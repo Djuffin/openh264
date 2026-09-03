@@ -1,15 +1,5 @@
 //! The decoder's module tree.
-//!
-//! **T5.AC12: the lint is on every file below, and on this one.** All 22 modules
-//! of `src/decoder/` carry `#![deny(unsafe_code)]` as of session AC; this file
-//! declares them and holds no code, so its own lint is the tree's statement rather
-//! than a check on anything here.
 
-// **S11.5 (step 5): NOT sealed, and the reason is `forbid`'s scope.** This file
-// holds no `unsafe` itself, but `#![forbid]` in a module root applies to the
-// module's whole subtree — every `mod` it declares — so sealing here would
-// forbid `unsafe` across files that still carry audited allows. A module root
-// seals when its subtree does, which is E2's business, not a per-file one.
 #![deny(unsafe_code)]
 
 pub mod bit_stream;

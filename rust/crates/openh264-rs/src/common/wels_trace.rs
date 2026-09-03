@@ -1,10 +1,4 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
-// **S8.9: sealed.** `WelsLog` took the application's own `SLogContext*` and called
-// the callback inside it, so this file carried both the deref and the C-ABI call.
-// S8.1 retired the deref (the context travels by value) and S8.9 moved the call
-// behind `TraceUserCtx::deliver` in `src/api/`, so nothing here is unsafe any more —
-// and the `clippy::not_unsafe_ptr_arg_deref` allow that stood here went with the raw
-// parameter that earned it.
 #![forbid(unsafe_code)]
 
 //! The codec trace, shared by both codecs.
@@ -14,19 +8,9 @@
 //! the two boundary classes own; `codec/api/wels/codec_api.h` declares
 //! `WelsTraceCallback`, the function the *caller* installs. Both codecs include
 //! all three in C++, so this port has one copy of each here rather than one per
-//! module — which retires the `SLogContext x2` and `WelsTraceCallback x2` entries
-//! the duplicate census carried.
+//! module.
 //!
-//! # What this replaced, and what it decided
-//!
-//! **T8.B6.** Until this module existed, `WelsLog` was a stub in *two* places
-//! (`encoder/wels_encoder_ext.rs` and `decoder/decoder_core.rs`), each of them
-//! `let _ = (pLogCtx, iLevel, msg);`. Nothing in the crate read `m_fpTrace` or
-//! `SLogContext::pfLog`, so a caller who installed a trace callback through
-//! `ENCODER_OPTION_TRACE_CALLBACK` or `DECODER_OPTION_TRACE_CALLBACK` — a
-//! documented option on a documented interface — was handed silence.
-//!
-//! **The one structural departure from the reference, and why.** In C++
+//! **The one structural departure from the reference.** In C++
 //! `SLogContext::pfLog` is `StaticCodecTrace` and `pLogCtx` is *the
 //! `welsCodecTrace` object itself*: the sink is a trampoline that finds the user's
 //! callback by following a back-pointer, which is what lets a `SetOption` after
@@ -34,26 +18,17 @@
 //! context. That back-pointer cannot be written here. The trace object is a member
 //! of the boundary object, every entry point reaches the boundary object through
 //! `&mut`, and a `&mut` retag of the owner invalidates any pointer previously
-//! derived from the member — the F38 class exactly, and this instance would be
-//! taken on the *logging* path, where nothing would ever observe it going wrong.
+//! derived from the member.
 //!
 //! So `SLogContext` carries what the sink needs instead of a route to it: the
 //! user's callback, the user's context, the instance address for the message tag,
 //! and the level to filter at. The indirection the back-pointer bought — a later
 //! `SetOption` reaching the context's copy — is bought instead by *re-stamping*
 //! that copy when the option is set, which is one line at each of the six option
-//! arms and is checked by the covering tests.
+//! arms.
 //!
 //! **The default sink is `welsStderrTrace` at `WELS_LOG_WARNING`, which is
-//! upstream's** (decision **D-api-1**, 2026-08-21; T8.C6).
-//!
-//! T8.B6 left the default at `None` and recorded it as a stated divergence, on the
-//! grounds that the malformed corpus alone would emit a line per damaged access unit.
-//! That reasoning is about the *project's instruments*, not about the library, and
-//! D-api-1 rules the other way: **a drop-in that is silent where the reference speaks
-//! is a divergence**, and one a consumer cannot detect by reading the header. A
-//! caller who wants silence installs a quiet callback — which is exactly what a C
-//! consumer does, and what this tree's high-volume harnesses now do.
+//! upstream's.** A caller who wants silence installs a quiet callback.
 
 use std::ffi::{CString, c_char, c_void};
 
@@ -61,14 +36,10 @@ pub use crate::api::codec_api::{TraceUserCtx, WelsTraceCallback};
 
 /// `codec_app_def.h:323-331` — the trace levels, and `WELS_LOG_DEFAULT`.
 ///
-/// **These are a bit mask upstream, not consecutive integers** (decision
-/// **D-fid-4**, 2026-08-26, from F184): `1 << 0 .. 1 << 5`. Until that ruling the
-/// port declared them 0,1,2,3,4,5 here and in four other places, which made this
-/// port's `DEBUG` bit-identical to the reference's `INFO` — ABI-visibly, because
-/// the level is the second argument of the caller's own trace callback and the
+/// **These are a bit mask upstream, not consecutive integers**: `1 << 0 .. 1 << 5`.
+/// The level is the second argument of the caller's own trace callback and the
 /// value `SetOption(ENCODER_OPTION_TRACE_LEVEL, ..)` is compared against
-/// (`m_iTraceLevel < iLevel`, `welsCodecTrace.cpp:76`). `ERROR` and `WARNING`
-/// agreed by coincidence; everything above them did not.
+/// (`m_iTraceLevel < iLevel`, `welsCodecTrace.cpp:76`).
 ///
 /// The threshold keeps working because the values stay monotonic, and nothing in
 /// either codec does arithmetic on them — they are compared and matched only.
@@ -102,30 +73,17 @@ pub struct SLogContext {
     pub pfLog: WelsTraceCallback,
     /// **C-ABI**: the caller's opaque context, handed back to `pfLog` untouched.
     /// Never dereferenced by this crate.
-    ///
-    /// **S8.9**: a [`TraceUserCtx`] rather than a bare `*mut c_void`. Same bytes
-    /// (`repr(transparent)`), but constructing one and invoking through one both
-    /// live in `src/api/`, so this field no longer carries an `unsafe` obligation
-    /// into every module that holds an `SLogContext`.
     pub pLogCtx: TraceUserCtx,
     /// The boundary object's address, for the message tag's `this = 0x…` only.
     /// An address and not a pointer: `utils.cpp:51` formats it with `%p` and does
-    /// nothing else with it, so a value that cannot be dereferenced is the honest
-    /// type and the F38 question does not arise.
+    /// nothing else with it.
     pub pCodecInstance: usize,
     /// The level to filter at. `welsCodecTrace::CodecTrace` holds this in the
     /// trace object and reaches it through the back-pointer; here it travels with
     /// the rest.
     pub iTraceLevel: i32,
-    /// **Explicit tail padding, and it has to be explicit.** This struct is a field
-    /// of `sWelsEncCtx`, whose whole byte image is pinned against a `memset`-zero
-    /// shell by `encoder_context.rs`'s equivalence test — a test that reads each
-    /// field's extent byte for byte and whose safety argument is that *no field
-    /// outside its by-value list has interior or trailing padding*. `iTraceLevel`
-    /// took the size to 28 and the alignment took it back to 32, so four bytes of
-    /// the context's image became uninitialised and Miri said so at the phase exit.
-    /// Naming the four bytes restores the premise rather than weakening the test.
-    /// Always zero.
+    /// **Explicit tail padding.** `iTraceLevel` took the size to 28 and the
+    /// alignment took it back to 32. Always zero.
     pub _reserved: u32,
 }
 
@@ -133,8 +91,7 @@ impl Default for SLogContext {
     /// **All zeros, deliberately.** In C++ this struct is a member of a context the
     /// codec `memset`s, and the level it filters at lives in the `welsCodecTrace`
     /// the back-pointer reaches — so a zeroed `SLogContext` is the reference's own
-    /// initial state, and `sWelsEncCtx`'s zeroed-shell equivalence test (Phase 5b)
-    /// is what holds this to it. `WELS_LOG_DEFAULT` is set where the reference sets
+    /// initial state. `WELS_LOG_DEFAULT` is set where the reference sets
     /// it, in [`welsCodecTrace`]'s constructor, and travels from there by the
     /// stamp.
     fn default() -> Self {
@@ -157,11 +114,6 @@ impl Default for SLogContext {
 /// in this port formats first and passes a `&str`; the filter and the tag are both
 /// here, and the observable — one call to the caller's callback per delivered
 /// message, with the level and the tagged text — is the same.
-// **S8.9: no `unsafe` left here at all.** The call to the application's sink is
-// `TraceUserCtx::deliver`, in `src/api/` — the C-ABI obligation lives at the
-// boundary that owns it, and this function is the plain formatter it always read
-// as. The by-value parameter (S8.1) had already retired the deref and its null
-// guard.
 pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
     let Some(pfLog) = ctx.pfLog else {
         return;
@@ -207,10 +159,6 @@ pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
 /// back-pointer. With the back-pointer gone (module comment) they *are*
 /// `m_sLogCtx`, and this object is the one place the caller's settings live before
 /// they are stamped into a codec context.
-///
-/// `m_pCodecInstance` stood here as a fifth member and had **no counterpart in the
-/// reference at all** — `welsCodecTrace.h` has no such field, and `SetCodecInstance`
-/// writes `m_sLogCtx.pCodecInstance`. It had no reader either. Deleted at T8.B6.
 #[derive(Debug)]
 pub struct welsCodecTrace {
     pub m_sLogCtx: SLogContext,
@@ -223,7 +171,7 @@ pub struct welsCodecTrace {
 /// replaces it, and `GetOption(*_TRACE_CALLBACK)` hands its address back, so it has
 /// to be the same type as anything a consumer could install.
 ///
-/// The default trace sink now lives in the C-ABI island — see
+/// The default trace sink itself lives in the C-ABI island — see
 /// [`crate::api::codec_api::welsStderrTrace`]. Re-exported here because this is the
 /// module every caller reaches it through, and because `SLogContext`'s own default
 /// names it.
@@ -231,7 +179,7 @@ pub use crate::api::codec_api::welsStderrTrace;
 
 impl Default for welsCodecTrace {
     /// `welsCodecTrace::welsCodecTrace()` — `welsCodecTrace.cpp:53`, both statements:
-    /// the level is `WELS_LOG_DEFAULT` and the sink is [`welsStderrTrace`] (D-api-1).
+    /// the level is `WELS_LOG_DEFAULT` and the sink is [`welsStderrTrace`].
     fn default() -> Self {
         Self {
             m_sLogCtx: SLogContext {
@@ -270,8 +218,8 @@ impl welsCodecTrace {
         self.m_sLogCtx.pfLog = func;
     }
 
-    /// **S8.9**: takes the token, not the pointer. Callers at the C-ABI boundary
-    /// mint one with [`TraceUserCtx::from_abi`], which is where the rawness belongs.
+    /// Callers at the C-ABI boundary mint the token with
+    /// [`TraceUserCtx::from_abi`].
     pub fn SetTraceCallbackContext(&mut self, pCtx: TraceUserCtx) {
         self.m_sLogCtx.pLogCtx = pCtx;
     }

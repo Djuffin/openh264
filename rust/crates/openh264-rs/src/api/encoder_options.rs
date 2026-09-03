@@ -1,30 +1,14 @@
 //! `CWelsH264SVCEncoder::SetOption` / `GetOption` — the encoder's untyped
 //! `void* pOption` boundary.
 //!
-//! **S12.2 moved these here from `encoder/wels_encoder_ext.rs`** (plan step 4's
-//! pattern, the same one that moved the version exports to [`crate::api::version`]).
-//! They were the last production `unsafe` outside this island that is *about* the
-//! C ABI rather than about the codec: `pOption` is `codec_api.h`'s untyped blob,
-//! its real type is named by `eOptionId` and by nothing else the compiler can see,
-//! and each arm's cast **is** that enum's contract with the application. S11.16
-//! already retagged them `C-ABI` after they were wrongly queued as convertible port
-//! work; this finishes the thought by putting them where the tag says they live.
+//! `pOption` is `codec_api.h`'s untyped blob, its real type is named by `eOptionId`
+//! and by nothing else the compiler can see, and each arm's cast **is** that enum's
+//! contract with the application.
 //!
-//! Nothing about the code changed in the move — the two methods are verbatim, and
-//! they stay inherent methods of [`CWelsH264SVCEncoder`], which Rust permits from
-//! any module of the defining crate. So `codec_api.rs`'s vtable thunks still call
-//! `self.SetOption(..)`, **the exported symbol set is untouched**, and
-//! `tools/abi_exports.sh` and `tools/abi_sizes.sh` are the referees that say so.
-//!
-//! What the move buys is one file: `encoder/wels_encoder_ext.rs` held these two
-//! allows and nothing else, so it seals `#![forbid(unsafe_code)]` behind them.
+//! The two methods are inherent methods of [`CWelsH264SVCEncoder`], so
+//! `codec_api.rs`'s vtable thunks call `self.SetOption(..)`.
 
-// No `clippy::not_unsafe_ptr_arg_deref` allow travelled here with the two methods.
-// One was written, then measured out: with it removed, `cargo clippy --lib`
-// (clippy 0.1.97) does not report the lint at either `SetOption` or `GetOption`,
-// nor anywhere else in the crate. An allow that suppresses nothing is silence
-// without a subject, which is the thing session J's crate-root pass deleted four of.
-// The C++ names come across verbatim, as everywhere in the port.
+// The C++ names come across verbatim.
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -32,8 +16,8 @@
     unused_imports,
     unused_variables
 )]
-// The island's regime (T8.C7): the module denies, and every surviving item carries
-// its own tagged `#[allow(unsafe_code)]`.
+// The module denies, and every item that needs it carries its own tagged
+// `#[allow(unsafe_code)]`.
 #![deny(unsafe_code)]
 
 use std::ffi::c_void;
@@ -64,17 +48,8 @@ use crate::encoder::wels_encoder_ext::{
 };
 
 impl CWelsH264SVCEncoder {
-    // **S11.16: `C-ABI`, not `port-raw`.** This was tagged as convertible port
-    // work, and it is not: the parameter is the C interface's untyped
-    // `void* pOption`, whose real type is named by `eOptionId` and by nothing
-    // else the compiler can see. Each arm's cast *is* that enum's contract with
-    // the application, `codec_api.rs`'s thunks pass the caller's pointer
-    // straight through, and there is no Rust shape that removes the cast
-    // without changing the exported interface — which is frozen (plan §7.1).
-    // Same allow, honest category; it stops sitting in the conversion queue.
-    // unsafe-cat: C-ABI
     #[allow(unsafe_code)]
-    /// `pOption` is **C-ABI** and stays a `c_void` (T8.B10): its type is a function
+    /// `pOption` is **C-ABI** and stays a `c_void`: its type is a function
     /// of `eOptionId` and of nothing else, over thirty-two ids, and no Rust type
     /// states that. `Encoder::set_option_raw` is the safe surface's `unsafe`
     /// spelling of the same obligation.
@@ -82,13 +57,6 @@ impl CWelsH264SVCEncoder {
         if pOption.is_null() {
             return cmInitParaError;
         }
-        // **B3 — the function-level raw is gone.** Each arm resolves the context off
-        // its own slot at the point it uses it, so the three arms that *replace* the
-        // context (`WelsEncoderParamAdjust` twice, `ENCODER_OPTION_LTR`) no longer
-        // need a re-derivation: there is no stale handle to refresh, and borrowck
-        // rejects using one across the replacement rather than leaving it to Miri.
-        // `is_none()` is `ctx_ptr(..).is_null()` — the accessor answered null exactly
-        // when the slot was empty.
         if (self.m_pEncContext.is_none() || !self.m_bInitialFlag)
             && eOptionId != EncoderOption::ENCODER_OPTION_TRACE_LEVEL
             && eOptionId != EncoderOption::ENCODER_OPTION_TRACE_CALLBACK
@@ -143,12 +111,10 @@ impl CWelsH264SVCEncoder {
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
                         return cmInitParaError;
                     }
-                    // T8.B5: `WelsEncoderParamAdjust` may replace the context
+                    // `WelsEncoderParamAdjust` may replace the context
                     // (`encoder_ext.cpp`'s uninit/init pair), so any earlier handle no
-                    // longer names this encoder's context. **B3**: the re-derivation is
-                    // gone with the function-level raw — each arm resolves the slot
-                    // where it uses it, and the timestamp is copied out so the borrow
-                    // ends before the `&mut self` logging calls below.
+                    // longer names this encoder's context. The timestamp is copied out
+                    // so the borrow ends before the `&mut self` logging calls below.
                     let ts = match self.m_pEncContext.as_deref() {
                         Some(ctx) => ctx.iLastStatisticsLogTs,
                         None => return cmInitExpected,
@@ -158,14 +124,10 @@ impl CWelsH264SVCEncoder {
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
                     let sEncodingParam = *(pOption as *const SEncParamExt);
-                    // **T9.X2 — the port's fourth `TraceParamInfo` call site, missing
-                    // until now.** `welsEncoderExt.cpp:796` logs the incoming block
+                    // `welsEncoderExt.cpp:796` logs the incoming block
                     // here, immediately after the copy and *before* the spatial-layer
                     // check below, so a caller whose parameters are about to be
-                    // rejected still gets them echoed. The port had the other three
-                    // (`:202`, `:229`, `:334`) and not this one; X2's brief lists only
-                    // those three, which is where the omission survived. It made no
-                    // observable difference while the body was empty. See F182.
+                    // rejected still gets them echoed.
                     self.TraceParamInfo(&sEncodingParam);
                     // verify number of spatial layer
                     if sEncodingParam.iSpatialLayerNum < 1
@@ -195,24 +157,18 @@ impl CWelsH264SVCEncoder {
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
                         return cmInitParaError;
                     }
-                    // T8.B5: `WelsEncoderParamAdjust` may replace the context
+                    // `WelsEncoderParamAdjust` may replace the context
                     // (`encoder_ext.cpp`'s uninit/init pair), so any earlier handle no
-                    // longer names this encoder's context. **B3**: the re-derivation is
-                    // gone with the function-level raw — each arm resolves the slot
-                    // where it uses it, and the timestamp is copied out so the borrow
-                    // ends before the `&mut self` logging calls below.
+                    // longer names this encoder's context. The timestamp is copied out
+                    // so the borrow ends before the `&mut self` logging calls below.
                     let ts = match self.m_pEncContext.as_deref() {
                         Some(ctx) => ctx.iLastStatisticsLogTs,
                         None => return cmInitExpected,
                     };
                     // LogStatistics
                     //
-                    // **T9.X2 — the announcement line was missing too (F186).**
                     // `welsEncoderExt.cpp:845` logs this immediately before the
-                    // statistics block, and the port had the call without it. It went
-                    // unnoticed because until this session neither diffharness driver
-                    // ever took this arm; the referee's 23rd argument is what made the
-                    // arm reachable and the omission visible on the same run.
+                    // statistics block.
                     WelsLog(
                         self.log_ctx(),
                         WELS_LOG_INFO,
@@ -296,10 +252,6 @@ impl CWelsH264SVCEncoder {
                     // Re-point the dispatch table. Setting the field alone leaves
                     // the encoder running the previous mode's callbacks.
                     let iRCMode = ctx.param().iRCMode;
-                    // **A6: the second of the two derivations the flip could
-                    // not take** — see `ctx_func_list_raw`. `pCtx` here is
-                    // `Self::ctx_ptr`'s raw, so `func_list_mut` would mean a
-                    // whole-context `&mut` retag through a raw root.
                     WelsRcInitFuncPointers(
                         &mut ctx.func_list_mut().pfRc,
                         iRCMode,
@@ -329,8 +281,8 @@ impl CWelsH264SVCEncoder {
                         return cmInitExpected;
                     };
                     let pLTR_Recover_Request = &mut *(pOption as *mut SLTRRecoverRequest);
-                    // S67 blessed (H2): the second argument points into the **C caller's**
-                    // memory, not the context.
+                    // The second argument points into the **C caller's** memory, not
+                    // the context.
                     FilterLTRRecoveryRequest(ctx, pLTR_Recover_Request);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_FEEDBACK => {
@@ -338,8 +290,7 @@ impl CWelsH264SVCEncoder {
                         return cmInitExpected;
                     };
                     let fb = &mut *(pOption as *mut SLTRMarkingFeedback);
-                    // S67 blessed (H2): as the recovery-request arm above — `pOption` is the
-                    // caller's.
+                    // As the recovery-request arm above — `pOption` is the caller's.
                     FilterLTRMarkingFeedback(ctx, fb);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_PERIOD => {
@@ -350,20 +301,11 @@ impl CWelsH264SVCEncoder {
                     ctx.param_mut().iLtrMarkPeriod = iValue;
                 }
                 EncoderOption::ENCODER_OPTION_LTR => {
-                    // S10.5b: the deref stays *here*, at the C-ABI edge where the
-                    // `void*` arrives, instead of travelling into
-                    // `WelsEncoderApplyLTR` as a raw parameter. This arm is one of
-                    // this dispatcher's many caller-supplied-pointer reads and its
-                    // allow is not going anywhere; the callee's is.
                     let pLTRValue = &mut *(pOption as *mut SLTRConfig);
                     let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     if WelsEncoderApplyLTR(log_ctx, &mut self.m_pEncContext, pLTRValue) != 0 {
                         return cmInitParaError;
                     }
-                    // T8.B5: the context may be a different allocation from here
-                    // on — `WelsEncoderApplyLTR` runs the uninit/init pair — and
-                    // this arm reads nothing after it, so there is nothing to
-                    // re-derive. The stale pointer is unreachable, not tolerated.
                 }
                 EncoderOption::ENCODER_OPTION_ENABLE_SSEI => {
                     let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
@@ -412,17 +354,12 @@ impl CWelsH264SVCEncoder {
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
                         return cmInitParaError;
                     }
-                    // T8.B5: as in `ENCODER_OPTION_LTR` — nothing below reads the
-                    // context in this arm, so there is nothing to re-derive.
                 }
                 EncoderOption::ENCODER_OPTION_CURRENT_PATH => {
-                    // **D-dead-7** (the user, 2026-08-26, from F183). This arm stored
-                    // `pOption` into `pSvcParam->pCurPath`, exactly as
-                    // `welsEncoderExt.cpp:1076` does — and nothing in either tree ever
-                    // read the field. The field is gone; the option id keeps returning
-                    // success and now does nothing, which is observably identical to
-                    // storing into storage no one reads. Same shape as
-                    // `ENCODER_OPTION_DUMP_FILE` below.
+                    // `welsEncoderExt.cpp:1076` stores `pOption` into
+                    // `pSvcParam->pCurPath`, and nothing in either tree ever read the
+                    // field. The option id keeps returning success and does nothing.
+                    // Same shape as `ENCODER_OPTION_DUMP_FILE` below.
                 }
                 EncoderOption::ENCODER_OPTION_DUMP_FILE => {
                     // The whole body is `#ifdef ENABLE_FRAME_DUMP` in C++, and
@@ -546,32 +483,18 @@ impl CWelsH264SVCEncoder {
                 // `ENCODER_OPTION`, so every id the reference can be handed is
                 // one of the 32 variants above, and leaving the match exhaustive
                 // turns "a new option was added and not handled" into a compile
-                // error instead of the silent success this replaced.
+                // error.
             }
         }
         0
     }
 
-    // **S11.16: `C-ABI`, not `port-raw`.** This was tagged as convertible port
-    // work, and it is not: the parameter is the C interface's untyped
-    // `void* pOption`, whose real type is named by `eOptionId` and by nothing
-    // else the compiler can see. Each arm's cast *is* that enum's contract with
-    // the application, `codec_api.rs`'s thunks pass the caller's pointer
-    // straight through, and there is no Rust shape that removes the cast
-    // without changing the exported interface — which is frozen (plan §7.1).
-    // Same allow, honest category; it stops sitting in the conversion queue.
-    // unsafe-cat: C-ABI
     #[allow(unsafe_code)]
     /// `pOption` is **C-ABI**, as in [`Self::SetOption`], with the blob written.
     pub fn GetOption(&mut self, eOptionId: EncoderOption, pOption: *mut c_void) -> i32 {
         if pOption.is_null() {
             return cmInitParaError;
         }
-        // **B3.** The context resolves as a shared reference off its own slot rather
-        // than through `ctx_ptr`'s raw: every use below is a read, so `&sWelsEncCtx`
-        // is the whole requirement, and the null guard becomes the `None` arm and
-        // answers the same `cmInitExpected`. `m_bInitialFlag` is a sibling field, so
-        // the borrow and the flag read coexist by construction.
         let Some(pCtx) = self.m_pEncContext.as_deref() else {
             return cmInitExpected;
         };
@@ -660,8 +583,6 @@ impl CWelsH264SVCEncoder {
                 }
                 // NOTE: C++'s GetOption has **no** ENCODER_OPTION_TRACE_LEVEL case —
                 // it is set-only, and a get falls to `default: return cmInitParaError`.
-                // This port used to answer it, which accepted a call the reference
-                // rejects.
                 _ => return cmInitParaError,
             }
         }

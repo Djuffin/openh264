@@ -7,18 +7,16 @@
 //
 // It must also contain NO `#[cfg(test)] mod tests`: `cfg(test)` is on in an
 // integration-test crate too, so tests declared here would compile into every
-// `tests/` binary that pulls in `tests/common/` — including three that predate this
-// module, whose test counts are a gate. This generator's own tests live in
-// `safe::prng_tests` (`src/safe/mod.rs`) instead.
+// `tests/` binary that pulls in `tests/common/`. This generator's own tests live
+// in `safe::prng_tests` (`src/safe/mod.rs`) instead.
 
 //! A deterministic PRNG for property-style tests.
 //!
-//! The safety refactor takes **no** new dependencies, dev-dependencies included
-//! (plan §2.1.5), so the property-style tests roll their own generator instead of
-//! reaching for `proptest`/`quickcheck`. That is a feature here rather than a
-//! concession: the tests run under Miri, where a shrinking framework would be
-//! unaffordably slow, and a fixed seed printed in the assertion message reproduces a
-//! failure exactly — in either test layer, since both include this same file.
+//! The property-style tests roll their own generator instead of reaching for
+//! `proptest`/`quickcheck`. The tests run under Miri, where a shrinking framework
+//! would be unaffordably slow, and a fixed seed printed in the assertion message
+//! reproduces a failure exactly — in either test layer, since both include this
+//! same file.
 //!
 //! xorshift64\* (Vigna 2016). Not cryptographic; it only has to be reproducible and
 //! to spread bits well enough that the differential tests hit boundary cases.

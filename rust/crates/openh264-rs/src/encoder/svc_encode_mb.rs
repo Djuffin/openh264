@@ -291,8 +291,6 @@ pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
 
 // Function pointer signatures for SWelsFuncPtrList
-// S9.0: the duplicate declaration of `PDctFunc` that stood here is gone — the
-// canonical one is `encode_mb_aux`'s, which `wels_func_ptr_def` already imported.
 pub use crate::encoder::encode_mb_aux::PDctFunc;
 pub type PTransformHadamard4x4Func = unsafe extern "C" fn(*mut i16, *mut i16);
 pub type PQuantizationFunc = unsafe extern "C" fn(*mut i16, *const i16, *const i16);
@@ -305,18 +303,10 @@ pub type PQuantizationHadamardSkipFunc = unsafe extern "C" fn(*mut i16, i16, i16
 pub type PScanFunc = unsafe extern "C" fn(*mut i16, *mut i16);
 pub type PCalculateSingleCtrFunc = unsafe extern "C" fn(*mut i16) -> i32;
 pub type PGetNoneZeroCountFunc = unsafe extern "C" fn(*mut i16) -> i32;
-/// **T9.D10**: F103's fourteenth, thirteenth and twelfth — the dequantisers were the
-/// rest of the coefficient family's slot half, and they take no plane either. One raw
-/// type served both spans here too, so it splits the way `PQuantizationFunc` did.
 pub type PDeQuantizationFunc = fn(pRes: &mut [i16; 64], kpMF: &[u16; 8]);
 pub type PDeQuantization4x4Func = fn(pRes: &mut [i16; 16], kpMF: &[u16; 8]);
 pub type PDeQuantizationIHadamard4x4Func = unsafe extern "C" fn(*mut i16, u16);
-// `PIDctFunc` and `PIDctI16x16DcFunc` stood here. The three slots they typed
-// were write-only (F138/F139) and are deleted with their installs (S18, session
-// F step 0); the second typedef had zero references even before that.
 pub type PCopyAlignedFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32);
-// `PSetMemoryZero = unsafe extern "C" fn(*mut c_void, i32)` was here; see
-// `encoder_context::WelsSetMemZero_c` for why the three slots that used it went.
 
 #[inline(always)]
 fn WelsClip1(val: i32) -> u8 {
@@ -329,24 +319,6 @@ fn WelsClip1(val: i32) -> u8 {
     }
 }
 
-// **S9.1: `WelsIDctT4Rec_c` deleted.** It was a shim over the safe kernel below it,
-// kept only because the differential tests drove it by name — its dispatch slot
-// was deleted in S18 (F138/F139: installed, asserted, never called), and the
-// production reconstruction has gone through the seam's kernels since T9.C2. The
-// probe now drives the safe kernel directly and keeps the two assertions that
-// were ever about more than the shim: sources unmoved, and no write beyond each
-// row's block.
-
-// **S9.1: `WelsIDctFourT4Rec_c` deleted.** It was a shim over the safe kernel below it,
-// kept only because the differential tests drove it by name — its dispatch slot
-// was deleted in S18 (F138/F139: installed, asserted, never called), and the
-// production reconstruction has gone through the seam's kernels since T9.C2. The
-// probe now drives the safe kernel directly and keeps the two assertions that
-// were ever about more than the shim: sources unmoved, and no write beyond each
-// row's block.
-
-
-
 // ============================================================================
 // Math & Transform Helpers (C reference fallbacks)
 // ============================================================================
@@ -354,8 +326,7 @@ fn WelsClip1(val: i32) -> u8 {
 /// 4x4 Inverse Hadamard transform for Intra 16x16 Luma DC
 ///
 /// Inputs above ±2047 can overflow the kernel's plain `i16` intermediates — a
-/// debug panic where the C++ wraps (finding F11); the in-contract DC levels stay
-/// far below it.
+/// debug panic where the C++ wraps; the in-contract DC levels stay far below it.
 #[inline]
 pub fn WelsIHadamard4x4Dc(pRes: &mut [i16; 16]) {
     crate::encoder::decode_mb_aux::ihadamard_4x4_dc(pRes);
@@ -364,15 +335,14 @@ pub fn WelsIHadamard4x4Dc(pRes: &mut [i16; 16]) {
 /// Dequantization of 4x4 Luma DC coefficients for QP < 12
 ///
 /// `kiQp` must be in `0..12`: at 12+ the shift count goes negative, which is a
-/// debug panic and the raw port's own behaviour. The one caller is gated on
-/// `uiQp < 12`. Not expressible in the type, so it stays a prose contract.
+/// debug panic. The one caller is gated on `uiQp < 12`. Not expressible in the
+/// type, so it stays a prose contract.
 #[inline]
 pub fn WelsDequantLumaDc4x4(pRes: &mut [i16; 16], kiQp: i32) {
     crate::encoder::decode_mb_aux::dequant_luma_dc_4x4(pRes, kiQp);
 }
 
 /// 2x2 Inverse Hadamard and dequantization for Chroma DC
-///
 #[inline]
 pub fn WelsDequantIHadamard2x2Dc(pDct: &mut [i16; 4], kuiMF: u16) {
     crate::encoder::decode_mb_aux::dequant_ihadamard_2x2_dc(pDct, kuiMF);
@@ -385,11 +355,6 @@ pub fn WelsDequantIHadamard2x2Dc(pDct: &mut [i16; 4], kuiMF: u16) {
 /// Computes forward 4x4 integer DCT on all sixteen 4x4 luma blocks within a 16x16 macroblock.
 ///
 /// Divides the 16x16 macroblock into four 8x8 quadrants and executes `pfDctFourT4` once per quadrant.
-///
-/// **S9.0**: the two strides are gone from the signature because the cursors carry
-/// them, and the four quadrant offsets are now stated in samples rather than in
-/// bytes-times-stride. They name the same addresses: the prediction scratch is
-/// stride 16, so its old `+8 / +128 / +136` are `(8,0) / (0,8) / (8,8)`.
 #[inline]
 pub fn WelsDctMb(
     pRes: &mut [i16],
@@ -408,7 +373,6 @@ pub fn WelsDctMb(
 
 /// Full DCT, DC Hadamard, quantization, scanning, inverse quantization, and local reconstruction
 /// for an **Intra 16x16 Luma** macroblock.
-///
 pub fn WelsEncRecI16x16Y(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -418,14 +382,9 @@ pub fn WelsEncRecI16x16Y(
     let pFuncList = (*pEncCtx).func_list();
     let pCurDqLayer = current_layer_expect(pEncCtx);
     let kiEncStride = (*pCurDqLayer).iEncStride[0];
-    // **T9.D11**: no long-lived raw into `sCoeffLevel`. The DC write-back below is
-    // indexed, and the two plane-taking slots derive their cursor where they use it —
-    // a `&mut` to this field (`blk_four4x4_mut`) is a Unique retag over the whole
-    // array and kills any raw held across it (F114).
     let kiRecStride = (*pCurDqLayer).iCsStride[0];
-    // S9.0: the prediction scratch is an owned `[u8; 2*256+16]` on the cache, so a
-    // cursor over it needs no raw at all. Stride 16 is the scratch's own geometry,
-    // which the raw form passed as a literal at every call.
+    // The prediction scratch is an owned `[u8; 2*256+16]` on the cache.
+    // Stride 16 is the scratch's own geometry.
     let pBestPred = RecCursor::over_owned(
         &mut (*pMbCache).sMemPredMb,
         mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf),
@@ -494,30 +453,16 @@ pub fn WelsEncRecI16x16Y(
         }
 
         // The scanned luma DC returns to block `k`'s DC slot, `sCoeffLevel[k * 16]`,
-        // in the C++'s raster-to-zigzag order. Sixteen raw stores through a held
-        // cursor before T9.D11; sixteen indexed stores now, same addresses.
+        // in the C++'s raster-to-zigzag order.
         const KI_DC_SCAN: [usize; 16] = [0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15];
         for (k, &src) in KI_DC_SCAN.iter().enumerate() {
             (*pMbCache).sCoeffLevel[k << 4] = aDctT4Dc[src];
         }
 
-        // **T9.C2 — the seam's idct consumers.** Four quadrant calls onto
-        // `SPicData.pCsMb[0]`, a raw cursor into the reconstruction plane, become
-        // four onto the seam's cursor at this macroblock's own origin. The
-        // prediction operand is unchanged in every respect but its type: it was
-        // always `sMemPredMb`'s luma half at stride 16, an owned arena array, so
-        // it is a slice and a stride rather than a second raw.
-        //
         // The four `pBestPred` offsets `0 / 8 / 128 / 136` at stride 16 are the
         // quadrant grid `(0,0) (8,0) (0,8) (8,8)`, which is also what the four
         // `pPred` offsets spell against `kiRecStride`; writing it once as
         // `QUADS` makes the two agree by construction instead of by inspection.
-        //
-        // **The slot is bypassed, not flipped** (F118): `pfIDctFourT4` is
-        // installed unconditionally by `WelsInitEncodingFuncs` and constant after
-        // init, so a fixed-size site may call the kernel directly and
-        // byte-identically. `kiRecStride` leaves the call because the view
-        // carries it.
         const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
         let view = layer_rec_view_expect(&*pCurDqLayer);
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
@@ -532,10 +477,8 @@ pub fn WelsEncRecI16x16Y(
             );
         }
     } else if uiCountI16x16Dc > 0 {
-        // **F137**: this site is the one the plane census never listed, because
-        // the census knew neither the `pfIDctI16x16Dc` slot nor its
-        // `WelsIDctRecI16x16Dc_c` kernel. It writes the reconstruction plane from
-        // the same `pPred` / `pBestPred` pair as the four calls above.
+        // This site writes the reconstruction plane from the same
+        // `pPred` / `pBestPred` pair as the four calls above.
         let view = layer_rec_view_expect(&*pCurDqLayer);
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
@@ -546,8 +489,8 @@ pub fn WelsEncRecI16x16Y(
             &aDctT4Dc,
         );
     } else {
-        // **T9.C2.** The residual-free branch: the prediction *is* the
-        // reconstruction, copied straight across from `sMemPredMb`'s luma half.
+        // The residual-free branch: the prediction *is* the reconstruction,
+        // copied straight across from `sMemPredMb`'s luma half.
         let view = layer_rec_view_expect(&*pCurDqLayer);
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
@@ -576,18 +519,11 @@ pub fn WelsEncRecI4x4Y(
     let iEncStride = (*pCurDqLayer).iEncStride[0];
     let uiQp = (*pCurMb).uiLumaQp;
 
-    // **T9.D11**: derived at each use, never held. The two slots below that still
-    // take a plane (`pfDctT4`, `pfIDctT4`) need a raw into `sCoeffLevel`; the two
-    // that do not take one now borrow the field safely, and a `&mut` to it is a
-    // Unique retag over **the whole array** — `blk4x4_mut` takes `&mut [i16]`, so
-    // the caller borrows all 384 coefficients before indexing. A raw held across
-    // that call is dead, which is what Miri reported here (F114).
     let iRecStride = (*pCurDqLayer).iCsStride[0];
 
     let uiOffset = g_kuiMbCountScan4Idx[uiI4x4Idx as usize] as usize;
-    // S9.0: source plane through the frame's read-only view, prediction scratch
-    // through its own owned `[u8; 2*16]`. Stride 4 is the blk4 scratch's geometry,
-    // which the raw form passed as a literal at the call.
+    // Source plane through the frame's read-only view, prediction scratch
+    // through its own owned `[u8; 2*16]`. Stride 4 is the blk4 scratch's geometry.
     let encView = crate::encoder::svc_encode_slice::layer_enc_view_expect(&*pCurDqLayer);
     let pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
     let pBestPred = RecCursor::over_owned(
@@ -602,10 +538,6 @@ pub fn WelsEncRecI4x4Y(
 
     let did = (*pEncCtx).uiDependencyId as usize;
     let tid_is_zero = if (*pEncCtx).uiTemporalId == 0 { 1 } else { 0 };
-    // T9.H2: the two lookups take `&sWelsEncCtx` — a shared reborrow every
-    // worker may hold at once. S11.28: through the *bounded* accessors
-    // (S11.2d's template), so the per-block read is an index into `[i32; 24]`
-    // rather than a raw `.add` — the last two raw cursor reads in this file.
     let tab = (*pEncCtx).pStrideTab.as_ref().expect("the stride tables are built at init");
     let enc_block_offset =
         tab.EncBlockOffsets(did).expect("the enc block-offset table is built")[uiI4x4Idx as usize] as isize;
@@ -613,9 +545,9 @@ pub fn WelsEncRecI4x4Y(
         tab.DecBlockOffsets(did, tid_is_zero).expect("the dec block-offset table is built")[uiI4x4Idx as usize] as isize;
 
     let func = (*pFuncList).pfDctT4;
-    // S9.0: `advance(n, 0)` moves the centre by exactly `n` bytes, which is what
-    // `.offset(enc_block_offset)` did — the block offset is a byte offset, not a
-    // sample coordinate. The prediction scratch's stride 4 rides in its cursor.
+    // `advance(n, 0)` moves the centre by exactly `n` bytes — the block offset is
+    // a byte offset, not a sample coordinate. The prediction scratch's stride 4
+    // rides in its cursor.
     func(
         &mut (*pMbCache).sCoeffLevel,
         &pEncMb.advance(enc_block_offset, 0),
@@ -636,13 +568,11 @@ pub fn WelsEncRecI4x4Y(
             blk4x4_mut(&mut (*pMbCache).sCoeffLevel, 0),
             &g_kuiDequantCoeff[uiQp as usize],
         );
-        // **T9.C2.** `pPredI4x4` is `pPred.offset(dec_block_offset)`, and
         // `dec_block_offset` is a flat byte offset into a plane of `iRecStride`
-        // — so `(off % stride, off / stride)` is the same address the raw form
-        // reached, exactly. The 4x4 blocks sit at `dx, dy` in `{0,4,8,12}` and
-        // the stride is never below 16, so neither term can wrap into the other.
-        // Prediction is `sMemPredBlk4` at stride 4 (not 16 — this is the 4x4
-        // arena, and its rows are four bytes).
+        // — so `(off % stride, off / stride)` is the same address. The 4x4 blocks
+        // sit at `dx, dy` in `{0,4,8,12}` and the stride is never below 16, so
+        // neither term can wrap into the other. Prediction is `sMemPredBlk4` at
+        // stride 4 (not 16 — this is the 4x4 arena, and its rows are four bytes).
         let view = layer_rec_view_expect(&*pCurDqLayer);
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let (dx, dy) = (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
@@ -654,7 +584,7 @@ pub fn WelsEncRecI4x4Y(
             blk4x4(&(*pMbCache).sCoeffLevel, 0),
         );
     } else {
-        // **T9.C2.** As the `pfIDctT4` branch above: `dec_block_offset` divides by
+        // As the `pfIDctT4` branch above: `dec_block_offset` divides by
         // `iRecStride` into the 4x4 block's `(dx, dy)` within the macroblock, and
         // the prediction is `sMemPredBlk4` at stride 4.
         let view = layer_rec_view_expect(&*pCurDqLayer);
@@ -687,9 +617,6 @@ pub fn WelsEncInterY(
     let pfGetNoneZeroCount = pFuncList.pfGetNoneZeroCount;
     let pfDequantizationFour4x4 = pFuncList.pfDequantizationFour4x4;
 
-    // **T9.D11**: the two `WelsSetMemZero_c` calls are `fill(0)` now — this body has
-    // no raw into `sCoeffLevel` at all, and cannot have one, because the residual
-    // slots take `&mut [i16]` of the whole field (F114).
     let mut iSingleCtrMb = 0i32;
     let mut iSingleCtr8x8 = [0i32; 4];
     let uiQp = (*pCurMb).uiLumaQp;
@@ -760,17 +687,11 @@ pub fn WelsEncInterY(
 /// 2x2 Chroma DC Hadamard transform, 4x4 AC quantization, JVT-O079 thresholding,
 /// and inverse dequantization for Chroma planes (`iUV = 1` for Cb, `iUV = 2` for Cr).
 ///
-/// **T9.D6 — `pRes` was a `*mut i16` into `pMbCache->sCoeffLevel`, and it is a
-/// `usize` index into that array now.** The C++ hands this function the arena *and* a
-/// cursor into it, which is the one shape a `&mut SMbCache` parameter cannot survive:
-/// whichever argument is evaluated second invalidates the first, and no ordering
-/// helps. So the second path is deleted and the callee derives the cursor.
-///
-/// **It is not `(iUV - 1) * 64` off a fixed base, and that matters.** The two callers
+/// `kiResOff` is not `(iUV - 1) * 64` off a fixed base. The two callers
 /// use *different* bases: `WelsIMbChromaEncode` passes `pCoeffLevel + 0`
 /// (`svc_encode_slice.cpp:475`) and `WelsPMbChromaEncode` passes `pCoeffLevel + 256`
 /// (`:499`). The offset is caller state, not a function of `iUV`, so it stays a
-/// parameter — as an index, which a retag cannot invalidate.
+/// parameter.
 ///
 /// # Safety
 /// `kiResOff .. kiResOff + 128` must be in bounds of `pMbCache->sCoeffLevel`.
@@ -792,11 +713,8 @@ pub fn WelsEncRecUV(
     let kiQp = (*pCurMb).uiChromaQp;
     let uiNoneZeroCountOffset = ((iUV - 1) << 1) as usize;
     let uiSubMbIdx = (16 + ((iUV - 1) << 2)) as usize;
-    // **T9.D3**: one `dct()` derivation, not two. Both cursors named the same
-    // `sDct` and the second call sat *between* the first cursor and its use, which
-    // is the hazard shape exactly — `q1c.py --type SMbCache` flagged it here.
-    // **T9.D8**: `iChromaBlock` is `[[i16; 16]; 8]`, so this plane's four blocks are
-    // `[kiChromaBlk ..][0..4]` — the walking `pBlock` cursor is an index now.
+    // `iChromaBlock` is `[[i16; 16]; 8]`, so this plane's four blocks are
+    // `[kiChromaBlk ..][0..4]`.
     let kiChromaBlk = ((iUV - 1) << 2) as usize;
     let mut aDct2x2 = [0i16; 4];
     let mut aMax = [0i16; 4];
@@ -845,7 +763,7 @@ pub fn WelsEncRecUV(
     }
 
     if iSingleCtr8x8 < 7 {
-        // `WelsSetMemZero_c(pRes, 128)` — one 64-coefficient chroma group (T9.D11).
+        // `WelsSetMemZero_c(pRes, 128)` — one 64-coefficient chroma group.
         (*pMbCache).sCoeffLevel[kiResOff..kiResOff + 64].fill(0);
         (*pCurMb).iNonZeroCount[16 + uiNoneZeroCountOffset] = 0;
         (*pCurMb).iNonZeroCount[16 + uiNoneZeroCountOffset + 1] = 0;
@@ -879,20 +797,6 @@ pub fn WelsEncRecUV(
     }
 }
 
-// **`WelsRecPskip` stood here — deleted in T9.C2 on F135's ruling.**
-//
-// The port carried two copies of `svc_encode_mb.cpp:315`: this one, in the file
-// the C++ puts it in, and a second in `svc_mode_decision.rs` beside the three
-// call sites. Only the second was ever reached — all three callers
-// (`svc_base_layer_md.cpp:1395`/`:1957`, `svc_mode_decision.cpp:440`) resolve
-// there, and T9.C7 converted it to the reconstruction seam. This one had no
-// caller in `src/`, `tests/` or `benches/`; both being `pub` in a `pub mod`,
-// no compiler pass could say so (F129), only a per-symbol grep.
-//
-// The surviving implementation keeps the provenance: its doc cites
-// `codec/encoder/core/src/svc_encode_mb.cpp:315`. Three blocked plane-census
-// rows come off here as a **deletion**, never summed with a conversion (F128).
-
 /// Fast early-termination test evaluating whether Luma (Y) residual qualifies for `P_SKIP`.
 ///
 /// # Returns
@@ -908,10 +812,6 @@ pub fn WelsTryPYskip(
 ) -> bool {
     let mut iSingleCtrMb = 0i32;
     let kuiQp = (*pCurMb).uiLumaQp;
-    // **T9.D8**: `aMax` was `[u16; 4]` cast to `*mut i16` at the call. The kernel
-    // writes `max_abs`, which starts at 0 and only grows, so every entry is
-    // non-negative and the two spellings compare identically — the array is `i16`
-    // now, which is what was always stored in it.
     let mut aMax = [0i16; 4];
     let pMF = &g_kiQuantMF[kuiQp as usize];
     let pFF = &g_kiQuantInterFF[kuiQp as usize];
@@ -944,14 +844,12 @@ pub fn WelsTryPYskip(
 /// # Returns
 /// - `true`: Chroma residual is zero or negligible, qualifying for `P_SKIP`.
 /// - `false`: Non-zero chroma DC or significant AC residual detected.
-///
 pub fn WelsTryPUVskip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
     iUV: i32,
 ) -> bool {
-    // **T9.D8**: the base is an offset now, not a cursor.
     let kiResOff = if iUV == 1 { 256usize } else { 256 + 64 };
 
     let chroma_qp_index_offset = if let Some(pps) = crate::encoder::svc_encode_slice::layer_pps_ref(

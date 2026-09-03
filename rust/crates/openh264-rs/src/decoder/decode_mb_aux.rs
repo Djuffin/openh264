@@ -23,18 +23,9 @@ pub fn WelsClip1(iX: i32) -> u8 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Safe kernels (plan §Phase 2, recipe R2). These are the implementations; the
-// `*_c` functions below are strangler shims (R7) that build views from the raw
-// pointers and call in here, so no call site and no dispatch-table installer
-// changes in this phase.
-//
 // Every kernel in this file writes a fixed-size block and reaches *forward* only,
-// from the block's own (0, 0) — no `-1` column, no `-stride` row. That is what
-// makes the shims' contracts short: the reachable span is a function of the
-// stride and the block size alone, so a shim needs no knowledge of the plane's
-// padding to build a slice that exactly covers what the kernel touches.
-// ---------------------------------------------------------------------------
+// from the block's own (0, 0) — no `-1` column, no `-stride` row: the reachable
+// span is a function of the stride and the block size alone.
 
 use crate::safe::plane::PlaneCursorMut;
 pub use crate::decoder::decode_slice::{g_kuiScan8};
@@ -48,11 +39,6 @@ pub use crate::decoder::decode_slice::{g_kuiScan8};
 /// The two 1-D passes are the C++'s, unchanged, **including the `as i16`
 /// truncation of the horizontal pass's output**: `iSrc` is an `int16_t[16]` there
 /// and the sums can exceed `i16`, so the truncation is observable and load-bearing.
-/// What did change is the write loop, which the C++ walks column-major
-/// (`for i in 0..4` over columns, four strided stores each). Every one of the 16
-/// samples is read and written exactly once, so transposing the loop to row-major
-/// is bit-exact, and it lets each row be one bounds check and a fixed-size window
-/// instead of four (plan §7.4).
 pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
     let mut src = [0i16; 16];
 
@@ -104,10 +90,6 @@ pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
 /// block at `pred` and saturated to `[0, 255]` in place.
 ///
 /// C++: `IdctResAddPred8x8_c`, `codec/decoder/core/src/decode_mb_aux.cpp`.
-///
-/// Both 1-D passes were already array-local in the port; only the final add loop
-/// touched the plane, and it was already row-major, so this is the C++ line for
-/// line with a `row_mut` window in place of the strided pointer.
 pub fn idct_res_add_pred8x8(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 64]) {
     let mut p = [0i16; 8];
     let mut b = [0i16; 8];
@@ -202,8 +184,7 @@ pub fn idct_res_add_pred8x8(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 64]) {
 /// `nzc` is a window onto the macroblock's 8-wide non-zero-count raster, anchored
 /// at this quadrant's top-left 4x4 block; the four sub-blocks are therefore at
 /// `nzc[0]`, `nzc[1]`, `nzc[4]` and `nzc[5]`, which is why the parameter is a
-/// `[i8; 6]` rather than a `[i8; 4]` — six is the exact reach, and stating it as a
-/// fixed-size array is what stops a caller passing a window that ends at index 3.
+/// `[i8; 6]` rather than a `[i8; 4]` — six is the exact reach.
 /// A block also needs the transform when only its DC coefficient is non-zero
 /// (the I16x16 luma DC case), hence the `|| rs[k << 4] != 0`.
 pub fn idct_four_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 64], nzc: &[i8; 6]) {
@@ -223,11 +204,6 @@ pub fn idct_four_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 64], nzc
 /// geometry).
 ///
 /// C++: `GetI4LumaIChromaAddrTable`, `codec/decoder/core/src/decode_mb_aux.cpp`.
-///
-/// The destination is `[i32; 24]` rather than a pointer because the only caller
-/// owns exactly that (`SWelsDecoderContext::iDecBlockOffsetArray`,
-/// `decoder_context.rs:676`) — the size relationship stops being something the two
-/// sides have to agree about by hand. That is finding F1's defect class, pre-empted.
 pub fn i4_luma_ichroma_addr_table(block_offset: &mut [i32; 24], stride_y: i32, stride_uv: i32) {
     let scan0 = g_kuiScan8[0] as u32;
 
@@ -247,20 +223,6 @@ pub fn i4_luma_ichroma_addr_table(block_offset: &mut [i32; 24], stride_y: i32, s
         block_offset[20 + i] = offset;
     }
 }
-
-// **T5.X8: the four `SHIM(phase2)` entry points that stood here are deleted**, with
-// the two dispatch typedefs that described them. Each rebuilt a slice from a raw
-// pointer and a stride and called the kernel above it; the dispatch tables hold the
-// kernels themselves now (`decoder_context.rs`'s `PIdctResAddPredFunc` and friends
-// take a `PlaneCursorMut`), and the reconstruction bracket builds the cursor from
-// the picture's own plane.
-//
-// `GetI4LumaIChromaAddrTable` and `i4_luma_ichroma_addr_table` went with them, and
-// so did `SWelsDecoderContext::iDecBlockOffsetArray`: the table held **byte** offsets
-// of the 16 luma and 8 chroma 4x4 blocks, which is why it had to be recomputed
-// whenever a picture's stride changed. A block's position inside its macroblock is a
-// pair of sample coordinates and no stride enters it — `decode_slice.rs`'s `blk4_xy`
-// is that pair, computed from `g_kuiScan8` exactly as the table's own body did.
 
 #[cfg(test)]
 mod tests {
@@ -300,11 +262,6 @@ mod tests {
         }
     }
 
-    /// **T5.X8**: the byte-offset table this file used to build is gone, and
-    /// `decode_slice.rs`'s `blk4_xy` replaces it. The values it produced are pinned
-    /// here in the units they moved to — a 32-byte luma stride made block 1 offset
-    /// 4 (`x = 4`) and block 2 offset 128 (`y = 4`), which is what these coordinates
-    /// say without a stride in them.
     #[test]
     fn blk4_xy_is_the_deleted_offset_table_with_the_stride_factored_out() {
         use crate::decoder::decode_slice::blk4_xy;

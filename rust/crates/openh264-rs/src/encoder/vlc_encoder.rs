@@ -11,13 +11,6 @@
 //! Translated from `codec/encoder/core/inc/vlc_encoder.h`,
 //! `codec/encoder/core/src/encoder_data_tables.cpp`, and `codec/encoder/core/src/set_mb_syn_cavlc.cpp`.
 
-// `CHROMA_DC_NC_OFFSET`, `ENC_RETURN_SUCCESS` and `ENC_RETURN_VLCOVERFLOWFOUND`
-// were declared here with no reader anywhere in the crate — three more copies of
-// names that live in `svc_set_mb_syn_cavlc.rs` (which holds `CHROMA_DC_NC_OFFSET`
-// as an `i8`, the width its two call sites want) and `svc_encode_slice.rs`. They
-// died with the writer dedupe, which is what makes duplicates findable: routing
-// the callers here is what showed nothing had ever routed to these.
-
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
@@ -36,10 +29,8 @@ pub enum ECtxBlockCat {
 /// The encoder's write position.
 ///
 /// `BsWriter` is a detached cursor — `{pos, cur_bits, left_bits}`, no buffer
-/// reference (plan §2.1.3). The buffer belongs to whoever allocated it and arrives
-/// as `&mut [u8]` on every call, which is what took `pStartBuf`/`pCurBuf`/`pEndBuf`
-/// out of this module. See `safe::bits` for the semantics and the differential
-/// tests that pin them.
+/// reference. The buffer belongs to whoever allocated it and arrives as
+/// `&mut [u8]` on every call. See `safe::bits` for the semantics.
 pub use crate::safe::bits::BsWriter;
 
 /// CAVLC codeword table item.
@@ -60,14 +51,6 @@ pub type SCavlcTableItem = TagCavlcTableItem;
 
 /// Mapping table from neighbor non-zero coefficient count (nC) to VLC table index.
 /// Matches `g_kuiEncNcMapTable[18]` in `codec/encoder/core/src/encoder_data_tables.cpp`.
-///
-/// One definition: `svc_set_mb_syn_cavlc.rs` carried a byte-identical second copy
-/// until the writer dedupe, and re-exports this one now.
-//
-// A `#[repr(align(16))] pub struct EncNcMapTable(pub [u8; 18])` sat here too, with
-// no constructor and no reader — the C++ has no such type; the alignment attribute
-// on the array in `encoder_data_tables.cpp` was transliterated into a newtype that
-// nothing ever wrapped.
 pub const g_kuiEncNcMapTable: [u8; 18] = [
     0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4,
 ];
@@ -79,8 +62,6 @@ pub const g_kuiZeroLeftMap: [u8; 16] = [
 ];
 
 // `g_kuiGolombUELength` is a common-layer table (`common_tables.cpp:886`).
-// This module used to declare its own copy; see the canonical definition for
-// what the divergent copies got wrong.
 pub use crate::common::wels_common_defs::g_kuiGolombUELength;
 
 /// Coeff token lookup table: `[nc_idx][total_coeff][trailing_ones][0--value, 1--bit count]`
@@ -350,24 +331,9 @@ pub const g_kuiVlcRunBefore: [[[u8; 2]; 15]; 8] = [
 // Bitstream Helper Functions
 // ============================================================================
 
-// The five pointer fields `SBitStringAux` carried are gone from this module. What
-// was `WRITE_BE_32(pCurBuf, …); pCurBuf += 4` is now a store into
-// `buf[pos..pos + 4]`, which is where the bounds come from: the C++ writer has no
-// end-of-buffer check at all, sizing being the caller's contract, so a panic here
-// is a pre-existing sizing bug made loud rather than new behaviour on any
-// in-contract path (plan §2.2.2). Note the contract includes four bytes of
-// headroom at the write position — both the accumulator flush and `BsFlush` store
-// a full word even when they advance by one byte.
-//
-// `InitBits` is **deleted** rather than converted. It declared `kpBuf: *const u8`,
-// stored it as `pStartBuf: *mut u8`, and the writer wrote through it, so every
-// honest caller produced a pointer with no write provenance and the first
-// `BsFlush` was Undefined Behaviour — `phase2_findings.md` F13's third site, the
-// one that is a signature lying about what the function does rather than a caller
-// mistake. There is nothing to amend: the buffer is now a `&mut [u8]` the caller
-// already holds, and the only state left to initialise is `BsWriter::new()`.
-//
-// `WRITE_BE_32` goes with it; its only callers were the two writer bodies.
+// The caller's buffer contract includes four bytes of headroom at the write
+// position — both the accumulator flush and `BsFlush` store a full word even when
+// they advance by one byte.
 
 /// Write `iLen` bits of `kuiValue` into the bitstream.
 #[inline(always)]
@@ -429,9 +395,9 @@ pub fn BsSizeSE(kiValue: i32) -> u32 {
 ///
 /// The C++ takes the code length from `g_kuiGolombUELength` below 256 and from a
 /// two-step reduction above it; both compute `2 * floor(log2(value + 1)) + 1`,
-/// which is what `BsWriter::write_ue` reaches directly. Differential-proven since
-/// Phase 1, and `BsSizeUE` above still spells the table form out for the
-/// mode-decision cost functions that want the length without writing anything.
+/// which is what `BsWriter::write_ue` reaches directly. `BsSizeUE` above spells
+/// the table form out for the mode-decision cost functions that want the length
+/// without writing anything.
 #[inline(always)]
 pub fn BsWriteUE(buf: &mut [u8], pBs: &mut BsWriter, kuiValue: u32) -> i32 {
     pBs.write_ue(buf, kuiValue);
@@ -544,29 +510,3 @@ pub fn WriteRunBefore(
     let kpRunBefore = &g_kuiVlcRunBefore[uiZeroLeft as usize][uiRunBefore as usize];
     BsWriteBits(buf, pBs, kpRunBefore[1] as i32, kpRunBefore[0] as u32)
 }
-
-// ============================================================================
-// CAVLC Parameter Extraction and Block Residual Serialization
-// ============================================================================
-
-// `CavlcParamCal_c` is deliberately NOT defined here either — **T9.X2 deleted a
-// second dead copy, the exact trap the paragraph below records.** The live kernel
-// is `svc_set_mb_syn_cavlc.rs:209`: it is the one `encoder_context.rs:1729`
-// installs into `pfCavlcParamCal`, the one the dispatch fallback at
-// `svc_set_mb_syn_cavlc.rs:265` names, and the one the in-module test at `:1206`
-// calls. Nothing anywhere named this file's copy — `svc_set_mb_syn_cavlc.rs`'s
-// `pub use` from here (`:167`) re-exports the five `Bs*` writers and not this.
-//
-// The two were **not** textually identical, which is why a dead copy is worse than
-// a redundant one: this one took `pCoffLevel` as a const-qualified pointer where
-// the live one takes a mutable one, and counted its zero run in an `i32` where the
-// live one uses a `u8`. Neither difference can bite at 16 coefficients, and that is
-// the point — the copy could have drifted somewhere that did bite and no gate in
-// this repo would have said a word, because no gate runs code with no callers.
-// F2's four-copy inventory is the standing record of the class.
-
-// `WriteBlockResidualCavlc` is deliberately NOT defined here. The live
-// definition is svc_set_mb_syn_cavlc.rs:299, where all ten call sites resolve
-// and which every CAVLC sweep exercises. A second, longer copy sat here with no
-// caller at all until Phase 5.4 removed it -- see the --dups audit in
-// rust/docs/encoder_port_status.md.

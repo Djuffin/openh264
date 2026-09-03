@@ -1,21 +1,12 @@
-//! **`DecodeParser`'s first referee** (Phase 8b session B, T8b.B2).
-//!
 //! `ISVCDecoder::DecodeParser` is a *different entry point* from `DecodeFrame2`, with
 //! a different output: an annex-B bitstream the caller can feed to another decoder,
-//! not planes. Every gate this project owns reads planes — the conformance 60, the
-//! 2707-row corpus, the reachability sweep, the ABI harness — so for the whole port
-//! this slot could return `dsErrorFree`, write nothing at all, and be green
-//! everywhere. It did exactly that: `decoder_decode_parser_c` was a stub, the
-//! parse-only arm of `DecodeFrameConstruction` kept the reference's length
-//! bookkeeping and none of its `memcpy`s, and `sSpsBsInfo`/`sSubsetSpsBsInfo`/
-//! `sPpsBsInfo` had no writer at all. S47 names the shape: an entry point with no
-//! referee is how a stub survives seven phases.
+//! not planes.
 //!
 //! # What the rows are
 //!
 //! The C++ decoder's, from `rust/tools/ecref/ecref <asset> 99999999 --parse-only`
-//! against `libopenh264.dylib` (the flag is T8b.B2's, added for exactly this). Its
-//! flow is transliterated below statement for statement: annex-B split,
+//! against `libopenh264.dylib`. Its flow is transliterated below statement for
+//! statement: annex-B split,
 //! `bParseOnly = true`, `ERROR_CON_SLICE_COPY`, **one NAL per call**, then the
 //! trailing `DecodeParser(NULL, 0)` that means end of stream on this slot.
 //!
@@ -33,7 +24,7 @@
 //!   `memcpy` of a struct whose `uiInBsTimeStamp` **nothing ever writes**
 //!   (`welsDecoderExt.cpp:1239`), so a completed frame overwrites the caller's own
 //!   input timestamp with zero. Reproduced, not repaired — it is observable
-//!   behaviour on a documented out-parameter (F90).
+//!   behaviour on a documented out-parameter.
 //! * **An IDR emits three NALs, not one.** `[13,8,2363]` on `BA_MW_D.264` call 3 is
 //!   the active SPS and PPS written in front of the slice out of the parse-only
 //!   caches, whether or not the source stream repeated them. That prepend is what
@@ -57,27 +48,20 @@ use common::Sha1Hasher;
 /// more than one VCL NAL), a stream carrying both an SPS and a subset SPS — and
 /// `Error_I_P`, the damaged stream below.
 ///
-/// **`Error_I_P` — F93, closed by F199 (Phase 9 session J).** A *damaged* stream,
-/// and parse-only decodes it with error concealment **disabled** — a combination
-/// nothing else referees: the malformed corpus runs every one of its 2707 rows with
-/// `ERROR_CON_SLICE_COPY` (`malformed_stream_parity.rs:490`) and the conformance
-/// assets are undamaged. It carries **three different SPSs** (ids 0/1/2 —
-/// 352x288, 640x480, 352x288), so every access-unit boundary here leans on
-/// `pActiveLayerSps`. Four of its seventeen rows diverged until session J: a
-/// dropped access unit (EC disabled, refs lost) left `iTotalNumMbRec` nonzero, the
-/// port was missing the fresh-picture zeroing at `decoder_core.cpp:2568`, and
-/// `ResetActiveSPSForEachLayer` — gated on `iTotalNumMbRec == 0` in both trees —
-/// never fired again, splitting the one recoverable IDR access unit in two. One
-/// statement restored all four rows and the emitted frame's SHA-1.
+/// **`Error_I_P`.** A *damaged* stream, and parse-only decodes it with error
+/// concealment **disabled** — a combination nothing else referees: the malformed
+/// corpus runs every one of its 2707 rows with `ERROR_CON_SLICE_COPY`
+/// (`malformed_stream_parity.rs:490`) and the conformance assets are undamaged. It
+/// carries **three different SPSs** (ids 0/1/2 — 352x288, 640x480, 352x288), so
+/// every access-unit boundary here leans on `pActiveLayerSps`.
 ///
 /// One column that is *expected* to differ and is therefore pinned by the port's
 /// own golden, not the reference's: `in=`, the input timestamp. Upstream's
-/// `DecodeParser` overwrites the caller's `uiInBsTimeStamp` on its way out
-/// (**F90**); the port does not, so the reference reports 0 where the port reports
-/// what it was handed. That is a divergence in the port's favour and is recorded as
-/// one. (The checked-in golden's `in=` column carries the caller's values, which
+/// `DecodeParser` overwrites the caller's `uiInBsTimeStamp` on its way out; the
+/// port does not, so the reference reports 0 where the port reports what it was
+/// handed. (The checked-in golden's `in=` column carries the caller's values, which
 /// both implementations now produce on the rows that emit nothing; the emitting row
-/// pins `in=0` — F90's overwrite — which the port reproduces at the copy-out.)
+/// pins `in=0` — the overwrite — which the port reproduces at the copy-out.)
 const ASSETS: &[&str] = &[
     "BA_MW_D",
     "Cisco_Men_whisper_640x320_CABAC_Bframe_9",
@@ -210,9 +194,6 @@ unsafe fn parseonly_rows(data: &[u8]) -> Vec<String> {
 
 #[test]
 fn decode_parser_matches_the_reference_on_every_asset() {
-    // F93's `DIVERGING` list is retired: its one asset moved into `ASSETS` when
-    // session J closed the finding (F199), so the guard that kept the row from
-    // being quietly lost is now the golden itself.
     assert!(ASSETS.contains(&"Error_I_P"), "F93's asset left the referee; see F199");
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let goldens = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/decoder_parseonly");
@@ -225,7 +206,7 @@ fn decode_parser_matches_the_reference_on_every_asset() {
         let want: Vec<&str> = golden.lines().filter(|l| !l.is_empty()).collect();
         let got = unsafe { parseonly_rows(&data) };
 
-        // S13 — the call count before the rows: a stub that never emits and a port
+        // The call count before the rows: a stub that never emits and a port
         // that emits the wrong bytes are different defects, and the first line of the
         // report should say which one this is.
         if got.len() != want.len() {
@@ -241,8 +222,7 @@ fn decode_parser_matches_the_reference_on_every_asset() {
                 failures.push(format!("{asset} row {i}:\n  ref:  {w}\n  port: {g}"));
                 // One row per asset is enough to name the defect; the rest of the
                 // asset's rows are almost always the same one repeating.
-                // `PARSEONLY_ALL=1` prints every diverging row instead, which is how
-                // F93's table above was measured.
+                // `PARSEONLY_ALL=1` prints every diverging row instead.
                 if std::env::var("PARSEONLY_ALL").is_err() {
                     break;
                 }

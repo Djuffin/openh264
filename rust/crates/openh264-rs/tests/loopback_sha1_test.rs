@@ -160,14 +160,6 @@ fn workspace_root() -> std::path::PathBuf {
 /// **every** `FillDefault` value in place, not just `iRCMode = RC_QUALITY_MODE`:
 /// `bEnableSceneChangeDetect`, `bEnableBackgroundDetection`, `bEnableAdaptiveQuant`
 /// and `bEnableFrameSkip` are all `true` as well.
-///
-/// It was `#[ignore]`d through Phase 5.0 because the QP-adapting rate-control modes
-/// were not byte-exact. Phase 5.1 closed that and three more things this
-/// configuration needs — `METHOD_COMPLEXITY_ANALYSIS`,
-/// `METHOD_BACKGROUND_DETECTION` and the `WelsMdUpdateBGDInfo` that was shadowed
-/// by an empty stub — and `compare.sh` now exits 0 for this exact
-/// `Initialize(SEncParamBase)` path as well
-/// (`compare.sh <yuv> <w> <h> <n> <qp> <cabac> <gop> <rcmode> 1`).
 #[test]
 fn test_decode_encode_full_cycle_sha1_parity() {
     let repo_root = workspace_root();
@@ -205,11 +197,6 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             // slice, one spatial layer, no denoise, no lossless link, no LTR, CAVLC —
             // and calls `Initialize` with a zeroed `SEncParamBase` carrying only
             // usage type, frame rate, width, height and `iTargetBitrate = 5000000`.
-            //
-            // This used to build an `SEncParamExt` by hand with a 500 kbit/s target
-            // and call `InitializeExt`, which is a different rate-control
-            // configuration entirely — the hash could not have matched whatever the
-            // encoder did.
             let mut enc_param = SEncParamBase::default();
             enc_param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
             enc_param.fMaxFrameRate = param.frame_rate;

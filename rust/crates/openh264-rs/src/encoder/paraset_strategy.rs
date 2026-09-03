@@ -1,14 +1,11 @@
 //! Port of `codec/encoder/core/src/paraset_strategy.cpp` and
 //! `codec/encoder/core/inc/paraset_strategy.h`.
 //!
-//! **Complete since T8b.B3.** C++ declares one abstract `IWelsParametersetStrategy`
-//! and five concrete strategies; all five are here — `CONSTANT_ID`, `INCREASING_ID`,
-//! `SPS_LISTING`, `SPS_LISTING_AND_PPS_INCREASING` and `SPS_PPS_LISTING`. Until
-//! T8b.B3 the last three were `None` out of [`CreateParametersetStrategy`] and
-//! `InitializeExt` refused, which was the honest shape while they were unported (S48)
-//! and cost seven `test/api` rows.
+//! C++ declares one abstract `IWelsParametersetStrategy` and five concrete
+//! strategies; all five are here — `CONSTANT_ID`, `INCREASING_ID`, `SPS_LISTING`,
+//! `SPS_LISTING_AND_PPS_INCREASING` and `SPS_PPS_LISTING`.
 //!
-//! ### One object, five kinds — T4b.2a, extended by T8b.B3
+//! ### One object, five kinds
 //!
 //! C++ layers six classes: `CWelsParametersetIdConstant`, the abstract
 //! `CWelsParametersetIdNonConstant` (which overrides `OutputCurrentStructure` and
@@ -29,13 +26,10 @@
 //! else from `CWelsParametersetSpsListing`. One kind per class keeps the map from the
 //! header to this file a lookup rather than an argument.
 //!
-//! This replaced a hand-written C-style vtable (`IWelsParametersetStrategyVtbl`, 20
-//! entries, 25 thunks, 2 static instances). The vtable existed because `SWelsFuncPtrList`
-//! stores this as a plain 8-byte member and a `*mut dyn Trait` is a 16-byte fat pointer
-//! that would mis-size the struct. `Option<Box<CWelsParametersetIdStrategyObj>>` is 8
-//! bytes by the null-pointer niche, so the size is kept without the indirection — and
-//! the `Box` makes the object's owner visible, which is how T4b.2a found the leak
-//! recorded as F19.
+//! `SWelsFuncPtrList` stores this as a plain 8-byte member and a `*mut dyn Trait` is
+//! a 16-byte fat pointer that would mis-size the struct.
+//! `Option<Box<CWelsParametersetIdStrategyObj>>` is 8 bytes by the null-pointer
+//! niche, so the size is kept without the indirection.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
 
 #![forbid(unsafe_code)]
@@ -70,8 +64,7 @@ pub const INVALID_ID: i32 = -1;
 /// five methods whose vtable entries actually differ read it.
 ///
 /// `Constant = 0` matters: [`SWelsFuncPtrList`](crate::encoder::wels_func_ptr_def::SWelsFuncPtrList)
-/// is built by `WelsMallocz`, so the all-zero pattern must be a declared variant —
-/// see the S21 note on [`CWelsParametersetIdStrategyObj`].
+/// is built by `WelsMallocz`, so the all-zero pattern must be a declared variant.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ParasetIdKind {
@@ -127,14 +120,6 @@ impl ParasetIdKind {
 /// Field order after `eIdKind` mirrors the C++ object: `m_sParaSetOffset`,
 /// `m_bSimulcastAVC`, `m_iSpatialLayerNum`, `m_iBasicNeededSpsNum`,
 /// `m_iBasicNeededPpsNum`.
-///
-/// **S21, the construction audit.** This type is only ever built by
-/// [`CreateParametersetStrategy`], which fills every field; it is never `mem::zeroed`
-/// and never `WelsMallocz`'d. What *is* zero-constructed is the
-/// `SWelsFuncPtrList` that holds it, and there the field is an
-/// `Option<Box<CWelsParametersetIdStrategyObj>>` whose all-zero pattern is `None` by
-/// the null-pointer niche — a valid value, not a dangling box. The owned field is
-/// therefore sound at all-zero, which is the case the rule asks about.
 #[repr(C)]
 pub struct CWelsParametersetIdStrategyObj {
     pub eIdKind: ParasetIdKind,
@@ -176,9 +161,6 @@ impl CWelsParametersetIdStrategyObj {
 
     // ------------------------------------------------------------------
     // The five methods whose C++ vtable entries differ between the kinds.
-    // Read each `match` against `ID_CONSTANT_VTBL` / `ID_INCREASING_VTBL` as they
-    // were: the `Constant` arm is the `ConstId_*` body, the `Increasing` arm the
-    // `IncId_*` / `NonConstId_*` one.
     // ------------------------------------------------------------------
 
     /// `GetPpsIdOffset` — `paraset_strategy.cpp:216` (Constant) / `:384`
@@ -260,23 +242,14 @@ impl CWelsParametersetIdStrategyObj {
     /// (SpsListing) / `:684` (SpsPpsListing). The three trailing parameters are
     /// unused by the first two and are what the listing kinds write through.
     ///
-    /// (S11.45: the `# Safety` clause retired with the pointer — the array
-    /// arrives borrowed at its stated length.)
-    /// **S7.A3**: the three arrays it copies out, not the context they live in — all
-    /// three reads are shared, and taking the whole context made this call a second
-    /// `&mut` claim beside the strategy's own. Callers use
-    /// [`ctx_strategy_and_paraset_arrays`].
+    /// Callers use [`ctx_strategy_and_paraset_arrays`].
     pub fn OutputCurrentStructure(
         &mut self,
-        // S11.45: the C's out-pointer is the caller's array, borrowed.
         pParaSetOffsetVariable: &mut [SParaSetOffsetVariable; PARA_SET_TYPE],
-        // S11.14: the PPS id list is a slice — the C's pointer + implicit
-        // MAX_PPS_COUNT length, said in the type.
         pPpsIdList: &mut [i32; MAX_DQ_LAYER_NUM * MAX_PPS_COUNT],
         pSpsArray: &[SWelsSPS],
         pSubsetArray: &[SSubsetSps],
         pPpsArray: &[SWelsPPS],
-        // S11.13: `Option<&mut>` — this body writes the list back.
         pExistingParasetList: Option<&mut SExistingParasetList>,
     ) {
         if !self.eIdKind.is_non_constant() {
@@ -291,9 +264,6 @@ impl CWelsParametersetIdStrategyObj {
         }
         *pParaSetOffsetVariable = self.m_sParaSetOffset.sParaSetOffsetVariable;
 
-        // T9.H8: the trailing `|| pCtx.is_null()` is gone — a `&mut sWelsEncCtx`
-        // cannot be null. The listing and paraset-list conditions are unchanged.
-        // S11.13: the null test is the `Option`.
         let Some(pExistingParasetList) = pExistingParasetList else {
             return;
         };
@@ -302,14 +272,11 @@ impl CWelsParametersetIdStrategyObj {
         }
         // `CWelsParametersetSpsListing::OutputCurrentStructure` — `:519`.
         pExistingParasetList.uiInUseSpsNum = self.m_sParaSetOffset.uiInUseSpsNum;
-        // A4: the copy is a slice copy now. The listing kinds set
-        // `m_iBasicNeededSpsNum = MAX_SPS_COUNT`, and this body has already
-        // returned unless `eIdKind.is_listing()`, so both sides are exactly
-        // `MAX_SPS_COUNT` long and `copy_from_slice` asserts what the raw copy
-        // assumed.
+        // The listing kinds set `m_iBasicNeededSpsNum = MAX_SPS_COUNT`, and this
+        // body has already returned unless `eIdKind.is_listing()`, so both sides
+        // are exactly `MAX_SPS_COUNT` long.
         pExistingParasetList.sSps.copy_from_slice(pSpsArray);
-        // The C tests `NULL != pCtx->pSubsetArray`; the port's accessor is a pointer
-        // into the context's own storage and the test is the same one.
+        // The C tests `NULL != pCtx->pSubsetArray`; the test is the same one.
         if !pSubsetArray.is_empty() {
             pExistingParasetList.uiInUseSubsetSpsNum = self.m_sParaSetOffset.uiInUseSubsetSpsNum;
             pExistingParasetList.sSubsetSps
@@ -326,11 +293,11 @@ impl CWelsParametersetIdStrategyObj {
         // **The reference reads `pCtx->pPps` here, not `pCtx->pPPSArray`** — a single
         // `SWelsPPS` member — and copies `MAX_PPS_COUNT` of them out of it. That is an
         // over-read of 56 structs past the end of one; the port copies the array the
-        // sentence means. See F94.
+        // sentence means.
         pExistingParasetList.uiInUsePpsNum = self.m_sParaSetOffset.uiInUsePpsNum;
         pExistingParasetList.sPps.copy_from_slice(pPpsArray);
-        // S11.45: the nested-to-flat cast is row copies — the same bytes in
-        // the same order, each row bounds-checked.
+        // The nested-to-flat cast is row copies — the same bytes in the same
+        // order, each row bounds-checked.
         for (kiDid, kpRow) in self.m_sParaSetOffset.iPpsIdList.iter().enumerate() {
             pPpsIdList[kiDid * MAX_PPS_COUNT..][..MAX_PPS_COUNT].copy_from_slice(kpRow);
         }
@@ -338,14 +305,9 @@ impl CWelsParametersetIdStrategyObj {
 
     /// `LoadPreviousStructure` — `paraset_strategy.h:148` (Constant, empty) /
     /// `paraset_strategy.cpp:300` (`CWelsParametersetIdNonConstant`).
-    ///
-    /// (S11.45: the `# Safety` clause retired with the pointer — the array
-    /// arrives borrowed at its stated length.)
     pub fn LoadPreviousStructure(
         &mut self,
         pParaSetOffsetVariable: &[SParaSetOffsetVariable; PARA_SET_TYPE],
-        // S11.14: the PPS id list is a slice — the C's pointer + implicit
-        // MAX_PPS_COUNT length, said in the type.
         pPpsIdList: &mut [i32; MAX_DQ_LAYER_NUM * MAX_PPS_COUNT],
     ) {
         if !self.eIdKind.is_non_constant() {
@@ -363,20 +325,15 @@ impl CWelsParametersetIdStrategyObj {
     }
 
     // ------------------------------------------------------------------
-    // The fifteen with one body. `ID_INCREASING_VTBL` pointed all fifteen of these
-    // entries at the `ConstId_*` thunks, which is C++ inheritance resolving them to
-    // the base class — so there is nothing to `match` on.
+    // The fifteen with one body: C++ inheritance resolves all of them to the
+    // base class, so there is nothing to `match` on.
     // ------------------------------------------------------------------
 
     /// `GetSpsIdOffsetList` — `paraset_strategy.cpp:223`.
-    ///
-    /// Returns a raw pointer because its callers hand it straight to the SPS writers,
-    /// which take `*mut i32` from C++.
     #[inline]
-    /// S4.C: the delta table as a **shared slice**. Every consumer
+    /// The delta table as a **shared slice**. Every consumer
     /// (`WelsWriteSpsNal`/`WelsWriteSpsSyntax`/`WelsWriteSubsetSpsSyntax`) reads one
-    /// entry at `uiSpsId` and writes none, so `&self` is the honest receiver and
-    /// `&[i32]` the honest answer — the raw was handed out `&mut` for a read.
+    /// entry at `uiSpsId` and writes none.
     pub fn GetSpsIdOffsetList(&self, iParasetType: i32) -> &[i32] {
         &self.m_sParaSetOffset.sParaSetOffsetVariable[iParasetType as usize].iParaSetIdDelta
     }
@@ -438,7 +395,6 @@ impl CWelsParametersetIdStrategyObj {
     /// `SExistingParasetList` (`encoder_ext.cpp:1161`) and the previous encoder's
     /// parameter sets come back into the new one's arrays, so a configuration the
     /// decoder has already seen keeps its old id.
-    ///
     pub fn LoadPrevious(
         &mut self,
         pExistingParasetList: Option<&SExistingParasetList>,
@@ -446,7 +402,6 @@ impl CWelsParametersetIdStrategyObj {
         pSubsetArray: &mut [SSubsetSps],
         pPpsArray: &mut [SWelsPPS],
     ) {
-        // S11.13: the null test is the `Option`.
         let Some(pExistingParasetList) = pExistingParasetList else {
             return;
         };
@@ -462,10 +417,6 @@ impl CWelsParametersetIdStrategyObj {
         );
         if !pSpsArray.is_empty() {
             let n = MAX_SPS_COUNT.min(pSpsArray.len());
-            // S11.15: plain slicing. The `addr_of!` + `from_raw_parts` pair
-                // existed because the source was a raw pointer and `&(*raw).sSps[..n]`
-                // would have been an implicit autoref through it; with the list a
-                // reference (S11.13) the borrow is ordinary and the length checked.
                 pSpsArray[..n].copy_from_slice(&pExistingParasetList.sSps[..n]);
         }
         if self.GetNeededSubsetSpsNum() > 0 {
@@ -478,10 +429,6 @@ impl CWelsParametersetIdStrategyObj {
             );
             if !pSubsetArray.is_empty() {
                 let n = MAX_SPS_COUNT.min(pSubsetArray.len());
-                // S11.15: plain slicing. The `addr_of!` + `from_raw_parts` pair
-                // existed because the source was a raw pointer and `&(*raw).sSubsetSps[..n]`
-                // would have been an implicit autoref through it; with the list a
-                // reference (S11.13) the borrow is ordinary and the length checked.
                 pSubsetArray[..n].copy_from_slice(&pExistingParasetList.sSubsetSps[..n]);
             }
         } else {
@@ -499,10 +446,6 @@ impl CWelsParametersetIdStrategyObj {
             );
             if !pPpsArray.is_empty() {
                 let n = MAX_PPS_COUNT.min(pPpsArray.len());
-                // S11.15: plain slicing. The `addr_of!` + `from_raw_parts` pair
-                // existed because the source was a raw pointer and `&(*raw).sPps[..n]`
-                // would have been an implicit autoref through it; with the list a
-                // reference (S11.13) the borrow is ordinary and the length checked.
                 pPpsArray[..n].copy_from_slice(&pExistingParasetList.sPps[..n]);
             }
         }
@@ -516,11 +459,8 @@ impl CWelsParametersetIdStrategyObj {
     /// `iPpsId`, and fills `iPpsIdList[pps][idr_round]` with the id to use on each IDR
     /// round. `GetCurrentPpsId` is the reader.
     ///
-    /// **S7.A3**: the two fields, not the context. This method reached exactly
-    /// `pCtx.iPpsNum` and the PPS array, and taking the whole context made the call
-    /// `ParasetStrategy(pCtx).UpdatePpsList(pCtx)` — two `&mut` claims on one
-    /// allocation, expressible only through a raw pointer. Callers use
-    /// [`ctx_strategy_and_pps`], which splits the two off one `&mut sWelsEncCtx`.
+    /// Callers use [`ctx_strategy_and_pps`], which splits the two off one
+    /// `&mut sWelsEncCtx`.
     ///
     /// `pps` must be `MAX_PPS_COUNT` entries, which is what
     /// `m_iBasicNeededPpsNum = MAX_PPS_COUNT` asks `RequestMemorySvc` for; indexing
@@ -547,8 +487,8 @@ impl CWelsParametersetIdStrategyObj {
             }
         }
         for iPpsId in iUsePpsNum as usize..MAX_PPS_COUNT {
-            // §4.6: the source entry is copied out — `SWelsPPS` is `Copy` — so the
-            // array is borrowed once per write instead of twice at once.
+            // The source entry is copied out — `SWelsPPS` is `Copy` — so the array
+            // is borrowed once per write instead of twice at once.
             let src = pps[iPpsId % iUsePpsNum as usize];
             let dst = &mut pps[iPpsId];
             *dst = src;
@@ -565,15 +505,13 @@ impl CWelsParametersetIdStrategyObj {
     /// object exists (`encoder_ext.cpp:467-473`), applied again where the object can
     /// see it: more than one SVC spatial layer and the strategy falls back to
     /// `CONSTANT_ID`.
-    ///
     pub fn CheckParamCompatibility(
         &mut self,
-        // S11.13: by reference — see `InitializeInternal`. `&mut`: this body
-        // writes `eSpsPpsIdStrategy` back when the listing strategy is refused.
+        // `&mut`: this body writes `eSpsPpsIdStrategy` back when the listing
+        // strategy is refused.
         pCodingParam: &mut SWelsSvcCodingParam,
         pLogCtx: SLogContext,
     ) -> bool {
-        // S11.13: the null disjunct retires with the raw (T9.H).
         if !self.eIdKind.is_listing() {
             return true;
         }
@@ -610,11 +548,7 @@ impl CWelsParametersetIdStrategyObj {
     /// which refuses with -1 because a reset would invalidate the PPS list). Called
     /// only from `GenerateNewSps` when the SPS list wraps.
     ///
-    /// # Safety
-    /// `pCtx` must be live with `pSpsArray` / `pSubsetArray` allocated to
-    /// `MAX_SPS_COUNT` entries.
-    /// **S7.A3**: the two arrays, not the context — `sps_array_mut()` and
-    /// `subset_array_mut()` were this method's only reach into it.
+    /// `pSpsArray` / `pSubsetArray` must hold `MAX_SPS_COUNT` entries.
     fn SpsReset(
         &mut self,
         pSpsArray: &mut [SWelsSPS],
@@ -624,9 +558,9 @@ impl CWelsParametersetIdStrategyObj {
         if self.eIdKind == ParasetIdKind::SpsPpsListing {
             return -1;
         }
-        // `SWelsSPS::ZERO`, not `default()`: F56's rule, and T6.G3 established it at
-        // exactly this memset. `Default` seeds `uiProfileIdc = PRO_BASELINE` and the
-        // VUI `*_UNDEF` values, which are not zero.
+        // `SWelsSPS::ZERO`, not `default()`: `Default` seeds
+        // `uiProfileIdc = PRO_BASELINE` and the VUI `*_UNDEF` values, which are
+        // not zero.
         if !kbUseSubsetSps {
             self.m_sParaSetOffset.uiInUseSpsNum = 1;
             for i in 0..MAX_SPS_COUNT {
@@ -642,7 +576,6 @@ impl CWelsParametersetIdStrategyObj {
     }
 
     /// `GenerateNewSps` — `paraset_strategy.cpp:265`.
-    ///
     pub fn GenerateNewSps(
         &mut self,
         pParam: &mut crate::encoder::param_svc::SWelsSvcCodingParam,
@@ -672,18 +605,11 @@ impl CWelsParametersetIdStrategyObj {
         // `CWelsParametersetSpsListing::GenerateNewSps` — `paraset_strategy.cpp:475`.
         // Reuse an SPS the decoder already has if the configuration matches one;
         // otherwise take the next id, wrapping through `SpsReset`.
-        // A7, §4.6 combined accessor: `FindExistingSps` writes `uiLevelIdc` back
-        // into the layer's configuration while reading the two arrays, so the
-        // parameter block and the arrays come out of one borrow.
         let iSpsNumInUse = if kbUseSubsetSps {
             self.m_sParaSetOffset.uiInUseSubsetSpsNum
         } else {
             self.m_sParaSetOffset.uiInUseSpsNum
         } as i32;
-        // **S7.A3**: the four arrive as parameters now — the combined accessor's call
-        // was this method's only reach into the context, and A7's reason for it (one
-        // borrow covering the parameter block and both arrays) is what the caller's
-        // [`ctx_strategy_and_param_arrays`] split now provides.
         let kiFoundSpsId = FindExistingSps(
             pParam,
             kbUseSubsetSps,
@@ -695,9 +621,8 @@ impl CWelsParametersetIdStrategyObj {
             bSVCBaselayer,
         );
         if INVALID_ID != kiFoundSpsId {
-            // The C also writes `pSps`/`pSubsetSps` here; T6.G3 deleted those two
-            // out-parameters because every caller recomputed them from this return
-            // value in the next statement.
+            // The C also writes `pSps`/`pSubsetSps` here; every caller recomputed
+            // them from this return value in the next statement.
             return kiFoundSpsId as u32;
         }
         if !self.CheckPpsGenerating() {
@@ -738,13 +663,8 @@ impl CWelsParametersetIdStrategyObj {
     /// Note the literal `true` C++ passes for `kbDeblockingFilterPresentFlag`, ignoring
     /// the argument of the same name.
     ///
-    /// **The two SPS parameters are `Option`s since T6.G3** — see [`WelsInitPps`],
-    /// which this forwards to unchanged.
-    ///
-    /// # Safety
-    /// `pCtx->pPPSArray` must hold at least `kuiPpsId + 1` entries.
-    /// **S7.A3**: the PPS array, not the context — `pps_array()`/`pps_array_mut()`
-    /// were this method's only reach into it. Callers use [`ctx_strategy_and_pps`].
+    /// `pps` must hold at least `kuiPpsId + 1` entries. Callers use
+    /// [`ctx_strategy_and_pps`].
     pub fn InitPps(
         &mut self,
         pps: &mut [SWelsPPS],
@@ -805,10 +725,7 @@ impl CWelsParametersetIdStrategyObj {
     /// left this empty would write one of each and produce a stream missing the very
     /// list it was configured for.
     ///
-    /// **S7.A3**: the three counts, not the context — as [`UpdatePpsList`] above, and
-    /// for the same reason. Callers use [`ctx_strategy_and_counts`].
-    ///
-    /// [`UpdatePpsList`]: Self::UpdatePpsList
+    /// Callers use [`ctx_strategy_and_counts`].
     pub fn UpdateParaSetNum(&mut self, pSpsNum: &mut i32, pSubsetSpsNum: &mut i32, pPpsNum: &mut i32) {
         if !self.eIdKind.is_listing() {
             return;
@@ -846,7 +763,6 @@ impl CWelsParametersetIdStrategyObj {
 }
 
 /// `WelsGenerateNewSps` — `paraset_strategy.cpp:78` (file-static).
-///
 pub fn WelsGenerateNewSps(
     pParam: &mut crate::encoder::param_svc::SWelsSvcCodingParam,
     pSpsArray: &mut [SWelsSPS],
@@ -858,28 +774,10 @@ pub fn WelsGenerateNewSps(
     bSVCBaselayer: bool,
 ) -> i32 {
     let iRet;
-    // **T6.G3: the two `*mut *mut` out-parameters are gone**, and with them the
-    // block that filled them. They handed the caller back exactly
-    // `pSpsArray[kiSpsId]` / `pSubsetArray[kiSpsId]` — values it recomputed from the
-    // id this function returns, in the very next statement — so they were a second
-    // copy of the return value carrying a pointer's failure modes. Each arm below
-    // now reaches its own array once, where it uses it, and the two-arm derivation
-    // that stood here (which computed one pointer the caller's arm never read) is
-    // gone with them.
-    // A7, §4.6 combined accessor: the SPS is built *into* the array while
-    // `WelsInitSps` writes `uiLevelIdc` back into the layer's configuration, so
-    // the parameter block and the arrays come out of one borrow.
-    // **S7.A3**: the three arrive as parameters. A7's reason for the combined
-    // accessor — `WelsInitSps` writes `uiLevelIdc` back into the layer's
-    // configuration while the arrays are read, so both come out of one borrow — is
-    // now the caller's split, and holds the same way.
-    // **S11.18**: S29's refusal is retired. `WelsInitSps` takes references now,
-    // and the caller-side binding whose tag the retag would have popped is
-    // derived at its use (`encoder_ext.rs`, `InitDqLayers`) rather than across
-    // this call. The two layer records come out of one destructure because the
-    // callee writes `uiLevelIdc` back into the config while reading the
-    // internal record — disjoint fields of `pParam`.
-    // §4.6, reorder: the scalars come out before the two layer records' borrow.
+    // The two layer records come out of one destructure because the callee writes
+    // `uiLevelIdc` back into the config while reading the internal record —
+    // disjoint fields of `pParam`.
+    // The scalars come out before the two layer records' borrow.
     let kuiIntraPeriod = pParam.uiIntraPeriod;
     let kiMaxNumRefFrame = pParam.iMaxNumRefFrame;
     let kbEnableFrameCropping = pParam.bEnableFrameCroppingFlag;
@@ -965,23 +863,12 @@ fn ParasetIdAdditionIdAdjust(
 /// function that reaches this same object back through `pCtx->pFuncList`
 /// (`WelsWriteOneSPS`, `WelsWriteOnePPS`) — so a `&mut` held across them would alias
 /// itself. Re-acquiring is one field read, and it makes the re-entrancy impossible to
-/// get wrong rather than merely unlikely. Under the vtable this hazard was invisible:
-/// a `*mut` cached in a local aliased freely and said nothing.
+/// get wrong rather than merely unlikely. Callers keep the reference for the length
+/// of one expression.
 ///
-/// The unbound lifetime is the usual laundering this port does at a raw-pointer
-/// boundary; callers keep the reference for the length of one expression.
-///
-/// # Safety
-/// `pCtx` must be a live context whose `pFuncList` is non-null. The strategy must be
-/// installed — `InitFunctionPointers` fails the encoder build when it is not, and the
-/// call sites that run before that point test the field first. Panics rather than
-/// dereferencing null if the invariant is broken; the vtable version was UB there.
-/// **S7.A3**: safe, and `&mut sWelsEncCtx`. A6 recorded this as "one of the two
-/// derivations the flip could not take" because the strategy is reached `&mut` while
-/// the body's context was a raw. Every one of the 21 call sites is in a body that
-/// already holds `&mut sWelsEncCtx`, so the raw was a leftover, not a requirement —
-/// and the two calls that genuinely could not be expressed this way are the ones
-/// [`ctx_strategy_and_pps`] and [`ctx_strategy_and_counts`] below exist for.
+/// The strategy must be installed — `InitFunctionPointers` fails the encoder build
+/// when it is not, and the call sites that run before that point test the field
+/// first. Panics if the invariant is broken.
 #[inline]
 pub fn ParasetStrategy(pCtx: &mut sWelsEncCtx) -> &mut CWelsParametersetIdStrategyObj {
     pCtx.pFuncList
@@ -995,11 +882,10 @@ pub fn ParasetStrategy(pCtx: &mut sWelsEncCtx) -> &mut CWelsParametersetIdStrate
 ///
 /// `ParasetStrategy(pCtx).UpdatePpsList(pCtx)` is two `&mut` claims on one allocation:
 /// the strategy object *lives inside* the context, at
-/// `pFuncList.pParametersetStrategy`, and the method took the context again. That is
-/// only expressible through a raw pointer, which is why it was one. Split at the
-/// source instead — the strategy and `UpdatePpsList`'s two fields are disjoint fields
-/// of one `&mut self`, and the compiler can see that where it cannot see two accessor
-/// calls each claiming the whole context.
+/// `pFuncList.pParametersetStrategy`, and the method took the context again. Split at
+/// the source instead — the strategy and `UpdatePpsList`'s two fields are disjoint
+/// fields of one `&mut self`, and the compiler can see that where it cannot see two
+/// accessor calls each claiming the whole context.
 #[inline]
 pub fn ctx_strategy_and_pps(
     pCtx: &mut sWelsEncCtx,
@@ -1094,21 +980,14 @@ pub fn ctx_strategy_and_counts(
 
 /// `IWelsParametersetStrategy::CreateParametersetStrategy` — `paraset_strategy.cpp:40`.
 ///
-/// All five strategies since T8b.B3. Until then the three listing ones returned
-/// `None` and `InitFunctionPointers` failed the encoder build — the S48 shape, which
-/// is right for an unported feature and wrong once it is ported.
-///
-/// **The `Option` stays, and it is now always `Some`.** `EParameterSetStrategy` is a
-/// closed five-variant enum (`codec_api.rs:556`), so with all five mapped the `match`
-/// is exhaustive and C++'s `default:` label has nothing left to catch — the value a
+/// **The `Option` is always `Some`.** `EParameterSetStrategy` is a closed
+/// five-variant enum (`codec_api.rs:556`), so with all five mapped the `match` is
+/// exhaustive and C++'s `default:` label has nothing left to catch — the value a
 /// caller hands in has already been checked against the five by
 /// `SWelsSvcCodingParam`'s own transcode (`param_svc.rs:688-694`), which is where a
-/// sixth would be refused. The return type is left as it is because every call site
-/// is written against it and because `InitFunctionPointers` still needs a failure
-/// path for the allocation the C checks.
+/// sixth would be refused.
 ///
 /// The returned `Box` **is** the object's lifetime: dropping it is `WELS_DELETE_OP`.
-/// There is no `DestroyParametersetStrategy` any more, which is what closes F19.
 pub fn CreateParametersetStrategy(
     eSpsPpsIdStrategy: EParameterSetStrategy,
     bSimulcastAVC: bool,
@@ -1131,16 +1010,6 @@ pub fn CreateParametersetStrategy(
 }
 
 /// `CheckMatchedSps` — `paraset_strategy.cpp:106` (file-static).
-///
-/// **T9.X2 — safe, and the reason it could go where its neighbours could not is
-/// that the borrow is SHARED.** Both parameters were `*const` to single objects
-/// that this function only reads, which is R1's shape; the two call sites that
-/// held raws now spell `&*pSpsArray.add(id)`. That is a shared retag over one
-/// element of the SPS array, which is exactly the access, and it is not F71's
-/// hazard: F71 is about `&mut` — a `Unique` retag that pops every pointer the
-/// other workers hold. A `&` reborrow narrows to `SharedReadOnly` and leaves them
-/// standing. The neighbouring `WelsInitSps` parameters stay raw for the opposite
-/// reason (S29, see `ParasetIdAdditionIdAdjust`): they are written through.
 pub fn CheckMatchedSps(pSps1: &SWelsSPS, pSps2: &SWelsSPS) -> bool {
     if pSps1.iMbWidth != pSps2.iMbWidth || pSps1.iMbHeight != pSps2.iMbHeight {
         return false;
@@ -1179,8 +1048,6 @@ pub fn CheckMatchedSps(pSps1: &SWelsSPS, pSps2: &SWelsSPS) -> bool {
 }
 
 /// `CheckMatchedSubsetSps` — `paraset_strategy.cpp:143` (file-static).
-///
-/// Safe since T9.X2, with [`CheckMatchedSps`] and for its reason.
 pub fn CheckMatchedSubsetSps(pSubsetSps1: &SSubsetSps, pSubsetSps2: &SSubsetSps) -> bool {
     if !CheckMatchedSps(&pSubsetSps1.pSps, &pSubsetSps2.pSps) {
         return false;
@@ -1201,7 +1068,7 @@ pub fn CheckMatchedSubsetSps(pSubsetSps1: &SSubsetSps, pSubsetSps2: &SSubsetSps)
     true
 }
 
-/// `FindExistingPps` — `paraset_strategy.cpp:608` (T8b.B3).
+/// `FindExistingPps` — `paraset_strategy.cpp:608`.
 ///
 /// Returns the index of a stored PPS the current configuration would produce, or
 /// [`INVALID_ID`]. Its only caller is `SpsPpsListing`'s `InitPps`.
@@ -1256,7 +1123,6 @@ pub fn FindExistingPps(
 ///
 /// Returns the index of a stored parameter set matching the current configuration, or
 /// [`INVALID_ID`].
-///
 pub fn FindExistingSps(
     pParam: &mut SWelsSvcCodingParam,
     kbUseSubsetSps: bool,
@@ -1267,13 +1133,10 @@ pub fn FindExistingSps(
     pSubsetArray: &[SSubsetSps],
     bSVCBaseLayer: bool,
 ) -> i32 {
-    // **S11.18**: S29's refusal is retired. `WelsInitSps` takes references now,
-    // and the caller-side binding whose tag the retag would have popped is
-    // derived at its use (`encoder_ext.rs`, `InitDqLayers`) rather than across
-    // this call. The two layer records come out of one destructure because the
-    // callee writes `uiLevelIdc` back into the config while reading the
-    // internal record — disjoint fields of `pParam`.
-    // §4.6, reorder: the scalars come out before the two layer records' borrow.
+    // The two layer records come out of one destructure because the callee writes
+    // `uiLevelIdc` back into the config while reading the internal record —
+    // disjoint fields of `pParam`.
+    // The scalars come out before the two layer records' borrow.
     let kuiIntraPeriod = pParam.uiIntraPeriod;
     let kiMaxNumRefFrame = pParam.iMaxNumRefFrame;
     let kbEnableFrameCropping = pParam.bEnableFrameCroppingFlag;
@@ -1354,9 +1217,9 @@ mod tests {
         assert_eq!(p.GetAllNeededParasetNum(), 3);
     }
 
-    /// The counts are inherited, not overridden: `ID_INCREASING_VTBL` pointed them at
-    /// the `ConstId_*` thunks, so the merged object must answer identically for both
-    /// kinds. This is the test that would catch a `match` added where C++ has none.
+    /// The counts are inherited, not overridden: the merged object must answer
+    /// identically for both kinds. This is the test that would catch a `match` added
+    /// where C++ has none.
     #[test]
     fn both_kinds_share_the_inherited_counts() {
         let mut c = strategy(EParameterSetStrategy::CONSTANT_ID);
@@ -1370,9 +1233,7 @@ mod tests {
         assert_eq!(c.GetSpsIdx(2), i.GetSpsIdx(2));
     }
 
-    /// **This replaces `unported_strategies_return_none`** (T8b.B3), which asserted
-    /// the three listing strategies came back `None`. Every one of the five now
-    /// builds, and each maps to the class the header names.
+    /// Every one of the five builds, and each maps to the class the header names.
     #[test]
     fn every_strategy_builds_and_maps_to_its_class() {
         let cases = [

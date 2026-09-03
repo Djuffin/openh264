@@ -163,9 +163,9 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
 
         assert!(decoded_frames > 0, "No frames decoded for {}", file_name);
         let calculated_hash = hasher.digest();
-        // S13 — frame counts before hashes: a hash mismatch whose frame count also
-        // moved is a different defect from one whose count held, and the message is
-        // the only place a reader of a failing run can learn which.
+        // Frame counts before hashes: a hash mismatch whose frame count also moved is
+        // a different defect from one whose count held, and the message is the only
+        // place a reader of a failing run can learn which.
         assert_eq!(
             calculated_hash, expected_hash,
             "SHA-1 hash mismatch for bitstream asset {} ({decoded_frames} frames decoded)",
@@ -241,9 +241,7 @@ asset_test!(test_asset_test_qcif_cabac, "test_qcif_cabac.264", "587d1d05943f3cd4
 // gives them the same uiDecodingTimeStamp, so ReleaseBufferedReadyPictureNoReorder falls
 // back to slot order and emits POC 8 before POC 6. Both are iSeqNum 1, so POC order is
 // display order and 6 must come first; the port breaks the tie by POC instead (see
-// ReleaseBufferedReadyPictureNoReorder in src/api/codec_api.rs). The direction of that
-// tiebreak is confirmed independently by the JVT gold for CABA2_SVA_B, which upstream
-// also fails on the same tie.
+// ReleaseBufferedReadyPictureNoReorder in src/api/codec_api.rs).
 asset_test!(test_asset_test_scalinglist_jm, "test_scalinglist_jm.264", "f690a3af2896a53360215fb5d35016bfd41499b3");
 asset_test!(test_asset_test_vd_1d, "test_vd_1d.264", "5827d2338b79ff82cd091c707823e466197281d3");
 asset_test!(test_asset_test_vd_rc, "test_vd_rc.264", "eea02e97bfec89d0418593a8abaaf55d02eaa1ca");
@@ -258,14 +256,10 @@ asset_test!(test_asset_vid_1280x720_cavlc_temporal_direct, "VID_1280x720_cavlc_t
 asset_test!(test_asset_vid_1920x1080_cavlc_temporal_direct, "VID_1920x1080_cavlc_temporal_direct.264", "b35dc99604ea2a1fda5b84d1b9098cb7565dec8f");
 
 // ---------------------------------------------------------------------------
-// Narrow frames — the F21 trigger class (`phase4b_findings.md`).
+// Narrow frames
 //
 // `ExpandReferencingPicture` takes a different arm for `iWidth >> 1 < 16`, i.e.
-// a frame narrower than 32 luma pixels, and one of the port's three copies of
-// that function had no such arm at all. Nothing above pinned it: every prior
-// asset here is 176x144 or wider, the diffharness inputs start at 152x100, and
-// the malformed corpus inherits the conformance streams' SPS dimensions, so the
-// narrow arm was unreachable by construction rather than by luck.
+// a frame narrower than 32 luma pixels.
 //
 // The three streams below are encoded by the C++ encoder from a window panned
 // across `CiscoVT2people_320x192_12fps.yuv` — panned so the MVs are non-zero and
@@ -276,8 +270,8 @@ asset_test!(test_asset_vid_1920x1080_cavlc_temporal_direct, "VID_1920x1080_cavlc
 //  * 24x18 — coded 32x32 and cropped, so `iWidthUV` is exactly 16: the other
 //    side of the same branch, one step away, plus frame cropping.
 //  * 16x16 with a lost IDR — reaches `WelsInitRefList`'s error-concealment
-//    prefetch, which is the call site the divergent copy served. See the
-//    header comment on `test_asset_narrow_16x16_idr_lost` for its construction.
+//    prefetch. See the header comment on `test_asset_narrow_16x16_idr_lost`
+//    for its construction.
 asset_test!(test_asset_narrow_16x16, "narrow_16x16.264", "6299ce8a7dc8a86d367dca65ca123eb499fc5ca8");
 asset_test!(test_asset_narrow_24x18, "narrow_24x18.264", "f6197477215d8847b570982d3c2747da2911f047");
 // Two 16x16 encodes concatenated, the second one's IDR NAL removed: a CAVLC
@@ -287,19 +281,11 @@ asset_test!(test_asset_narrow_24x18, "narrow_24x18.264", "f6197477215d8847b57098
 // reference lists, the first P slice therefore finds them empty, and
 // `WelsCheckAndRecoverForFutureDecoding` prefetches a *recycled* picture — one
 // still holding the first sequence's samples outside the area it memsets to 128
-// — and expands its border. That recycled content is what makes the missing
-// chroma arm observable; a stream that concealed from a fresh pool would find
-// 128 on both sides of the fix and prove nothing.
+// — and expands its border.
 asset_test_concealed!(test_asset_narrow_16x16_idr_lost, "narrow_16x16_idr_lost.264", "754db24b395cc7aff338e036a416a9b5bb409c81");
 
 // ---------------------------------------------------------------------------
-// The macroblock-grid probe — Phase 5 session J, F34.
-//
-// `decode_slice_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker`
-// (`src/decoder/decode_slice.rs`) is why this stream exists: the phase's Miri gate
-// on the slice-decode loop decoded `narrow_16x16.264` and nothing else, that is
-// one macroblock per frame, and so no neighbour-reading path had ever run under
-// the aliasing checker. F34 is what that cost.
+// The macroblock-grid probe
 //
 // 48x32 is 3x2 macroblocks — the smallest grid holding a macroblock with all four
 // neighbours as well as one missing only its left and one missing only its
@@ -308,58 +294,25 @@ asset_test_concealed!(test_asset_narrow_16x16_idr_lost, "narrow_16x16_idr_lost.2
 //
 // It is the one asset here built by ffmpeg/libx264 rather than by the C++
 // encoder, and `rust/tools/make_narrow_assets.py` carries the reason: **OpenH264's
-// encoder has no `transform_8x8_mode_flag` to write** and F34 sits behind it, so
-// no stream that encoder can produce re-finds the miss. The golden below is the
+// encoder has no `transform_8x8_mode_flag` to write**. The golden below is the
 // C++ *decoder*'s output, exactly as every other row here.
 asset_test!(test_asset_grid_48x32, "grid_48x32.264", "a56242a64a22edee058cd9cd14179f54bcd79b97");
 
 // ---------------------------------------------------------------------------
-// Error concealment — the F43 coverage (Phase 5 session S).
-//
-// Until F43 was fixed, `decoder_core.rs` declared stubs that shadowed
-// `error_concealment.rs`, so `NeedErrorCon` was a constant `false` and the whole
-// subsystem — `DoErrorConFrameCopy`, `DoErrorConSliceCopy`,
-// `GetAvilInfoFromCorrectMb`, `DoErrorConSliceMVCopy` and the MC paths under them
-// — ran only in unit tests. **Nothing above this line can see that**: every asset
-// here is a clean stream, where the C++'s own `NeedErrorCon` also returns false
-// and the two decoders agree by not running the code.
+// Error concealment
 //
 // `BA_MW_D_P_LOST` is the conformance `BA_MW_D` with a P slice dropped, so each
 // affected picture is decoded with a hole. The golden is the **C++ decoder's**,
 // taken with `rust/tools/ecref` under the same `ERROR_CON_SLICE_COPY` these tests
-// use, and the port matches it to the byte across all 99 frames.
+// use.
 //
-// **What `_P_LOST` is not**: it is not F43 coverage. Measured on a worktree at
-// the pre-fix commit, it produces the *same* hash with the stubs in place — and
-// re-stubbing `NeedErrorCon` leaves it green too. The concealment it reaches
-// never came through `NeedErrorCon`'s arm. The red-under-revert evidence for F43
-// is the malformed-parity table (re-stubbing turns 6 streams red) and
-// `fmo_2groups_64x64.264` below.
-//
-// `_IDR_LOST` is **F44's** row and it did move: with the IDR gone there is no
-// complete non-ECed IDR to clear `bFreezeOutput`, and nothing else cleared it
-// because `InitErrorCon` had no caller, so the port emitted 70 frames against the
-// C++'s 97 and its slice-copy concealment silently copied nothing (`sCopyFunc`
-// was `None`). Wiring `InitErrorCon` where the C++ calls it moved this row onto
-// the C++'s hash.
-//
-// Both were **always available and never taken**: `res/` has carried them since
-// upstream added them in 2014 (`45ef803e`) and the port has driven both since
-// Phase 3 — but only through the malformed-parity gate, which pins the port
-// against *itself*. Five phases of clean-stream conformance rows, and no
-// damaged-stream row had a C++ golden. These are the first two.
+// `_IDR_LOST`: with the IDR gone there is no complete non-ECed IDR to clear
+// `bFreezeOutput`.
 asset_test_concealed!(test_asset_ba_mw_d_idr_lost, "BA_MW_D_IDR_LOST.264", "f31e54a50296406f7f55d95c959e800d5dfbbe44");
 asset_test_concealed!(test_asset_ba_mw_d_p_lost, "BA_MW_D_P_LOST.264", "66ec2f1d66356de3dfadffa298bbe838347a9eb1");
 
 // ---------------------------------------------------------------------------
-// Flexible macroblock ordering — the other half of F43 (Phase 5 session S).
-//
-// `decoder_core.rs` declared an `FmoNextMb` stub returning `iMbIdx + 1` — raster
-// order, the one answer FMO exists to *not* give — and nothing ever wrote
-// `pCtx->pFmo`, so `fmo.rs` was unreachable in production. **No asset above this
-// line could catch either**: all 74 streams in `res/` carry
-// `num_slice_groups_minus1 == 0`, so raster order *is* the right answer for every
-// one of them and the stub is indistinguishable from the real function.
+// Flexible macroblock ordering
 //
 // `rust/tools/make_fmo_asset.py` builds this one for the purpose: 64x64, two slice
 // groups interleaved 1-1 (`slice_group_map_type` 0), one slice per group, every
@@ -369,8 +322,5 @@ asset_test_concealed!(test_asset_ba_mw_d_p_lost, "BA_MW_D_P_LOST.264", "66ec2f1d
 // wrong place. I_PCM makes the frame *be* the values the generator wrote, so the
 // failure is legible rather than a diffuse hash change.
 //
-// Red under revert (F21's rule), and the revert is the stub itself. Measured:
-// with `FmoNextMb` returning `kiMbXy + 1` this row fails as **"No frames decoded"**
-// — the raster walk runs slice 0 past the macroblocks its group owns, the slice
-// errors out, and nothing is emitted at all. The golden is the C++ decoder's.
+// The golden is the C++ decoder's.
 asset_test!(test_asset_fmo_2groups_64x64, "fmo_2groups_64x64.264", "6420bae4a88f86a0f3f54c94aee59b2c1e7b7319");

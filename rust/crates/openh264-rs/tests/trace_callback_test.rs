@@ -1,18 +1,6 @@
-//! **The trace callback, and the fact that it never fired.**
-//!
 //! `ENCODER_OPTION_TRACE_CALLBACK` / `_CONTEXT` and `DECODER_OPTION_TRACE_CALLBACK`
 //! / `_CONTEXT` are documented options on a documented interface: a caller installs
-//! a function and every message the codec logs is handed to it. Before **T8.B6** a
-//! caller who installed one got silence, on both codecs and for two different
-//! reasons:
-//!
-//! * `WelsLog` was a stub — `let _ = (pLogCtx, iLevel, msg);` — in *two* places,
-//!   `encoder/wels_encoder_ext.rs` and `decoder/decoder_core.rs`;
-//! * the encoder had **no `WelsLog` call sites at all** (the reference's boundary
-//!   class has 87), and the decoder had seventeen but its `SLogContext` was never
-//!   given a destination — `WelsDecoderDefaults`' log-context parameter was
-//!   `_pLogCtx: *mut c_void` and ignored, and `CWelsDecoderImpl` had no trace
-//!   object to pass.
+//! a function and every message the codec logs is handed to it.
 //!
 //! These tests drive the option pair from outside and count what arrives.
 
@@ -22,7 +10,7 @@ use std::ffi::{CStr, c_char, c_void};
 
 /// What a callback run collects. The address of one of these is what the caller
 /// installs as the trace *context*, which is the pointer the callback is handed
-/// back — the one piece of the reference's plumbing that is genuinely the caller's.
+/// back.
 #[derive(Default)]
 struct Collected {
     lines: Vec<(i32, String)>,
@@ -43,10 +31,7 @@ unsafe extern "C" fn collect(ctx: *mut c_void, level: i32, string: *const c_char
 /// **Spelled out rather than imported, on purpose.** These are the values a C
 /// caller gets from the real header, and this test's job is to assert the port
 /// delivers *those* — importing `common::wels_trace`'s constants would make the
-/// assertion agree with the port by construction and check nothing. It used to
-/// say `WELS_LOG_INFO = 3` while citing the header line that says 4, which is
-/// how the port kept a green test asserting an ABI divergence was correct
-/// (F184; corrected under D-fid-4, 2026-08-26).
+/// assertion agree with the port by construction and check nothing.
 const WELS_LOG_INFO: i32 = 4;
 const WELS_LOG_ERROR: i32 = 1;
 
@@ -54,11 +39,6 @@ const WELS_LOG_ERROR: i32 = 1;
 // The encoder
 // ---------------------------------------------------------------------------
 
-/// Red before T8.B6:
-///
-/// ```text
-/// assertion failed: the encoder's trace callback never fired: []
-/// ```
 #[test]
 fn test_encoder_trace_callback_receives_the_init_line() {
     unsafe {
@@ -184,16 +164,9 @@ fn test_encoder_trace_level_filters() {
 // The decoder
 // ---------------------------------------------------------------------------
 
-/// The decoder's seventeen call sites, and **T8.B3's trace throttle** measured from
-/// outside: `bPrintFrameErrorTraceFlag` lets one `decode failed, failure type:` line
+/// `bPrintFrameErrorTraceFlag` lets one `decode failed, failure type:` line
 /// through per error burst and counts the rest, so a stream that fails on many
 /// access units must produce strictly fewer lines than it produces errors.
-///
-/// Red before T8.B6 — nothing arrives at all:
-///
-/// ```text
-/// assertion failed: the decoder's trace callback never fired over N erroring calls
-/// ```
 #[test]
 fn test_decoder_trace_callback_and_the_error_throttle() {
     let mut repo_root = std::path::PathBuf::from("../../../");

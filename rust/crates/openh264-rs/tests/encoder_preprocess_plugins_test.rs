@@ -1,30 +1,7 @@
-//! **The two preprocessing plugins are accepted *and run*** (Phase 8b session C,
-//! T8b.C1/T8b.C2).
+//! **The two preprocessing plugins are accepted *and run***.
 //!
-//! This file used to be `encoder_unsupported_preprocess_test.rs` and pinned the
-//! opposite contract. `METHOD_DENOISE` and `METHOD_DOWNSAMPLE` were untranslated, and
-//! — the actual defect — asking for either one *succeeded*:
-//! `CWelsPreProcess::BilateralDenoising` was an empty body behind `bEnableDenoise`,
-//! and `DownsamplePadding` returned `RET_NOTSUPPORTED` while **both callers dropped
-//! the return**, so a lower spatial layer was encoded from whatever the picture pool
-//! last held. A consumer got a successful encode and bytes that were not what it
-//! asked for. S48 made both refuse at `ParamValidationExt` with `cmInitParaError`,
-//! which is what T8b.A5 pinned here, at the cost of 17 gtest rows.
-//!
-//! Both plugins are ported now, the refusals are gone, and the assertions invert.
-//!
-//! **They invert into something stronger than "it initializes".** Deleting a guard
-//! also makes `InitializeExt` succeed, and that is precisely the bug S48 was written
-//! against — so every test below asserts that the plugin *changed the output*.
 //! Denoise on must not produce the same bytes as denoise off; a two-layer encode
-//! must not produce the same bytes as a one-layer encode of the same source. A port
-//! that dropped the guard and left the kernel absent passes an init-only test and
-//! fails these.
-//!
-//! Byte-exactness against the reference is refereed elsewhere — five targeted
-//! `cxx_enc`/`rust_enc` pairs and the `dl` sweep preset. What lives here is the
-//! property those pairs cannot state on their own: that the feature is reachable
-//! through the public API at all.
+//! must not produce the same bytes as a one-layer encode of the same source.
 
 use openh264_rs::api::codec_api::*;
 
@@ -229,12 +206,7 @@ fn encode_scrolling(
     }
 }
 
-/// **P10.1: `SCREEN_CONTENT_REAL_TIME` is accepted at init.** Three port-added
-/// refusals stood where the C++ allocates — the VAA extension
-/// (`RequestMemoryVaaScreen`), the last layer's feature-search preparation
-/// (`RequestFeatureSearchPreparation`) and the reference pictures' feature storage
-/// (`RequestScreenBlockFeatureStorage`) — and `InitializeExt` answered
-/// `cmInitParaError`. P10.1.B3/B4/B5 ported the three allocations.
+/// **`SCREEN_CONTENT_REAL_TIME` is accepted at init.**
 #[test]
 fn screen_content_is_accepted_at_init() {
     assert_eq!(
@@ -274,9 +246,7 @@ fn screen_content_ltr_without_lossless_link_is_accepted_at_init() {
 
 /// A screen-content sequence encodes to completion. It deliberately asserts nothing
 /// about the bytes: `screen_content_scrolling_source_codes_smaller_than_camera`
-/// below is the row that does, and it took P10.2's three plugins and P10.3's
-/// dispatch block to be able to. Byte-exactness against the reference is the `scc`
-/// sweep preset's (`SCC_TIER=min`, 28/28 since P10.3.D4).
+/// below is the row that does.
 #[test]
 fn screen_content_encodes_a_sequence() {
     let screen = encode_bytes(320, 192, 12, |p| p.iUsageType = EUsageType::SCREEN_CONTENT_REAL_TIME);
@@ -371,9 +341,9 @@ fn a_downsampled_spatial_layer_is_accepted_and_encoded() {
 /// Four spatial layers at 1280x720 — `EncoderOutputTest/7`'s shape, and the case
 /// that distinguishes a correct downsampler from an obvious-but-wrong one.
 ///
-/// The reference reaches each layer by **cascaded halving through a scratch buffer**
-/// (F98), not by the quarter/one-third kernels that `CDownsampling::Process`'s first
-/// arm would suggest — that arm is the out-of-memory fallback, not the normal path.
+/// The reference reaches each layer by **cascaded halving through a scratch buffer**,
+/// not by the quarter/one-third kernels that `CDownsampling::Process`'s first arm
+/// would suggest — that arm is the out-of-memory fallback, not the normal path.
 /// Three halvings happen here.
 #[test]
 fn four_spatial_layers_at_720p_are_accepted_and_encoded() {
@@ -401,10 +371,7 @@ fn four_spatial_layers_at_720p_are_accepted_and_encoded() {
 
 /// A layer **larger** than the input rect is not downsampled, and must not be
 /// refused: `ParamTranscode` rounds layer dimensions up to a multiple of 16 while
-/// leaving `iPicWidth` alone, so 140x96 legitimately becomes a 144x96 layer. The
-/// first version of the T8b.A5 check compared `iPicWidth` against the top layer and
-/// refused every non-multiple-of-16 width. The check is gone, but the shape it got
-/// wrong is still worth a row.
+/// leaving `iPicWidth` alone, so 140x96 legitimately becomes a 144x96 layer.
 #[test]
 fn a_layer_rounded_up_to_a_macroblock_multiple_is_not_a_downsample() {
     unsafe {
@@ -419,24 +386,19 @@ fn a_layer_rounded_up_to_a_macroblock_multiple_is_not_a_downsample() {
     }
 }
 
-/// **P10.3: the screen-content algorithms ran.** A source that scrolls eight lines
-/// per frame codes *materially smaller* under `SCREEN_CONTENT_REAL_TIME` than under
+/// **The screen-content algorithms ran.** A source that scrolls eight lines per frame
+/// codes *materially smaller* under `SCREEN_CONTENT_REAL_TIME` than under
 /// `CAMERA_VIDEO_REAL_TIME`, at the same fixed QP with rate control off.
 ///
 /// **Why the comparison is this one and not "the bytes differ".** Camera and screen
-/// bytes have differed since long before this phase — the two usage types already
-/// disagree about MV range, QP range and reference count — so an `assert_ne!` here
-/// would have passed at P10.1, with every screen algorithm dormant, and would not
-/// have meant what it said. What cannot happen without the dispatch block is
-/// *exploiting the scroll*: `DetectSceneChangeScreen` finds the displacement,
-/// `PreprocessSliceCoding`'s screen block installs `SetScrollingMvToMd` and
-/// `WelsMotionEstimateSearchScrolled`, and the search starts at the right vector
+/// bytes have differed — the two usage types already disagree about MV range, QP range
+/// and reference count — so an `assert_ne!` here would have passed with every screen
+/// algorithm dormant, and would not have meant what it said. What cannot happen without
+/// the dispatch block is *exploiting the scroll*: `DetectSceneChangeScreen` finds the
+/// displacement, `PreprocessSliceCoding`'s screen block installs `SetScrollingMvToMd`
+/// and `WelsMotionEstimateSearchScrolled`, and the search starts at the right vector
 /// instead of hunting for it. That shows up as size, which is why size is what is
 /// asserted. The inequality is checked too, as the weaker half.
-///
-/// Correctness — that these bytes are the C++'s bytes — is the `scc` sweep's claim,
-/// not this file's. What lives here is that the feature is reachable and effective
-/// through the public API alone.
 #[test]
 fn screen_content_scrolling_source_codes_smaller_than_camera() {
     let camera = encode_scrolling(320, 192, 12, 8, |p| {

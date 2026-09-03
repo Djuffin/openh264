@@ -39,29 +39,19 @@ pub const MAX_FNAME_LEN: usize = 256;
 pub const MAX_SPS_COUNT: usize = 32;
 /// The **encoder's** PPS ceiling — `wels_const.h:51` sets `MAX_PPS_COUNT` to
 /// `MAX_PPS_COUNT_LIMITED` (57), not the standard's 256, "because of known
-/// limitation of receiver endpoints". This module declared its own 256 (the
-/// decoder's value), which oversized `SExistingParasetList::sPps` by 199
-/// entries. Re-exported from the one encoder-side definition instead.
+/// limitation of receiver endpoints".
 pub use crate::encoder::encoder_context::MAX_PPS_COUNT;
 pub const MAX_SLICEGROUP_IDS: usize = 8;
 /// `svc_enc_slice_segment.h:62` — `(MAX_NAL_UNITS_IN_LAYER - SAVED_NALUNIT_NUM) / 3`
-/// = (128 - 21) / 3 = 35. The literal here matches; re-exported anyway so there is
-/// one definition.
+/// = (128 - 21) / 3 = 35.
 pub use crate::encoder::wels_encoder_ext::MAX_SLICES_NUM;
 /// `codec_app_def.h:56` — `(MAX_NAL_UNITS_IN_LAYER - SAVED_NALUNIT_NUM_TMP) / 3`
-/// = (128 - 21) / 3 = **35**, not 32. Both `ParamTranscode` and `FillDefault`
+/// = (128 - 21) / 3 = **35**. Both `ParamTranscode` and `FillDefault`
 /// compute `kiLesserSliceNum = min (MAX_SLICES_NUM, MAX_SLICES_NUM_TMP)`
-/// (param_svc.h:203), so the port capped `uiSliceNum` at 32 where the reference
-/// caps at 35.
+/// (param_svc.h:203).
 pub use crate::api::codec_api::MAX_SLICES_NUM_TMP;
 
-/// `wels_const.h:60` says **60**, not 30. This module's own copy said 30, and it
-/// is the one `FillDefault` and the two transcoders use -- so `GetDefaultParams`
-/// reported 30 fps where the reference reports 60, and `ParamTranscode`'s
-/// `WELS_CLIP3 (fMaxFrameRate, MIN_FRAME_RATE, MAX_FRAME_RATE)` silently capped
-/// any caller asking for more than 30. Measured against libopenh264.a: the
-/// reference returns 60.0 from GetDefaultParams and keeps 50.0 through
-/// InitializeExt. Re-exported from the one definition.
+/// `wels_const.h:60` says **60**.
 pub use crate::encoder::wels_encoder_ext::{MAX_FRAME_RATE, MIN_FRAME_RATE};
 
 pub const UNSPECIFIED_BIT_RATE: i32 = 0;
@@ -198,8 +188,7 @@ pub struct SUsedPicRect {
 pub struct SWelsSvcCodingParam {
     // SEncParamExt base, in the exact order of api/codec_api.rs. C++ derives
     // (TagWelsSvcCodingParam: SEncParamExt, param_svc.h:106) so the base must be a
-    // byte-identical 924-byte prefix; this list had bEnableFrameCroppingFlag and the
-    // fields after it out of order, which changed the padding and the total size.
+    // byte-identical 924-byte prefix.
     pub iUsageType: EUsageType,
     pub iPicWidth: i32,
     pub iPicHeight: i32,
@@ -247,13 +236,6 @@ pub struct SWelsSvcCodingParam {
     pub sDependencyLayers: [SSpatialLayerInternal; MAX_DEPENDENCY_LAYER],
     pub uiGopSize: u32,
     pub SUsedPicRect: SUsedPicRect,
-    // `param_svc.h:118`'s `pCurPath` stood here — **deleted, D-dead-7** (the user,
-    // 2026-08-26, from F183). Three writes and no reader, in *both* trees: upstream
-    // declares it (`param_svc.h:118`), nulls it (`:228`) and stores to it
-    // (`welsEncoderExt.cpp:1076`), and never reads it anywhere in `codec/`; this
-    // port had the same three and likewise never read it. D-dead-3's shape a fourth
-    // time. `SetOption(ENCODER_OPTION_CURRENT_PATH)` keeps returning success and now
-    // does nothing, which is observably what it already did.
     pub bDeblockingParallelFlag: bool,
     pub iBitsVaryPercentage: i32,
     pub iDecompStages: i8,
@@ -620,8 +602,7 @@ impl SWelsSvcCodingParam {
         self.iLtrMarkPeriod = pCodingParam.iLtrMarkPeriod;
         self.bIsLosslessLink = pCodingParam.bIsLosslessLink;
         // These five are *copied* here (`param_svc.h:349-353`); the constants above
-        // belong to `FillDefault`. Hardcoding them made `bFixRCOverShoot` true for
-        // every caller, which sends `RcInitVGop` down its carry-over arm.
+        // belong to `FillDefault`.
         self.bFixRCOverShoot = pCodingParam.bFixRCOverShoot;
         self.iIdrBitrateRatio = pCodingParam.iIdrBitrateRatio;
         self.bPsnrY = pCodingParam.bPsnrY;
@@ -671,15 +652,10 @@ impl SWelsSvcCodingParam {
             self.iMaxNumRefFrame = self.iNumRefFrame;
         }
 
-        // **F62** (`param_svc.h:384`): `iLTRRefNum = (bEnableLongTermReference ?
-        // pCodingParam.iLTRRefNum : 0)`. This read `0 : 0` — the caller's value was
-        // dropped on the floor — and nothing saw it, because no configuration the
-        // differential harness could express ever set `bEnableLongTermReference` until
-        // Phase 6 session F added the `ltr` preset. It is *masked* rather than
-        // observable even so: `WelsCheckNumRefSetting` (`au_set.rs`) overwrites the
-        // field with `LONG_TERM_REF_NUM` on every init path that reaches it. Fixed as
-        // a transcription, not as a behaviour change — the `ltr` preset reads 16/16
-        // byte-identical either way.
+        // `param_svc.h:384`: `iLTRRefNum = (bEnableLongTermReference ?
+        // pCodingParam.iLTRRefNum : 0)`. `WelsCheckNumRefSetting` (`au_set.rs`)
+        // overwrites the field with `LONG_TERM_REF_NUM` on every init path that
+        // reaches it.
         self.iLTRRefNum = if pCodingParam.bEnableLongTermReference {
             pCodingParam.iLTRRefNum
         } else {
@@ -890,16 +866,7 @@ impl SWelsSvcCodingParam {
     }
 }
 
-/// A parameter set's **position in the encoder context's array of them** — Phase 6
-/// session G.
-///
-/// The context used to carry `pSps`/`pPps`/`pSubsetSps` as pointers *into*
-/// `pSpsArray`/`pPPSArray`/`pSubsetArray`, and the layer and slice headers carried
-/// copies of the same addresses. That is cache-not-carrier with the id already
-/// named: **`SDqIdc` stores exactly these two numbers as data** (`iPpsId: u16`,
-/// `iSpsId: u8`) because `InitDqLayers` writes them there, and the C++ itself indexes
-/// the arrays with them (`&pCtx->pPPSArray[iCurPpsId]`). These types are those
-/// numbers, given names.
+/// A parameter set's **position in the encoder context's array of them**.
 ///
 /// **Position, not the syntax element.** `SWelsSPS::uiSpsId` and `SWelsPPS::iPpsId`
 /// are what goes on the wire, and the id strategy may add an offset to the latter
@@ -921,9 +888,7 @@ pub struct PpsId(pub u16);
 /// **Its own type, because the id strategy has its own space for it**:
 /// `PARA_SET_TYPE_AVCSPS`, `PARA_SET_TYPE_SUBSETSPS` and `PARA_SET_TYPE_PPS` are
 /// three separate id counters in `paraset_strategy.rs`, and the context keeps three
-/// separate arrays. `WelsInitCurrentLayer` indexes `pSpsArray` and `pSubsetArray`
-/// with the same local (`iCurSpsId`) in its two arms, which is precisely the
-/// confusion a shared type would let through.
+/// separate arrays.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SubsetSpsId(pub u8);
 
@@ -983,14 +948,11 @@ pub struct SWelsSPS {
     pub sAspectRatioExtHeight: u16,
 }
 
-/// **The C++'s `memset (pSps, 0, sizeof (SWelsSPS))`, spelled out** — T6.G3.
+/// **The C++'s `memset (pSps, 0, sizeof (SWelsSPS))`, spelled out.**
 ///
-/// `WelsInitSps` and `WelsInitSubsetSps` begin with that memset, and this is what
-/// they assign now that they take a `&mut` instead of a `*mut`. It is deliberately
+/// `WelsInitSps` and `WelsInitSubsetSps` begin with that memset. It is deliberately
 /// **not** [`Default`](SWelsSPS::default), which seeds `uiProfileIdc = PRO_BASELINE`
-/// and the VUI `*_UNDEF` values — the port has carried that warning as a comment at
-/// the memset since Phase 3, and this is the same statement as a value. F56's rule:
-/// a zero image is ruled, not defaulted, and the two are different here.
+/// and the VUI `*_UNDEF` values.
 impl SWelsSPS {
     pub const ZERO: Self = Self {
         uiSpsId: 0,
@@ -1120,11 +1082,10 @@ pub struct SSubsetSps {
 /// `TagWelsPPS` — `codec/encoder/core/inc/parameter_sets.h:136`. **16 bytes**, with
 /// `iPicInitQp` at offset 8.
 ///
-/// The nine FMO fields (`uiNumSliceGroups` … `uiSliceGroupId`) that this port used to
-/// declare here sit inside `#if !defined(DISABLE_FMO_FEATURE)`, and
+/// The nine FMO fields (`uiNumSliceGroups` … `uiSliceGroupId`) sit inside
+/// `#if !defined(DISABLE_FMO_FEATURE)`, and
 /// `codec/encoder/core/inc/as264_common.h:53` defines `DISABLE_FMO_FEATURE`
 /// unconditionally — so they are **not** part of the struct the C++ encoder compiles.
-/// Including them made this struct roughly nine times too large.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SWelsPPS {
@@ -1178,20 +1139,14 @@ impl Default for SExistingParasetList {
     }
 }
 
-/// Releases dynamic coding param buffer via CMemoryAlign
-/// The encoder's own copy of the coding parameters — **T6.H11**, and what
-/// `AllocCodingParam`/`FreeCodingParam` became.
+/// The encoder's own copy of the coding parameters.
 ///
-/// The pair was `WelsMallocz` + `FillDefault` and a matching `WelsFree`. The context
-/// owns the block (see the field's own note for the ownership read this session did),
-/// so the free is its drop and the allocation is a `Box`.
-///
-/// **The starting image is `Default`'s, not a memset's, and that is a deviation
-/// worth one line**: the C++ zeroes the block and then calls `FillDefault`, which
-/// writes some of it. `SWelsSvcCodingParam` holds `repr(C)` enums whose zero is not
-/// in every case a declared variant, so there is no safe zero image to reproduce.
-/// It is unobservable: `WelsInitEncoderExt` assigns the caller's whole parameter
-/// struct over this one on the very next line, and it is the only live caller.
+/// **The starting image is `Default`'s, not a memset's**: the C++ zeroes the block
+/// and then calls `FillDefault`, which writes some of it. `SWelsSvcCodingParam`
+/// holds `repr(C)` enums whose zero is not in every case a declared variant, so
+/// there is no safe zero image to reproduce. It is unobservable:
+/// `WelsInitEncoderExt` assigns the caller's whole parameter struct over this one
+/// on the very next line, and it is the only live caller.
 pub fn NewCodingParam() -> Box<SWelsSvcCodingParam> {
     let mut p = Box::new(SWelsSvcCodingParam::default());
     p.FillDefault();
@@ -1216,10 +1171,7 @@ mod tests {
     fn test_param_defaults() {
         let param = SWelsSvcCodingParam::new();
         assert_eq!(param.uiGopSize, 1);
-        // MAX_FRAME_RATE is 60 (wels_const.h:60). Measured: the reference's
-        // GetDefaultParams returns fMaxFrameRate = 60.0. This assertion used to
-        // say 30.0, which is what this module's own wrong copy of the constant
-        // produced.
+        // MAX_FRAME_RATE is 60 (wels_const.h:60).
         assert_eq!(param.fMaxFrameRate, 60.0);
         assert_eq!(param.iSpatialLayerNum, 1);
         assert_eq!(param.iTemporalLayerNum, 1);
@@ -1239,9 +1191,6 @@ mod tests {
         assert_eq!(param.sDependencyLayers[0].iHighestTemporalId, 2);
     }
 
-    /// T6.H11: the allocate/free pair is one constructor, so what is left to test is
-    /// that `FillDefault` ran — which is what the old test actually checked, either
-    /// side of a `WelsFree` that is now the `Box`'s own.
     #[test]
     fn new_coding_param_is_filled() {
         let p = NewCodingParam();

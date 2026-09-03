@@ -1,25 +1,11 @@
-//! **F77's covering test** (Phase 8 session C, T8.C1) — a mid-stream resolution
-//! change must reallocate the picture pool.
+//! A mid-stream resolution change must reallocate the picture pool.
 //!
 //! `res/Error_I_P.264` is the only stream in `res/` that changes resolution while
-//! decoding: 352x288 → 640x480 → 352x288. Before T8.C1 the port never rebuilt the
-//! picture pool for a new sequence — `SyncPictureResolutionExt` created it once and
-//! kept it — while `InitialDqLayersContext` re-sized the *layer* from the new SPS
-//! unconditionally. So the layer went to 40x30 (1200 macroblocks) with the pictures
-//! still 22x18 (396), and `WelsActualDecodeMbCavlcISlice` indexed `pDec.pMbType` at
-//! 396 of 396. Through an `extern "C"` thunk that panic is
-//! `thread caused non-unwinding panic. aborting.` — a `SIGABRT` in the C consumer's
-//! process, which is plan §P13's line and the reason this is a boundary defect.
-//!
-//! **Measured red**: at `19937662` this test does not fail, it *aborts the test
-//! binary*, taking every other test in the process with it. That is the finding.
+//! decoding: 352x288 → 640x480 → 352x288.
 //!
 //! The numbers below are the C++ decoder's, taken from
 //! `rust/tools/ecref/ecref res/Error_I_P.264 61251 --frames` against
-//! `libopenh264.dylib` — not from the port. `tests/data/malformed_parity/Error_I_P.txt`
-//! gates the same asset across 212 truncations; this test is the whole-stream row
-//! stated by hand, because a golden table says "unchanged" where this says what the
-//! reference decoder does.
+//! `libopenh264.dylib` — not from the port.
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;

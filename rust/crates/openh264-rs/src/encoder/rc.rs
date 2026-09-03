@@ -34,37 +34,6 @@
 //! governing bit allocation across Virtual GOPs, frame-level quantization parameter ($QP$) derivation,
 //! Group of Macroblocks (GOM) adaptive quantization, Virtual Buffer Verifier (VBV) leaky-bucket
 //! management, and dynamic frame skipping for temporal and spatial layers.
-//!
-//! # The raw-pointer census, attributed — T6.G4
-//!
-//! Phase 6 session G's step 4 was "sweep `rc.rs`'s remaining single-object
-//! parameters". The sweep found **none left to take**, and that is a result rather
-//! than an omission, so it is written down here where the next session will see it.
-//! All **93** occurrences of `*mut`/`*const` in this file, by who owns them (counted
-//! at session G's close; **T6.H6 spent the two rows marked below, and the count is 84**
-//! — the nineteen the rc blocks cost, minus the five accessors' signatures and the
-//! `CMemoryAlign` parameters that went with them):
-//!
-//! | count | what | whose |
-//! |---|---|---|
-//! | 61 | `pEncCtx`/`pCtx` parameters, raw `sWelsEncCtx` | **session I** — the context is the largest arena in the tree, and the S37 inventory decides `&mut` for all of it at once, not file by file |
-//! | 16 | `SWelsSvcRc`'s own five member pointers and the reaches through them | **spent at T6.H6** — the five are owned containers, reached through `rc_gom_fg_blocks` and its siblings (all four roots retired by A1) |
-//! |  7 | `pSlice` parameters, raw `SSlice` | **session I** — five sit behind `pfWelsRcMbInit`/`pfWelsRcMbInfoUpdate`, which is 4b's fence, and the two that do not are covered by the blocker below |
-//! |  6 | `sWelsEncCtx::vaa_ext` — the video-analysis block downcast | **spent**: the six are `vaa_ext_screen_frame_complexity()` now, and since P10.2.C5 that accessor answers a number the screen complexity plugin computed rather than the structural zero the unported plugin left |
-//! |  3 | `RcInitLayerMemory`'s carve-up of one `CMemoryAlign` block | **spent at T6.H6** — the carve-up is gone; this file no longer names `CMemoryAlign` at all |
-//!
-//! **The one that looked convertible and was not — now both.** `GomRCInitForOneSlice`
-//! takes `&mut SSlice` today. When it was raw, the reason was its caller,
-//! `WelsCodeOneSlice` (`svc_encode_slice.rs`), which bound `pBs = slice_writer(..)`
-//! **before** this call and used it **after** — a `&mut SSlice` here would have
-//! popped it (F13's family, S25's rule). S11.1a retired the resolver and mints the
-//! writer below this call, so no popping shape survives, the same one
-//! `svc_set_mb_syn_cavlc`'s header comment
-//! records for its own writers. Converting it needs either the caller's binding
-//! moved after the call (a behavioural change to check, not a spelling) or a
-//! parameter narrowed to `&mut SRCSlicing` plus the two slice fields it reads,
-//! which walks away from the C++ signature. Neither is a sweep; both are a decision
-//! with an owner, and it is not this session's.
 
 #![allow(
     non_snake_case,
@@ -309,17 +278,7 @@ pub struct SRCTemporal {
 }
 
 /// Spatial dependency layer rate control state machine (`TagWelsRc`).
-///
-/// **No longer `Copy`** — T6.H6. The five arrays below are owned, so a bit-copy of
-/// this struct would be a second owner of five allocations. Nothing copied it: the
-/// only by-value use in the tree was `Default`, and the three `let r = &*pWelsSvcRc`
-/// bindings take a reference, not a copy.
 #[repr(C)]
-/// `Clone` was derived here and **never used** — T9.C5 dropped it over `pGomCost`,
-/// which D-dead-3 has since deleted whole. The four owned arrays that remain are
-/// all trivially cloneable, so the *trap* argument retired with the field; the
-/// original one did not. Nothing in the tree clones a rate controller (the pool is
-/// built in place by `RcInitLayerMemory`), so the derive was only an invitation.
 #[derive(Debug)]
 pub struct SWelsSvcRc {
     pub iRcVaryPercentage: i32,
@@ -349,25 +308,8 @@ pub struct SWelsSvcRc {
     pub iFrameDqBits: i32,
 
     pub bGomRC: bool,
-    // **T6.H6 — the GOM arrays and `pTemporalOverRc` below are owned.** They were
-    // five raw pointers into one `CMemoryAlign` block `RcInitLayerMemory` cut and
-    // `RcFreeLayerMemory` released; they became five containers rather than one
-    // arena. **Two of the five are gone now** — `pGomCost` (D-dead-3) and
-    // `pGomComplexity` (D-dead-6), each deleted after both trees were grepped and
-    // neither had a reader; see below for the second.
     pub pGomForegroundBlockNum: Vec<i32>,
     pub pCurrentFrameGomSad: Vec<i32>,
-    // **`pGomCost` stood here — deleted whole, D-dead-3 (2026-08-25), F133's end.**
-    // The C++ has the field at `rc.h:191` and writes it at `ratectl.cpp:79`
-    // (allocate), `:90` (null), `:669` (memset) and `:1273` (`+=` per macroblock).
-    // **Not one of the five is a read**, in either tree, and this port had the same
-    // five. T9.C5 found it by finding the race — the `+=` runs inside the fork and
-    // `RcInitGomParameters` zeroes `iComplexityIndexSlice` for every slice, so slice
-    // 0's GOM *k* and slice 1's GOM *k* are one entry — and made the element
-    // `AtomicI32` to make the port defined where the C++ is not. The ruling went the
-    // other way: an accumulator with no reader is not state, so the port keeps no
-    // artefact of the race at all. `bEnableGomQp` below and the three GOM arrays
-    // above are the live GOM mechanism; this was never part of it.
     pub bEnableGomQp: i32,
     pub iAverageFrameQp: i32,
     pub iMinFrameQp: i32,
@@ -405,9 +347,6 @@ pub struct SWelsSvcRc {
     pub iPaddingBitrateStat: i32,
     pub bSkipFlag: bool,
     pub iContinualSkipFrames: i32,
-    /// **T6.H6 — owned**; the head of the block the other four hung off. All four
-    /// raw roots are comments now; see [`SWelsSvcRc::gom_sad`], the family's one
-    /// surviving accessor.
     pub pTemporalOverRc: Vec<SRCTemporal>,
 
     pub iAvgCost2Bits: i64,
@@ -524,17 +463,7 @@ pub struct SRCSlicing {
 
 
 
-// The nine `PWelsRC*Func` typedefs were here. T4b.1b folded every one of them into
-// `SWelsRcFunc`'s single mode; `PGetBsPositionFunc` went at T4b.1, into
-// `EntropyCoder`. Both tables were configuration, not dispatch.
-
-/// `SWelsRcFunc` — `rc.h:132`. **Nine `Option<fn>` slots became one `RCMode`.**
-///
-/// `WelsRcInitFuncPointers` filled all nine from a single `match` on the mode, with
-/// no arm assigning them independently, so the table's whole information content
-/// was the mode it was built from. It stores that instead, and each former slot is
-/// an `#[inline]` method whose `match` is the same `match` — one level later, where
-/// the compiler can see the call.
+/// `SWelsRcFunc` — `rc.h:132`.
 ///
 /// **`eInstalledMode` is deliberately *not* `pSvcParam->iRCMode`, and the two can
 /// legitimately differ.** `WelsEncoderParamAdjust`'s no-reset arm assigns
@@ -542,13 +471,7 @@ pub struct SRCSlicing {
 /// upstream's own "Any else initialization/reset for rate control here?" sits a few
 /// lines below it — so from that moment the encoder runs the *previous* mode's
 /// callbacks until something re-inits. `SetOption(ENCODER_OPTION_RC_MODE)` is the
-/// path that does re-point, and it is the only one. Reading the live `iRCMode` here
-/// would silently *fix* that, which is a behaviour change on a live configuration
-/// path (S6: parity, not repair). The lag is preserved by storing the installed
-/// mode, and naming the field is what makes it visible rather than accidental.
-///
-/// Zero (`RC_QUALITY_MODE`, C++'s value 0) is a declared variant, so `mem::zeroed()`
-/// construction of `SWelsFuncPtrList` stays sound (S21).
+/// path that does re-point, and it is the only one.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct SWelsRcFunc {
@@ -558,7 +481,6 @@ pub struct SWelsRcFunc {
 
 impl SWelsRcFunc {
     /// `pfWelsRcPictureInit`.
-    ///
     #[inline]
     pub fn WelsRcPictureInit(self, pCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
         match self.eInstalledMode {
@@ -571,9 +493,7 @@ impl SWelsRcFunc {
         }
     }
 
-    /// `pfWelsRcPicDelayJudge`. Installed by `RC_TIMESTAMP_MODE` alone; every other
-    /// mode left the slot `None`, and every call site guarded on that, so the other
-    /// arm is empty.
+    /// `pfWelsRcPicDelayJudge`. Installed by `RC_TIMESTAMP_MODE` alone.
     #[inline]
     pub fn WelsRcPicDelayJudge(self, pCtx: &mut sWelsEncCtx, uiTimeStamp: i64, iDidIdx: i32) {
         if self.eInstalledMode == RCMode::RC_TIMESTAMP_MODE {
@@ -582,7 +502,6 @@ impl SWelsRcFunc {
     }
 
     /// `pfWelsRcPictureInfoUpdate`.
-    ///
     #[inline]
     pub fn WelsRcPictureInfoUpdate(self, pCtx: &mut sWelsEncCtx, iLayerSize: i32) {
         match self.eInstalledMode {
@@ -597,7 +516,6 @@ impl SWelsRcFunc {
     }
 
     /// `pfWelsRcMbInit`.
-    ///
     #[inline]
     pub fn WelsRcMbInit(
         self,
@@ -618,7 +536,6 @@ impl SWelsRcFunc {
     }
 
     /// `pfWelsRcMbInfoUpdate`.
-    ///
     #[inline]
     pub fn WelsRcMbInfoUpdate(
         self,
@@ -687,15 +604,7 @@ impl SWelsRcFunc {
         }
     }
 
-    /// `pfWelsRcPostFrameSkipping` — the one slot with a return value, and the one
-    /// whose absence a caller reads: `if let Some(f) = …` guarded a whole
-    /// skip-and-return path. **`false` is what "the slot was `None`" meant**, so the
-    /// empty arms return it. Installed by the two bitrate modes only —
-    /// `RC_QUALITY_MODE` is the arm that sets the other three and leaves this one
-    /// `None`.
-    ///
-    /// # Safety
-    /// As [`WelsRcPictureInit`](SWelsRcFunc::WelsRcPictureInit).
+    /// `pfWelsRcPostFrameSkipping`. Installed by the two bitrate modes only.
     #[inline]
     pub fn WelsRcPostFrameSkipping(
         self,
@@ -715,102 +624,24 @@ impl SWelsRcFunc {
     }
 }
 
-
-/// Central encoder context required by rate control (`TagWelsEncCtx`).
-
 // ============================================================================
 // Core Rate Control Functions
 // ============================================================================
 
-/// Builds a spatial layer's rate-control arrays — **T6.H6.**
-///
-/// The C++ (and this port until now) took **one** `CMemoryAlign` block and cut five
-/// regions out of it: `SRCTemporal[kiMaxTl]`, then three or four GOM-sized arrays.
-/// Here it is five owned containers, and unlike `SStrideTables` — the session's other
-/// arena — that is the right shape rather than a shortcut: **no two of these regions
-/// are ever named by the same pointer, and nothing walks from one into the next.**
-/// The single block bought the C++ one `malloc` per spatial layer at init; the
-/// aliasing that made `SStrideTables` an arena is simply absent here.
-///
-/// `pMA` is gone with the block, and with it the `alloc_zeroed` fallback the port had
-/// grown for the null-`pMA` test path — one divergence fewer between the two.
-///
-/// The C++ takes the block with `WelsMalloc` (uninitialized) and every consumer
-/// either writes before reading or is guarded by `bGomRC`; the containers are
-/// zero-filled, which the port's own fallback path already did.
+/// Builds a spatial layer's rate-control arrays.
 pub fn RcInitLayerMemory(pWelsSvcRc: &mut SWelsSvcRc, kiMaxTl: i32) {
     let kiGomSize = (*pWelsSvcRc).iGomSize.max(0) as usize;
     (*pWelsSvcRc).pTemporalOverRc = vec![SRCTemporal::default(); kiMaxTl.max(0) as usize];
     (*pWelsSvcRc).pGomForegroundBlockNum = vec![0i32; kiGomSize];
     (*pWelsSvcRc).pCurrentFrameGomSad = vec![0i32; kiGomSize];
-    // Two of the C++ block's five cuts have no line here: `ratectl.cpp:79`'s
-    // `pGomCost` (**D-dead-3**) and `:73`'s `pGomComplexity` (**D-dead-6**), both
-    // deleted with their fields.
 }
 
-// `rc_temporal_over` stood here — the raw root of `pTemporalOverRc`, the first of
-// this family. **S18, retired in T9.X.** Its ten production callers were all
-// single-threaded (checked against the forksplit's in-fork column body by body),
-// but every one of them interleaved `(*pTOverRc).field` with `(*pWelsSvcRc).field`
-// on the same statement or the next one, so a `&mut SWelsSvcRc` -> `&mut
-// [SRCTemporal]` API would have minted exactly F171's shape: a Unique over the
-// container popped by the raw read beside it. Indexing the `Vec` field directly —
-// `(*pWelsSvcRc).pTemporalOverRc[iTl]` — borrows only that field, for the length of
-// one expression, and is a closer transcription of the C++
-// (`pWelsSvcRc->pTemporalOverRc[iTl]`) than the cursor ever was. T9.C5 retired
-// `rc_gom_cost` the same way.
-//
-// `rc_gom_complexity` stood here too, the second of the family — and **the field
-// it read is gone as well, D-dead-6 (the user, 2026-08-26), F174's ruling.**
-// `SWelsSvcRc::pGomComplexity` (`rc.h:188`) is allocated (`ratectl.cpp:73`), nulled
-// (`:87`) and `memset` to zero (`:668`) in the reference, and read **nowhere** in
-// either tree; this port mirrored all three writes and likewise never read it. It
-// is D-dead-3's `pGomCost` exactly, a second time.
-//
-// **The grep that makes this safe is not the one on the name.** `grep -rn
-// pGomComplexity codec/` returns sixteen lines and twelve of them belong to a
-// *different* field: `SComplexityAnalysisParam::pGomComplexity` and
-// `SComplexityAnalysisScreenParam::pGomComplexity` (`IWelsVP.h:226/:235`, `int*`,
-// not `double*`), which `ComplexityAnalysis.cpp` really does read and write. That
-// one is alive, and `wels_preprocess.cpp:859/:924` aims it at
-// `pWelsSvcRc->pCurrentFrameGomSad` — a third field again, misnomer and all (see
-// `SComplexityAnalysisParam` in `wels_preprocess.rs`). Only after the three are
-// told apart does the deleted one read as dead. S64's rule, on a name collision
-// rather than a type.
-
-// `rc_gom_cost` stood here — the raw root of `pGomCost`, the fifth of this
-// family. **S18, deleted in T9.C5**: the array became `Vec<AtomicI32>` and its one
-// production caller indexed it directly, so the accessor's only remaining caller
-// was the sibling-derivation test beside its four peers, which still covers the
-// property for all four. **The array itself is gone too — D-dead-3.** Four roots,
-// four arrays, and the family's fifth member is a comment at both ends.
-
-// `rc_gom_fg_blocks` stood here — the raw root of `pGomForegroundBlockNum`, the
-// fourth. **S18 again, deleted in A1 of the safe-conversion plan**, and on the
-// same criterion T9.C5 used: it had **no production caller**. The array reaches
-// the complexity-analysis plugin as `&mut [i32]` (`wels_preprocess.rs:2913`,
-// T9.X), and the accessor's only remaining caller was the sibling-derivation
-// test. All four roots are comments now; the property they asserted is carried
-// one level up: A2's `rc_at` hands out `&SWelsSvcRc`, so the whole family is
-// references now and the property is the borrow checker's.
-
 impl SWelsSvcRc {
-    /// A layer's **GOM SAD array** — `pCurrentFrameGomSad`, and the last of the
-    /// five raw roots this struct handed out.
-    ///
-    /// Its two readers are `RcGomTargetBits`'s, which the forksplit puts
-    /// **in-fork**: they take the shared reborrow this `&self` reader is, index
-    /// the slice, and hold nothing. That is exactly the route S63 permits, and it
-    /// replaces a raw `.add(i)` read with a bounds-checked one.
+    /// A layer's **GOM SAD array** — `pCurrentFrameGomSad`.
     #[inline]
     pub fn gom_sad(&self) -> &[i32] {
         &self.pCurrentFrameGomSad
     }
-
-    // `gom_sad_ptr` — [`gom_sad`](Self::gom_sad) as a raw root — stood here for one
-    // consumer, `SComplexityAnalysisScreenParam::pGomComplexity`. **P10.1.B2
-    // (D-scc-2) deleted the field and the accessor with it**: the screen plugin
-    // (P10.2) takes the array as `&mut [i32]`, as the camera plugin already does.
 }
 
 /// Converts a quantization parameter ($QP$) to its scaled quantization step size ($Q_{\text{step}}$).
@@ -835,8 +666,6 @@ pub fn RcInitSequenceParameter(pEncCtx: &mut sWelsEncCtx) {
     let spatial_layer_num = pEncCtx.param().iSpatialLayerNum;
 
     for j in 0..spatial_layer_num as usize {
-        // A7, §4.6 combined accessor: the loop writes layer `j`'s rate-control
-        // state from layer `j`'s configuration — see `RcUpdateBitrateFps`.
         let (pSvcParam, pWelsSvcRc) = pEncCtx.param_and_rc_at_mut(j);
         let pDLayerParam = &pSvcParam.sSpatialLayers[j];
         let iMbWidth = pDLayerParam.iVideoWidth >> 4;
@@ -918,17 +747,10 @@ pub fn RcInitSequenceParameter(pEncCtx: &mut sWelsEncCtx) {
 /// Initializes temporal layer weighting matrices for Virtual GOP bit allocation.
 pub fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
-    // §4.6, reorder: the coding-parameter reads are lifted above the rate
-    // controller's `&mut`. Nothing moves relative to anything else — the binding
-    // sinks past pure reads of a different field — and the reads themselves go
-    // through a raw, so they end where they are written.
     let pDLayerParam = &pEncCtx.param().sDependencyLayers[did];
     let kiDecompositionStages = pDLayerParam.iDecompositionStages as usize;
     let kiHighestTid = pDLayerParam.iHighestTemporalId;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    // T9.X: the C++ hoists this pointer once per body
-    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
-    // nine more); the port hoists the slice — same shape, no arithmetic.
     let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
 
     let iWeightArray: [[i32; 4]; 4] = [
@@ -970,23 +792,11 @@ pub fn RcInitTlWeight(pEncCtx: &mut sWelsEncCtx) {
 /// Updates frame and temporal bit quotas whenever user bitrate or framerate changes.
 pub fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
-    // §4.6, reorder: the coding-parameter reads are lifted above the rate
-    // controller's `&mut`. Nothing moves relative to anything else — the binding
-    // sinks past pure reads of a different field — and the reads themselves go
-    // through a raw, so they end where they are written.
-
-    // A7, §4.6 combined accessor: the layer's configuration and its rate-control
-    // state come out of one borrow. Under the raw accessor the config borrow was
-    // of the parameter block's own allocation, so it never met the context's
-    // `&mut`; `param` borrows the context, so it does.
     let (pParam, pWelsSvcRc) = pEncCtx.param_and_rc_at_mut(did);
     let pDLayerParam = &pParam.sSpatialLayers[did];
     let pDLayerParamInternal = &pParam.sDependencyLayers[did];
     let kiGopSize = 1 << pDLayerParamInternal.iDecompositionStages;
     let kiHighestTid = pDLayerParamInternal.iHighestTemporalId;
-    // T9.X: the C++ hoists this pointer once per body
-    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
-    // nine more); the port hoists the slice — same shape, no arithmetic.
     let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
 
     let input_iBitsPerFrame = if pDLayerParamInternal.fOutputFrameRate > EPSN as f32 {
@@ -1042,16 +852,9 @@ pub fn RcUpdateBitrateFps(pEncCtx: &mut sWelsEncCtx) {
 /// Resets the bit budget accumulator at the start of a Virtual GOP.
 pub fn RcInitVGop(pEncCtx: &mut sWelsEncCtx) {
     let kiDid = pEncCtx.uiDependencyId as usize;
-    // §4.6, reorder: the coding-parameter reads are lifted above the rate
-    // controller's `&mut`. Nothing moves relative to anything else — the binding
-    // sinks past pure reads of a different field — and the reads themselves go
-    // through a raw, so they end where they are written.
     let kiHighestTid = pEncCtx.param().sDependencyLayers[kiDid].iHighestTemporalId;
     let fix_rc_overshoot = pEncCtx.param().bFixRCOverShoot;
     let pWelsSvcRc = pEncCtx.rc_at_mut(kiDid);
-    // T9.X: the C++ hoists this pointer once per body
-    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
-    // nine more); the port hoists the slice — same shape, no arithmetic.
     let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
 
     if fix_rc_overshoot {
@@ -1084,19 +887,11 @@ pub fn RcInitVGop(pEncCtx: &mut sWelsEncCtx) {
 /// Full reset of the rate control state machine upon encoder initialization or IDR insertion.
 pub fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) {
     let kiDid = pEncCtx.uiDependencyId as usize;
-    // §4.6, reorder: the coding-parameter reads are lifted above the rate
-    // controller's `&mut`. Nothing moves relative to anything else — the binding
-    // sinks past pure reads of a different field — and the reads themselves go
-    // through a raw, so they end where they are written.
     let fix_rc_overshoot = pEncCtx.param().bFixRCOverShoot;
-    // A7, §4.6 combined accessor — see `RcUpdateBitrateFps`.
     let (pParam, pWelsSvcRc) = pEncCtx.param_and_rc_at_mut(kiDid);
     let pDLayerParam = &pParam.sSpatialLayers[kiDid];
     let pDLayerParamInternal = &pParam.sDependencyLayers[kiDid];
     let kiHighestTid = pDLayerParamInternal.iHighestTemporalId;
-    // T9.X: the C++ hoists this pointer once per body
-    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
-    // nine more); the port hoists the slice — same shape, no arithmetic.
     let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
 
     (*pWelsSvcRc).iIntraComplexity = 0;
@@ -1126,8 +921,6 @@ pub fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) {
     (*pWelsSvcRc).iPreviousBitrate = pDLayerParam.iSpatialBitrate;
     (*pWelsSvcRc).dPreviousFps = pDLayerParamInternal.fOutputFrameRate as f64;
 
-    // T6.H6: `write_bytes` through the raw cursor became a slice fill — the array is
-    // owned, so its length is the bound rather than `iGomSize` restated.
     (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);
 
     RcInitTlWeight(pEncCtx);
@@ -1138,8 +931,6 @@ pub fn RcInitRefreshParameter(pEncCtx: &mut sWelsEncCtx) {
 /// Checks whether user bitrate or framerate settings have changed at runtime.
 pub fn RcJudgeBitrateFpsUpdate(pEncCtx: &mut sWelsEncCtx) -> bool {
     let iCurDid = pEncCtx.uiDependencyId as usize;
-    // §4.6, reorder: the parameter reads go above the writer's `&mut`.
-    // A7, §4.6 combined accessor — see `RcUpdateBitrateFps`.
     let (pParam, pWelsSvcRc) = pEncCtx.param_and_rc_at_mut(iCurDid);
     let pDLayerParamInternal = &pParam.sDependencyLayers[iCurDid];
     let pDLayerParam = &pParam.sSpatialLayers[iCurDid];
@@ -1160,10 +951,6 @@ pub fn RcUpdateTemporalZero(pEncCtx: &mut sWelsEncCtx) {
     let pDLayerParam = &pEncCtx.param().sDependencyLayers[kiDid];
     let kiGopSize = 1 << pDLayerParam.iDecompositionStages;
 
-    // §4.6, reorder: the three condition reads are taken first and the borrow
-    // ends, because both arms re-enter the rate controller through the context.
-    // The extra reads on the taken-first arm are unobservable, and on the other
-    // arm they happen exactly where they happened before.
     let rc = pEncCtx.rc_at(kiDid);
     let (iPreviousGopSize, iGopIndexInVGop, iGopNumberInVGop) =
         (rc.iPreviousGopSize, rc.iGopIndexInVGop, rc.iGopNumberInVGop);
@@ -1176,7 +963,6 @@ pub fn RcUpdateTemporalZero(pEncCtx: &mut sWelsEncCtx) {
     {
         RcInitVGop(pEncCtx);
     }
-    // Re-derived, not held: `RcInitVGop` writes this very field.
     pEncCtx.rc_at_mut(kiDid).iGopIndexInVGop += 1;
 }
 
@@ -1204,9 +990,7 @@ pub fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
     }
 
     let did = pEncCtx.uiDependencyId as usize;
-    // §4.6, reorder: the parameter reads go above the writer's `&mut`.
     let eSliceType = pEncCtx.eSliceType;
-    // A7, §4.6 combined accessor — see `RcUpdateBitrateFps`.
     let (pParam, pWelsSvcRc) = pEncCtx.param_and_rc_at_mut(did);
     let pDLayerParam = &pParam.sSpatialLayers[did];
     let pDLayerParamInternal = &pParam.sDependencyLayers[did];
@@ -1274,10 +1058,6 @@ pub fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
         (*pWelsSvcRc).iInitialQp = RcConvertQStep2Qp((*pWelsSvcRc).iQStep);
     }
 
-    // S62, outcome-equality: the four reads below were reads of `iGlobalQp` one
-    // statement after it was assigned `iInitialQp`, so the local *is* the value
-    // they read. The context write moves to the end, past the rate controller's
-    // last use, and nothing between reads `iGlobalQp`.
     let iInitialQp = WELS_CLIP3((*pWelsSvcRc).iInitialQp, iMinQp, iMaxQp);
     (*pWelsSvcRc).iInitialQp = iInitialQp;
     (*pWelsSvcRc).iQStep = RcConvertQp2QStep(iInitialQp);
@@ -1298,20 +1078,11 @@ pub fn RcCalculatePictureQp(pEncCtx: &mut sWelsEncCtx) {
     if pEncCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
         iFrameComplexity = pEncCtx.vaa_ext_screen_frame_complexity();
     }
-    // §4.6, reorder: the adaptive-quant pair is read here rather than inside the
-    // branch below. `pVaa` is already dereferenced unconditionally two lines up,
-    // so the read is no more conditional than the one that precedes it.
     let bEnableAdaptiveQuant = pEncCtx.param().bEnableAdaptiveQuant;
     let iAverMotionTextureIndexToDeltaQp = pEncCtx.vaa_expect().sAdaptiveQuantParam
         .iAverMotionTextureIndexToDeltaQp;
 
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    // T9.X hoisted `pTOverRc` once per body, as the C++ does
-    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
-    // nine more). A2: this body only ever *reads* that entry — five scalars across
-    // three arms — and `SRCTemporal` is `Copy`, so the entry is copied out instead
-    // of reborrowed, which is what lets the writes to the rest of the struct
-    // coexist with it.
     let sTOverRc: SRCTemporal = (*pWelsSvcRc).pTemporalOverRc[iTl];
 
     if sTOverRc.iPFrameNum == 0 {
@@ -1398,11 +1169,7 @@ pub fn GomRCInitForOneSlice(pSlice: &mut SSlice, kiBitsPerMb: i32) {
 /// Resets bit accumulators and macroblock counters across slices.
 pub fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
-    // §4.6, reorder: the context reads go above the writer's `&mut`.
     let rc_mode = pEncCtx.param().iRCMode;
-    // S11.2c: one `&mut` yields both owners (`rc_and_current_layer_mut`), so the
-    // layer no longer has to come through `current_layer`'s raw to coexist with
-    // the controller's borrow.
     let (pWelsSvcRc, pCurDq) = pEncCtx.rc_and_current_layer_mut(did);
     let pCurDq = pCurDq.expect("the frame's current layer is stamped");
     let kiSliceNum = pCurDq.iMaxSliceNum;
@@ -1415,8 +1182,6 @@ pub fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
     pWelsSvcRc.bGomRC = !(rc_mode == RCMode::RC_OFF_MODE || rc_mode == RCMode::RC_BUFFERBASED_MODE);
 
     for i in 0..kiSliceNum as usize {
-        // The raw form dereferenced unconditionally, so absence was never a
-        // handled state here (T9.H) — `expect`, not a skip, keeps that.
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, i as i32)
             .expect("the layer's slice bank maps this slice index");
         let pSOverRc = &mut pSlice.sSlicingOverRc;
@@ -1434,7 +1199,6 @@ pub fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
 pub fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let tid = pEncCtx.uiTemporalId as usize;
-    // §4.6, reorder: the context reads go above the writer's `&mut`.
     let eSliceType = pEncCtx.eSliceType;
     let fix_rc_overshoot = pEncCtx.param().bFixRCOverShoot;
     let iIdrBitrateRatio = pEncCtx.param().iIdrBitrateRatio;
@@ -1442,9 +1206,6 @@ pub fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
     let bEnableFrameSkip = pEncCtx.param().bEnableFrameSkip;
 
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    // §4.6: this body only *reads* the temporal-layer entry, and `SRCTemporal`
-    // is `Copy`, so it is copied out rather than reborrowed out of the struct the
-    // rest of the body writes.
     let sTOverRc: SRCTemporal = (*pWelsSvcRc).pTemporalOverRc[tid];
 
     (*pWelsSvcRc).iCurrentBitsLevel = BITS_NORMAL;
@@ -1486,15 +1247,10 @@ pub fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
 pub fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let iTl = pEncCtx.uiTemporalId as usize;
-    // §4.6, reorder: the context reads go above the writer's `&mut`.
     let eSliceType = pEncCtx.eSliceType;
-    // A7, §4.6 combined accessor — see `RcUpdateBitrateFps`.
     let (pParam, pWelsSvcRc) = pEncCtx.param_and_rc_at_mut(did);
     let pDLayerParam = &pParam.sSpatialLayers[did];
     let pDLayerParamInternal = &pParam.sDependencyLayers[did];
-    // §4.6: this body only *reads* the temporal-layer entry, and `SRCTemporal`
-    // is `Copy`, so it is copied out rather than reborrowed out of the struct the
-    // rest of the body writes.
     let sTOverRc: SRCTemporal = (*pWelsSvcRc).pTemporalOverRc[iTl];
     (*pWelsSvcRc).iCurrentBitsLevel = BITS_NORMAL;
 
@@ -1553,10 +1309,8 @@ pub fn RcDecideTargetBitsTimestamp(pEncCtx: &mut sWelsEncCtx) {
 /// Clears the GOM complexity tracking array.
 pub fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
-    // §4.6, reorder: the context reads go above the writer's `&mut`.
     let kiGlobalQp = pEncCtx.iGlobalQp;
 
-    // S11.2c: both owners from one `&mut` — see `RcInitSliceInformation`.
     let (pWelsSvcRc, pCurDq) = pEncCtx.rc_and_current_layer_mut(did);
     let pCurDq = pCurDq.expect("the frame's current layer is stamped");
     let kiSliceNum = pCurDq.iMaxSliceNum;
@@ -1569,11 +1323,6 @@ pub fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
         pSOverRc.iComplexityIndexSlice = 0;
         pSOverRc.iCalculatedQpSlice = kiGlobalQp;
     }
-
-    // Two of `RcInitGomParameters`'s memsets have no line here: `ratectl.cpp:668`'s
-    // `pGomComplexity` (**D-dead-6**) and `:669`'s `pGomCost` (**D-dead-3**), both
-    // deleted with their fields. Mirroring a memset of storage neither tree reads
-    // is not fidelity, it is an allocation and a loop for nobody.
 }
 
 /// Assigns final macroblock luma and chroma QPs.
@@ -1593,10 +1342,6 @@ pub fn RcCalculateMbQp(
 
     if (*pEncCtx).param().bEnableAdaptiveQuant {
         let pVaa = (*pEncCtx).vaa_expect();
-        // **T9.X**: the buffer is `SVAAFrameInfo`'s own `Vec<i8>` now (it was a
-        // permanently-null `*mut`-i8 on the parameter block — F177). Both of these
-        // bodies are in-fork (S63) and both only *read* it, which a shared slice
-        // expresses exactly.
         let delta_qp: &[i8] = &pVaa.pMotionTextureIndexToDeltaQp;
         let mb_xy = (*pCurMb).iMbXY as usize;
         let delta = delta_qp[mb_xy] as i32;
@@ -1612,12 +1357,6 @@ pub fn RcCalculateMbQp(
 }
 
 /// Evaluates if base layer GOM statistics can be reused for inter-layer prediction.
-///
-/// **A2**: the raw return becomes `Option<&SWelsSvcRc>` — "the base layer's rate
-/// controller, if it is usable" is what the `null` meant, and the one caller asked
-/// exactly that with `is_null()`. The lifetime is free (the input is a raw
-/// pointer), which is the same shape `ctx_ref_pic`/`ctx_pic_ref` already use in
-/// `svc_encode_slice.rs`; the body is in-fork and reads only.
 pub fn RcJudgeBaseUsability<'a>(pEncCtx: &'a sWelsEncCtx) -> Option<&'a SWelsSvcRc> {
     let did = (*pEncCtx).uiDependencyId as usize;
     if did == 0 {
@@ -1730,9 +1469,6 @@ pub fn RcCalculateGomQp(
 pub fn RcVBufferCalculationSkip(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
-    // T9.X: the C++ hoists this pointer once per body
-    // (`SRCTemporal* pTOverRc = pWelsSvcRc->pTemporalOverRc;`, ratectl.cpp:180 and
-    // nine more); the port hoists the slice — same shape, no arithmetic.
     let pTOverRc: &mut [SRCTemporal] = &mut (*pWelsSvcRc).pTemporalOverRc;
     let kiOutputBits = (*pWelsSvcRc).iBitsPerFrame;
     let kiOutputMaxBits = (*pWelsSvcRc).iMaxBitsPerFrame;
@@ -1772,9 +1508,6 @@ pub extern "C" fn CheckFrameSkipBasedMaxbr(
     _uiTimeStamp: i64,
     iDidIdx: i32,
 ) {
-    // §4.6, reorder: the context reads go above the writer's `&mut`. A7: the one
-    // field wanted out of the layer's configuration is a scalar, so it is read
-    // rather than borrowed.
     let kiMaxSpatialBitRate = pEncCtx.param().sSpatialLayers[iDidIdx as usize].iMaxSpatialBitrate as i64;
 
     if !pEncCtx.param().bEnableFrameSkip {
@@ -2078,14 +1811,9 @@ pub fn RcTraceFrameBits(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSiz
 /// Computes average frame QP and updates temporal layer bit counters.
 pub fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) {
     let did = pEncCtx.uiDependencyId as usize;
-    // §4.6, reorder: the context reads go above the writer's `&mut`.
     let eSliceType = pEncCtx.eSliceType;
     let iGlobalQp = pEncCtx.iGlobalQp;
     let tid = pEncCtx.uiTemporalId as usize;
-    // S11.2c: both owners from one `&mut` — see `RcInitSliceInformation`. S10.5a'
-    // read the slice count out as a scalar because a layer borrow could not
-    // outlive `rc_at_mut`'s; with the two borrows granted together the layer
-    // simply stays, and the loop reads its slices through it.
     let (pWelsSvcRc, pCurDq) = pEncCtx.rc_and_current_layer_mut(did);
     let pCurDq = pCurDq.expect("the frame's current layer is stamped");
     let iSliceNumInFrame = pCurDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
@@ -2115,8 +1843,6 @@ pub fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) {
     (*pWelsSvcRc).iFrameDqBits = iCodedBits;
     (*pWelsSvcRc).iLastCalculatedQScale = (*pWelsSvcRc).iAverageFrameQp;
 
-    // T9.X hoisted `pTOverRc` here as the C++ does; A2 takes the entry at its one
-    // use instead, because the write above it is to the same struct.
     let iFrameDqBits = (*pWelsSvcRc).iFrameDqBits;
     (*pWelsSvcRc).pTemporalOverRc[tid].iGopBitsDq += iFrameDqBits;
 }
@@ -2124,7 +1850,6 @@ pub fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) {
 /// Updates the exponential moving average of Intra frame complexity.
 pub fn RcUpdateIntraComplexity(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
-    // §4.6, reorder: the analysis reads go above the writer's `&mut`.
     let mut iFrameComplexity = pEncCtx.vaa_expect().sComplexityAnalysisParam.iFrameComplexity;
     if pEncCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
         iFrameComplexity = pEncCtx.vaa_ext_screen_frame_complexity();
@@ -2160,11 +1885,6 @@ pub fn RcUpdateIntraComplexity(pEncCtx: &mut sWelsEncCtx) {
 pub fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
     let did = pEncCtx.uiDependencyId as usize;
     let kiTl = pEncCtx.uiTemporalId as usize;
-    // §4.6, reorder: the analysis reads go above the writer's `&mut`. This body
-    // writes the temporal-layer entry (`iLinearCmplx`, `iFrameCmplxMean`,
-    // `iPFrameNum`), so it takes the writer, and the two scalars it needs from the
-    // enclosing struct are copied out first — T9.X's hoisted `pTOverRc` and the
-    // struct's own fields cannot both be live once they are references.
     let mut iFrameComplexity = pEncCtx.vaa_expect().sComplexityAnalysisParam.iFrameComplexity;
     if pEncCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
         iFrameComplexity = pEncCtx.vaa_ext_screen_frame_complexity();
@@ -2197,16 +1917,7 @@ pub fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
         pTOverRc[kiTl].iPFrameNum = 255;
     }
 
-    // `ratectl.cpp:1156-1161` — **P10.2.C7, and the second line is a referee's
-    // input.** The screen complexity plugin never touches a verdict; it feeds the
-    // rate controller, so it needs a referee of its own. On the first P frame of an
-    // `rc=1` row both sides compute `iFrameComplexity` from a source frame and a
-    // reconstruction that are byte-identical (the IDR is), so this line must show
-    // the same number on both. Later frames legitimately diverge: their
-    // reconstructions do.
-    //
-    // §4.6: `pTOverRc` is a `&mut` into the rate controller, so the two values are
-    // read out of it before the log call reaches `pEncCtx` again for `sLogCtx`.
+    // `ratectl.cpp:1156-1161`.
     let (kiFrameDqBitsLog, kiLinearCmplx, kiFrameCmplxMean) = (
         iFrameDqBits,
         pTOverRc[kiTl].iLinearCmplx,
@@ -2258,12 +1969,6 @@ pub extern "C" fn WelsRcPictureInitGom(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i
     let kiSliceNum = current_layer_expect(pEncCtx)
         .iMaxSliceNum;
     let eSliceType = pEncCtx.eSliceType;
-    // §4.6: this body is an orchestrator — every branch re-enters the rate
-    // controller through the context — so it holds no borrow at all and
-    // re-derives the layer's state at each use. `eSliceType` is read once up
-    // front: nothing it calls writes it (the field's only writers are
-    // `encoder_context.rs` and `encoder_ext.rs:2106`, all outside this call
-    // tree), so the two reads it replaces see the same value.
     pEncCtx.rc_at_mut(did).iContinualSkipFrames = 0;
 
     if eSliceType as i32 == I_SLICE && pEncCtx.rc_at(did).iIdrNum == 0 {
@@ -2347,12 +2052,6 @@ static RC_MB_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 pub extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: &mut sWelsEncCtx, iLayerSize: i32) {
     let did = pEncCtx.uiDependencyId as usize;
     let iCodedBits = iLayerSize << 3;
-    // §4.6: this body is an orchestrator — every branch re-enters the rate
-    // controller through the context — so it holds no borrow at all and
-    // re-derives the layer's state at each use. `eSliceType` is read once up
-    // front: nothing it calls writes it (the field's only writers are
-    // `encoder_context.rs` and `encoder_ext.rs:2106`, all outside this call
-    // tree), so the two reads it replaces see the same value.
 
     RcUpdatePictureQpBits(pEncCtx, iCodedBits);
 
@@ -2463,10 +2162,6 @@ pub extern "C" fn WelsRcMbInfoUpdateGom(
     pSOverRc.iFrameBitsSlice += iCurMbBits;
     pSOverRc.iGomBitsSlice += iCurMbBits;
 
-    // `ratectl.cpp:1273`'s `pGomCost[kiComplexityIndex] += iCostLuma` stood here
-    // — **D-dead-3**, deleted with the field. It was the only consumer of
-    // `iCostLuma` and of `iComplexityIndexSlice` in this body; the parameter stays
-    // because the `pfRcMbInfoUpdate` slot's other three installees share its shape.
     if iCurMbBits > 0 {
         pSOverRc.iTotalQpSlice += (*pCurMb).uiLumaQp as i32;
         pSOverRc.iTotalMbSlice += 1;
@@ -2477,9 +2172,6 @@ pub extern "C" fn WelsRcPictureInitDisable(pEncCtx: &mut sWelsEncCtx, _uiTimeSta
     let did = pEncCtx.uiDependencyId as usize;
     let pDLayerParam = &pEncCtx.param().sSpatialLayers[did];
     let kiQp = pDLayerParam.iDLayerQp;
-    // §4.6: `RcCalculateCascadingQp` re-enters through the context, so the two QP
-    // bounds are copied out rather than held. They are read-only here; the only
-    // write to the struct is the last line.
     let (iMinQp, iMaxQp) = {
         let rc = pEncCtx.rc_at(did);
         (rc.iMinQp, rc.iMaxQp)
@@ -2523,10 +2215,6 @@ pub extern "C" fn WelsRcMbInitDisable(
 
     if (*pEncCtx).param().bEnableAdaptiveQuant && (*pEncCtx).eSliceType as i32 == P_SLICE {
         let pVaa = (*pEncCtx).vaa_expect();
-        // **T9.X**: the buffer is `SVAAFrameInfo`'s own `Vec<i8>` now (it was a
-        // permanently-null `*mut`-i8 on the parameter block — F177). Both of these
-        // bodies are in-fork (S63) and both only *read* it, which a shared slice
-        // expresses exactly.
         let delta_qp: &[i8] = &pVaa.pMotionTextureIndexToDeltaQp;
         let mb_xy = (*pCurMb).iMbXY as usize;
         let delta = delta_qp[mb_xy] as i32;
@@ -2557,11 +2245,8 @@ pub extern "C" fn WelRcPictureInitBufferBasedQp(
     pEncCtx: &mut sWelsEncCtx,
     _uiTimeStamp: i64,
 ) {
-    // §4.6, reorder: the scene-change idc is `Copy`, so it is read out here rather
-    // than held as a borrow of the context across the `iGlobalQp` writes below.
     let eSceneChangeIdc = pEncCtx.vaa_expect().eSceneChangeIdc;
     let did = pEncCtx.uiDependencyId as usize;
-    // §4.6, reorder: the context reads go above the writer's `&mut`.
     let rcMaxQp = pEncCtx.rc_at(did).iMaxQp;
 
     let mut iMinQp = pEncCtx.param().iMinQp;
@@ -2587,16 +2272,11 @@ pub extern "C" fn WelRcPictureInitBufferBasedQp(
 pub extern "C" fn WelRcPictureInitScc(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i64) {
     let did = pEncCtx.uiDependencyId as usize;
     let eSliceType = pEncCtx.eSliceType;
-    // A7, §4.6 reorder: both fields are scalars and the body writes `iGlobalQp` on
-    // the context between their uses.
     let iBitRate = pEncCtx.param().sSpatialLayers[did].iSpatialBitrate;
     let fOutputFrameRate = pEncCtx.param().sDependencyLayers[did].fOutputFrameRate;
 
     let iFrameCplx = pEncCtx.vaa_ext_screen_frame_complexity();
 
-    // §4.6: the body reads seven of the layer's scalars and writes `iGlobalQp` on
-    // the context between them, so the reads are copied out once and the three
-    // writes go to the tail, where the `&mut` is taken and released.
     let (rcBaseQp, rcMinQp, rcMaxQp, rcBufferFullnessSkip, rcCost2BitsIntra, rcAvgCost2Bits) = {
         let rc = pEncCtx.rc_at(did);
         (rc.iBaseQp, rc.iMinQp, rc.iMaxQp, rc.iBufferFullnessSkip,
@@ -2681,13 +2361,8 @@ pub extern "C" fn WelRcPictureInitScc(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i6
 pub extern "C" fn WelsRcPictureInfoUpdateScc(pEncCtx: &mut sWelsEncCtx, iNalSize: i32) {
     let did = pEncCtx.uiDependencyId as usize;
     let iFrameBits = iNalSize << 3;
-    // §4.6, reorder: the context reads go above the writer's `&mut`.
     let iQstep = RcConvertQp2QStep(pEncCtx.iGlobalQp);
     let eSliceType = pEncCtx.eSliceType;
-    // S10.5a': the complexity read joins the other context reads above the
-    // writer's `&mut`, which is what this body's §4.6 comment already asks for —
-    // it was below only because it used to go through a raw the borrow checker
-    // could not see.
     let screen_cmplx = pEncCtx.vaa_ext_screen_frame_complexity();
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
     (*pWelsSvcRc).iBufferFullnessSkip += iFrameBits as i64;
@@ -2727,9 +2402,7 @@ pub extern "C" fn WelsRcFrameDelayJudgeTimeStamp(
     uiTimeStamp: i64,
     iDidIdx: i32,
 ) {
-    // §4.6, reorder: the context reads go above the writer's `&mut`.
     let bEnableFrameSkip = pEncCtx.param().bEnableFrameSkip;
-    // A7, §4.6 combined accessor — see `RcUpdateBitrateFps`.
     let (pParam, pWelsSvcRc) = pEncCtx.param_and_rc_at_mut(iDidIdx as usize);
     let pDLayerConfig = &pParam.sSpatialLayers[iDidIdx as usize];
 
@@ -2783,8 +2456,6 @@ pub extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
 ) {
     let did = pEncCtx.uiDependencyId as usize;
     let iCodedBits = iLayerSize << 3;
-    // §4.6: an orchestrator, as `WelsRcPictureInfoUpdateGom` is — every branch
-    // re-enters through the context, so nothing is held.
 
     RcUpdatePictureQpBits(pEncCtx, iCodedBits);
     if pEncCtx.eSliceType as i32 == P_SLICE {
@@ -2807,42 +2478,18 @@ pub extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(
 
 /// Populates the rate control function dispatch table.
 ///
-/// **T4b.1b**: the table is one field, so "populate" is one assignment. The
-/// `match` that used to be here is now nine `match`es, one per former slot, each
-/// at the point of use — see [`SWelsRcFunc`]. The C++ per-mode blocks are
-/// transposed rather than deleted: read the methods down instead of across, and
-/// `rc.cpp:WelsRcInitFuncPointers`'s five cases are still all there.
-///
-/// The signature is unchanged so its two callers — `InitFunctionPointers` and
-/// `SetOption(ENCODER_OPTION_RC_MODE)` — keep their shape; those two are the
-/// **only** places the installed mode may change, which is the property the type
-/// note depends on.
+/// Its two callers — `InitFunctionPointers` and `SetOption(ENCODER_OPTION_RC_MODE)`
+/// — are the **only** places the installed mode may change.
 pub fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
     pRcf.eInstalledMode = iRcMode;
 }
 
 /// Top-level initialization entry point called during encoder creation.
 pub fn WelsRcInitModule(pEncCtx: &mut sWelsEncCtx, iRcMode: RCMode) {
-    // T6.I1: the `&& !pFuncList.is_null()` arm went with the raw table.
-    // T9.H8: and the `!pEncCtx.is_null()` arm goes with the flip — a
-    // `&mut sWelsEncCtx` cannot be null, so the condition was always true and the
-    // install is unconditional. Both arms of the original guard are now gone for
-    // the same reason: the thing each tested has a type that cannot express it.
-    // The table's `&mut` is bound before the field is projected out of it: the
-    // inline `&mut <ctx>.func_list_mut().pfRc` spelling reads to the F208 scanner
-    // as a context-`&mut` live across a reader call, and this one is not.
     let fl = pEncCtx.func_list_mut();
     WelsRcInitFuncPointers(&mut fl.pfRc, iRcMode);
     RcInitSequenceParameter(pEncCtx);
 }
-
-// **T6.H6**: `WelsRcFreeMemory` and `RcFreeLayerMemory` stood here. They walked the
-// spatial layers releasing each one's rate-control block, and `WelsUninitEncoderExt`
-// had to call the pair *before* releasing `pWelsSvcRc` itself, because the blocks
-// hung off the array being freed. The five containers are the layer's own, the layers
-// are the context's `Vec`, and the whole cascade is one drop — so both functions are
-// deleted rather than converted, and the ordering constraint they documented is gone
-// with them.
 
 /// Computes a monotonically increasing timestamp for rate control.
 #[inline]
@@ -2895,22 +2542,6 @@ mod tests {
 
     #[test]
     fn test_rc_intentional_noop_callbacks() {
-        // **T9.H11: the context arguments are `&mut` now, so the nulls go.**
-        // This test used to pass `null_mut()` for the context to prove these
-        // callbacks dereference nothing. That property is no longer *testable*
-        // because it is no longer *expressible*: a `&mut sWelsEncCtx` cannot be
-        // null, so the type enforces strictly more than the assertion did. What
-        // remains worth running is that each no-op is callable and answers its
-        // documented value, so a real context takes the nulls' place.
-        //
-        // **S7.A5**: `WelsRcMbInfoUpdateDisable` no longer keeps its raw context, so
-        // the null this line used to pass is unrepresentable — and it was F238's class
-        // besides: the body is empty, so `&*null` would have been *newly* undefined
-        // where passing a null raw pointer to a body that ignores it was defined. The
-        // assertion is unchanged in what it means (the no-op arm runs and does
-        // nothing); it says it with the context the test already built. Every
-        // production caller reaches this through `pfRc.WelsRcMbInfoUpdate`, whose
-        // context is the encode path's and never null.
         let mut ctx = Box::new(sWelsEncCtx::default());
         assert!(!WelsRcPostFrameSkipping(&mut ctx, 0, 0));
         WelsRcPostFrameSkippedUpdate(&mut ctx, 0);

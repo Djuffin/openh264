@@ -19,50 +19,14 @@
 //! | `BENCH_LOAD_BALANCING=0\|1` | override `bUseLoadBalancing` (default: leave `GetDefaultParams`' value) |
 //! | `BENCH_USAGE=0\|1` | `iUsageType`: 0 camera (default), 1 `SCREEN_CONTENT_REAL_TIME` |
 //!
-//! **F68** (`phase7_findings.md`): before the slice-mode knob existed this bench
-//! set `iMultipleThreadIdc` and nothing else, so `GetDefaultParams`' `SM_SINGLE_SLICE`
-//! survived into every row — and `SM_SINGLE_SLICE` is the first arm of the slice-mode
-//! chain in `WelsEncoderEncodeExt`, tested before any thread-count condition. Every
-//! `[4 thread]` row this bench has ever printed, on **both** sides, encoded on the
-//! calling thread. The flat 0.0-1.4% "speedup" at every resolution was the signature
-//! of a path that never ran. `BENCH_SLICE_MODE` is a knob rather than an edit so the
-//! `sm=0` rows stay comparable with every span already in `perf_baseline.md`.
-//!
 //! **`BENCH_LOAD_BALANCING`, and why it exists.** `GetDefaultParams` sets
 //! `bUseLoadBalancing = true` on both sides. With `uiSliceMode = 1` and
 //! `iMultipleThreadIdc >= uiSliceNum` that reaches `AdjustBaseLayer` →
 //! `DynamicAdjustSlicing`, whose slice boundaries for frame N+1 are computed from
 //! frame N's measured per-slice encode *times* — so the bitstream is a function of
 //! the schedule. The C++ header says so itself (`codec_app_def.h:579`: the result of
-//! each run may be different), and two consecutive runs of this bench confirm it —
-//! the **C++** side alone returns a different byte count every time. A row on that
-//! path can never be bit-identical, so `BENCH_LOAD_BALANCING=0` is what a
-//! byte-checked multi-slice span wants; it is also the configuration the diffharness
-//! gates (`cxx_enc.cpp:119` sets it false). Leaving the knob unset keeps every
-//! historical row exactly as it was.
-//!
-//! **`BENCH_USAGE`, and why it is a byte referee rather than only a knob** (P10.4,
-//! D-scc-18). `iUsageType` was `CAMERA_VIDEO_REAL_TIME` on every row this bench has
-//! ever printed, so the screen path had no measurement at all — its cost against the
-//! reference was unknown at the moment Phase 10 declared it byte-identical. Setting
-//! it to 1 does more than time the path: the per-row SHA-1 comparison below is then
-//! refereeing a content family the diffharness never feeds the screen encoder —
-//! fifteen ffmpeg lavfi sources at four sizes under `GetDefaultParams`' own values
-//! (rate control ON, frame skip on, `SM_FIXEDSLCNUM_SLICE` one-slice-per-thread)
-//! rather than the harness's pinned gate configuration over three `res/` clips and
-//! four synthetic scrolling-text ones. A `MISMATCH` row here is a defect, not a knob
-//! misuse. The row label gains ` u=1` inside the bracket `perfpair.py` parses, so a
-//! screen row and a camera row are separate keys and no historical row moves.
-//!
-//! **What it does not reach (F335).** Nothing in `lavfi`'s catalogue scrolls by
-//! whole rows, so `bScrollDetectFlag` stays false and the scrolled search,
-//! `SetScrollingMvToMd` and `JudgeScrollSkip` are inert on every row here — a
-//! deliberate `iMvY + 1` in `SetScrollingMvToMd` leaves all 30 rows bit-identical,
-//! where the same break fails 48 of the family gate's 108 `scc` rows. This axis is a
-//! *complement* to `sweep.sh scc`, not a superset of it: it covers content and an
-//! API flow the harness has no clip for, and the harness covers the scroll family
-//! this content cannot express. Calibrating a change here means picking a break the
-//! content actually reaches.
+//! each run may be different). A row on that path can never be bit-identical, so
+//! `BENCH_LOAD_BALANCING=0` is what a byte-checked multi-slice span wants.
 //!
 //! Exits non-zero if any configuration's bitstreams disagree, after running and
 //! reporting all of them — one mismatch should not cost you the other 29 rows.
@@ -213,11 +177,9 @@ impl CppLibrary {
     }
 }
 
-/// One entry of the slice-mode axis (F68).
+/// One entry of the slice-mode axis.
 ///
-/// `SM_SINGLE_SLICE` is the default so an unset `BENCH_SLICE_MODE` reproduces every
-/// row this bench printed before the knob existed, byte for byte and number for
-/// number. The multi-slice entries are what actually reach the threaded paths:
+/// The multi-slice entries are what actually reach the threaded paths:
 /// `SM_FIXEDSLCNUM_SLICE` takes the fork/join dispatch, `SM_SIZELIMITED_SLICE` the
 /// dynamic one.
 #[derive(Clone, Copy, PartialEq)]
@@ -289,9 +251,8 @@ unsafe fn fill_params(
     let mut param: SEncParamExt = unsafe { std::mem::zeroed() };
     let vtbl = unsafe { &*(*enc).lpVtbl };
     unsafe { (vtbl.GetDefaultParams)(enc, &mut param) };
-    // D-scc-18. `GetDefaultParams` writes `CAMERA_VIDEO_REAL_TIME`, which is what
-    // every row before P10.4 measured. Under screen usage the encoder's own
-    // `ParamValidation` then forces `bEnableSceneChangeDetect` ON and
+    // `GetDefaultParams` writes `CAMERA_VIDEO_REAL_TIME`. Under screen usage the
+    // encoder's own `ParamValidation` then forces `bEnableSceneChangeDetect` ON and
     // `bEnableAdaptiveQuant`/`bEnableBackgroundDetection` OFF on both sides
     // (`encoder_ext.cpp:274-290`), so the two remain configured identically.
     param.iUsageType = usage;
@@ -305,10 +266,8 @@ unsafe fn fill_params(
     param.sSpatialLayers[0].iVideoHeight = height;
     param.sSpatialLayers[0].fFrameRate = 30.0;
     param.sSpatialLayers[0].iSpatialBitrate = 2_000_000;
-    // F68. `GetDefaultParams` leaves `uiSliceMode` at `SM_SINGLE_SLICE`, and until
-    // this block existed nothing here raised it — so the thread axis measured the
-    // single-threaded path at every count. The arms mirror `cxx_enc.cpp:144`, which
-    // is what the byte harness drives.
+    // `GetDefaultParams` leaves `uiSliceMode` at `SM_SINGLE_SLICE`. The arms mirror
+    // `cxx_enc.cpp:144`.
     if let Some(lb) = load_balancing {
         param.bUseLoadBalancing = lb;
     }
@@ -474,21 +433,15 @@ fn main() {
         .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
         .filter(|v: &Vec<u16>| !v.is_empty())
         .unwrap_or_else(|| vec![1, 4]);
-    // F68's knob. Unset = the one default entry, which is what every span in
-    // `perf_baseline.md` before 2026-08-20 measured.
     let slice_specs: Vec<SliceSpec> = std::env::var("BENCH_SLICE_MODE")
         .ok()
         .map(|v| v.split(',').filter_map(SliceSpec::parse).collect())
         .filter(|v: &Vec<SliceSpec>| !v.is_empty())
         .unwrap_or_else(|| vec![SliceSpec::DEFAULT]);
-    // Only tag the rows when the axis actually has something on it, so an unset
-    // `BENCH_SLICE_MODE` prints the exact row text the ledger's history is written in.
+    // Only tag the rows when the axis actually has something on it.
     let tag_rows = slice_specs.len() > 1 || slice_specs[0] != SliceSpec::DEFAULT;
-    // D-scc-18's knob. `0`/unset is camera — every row this bench has printed since
-    // it existed — and `1` is `SCREEN_CONTENT_REAL_TIME`. Anything else is a panic
-    // rather than a silent fallback to camera: a typo that quietly measured the
-    // camera path while the operator believed they were measuring the screen one is
-    // exactly the failure `BENCH_SLICE_MODE` had before F68 caught it.
+    // `0`/unset is camera and `1` is `SCREEN_CONTENT_REAL_TIME`. Anything else is a
+    // panic rather than a silent fallback to camera.
     let usage: EUsageType = match std::env::var("BENCH_USAGE").ok().as_deref() {
         None | Some("") | Some("0") => EUsageType::CAMERA_VIDEO_REAL_TIME,
         Some("1") => EUsageType::SCREEN_CONTENT_REAL_TIME,
@@ -567,10 +520,9 @@ fn main() {
             for threads in &thread_counts {
                 let threads = *threads;
                 // The tag goes INSIDE the bracket: `perfpair.py`'s row regex is
-                // `\[(\d+) thread([^\]]*)\]` (its F74 fix), so everything up to the
-                // `]` travels into the row key and a `u=1` row can never be paired
-                // against a camera row of the same size and thread count. An unset
-                // knob prints the exact historical text.
+                // `\[(\d+) thread([^\]]*)\]`, so everything up to the `]` travels
+                // into the row key and a `u=1` row can never be paired against a
+                // camera row of the same size and thread count.
                 let usage_tag = if screen { " u=1" } else { "" };
                 let row = if tag_rows {
                     format!("{:1} thread {}{}", threads, spec.label(threads), usage_tag)

@@ -44,9 +44,6 @@
     unused_variables,
     unused_mut
 )]
-// S11.30: `unused_unsafe` left the allow list above — a muzzled lint is how
-// eighteen vacuous blocks accumulated crate-wide (F281), and this file's six
-// around the coding thunks were invisible for exactly this reason.
 
 #![deny(unsafe_code)]
 
@@ -83,16 +80,12 @@ pub const TOP_MB_POS: u8 = 0x02;
 pub const TOPRIGHT_MB_POS: u8 = 0x04;
 pub const TOPLEFT_MB_POS: u8 = 0x08;
 
-/// `rc.h:77` says **2**, not 1. `UpdateQpForOverflow` is the only user, so a
-/// macroblock that overflowed the CAVLC level suffix was re-encoded one QP step
-/// higher than the reference chose. Only reachable at very low QP, which is why
-/// it survived every sweep except qp=0. Re-exported from the one definition.
+/// `rc.h:77` says **2**. `UpdateQpForOverflow` is the only user.
 pub use crate::encoder::rc::DELTA_QP;
 pub const MB_COEFF_LIST_SIZE: usize = 384;
 pub const MB_BLOCK4x4_NUM: usize = 16;
 pub const MB_LUMA_CHROMA_BLOCK4x4_NUM: usize = 24;
-// wels_const.h:69 says 4. This module had 8, which over-sized SDqLayer's
-// sSliceBufferInfo and its four partition arrays by 128 bytes in total.
+// wels_const.h:69 says 4.
 pub use crate::encoder::encoder_context::MAX_THREADS_NUM;
 pub use crate::encoder::encoder_context::MAX_DEPENDENCY_LAYER;
 pub const MAX_REF_PIC_COUNT: u32 = 16;
@@ -110,9 +103,7 @@ pub const ENC_RETURN_MEMOVERFLOWFOUND: i32 = 0x20;
 pub const ENC_RETURN_VLCOVERFLOWFOUND: i32 = 0x40;
 pub const ENC_RETURN_KNOWN_ISSUE: i32 = 0x80;
 
-// `wels_common_defs.h:275-285`. MB_TYPE_INTRA_BL and MB_TYPE_SKIP were both wrong
-// here: 0x04 is MB_TYPE_INTRA8x8 and 0x80 is MB_TYPE_8x8_REF0. Both are live, in
-// IS_SVC_INTER and IS_SKIP below.
+// `wels_common_defs.h:275-285`.
 pub const MB_TYPE_INTRA4x4: u32 = 0x00000001;
 pub const MB_TYPE_INTRA16x16: u32 = 0x00000002;
 pub const MB_TYPE_16x16: u32 = 0x00000008;
@@ -140,8 +131,6 @@ pub const g_kiQpCostTable: [i32; 52] = [
 ];
 
 // `g_kuiGolombUELength` is a common-layer table (`common_tables.cpp:886`).
-// This module used to declare its own copy; see the canonical definition for
-// what the divergent copies got wrong.
 pub use crate::common::wels_common_defs::g_kuiGolombUELength;
 
 #[inline]
@@ -208,18 +197,6 @@ pub fn WELS_CEILLOG2(v: u32) -> i32 {
 // Core Macroblock, Cache, and Slice Data Structures
 // ============================================================================
 
-
-
-
-
-
-
-
-
-
-
-
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SSliceHeader {
@@ -234,19 +211,6 @@ pub struct SSliceHeader {
     pub uiDisableDeblockingFilterIdc: u8,
     pub iSliceAlphaC0Offset: i8,
     pub iSliceBetaOffset: i8,
-    // **`pSps` and `pPps` stood here and are deleted, not converted** (T6.G3).
-    // Their replacement was already in the struct: `iSpsId`/`iPpsId`, immediately
-    // below, are the same two numbers, written from the same locals in the same
-    // statement block (`WelsInitCurrentLayer`) and copied by the same function
-    // (`InitSliceHeadWithBase`). Converting the pointers to ids would have produced
-    // a second dead copy of a number already stored two lines down.
-    //
-    // Dead is measured, not assumed: grepped tree-wide at this step, both fields are
-    // **written and never read**. The C++ does read `pSliceHeader->pPps->iPpsId`
-    // (`svc_encode_slice.cpp:285`/`:361`) — this port reads `sLayerInfo.pPpsP`
-    // there instead, and says so at both sites. So does `iPpsId` below, which is
-    // write-only for the same reason; it stays because it is a syntax element and
-    // not a pointer, and naming it here is cheaper than finding it again.
     pub iSpsId: i32,
     pub iPpsId: i32,
     pub uiIdrPicId: u16,
@@ -256,27 +220,10 @@ pub struct SSliceHeader {
     pub sRefReordering: SRefPicListReorderSyntax,
 }
 
-// `impl Default for SSliceHeader` stood here as `unsafe { mem::zeroed() }`, with
-// T6.H12's audit for why the zeros are right: every member is an integer, a
-// `bool`, or a POD sub-struct of those (`SRefPicMarking`,
-// `SRefPicListReorderSyntax`), plus `eSliceType`, whose zero discriminant
-// `P_SLICE` is a declared variant. The C++ memsets the slice header before
-// `InitSliceHeadWithBase` fills it, and this was that memset.
-//
-// **S11.48: the audit is the derive.** Every one of those facts is now stated by
-// the type — both sub-structs `#[derive(Default)]`, and `EWelsSliceType` carries
-// `#[default]` on `P_SLICE = 0` — so `#[derive(Default)]` writes the same zeros
-// field by field, and the compiler rechecks the audit whenever a field changes.
-// A memset cannot do that: adding a non-zeroable field would have kept
-// compiling.
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SSliceHeaderExt {
     pub sSliceHeader: SSliceHeader,
-    // **`pSubsetSps` stood here and is deleted** (T6.G3): declared by the C++,
-    // transcribed by this port, and never written or read by either. The layer's
-    // `sLayerInfo` is where every subset consumer looks.
     pub uiNumMbsInSlice: u32,
     pub bStoreRefBasePicFlag: bool,
     pub bConstrainedIntraResamplingFlag: bool,
@@ -291,10 +238,6 @@ pub struct SSliceHeaderExt {
     pub uiDisableInterLayerDeblockingFilterIdc: u8,
 }
 
-// `impl Default for SSliceHeaderExt` stood here for the same reason and is
-// derived for the same reason (S11.48): that struct plus eleven `bool`s and two
-// integers.
-
 pub use crate::common::wels_common_defs::EWelsNalUnitType;
 use crate::safe::plane::PlaneCursor;
 pub use crate::safe::bits::BsWriter;
@@ -303,20 +246,10 @@ use crate::safe::mvd_cost::MvdCostCursor;
 pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 use crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj;
 
-
-/// `TagSlice` — `codec/encoder/core/inc/slice.h:170`. 1584 bytes in the C++; the
-/// port's is not pinned (`abi_guard.rs`) and measures 1520 at Phase 6 session B,
-/// after `pSliceBsa`, `sSliceBs.pBsBuffer` and the NAL records' `pRawData` went.
+/// `TagSlice` — `codec/encoder/core/inc/slice.h:170`. 1584 bytes in the C++.
 #[repr(C)]
 pub struct SSlice {
     pub sMbCacheInfo: SMbCache,
-    // `pSliceBsa: *mut BsWriter` was here — the C++ `SBitStringAux*` that aimed at
-    // either `sSliceBs.sBsWrite` just below or the frame's `pOut->sBsWrite`. It was a
-    // cache of one bit that `sSliceBs.pBs`'s nullness already records, and
-    // `InitBitStream` replacing `pOut->sBsWrite` every frame killed every slice's
-    // copy of it (the encoder probe's eleventh finding, session A).
-    // `slice_bs_writer` (S11.1a; `slice_writer` before it) derives the choice
-    // fresh at each use; nothing stores it. Phase 6 session B.
     pub sSliceBs: SWelsSliceBs,
     pub sSliceHeaderExt: SSliceHeaderExt,
     pub sMvStartMin: SMVUnitXY,
@@ -342,24 +275,10 @@ pub struct SSlice {
 }
 
 impl SSlice {
-    /// A slice exactly as `InitSliceThreadInfo` used to find it the moment
-    /// `WelsMallocz` returned — **T6.D8**, and it exists for the same reason the
-    /// layer's constructor does: the bank is a `Vec<SSlice>` now, so the slices are
-    /// built rather than handed a zeroed block.
-    ///
-    /// **Every field below is that block's zero**, and the port's own audit of the
-    /// pieces says so: `SMbCache::default()` is all-zero field by field (T6.C3),
-    /// `SCabacCtx::default()` likewise, and `SSliceHeaderExt`/`SRCSlicing`/`SMVUnitXY`
-    /// are plain POD. **The one exception is named**: `SWelsSliceBs::default()`
-    /// carries `BsWriter::default()`, whose `left_bits` is **32** where a zeroed
-    /// `SBitStringAux`'s `iLeftBits` is 0 — a difference `safe/bits.rs` already
-    /// settled in writing ("the C++ never uses that struct before calling
-    /// `InitBits`"), and `InitBitStream`/`WelsInitSliceCabac` establish the writer
-    /// before any slice writes a bit. The sweeps are the measurement.
     pub fn new() -> Self {
         Self {
-            // Per-macroblock scratch: 5600 bytes of inline arrays since T6.C3, and
-            // every one of them is written before it is read, per macroblock.
+            // Per-macroblock scratch: 5600 bytes of inline arrays, and every one of
+            // them is written before it is read, per macroblock.
             sMbCacheInfo: SMbCache::default(),
             // The slice's own bitstream: `InitSliceBsBuffer` sets `uiSize` and either
             // allocates `pBs` or leaves it null (the frame writer's slot).
@@ -400,29 +319,18 @@ impl Default for SSlice {
     }
 }
 
-
-
 #[repr(C)]
 #[derive(Debug)]
 pub struct SDynamicSlicingStack<'a> {
     pub iStartPos: i32,
     pub iCurrentPos: i32,
-    /// The CAVLC rollback snapshot. Was `pBsStackBufPtr`/`uiBsStackCurBits`/
-    /// `iBsStackLeftBits` — a pointer and the two accumulator fields, restored
-    /// one by one. A detached cursor is `Copy`, so the snapshot is the value.
+    /// The CAVLC rollback snapshot.
     pub sBsStack: BsWriter,
     pub sStoredCabac: crate::encoder::set_mb_syn_cabac::SCabacCtx,
     pub iMbSkipRunStack: i32,
     pub uiLastMbQp: u8,
-    /// **S11.30: the CABAC restore scratch, as the borrow it always was.** The
-    /// `*mut u8` named one of `pDynamicBsBuffer`'s per-partition allocations,
-    /// reached through the shared context in-fork (`dynamic_bs_buffer`, F71's
-    /// mint — deleted with this field's conversion). It now arrives like the
-    /// bitstream pair (S11.1a): taken from the context by the owner — pre-fork
-    /// for the size-limited workers, around the call for the single-threaded
-    /// callers — and threaded down the coding slot. `None` is what null was:
-    /// CAVLC dynamic slicing, and every fixed mode. `Copy` came off with the
-    /// pointer; nothing ever copied the stack whole.
+    /// The CABAC restore scratch, one of `pDynamicBsBuffer`'s per-partition
+    /// allocations. `None` for CAVLC dynamic slicing, and every fixed mode.
     pub pRestoreBuffer: Option<&'a mut [u8]>,
 }
 
@@ -440,13 +348,10 @@ impl Default for SDynamicSlicingStack<'_> {
     }
 }
 
-
-
 /// `TagSliceBufferInfo` — `codec/encoder/core/inc/svc_enc_frame.h:71`. 16 bytes in
-/// the C++; not `repr(C)` since **T6.D8**, because `pSliceBuffer` is a `Vec<SSlice>`.
+/// the C++; not `repr(C)`, because `pSliceBuffer` is a `Vec<SSlice>`.
 pub struct SSliceBufferInfo {
-    /// The bank's slices, **owned since T6.D8**. `slice_in_layer` resolves a
-    /// `SliceIdx` against this, deriving from the bank's root (S28).
+    /// The bank's slices, **owned**.
     pub pSliceBuffer: Vec<SSlice>,
     pub iMaxSliceNum: i32,
     pub iCodedSliceNum: i32,
@@ -462,20 +367,7 @@ impl Default for SSliceBufferInfo {
     }
 }
 
-/// **Which array a layer's active SPS lives in** — T6.G3.
-///
-/// `SLayerInfo` carried two pointers for this, `pSubsetSpsP` and `pSpsP`, and the
-/// choice between them was encoded in whether the first was null:
-/// `WelsInitCurrentLayer`'s SVC arm aims `pSubsetSpsP` at `pSubsetArray[id]` and then
-/// aims `pSpsP` *inside it*, at `SSubsetSps::pSps`; its AVC arm nulls the first and
-/// aims `pSpsP` at `pSpsArray[id]`. So `pSpsP` was **not** an index into one array —
-/// it named a position in either of two, and the discriminator was a null.
-///
-/// That is a tagged union with the tag spelled as a null pointer, and this is the
-/// same statement with the tag spelled as a tag. It is why the two fields become one:
-/// an `Option<SpsId>` plus an `Option<SubsetSpsId>` would leave three states the
-/// encoder cannot be in, and one of them (both `Some`, disagreeing) is the bug the
-/// null spelling could actually produce.
+/// **Which array a layer's active SPS lives in.**
 ///
 /// The two ids are *different spaces* — `pSpsArray` and `pSubsetArray` are different
 /// allocations with different lengths — which is why the arms carry different types
@@ -491,10 +383,9 @@ pub enum LayerSps {
 
 /// `TagLayerInfo` — `codec/encoder/core/inc/svc_enc_frame.h:77`. 48 bytes in the C++.
 ///
-/// **Not `repr(C)` since T6.G3**, for `SDqLayer`'s reason one level down:
-/// `Option<LayerSps>` has no C shape. The C++'s three parameter-set pointers are two
-/// fields here, and neither is an address — see [`LayerSps`], and
-/// [`layer_sps`]/[`layer_pps`]/[`layer_subset_sps`] for the resolution.
+/// Not `repr(C)`: `Option<LayerSps>` has no C shape. The C++'s three
+/// parameter-set pointers are two fields here, and neither is an address — see
+/// [`LayerSps`].
 #[derive(Debug, Copy, Clone)]
 pub struct SLayerInfo {
     pub sNalHeaderExt: SNalUnitHeaderExt,
@@ -505,11 +396,10 @@ pub struct SLayerInfo {
 }
 
 impl Default for SLayerInfo {
-    /// **Field-wise, and it has to be** (F56/S21): `Option<LayerSps>` and
-    /// `Option<PpsId>` have no niche — `LayerSps`'s payloads are plain integers — so
-    /// the all-zero image of this struct is `Some(Avc(SpsId(0)))` and
-    /// `Some(PpsId(0))`, a layer that already has parameter sets. `mem::zeroed()`
-    /// stood here and would still have compiled.
+    /// **Field-wise, and it has to be**: `Option<LayerSps>` and `Option<PpsId>`
+    /// have no niche — `LayerSps`'s payloads are plain integers — so the all-zero
+    /// image of this struct is `Some(Avc(SpsId(0)))` and `Some(PpsId(0))`, a layer
+    /// that already has parameter sets.
     fn default() -> Self {
         Self {
             // All scalars, and its own `Default` is its zero; the header is stamped
@@ -523,21 +413,13 @@ impl Default for SLayerInfo {
 
 pub use crate::encoder::encoder_context::SRefList;
 
-/// `TagDqLayer` — `codec/encoder/core/inc/svc_enc_frame.h:84`. 512 bytes.
-///
-/// This was previously spread over eleven partial copies. The least-truncated one
-/// (`slice_multi_threading.rs`) still stood `sSliceBufferInfo` in for
-/// `[SSliceBufferInfo; MAX_THREADS_NUM]` with `[u8; 64 * MAX_THREADS_NUM]` — four
-/// times the real 64 bytes — and left four pointers as `*mut c_void`.
-/// A layer's position in `sWelsEncCtx::ppDqLayerList` — Phase 6 session D.
+/// A layer's position in `sWelsEncCtx::ppDqLayerList`.
 ///
 /// The list is `iSpatialLayerNum` entries built once in `InitDqLayers` and freed
 /// once in `FreeDqLayer`, and **nothing permutes it**: `WelsSwapDqLayers`
 /// reassigns `pCurDqLayer` and stamps the outgoing layer's index, and no
 /// `swap`/`rotate`/`retain`/`remove`/`sort`/`drain` touches the list anywhere in
-/// the tree (S34, grepped at this face's open — 28 occurrences, zero hits). So a
-/// position is a stable identity and an index is faithful where the raw
-/// `*mut SDqLayer` was.
+/// the tree. So a position is a stable identity.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LayerIdx(pub u8);
 
@@ -548,23 +430,8 @@ impl LayerIdx {
     }
 }
 
-/// A slice's position in the layer's slice **banks** — Phase 6 session D.
-///
-/// `ppSliceInLayer` was `*mut *mut SSlice`: one pointer per slice, into
-/// `sSliceBufferInfo[bank].pSliceBuffer`. Two things invalidate such a pointer and
-/// neither invalidates a position:
-///
-/// * **`ReallocateSliceList` grows a bank** by allocating a new block, copying into
-///   it and freeing the old one — every `ppSliceInLayer` entry into that bank is
-///   dangling until something re-stamps it. The single-threaded path does re-stamp
-///   (`ReallocSliceBuffer` -> `ExtendLayerBuffer` -> the fill loop); the
-///   multi-threaded one does not (`ReallocateSliceInThread` updates
-///   `sSliceBufferInfo[..].pSliceBuffer` and nothing else), and **the C++ has the
-///   same shape** — `phase6_findings.md` F61, Phase 7's.
-/// * **`ReOrderSliceInLayer` permutes the pointer array** while the banks stay put.
-///
-/// The position spelling removes the class rather than the instance: an entry names
-/// (bank, offset) and stays true across both.
+/// A slice's position in the layer's slice **banks**: an entry names
+/// (bank, offset).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SliceIdx {
     pub bank: u8,
@@ -574,33 +441,12 @@ pub struct SliceIdx {
 impl SliceIdx {
     /// The value an unfilled entry holds — `ReOrderSliceInLayer` fills the tail of
     /// the array with the banks' uncoded slices, so "unfilled" only ever means
-    /// "before the first fill", where the pointer spelling held null.
+    /// "before the first fill".
     pub const NONE: SliceIdx = SliceIdx { bank: u8::MAX, offset: -1 };
 }
 
-// **S11.35: `slice_in_layer` is deleted** — see the note at its siblings
-// below; `slice_in_layer_mut` is the surviving resolver.
-
-/// The bank's slices as an **exclusive slice** — the safe twin of
-/// [`slice_bank_root`], for the callers that hold the layer `&mut`.
-///
-/// # Why this can exist, and what F71 actually said
-///
-/// [`slice_bank_root`] reads the buffer pointer out with `addr_of!` + `as_ptr()`
-/// because `&mut Vec<SSlice>` is a `Unique` retag over the `Vec` header, and in
-/// every fixed slice mode **all workers resolve bank 0** — so two of them
-/// retagging it at once is a data race even though neither writes the `Vec`.
-/// That is true, and it is true of **workers**.
-///
-/// It is not true of a caller holding `&mut SDqLayer`, which by construction has
-/// no sibling: a `&mut` to the layer cannot exist while the fork is live, because
-/// every worker holds `&SDqLayer`. Measured at S10.3d, **29 of the 38 call sites**
-/// in the `slice_bank_root` / `slice_in_bank` / `slice_in_layer` family sit in
-/// bodies whose receiver is `&mut sWelsEncCtx` or `&mut SDqLayer`. They were
-/// paying the fork's price for single-threaded access; this is what they take.
-///
-/// `None` for a bank that has not been sized — the state the raw form answered
-/// null for.
+/// The bank's slices as an **exclusive slice**, for the callers that hold the
+/// layer `&mut`. `None` for a bank that has not been sized.
 #[inline]
 pub fn slice_bank_mut(pCurLayer: &mut SDqLayer, kiBank: usize) -> Option<&mut [SSlice]> {
     let bank = pCurLayer.sSliceBufferInfo.get_mut(kiBank)?;
@@ -610,8 +456,7 @@ pub fn slice_bank_mut(pCurLayer: &mut SDqLayer, kiBank: usize) -> Option<&mut [S
     Some(&mut bank.pSliceBuffer)
 }
 
-/// The slice at `kiOffset` in bank `kiBank`, exclusively — [`slice_in_bank`]'s
-/// safe twin. See [`slice_bank_mut`].
+/// The slice at `kiOffset` in bank `kiBank`, exclusively. See [`slice_bank_mut`].
 #[inline]
 pub fn slice_in_bank_mut(
     pCurLayer: &mut SDqLayer,
@@ -624,8 +469,8 @@ pub fn slice_in_bank_mut(
     slice_bank_mut(pCurLayer, kiBank)?.get_mut(kiOffset as usize)
 }
 
-/// Slice `kiSliceIdx` of the layer, exclusively — [`slice_in_layer`]'s safe twin.
-/// Resolves through `ppSliceInLayer` exactly as the raw form does.
+/// Slice `kiSliceIdx` of the layer, exclusively. Resolves through
+/// `ppSliceInLayer`.
 #[inline]
 pub fn slice_in_layer_mut(pCurLayer: &mut SDqLayer, kiSliceIdx: i32) -> Option<&mut SSlice> {
     if kiSliceIdx < 0 {
@@ -638,59 +483,8 @@ pub fn slice_in_layer_mut(pCurLayer: &mut SDqLayer, kiSliceIdx: i32) -> Option<&
     slice_in_bank_mut(pCurLayer, s.bank as usize, s.offset)
 }
 
-// **S11.35: `slice_bank_root` is deleted** — the slice-bank family's raw resolver chain
-
-// **S11.35: `slice_in_bank` is deleted** — the slice-bank family's raw resolver chain
-
-// `mb_list_root` (T6.D5, S28's root hand-out) and `mb_at` stood here — the raw
-// per-record mints every neighbour walker offset out of. The grid conversion
-// (Phase 9 E3) moved all 34 walker parameters and the four list walkers onto
-// the window mint below (whole-tree read grep at deletion: zero mentions beyond
-// the definitions), whose S28/S40 covering test was re-aimed at the mint (S36).
-// S11.27 then deleted the mint and that instrument with it — see the note in
-// its place. Two `cursor` tags retired with the walkers.
-
-// **S11.27: `mb_window` is deleted.** The grid family's mint (Phase 9 E3)
-// conjured a `&mut [SMB]` from a shared `&SDqLayer` on a `# Safety` sentence —
-// "the caller owns these records exclusively" — that only scheduling made true.
-// Every walker now receives its window from an owner: the fork entries carve
-// the taken grid per slice or per partition (`split_at_mut`, S10.4's chain),
-// the single-threaded callers take the array out of the layer for the call,
-// and the frame-level walkers destructure their `&mut SDqLayer`. The claim is
-// the compiler's everywhere the mint used to assert it.
-
-// **S12.12 deleted `current_layer`, T6.G2's resolution accessor.**
-//
-// It resolved `iCurDqLayer` back to the `*mut SDqLayer` cursor that ~150 consumers
-// held, and carried the `fork-shared(S63)` tag because `ctx_dq_layer` beneath it
-// read the `Box` slot as a pointer *value* — so two workers could resolve the layer
-// at once without one retagging the other's answer (F71). That argument was real
-// while the fork's bodies took the raw.
-//
-// F240's `current_layer_ref` and `current_layer_mut` took those callers, and by S12
-// this had **none left**: every remaining mention in the tree was a `use` or a
-// comment, which is F291's shape and the second time this session that the cascade
-// tool could not see it (F304 — it works on convertible *bodies*, and a converted
-// function nobody calls has no body to offer). Deleting it took eight dangling
-// imports with it and `ctx_dq_layer` beneath it, whose only non-test caller this
-// was.
-
-/// The current layer as a **shared reference** — F240's companion to
-/// [`current_layer`], and expressible with no `unsafe` at all.
-///
-/// F240 named this the cheap piece that moves `current_layer`'s callers and priced
-/// it exactly: `iCurDqLayer?` then `ppDqLayerList.get(idx)?.as_deref()`. Every field
-/// it touches is already owned and safe, so the whole body is three `?`s.
-///
-/// **Why a shared borrow is sound where `ctx_dq_layer`'s raw was needed.** F71 wrote
-/// that accessor to avoid *retagging* the layer, because two workers resolve the same
-/// one per call and an exclusive claim would race. A shared reference makes no
-/// exclusive claim — sibling `&SDqLayer`s coexist by construction, which is the whole
-/// premise of the S6 flip that put `&SDqLayer` in 28 signatures. Nothing writes
-/// `ppDqLayerList` inside the fork; the list is built at `InitDqLayers` and emptied at
-/// teardown.
-///
-/// `None` where `current_layer` answers null, so the two agree on the unset state.
+/// The current layer as a **shared reference**. `None` when no layer is stamped
+/// for the frame.
 #[inline]
 pub fn current_layer_ref(pCtx: &sWelsEncCtx) -> Option<&SDqLayer> {
     let idx = pCtx.iCurDqLayer?;
@@ -706,8 +500,6 @@ pub fn current_layer_ref(pCtx: &sWelsEncCtx) -> Option<&SDqLayer> {
 /// **Single-threaded only, and the type says so.** A `&mut sWelsEncCtx` cannot
 /// exist while the fork is live (every worker holds `&sWelsEncCtx`), so this
 /// accessor is unavailable in exactly the place a `&mut SDqLayer` would be a race.
-/// That is the whole difference between it and [`current_layer`]'s raw, which is
-/// reachable from anywhere and therefore carries the S63 tag.
 #[inline]
 pub fn current_layer_mut(pCtx: &mut sWelsEncCtx) -> Option<&mut SDqLayer> {
     let idx = pCtx.iCurDqLayer?;
@@ -718,55 +510,34 @@ pub fn current_layer_mut(pCtx: &mut sWelsEncCtx) -> Option<&mut SDqLayer> {
     pCtx.ppDqLayerList.get_mut(idx.get())?.as_deref_mut()
 }
 
-/// The current layer, **for the 86 readers that do not ask** — the frame loop's
-/// `pCtx->pCurDqLayer`, dereferenced exactly as the C++ dereferenced it.
-///
-/// **Why this is a third name and not [`current_layer_ref`]'s.** The split here
-/// is 86 unconditional reads against 24 sites that keep the `Option`, and the 24
-/// are two different things: 16 genuinely ask (`is_none()` early-outs in
-/// `ref_list_mgr_svc.rs` and `slice_multi_threading.rs`, `let Some(..) else` in
-/// `WelsISliceMdEnc`'s caller), and 8 hand the `Option` onward to a callee whose
-/// parameter *is* `Option<&SDqLayer>` (`SetSliceBoundaryInfo`,
-/// `WelsMdInterMbRefinement`'s cost helpers). So [`current_layer_ref`] keeps its
-/// name and its shape for all 24, and the unconditional readers take this one —
-/// [`sWelsEncCtx::param`]'s ruling, at a third the call count.
+/// The current layer, for the readers that do not ask — the frame loop's
+/// `pCtx->pCurDqLayer`.
 ///
 /// # Panics
 /// If no layer is stamped for the frame — `iCurDqLayer` unset, or the list not
-/// built by `InitDqLayers`. Every caller of this accessor dereferenced
-/// `pCurDqLayer` without asking, so the panic replaces a null dereference, not a
-/// branch; the callers that *do* ask keep asking, through [`current_layer_ref`].
+/// built by `InitDqLayers`. The callers that *do* ask keep asking, through
+/// [`current_layer_ref`].
 #[inline]
 pub fn current_layer_expect(pCtx: &sWelsEncCtx) -> &SDqLayer {
     current_layer_ref(pCtx).expect("the frame's current layer is stamped")
 }
 
-/// [`current_layer_expect`] mutably — the 52 writers that stamp the layer.
+/// [`current_layer_expect`] mutably — the writers that stamp the layer.
 ///
 /// **Single-threaded only, and the type says so.** A `&mut sWelsEncCtx` cannot
 /// exist while the fork is live (every worker holds `&sWelsEncCtx`), so this
 /// accessor is unavailable in exactly the place a `&mut SDqLayer` would be a
-/// race — the argument [`current_layer_mut`] already carries, unchanged by
-/// moving the `expect` off the call sites.
+/// race.
 ///
 /// # Panics
-/// As [`current_layer_expect`]; the five asking callers keep
-/// [`current_layer_mut`].
+/// As [`current_layer_expect`]; the asking callers keep [`current_layer_mut`].
 #[inline]
 pub fn current_layer_expect_mut(pCtx: &mut sWelsEncCtx) -> &mut SDqLayer {
     current_layer_mut(pCtx).expect("the frame's current layer is stamped")
 }
 
-/// Make `kIdx` the current layer — the setter half of [`current_layer`], and the
-/// only writer of `sWelsEncCtx::iCurDqLayer`.
-///
-/// The C++ assigns `pCtx->pCurDqLayer = pCtx->ppDqLayerList[iDid]` at each of its
-/// three sites, so each already had the index in hand and was converting it to an
-/// address; this keeps the index. `None` un-sets it, which no live path does — it
-/// exists so the field's zero has a name.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
+/// Make `kIdx` the current layer — the only writer of
+/// `sWelsEncCtx::iCurDqLayer`. `None` un-sets it, which no live path does.
 #[inline]
 pub fn set_current_layer(pCtx: &mut sWelsEncCtx, kIdx: Option<LayerIdx>) {
     debug_assert!(
@@ -776,29 +547,15 @@ pub fn set_current_layer(pCtx: &mut sWelsEncCtx, kIdx: Option<LayerIdx>) {
     pCtx.iCurDqLayer = kIdx;
 }
 
-/// The layer's active PPS **as a shared reference** — [`layer_pps`]'s safe twin.
-///
-/// Same argument as [`ctx_sps_ref`], one indirection out: the callers that read a
-/// single field (`uiChromaQpIndexOffset`, three times in `rc.rs`) never hold the
-/// pointer, so the raw return buys them nothing.
-///
-/// **Fork-safe, and refereed rather than asserted.** The `&SDqLayer` this takes is
-/// a *shared* borrow, which the two probes in this file
-/// (`partition_counters_take_a_shared_layer_borrow_across_the_forked_writes` and
-/// `slice_banks_take_a_shared_layer_borrow_across_the_forked_writes`) exist to
-/// certify may be held while sibling workers write the layer. The PPS array itself
-/// is written only before the fork.
+/// The layer's active PPS **as a shared reference**. The PPS array itself is
+/// written only before the fork.
 #[inline]
 pub fn layer_pps_ref<'a>(pCtx: &'a sWelsEncCtx, pCurLayer: &SDqLayer) -> Option<&'a SWelsPPS> {
     pCtx.pps_array().get(pCurLayer.sLayerInfo.iPps?.get())
 }
 
-/// A layer's active SPS **as a shared reference** — [`layer_sps`]'s safe twin, on
-/// [`layer_pps_ref`]'s template and its fork-safety argument. Answers `None`
-/// exactly where the raw answered null — no SPS named, or the array empty — and
-/// the subset arm answers the embedded AVC SPS, as the raw's `addr_of_mut!` into
-/// `pSps` did. (`get` also bounds-checks the id, which the raw trusted; equal
-/// wherever the raw was in bounds.)
+/// A layer's active SPS **as a shared reference**. Answers `None` when no SPS is
+/// named, or the array is empty; the subset arm answers the embedded AVC SPS.
 #[inline]
 pub fn layer_sps_ref<'a>(pCtx: &'a sWelsEncCtx, pCurLayer: &SDqLayer) -> Option<&'a SWelsSPS> {
     match pCurLayer.sLayerInfo.eSps {
@@ -808,8 +565,7 @@ pub fn layer_sps_ref<'a>(pCtx: &'a sWelsEncCtx, pCurLayer: &SDqLayer) -> Option<
     }
 }
 
-/// A layer's subset SPS as a shared reference — [`layer_subset_sps`]'s safe twin;
-/// `None` on the AVC arm for the reason the raw was null there.
+/// A layer's subset SPS as a shared reference; `None` on the AVC arm.
 #[inline]
 pub fn layer_subset_sps_ref<'a>(pCtx: &'a sWelsEncCtx, pCurLayer: &SDqLayer) -> Option<&'a SSubsetSps> {
     match pCurLayer.sLayerInfo.eSps {
@@ -818,13 +574,8 @@ pub fn layer_subset_sps_ref<'a>(pCtx: &'a sWelsEncCtx, pCurLayer: &SDqLayer) -> 
     }
 }
 
-/// The context's **active SPS**, resolved from its position — T6.G3.
-///
-/// `sWelsEncCtx::pSps` was a pointer into `pSpsArray`; `iSps` is the index, and this
-/// answers the same address, including **null in the two cases the pointer was
-/// null**: before `WelsInitEncoderExt` names one, and before the array exists. The
-/// spelling is S40's — the array reader hands out the buffer's own address, so
-/// repeated calls are independent.
+/// The context's **active SPS**, resolved from its position. Null in two cases:
+/// before `WelsInitEncoderExt` names one, and before the array exists.
 #[inline]
 pub fn ctx_sps(pCtx: &sWelsEncCtx) -> *mut SWelsSPS {
     let Some(id) = pCtx.iSps else {
@@ -835,36 +586,20 @@ pub fn ctx_sps(pCtx: &sWelsEncCtx) -> *mut SWelsSPS {
         return std::ptr::null_mut();
     }
     debug_assert!((id.get() as i32) < pCtx.iSpsNum.max(1), "iSps past iSpsNum");
-    // A4: a **safe fn with a raw return** — forming a pointer needs no `unsafe`,
-    // only dereferencing one does, and the dereference belongs to the twenty-two
-    // consumers that read a field off it. `wrapping_add` computes the address
-    // `.add` computed without making the in-bounds claim, which the
-    // `debug_assert` above has always made instead. The return stays raw because
-    // every caller holds it beside other reaches into the same context; a
-    // reference would borrow the context for its whole lifetime and A7's split is
-    // where that gets settled.
+    // `wrapping_add` computes the address `.add` computed without making the
+    // in-bounds claim, which the `debug_assert` above makes instead.
     arr.as_ptr().cast_mut().wrapping_add(id.get())
 }
 
-/// The context's active SPS **as a shared reference** — [`ctx_sps`]'s safe twin.
-///
-/// `ctx_sps` hands out a raw pointer for a stated reason: "every caller holds it
-/// beside other reaches into the same context; a reference would borrow the
-/// context for its whole lifetime". That is true of the callers that *keep* it.
-/// It is not true of the callers that read one field on one line and never look
-/// again — for those the borrow dies at the semicolon, and the raw deref they
-/// perform buys nothing. This is the accessor those callers take.
-///
-/// `None` in the two cases `ctx_sps` returns null: before `WelsInitEncoderExt`
-/// names an SPS, and before the array exists.
+/// The context's active SPS **as a shared reference**. `None` in the two cases
+/// [`ctx_sps`] returns null: before `WelsInitEncoderExt` names an SPS, and before
+/// the array exists.
 #[inline]
 pub fn ctx_sps_ref(pCtx: &sWelsEncCtx) -> Option<&SWelsSPS> {
     pCtx.sps_array().get(pCtx.iSps?.get())
 }
 
-/// The context's active PPS **as a shared reference** — [`ctx_pps`]'s safe twin,
-/// and [`ctx_sps_ref`]'s sibling. Same argument: the callers that read one field
-/// and never look again do not need the raw return.
+/// The context's active PPS **as a shared reference**.
 #[inline]
 pub fn ctx_pps_ref(pCtx: &sWelsEncCtx) -> Option<&SWelsPPS> {
     pCtx.pps_array().get(pCtx.iPps?.get())
@@ -881,15 +616,11 @@ pub fn ctx_pps(pCtx: &sWelsEncCtx) -> *mut SWelsPPS {
         return std::ptr::null_mut();
     }
     debug_assert!((id.get() as i32) < pCtx.iPpsNum.max(1), "iPps past iPpsNum");
-    // Safe fn, raw return — see [`ctx_sps`].
     arr.as_ptr().cast_mut().wrapping_add(id.get())
 }
 
 /// The context's current reference picture, resolved through the current dependency
 /// layer's reference list.
-///
-/// # Safety
-/// `pCtx` must be a live encoder context past `RequestMemorySvc`.
 #[inline]
 pub fn ctx_ref_pic<'a>(pCtx: &'a sWelsEncCtx) -> Option<&'a SPicture> {
     let id = (*pCtx).pRefPic?;
@@ -897,18 +628,10 @@ pub fn ctx_ref_pic<'a>(pCtx: &'a sWelsEncCtx) -> Option<&'a SPicture> {
     Some(pRefList.pic(id))
 }
 
-// `ctx_pic_ref_mut` stood here — the exclusive form of the `PicRef` resolution.
-// Its last callers were `JudgeStaticSkip`/`JudgeScrollSkip`'s two
-// `ctx_pic_ref_mut(..).planes()` whole-picture retags (F121's live-as-code,
-// dark-as-behaviour pair), which session F replaced with the shared route; the
-// accessor has had **zero callers anywhere in the tree** since (whole-tree read
-// grep at deletion). S18, with E3's tag sweep. One `cursor` tag retires.
-
 /// The picture a [`PicRef`] names — the reconstruction pool through the current
 /// dependency layer's reference list, or the spatial source pool through the
 /// preprocessor. `SDqLayer::pRefOri` is the one field that holds either; see
-/// [`PicRef`]. Shared only: the exclusive form is deleted (see above).
-///
+/// [`PicRef`].
 #[inline]
 pub fn ctx_pic_ref<'a>(pCtx: &'a sWelsEncCtx, r: PicRef) -> Option<&'a SPicture> {
     match r {
@@ -919,9 +642,6 @@ pub fn ctx_pic_ref<'a>(pCtx: &'a sWelsEncCtx, r: PicRef) -> Option<&'a SPicture>
             if (*pCtx).pVpp.is_none() {
                 None
             } else {
-                // S3.B1: the slot read, and the **shared** half of the pair — this
-                // body is fork-reachable, so `ctx_vpp_raw`'s `&mut` would be a
-                // data race the MT probes refuse. See `ctx_vpp_ref`.
                 Some(crate::encoder::encoder_context::ctx_vpp_ref(pCtx).src_id(id))
             }
         }
@@ -932,25 +652,16 @@ pub fn ctx_pic_ref<'a>(pCtx: &'a sWelsEncCtx, r: PicRef) -> Option<&'a SPicture>
 /// reference list the layer was stamped with — `None` before the first inter frame,
 /// or if the layer has not been initialised for a frame yet.
 ///
-/// **S37, and the rule this family exists to keep** — half of it enforced now.
-/// **S6.A1** tied the returned borrow to `pLayer`, which is a `&'a SDqLayer`, so the
-/// compiler holds the layer still for as long as the result lives; the raw parameter
-/// was the only reason it could not. What the compiler still cannot see is the
-/// *pool*: a caller must not hold the result across a call that resolves another
-/// handle in the same pool. Every consumer below takes what it needs — a stride, a
-/// plane root, one array element — and drops the borrow in the same statement.
-///
+/// A caller must not hold the result across a call that resolves another handle
+/// in the same pool. Every consumer takes what it needs — a stride, a plane root,
+/// one array element — and drops the borrow in the same statement.
 #[inline]
 pub fn layer_ref_pic<'a>(
     pCtx: &'a sWelsEncCtx,
     pLayer: &SDqLayer,
 ) -> Option<&'a SPicture> {
-    // **S10.8: resolved through the context, on the layer's own dependency id.**
-    // `SDqLayer::pRefList` was a per-frame copy of `ctx.ppRefPicListExt[did]`,
-    // stamped by `WelsInitCurrentLayer` from `pCtx.uiDependencyId` — the same
-    // value it writes into `sLayerInfo.sNalHeaderExt.uiDependencyId` seventy lines
-    // later, in the same body. So this reads the layer's *own* id rather than the
-    // context's current one: under multi-layer SVC the frame loop moves
+    // Resolved through the context, on the layer's *own* dependency id rather
+    // than the context's current one: under multi-layer SVC the frame loop moves
     // `pCtx.uiDependencyId` on, and the stamped list is the one this layer's
     // readers mean.
     let id = pLayer.pRefPic?;
@@ -958,15 +669,9 @@ pub fn layer_ref_pic<'a>(
     Some(pCtx.ref_list(did)?.pic(id))
 }
 
-/// [`layer_ref_pic`] for the eight readers that **do not ask** — the motion-search
+/// [`layer_ref_pic`] for the readers that **do not ask** — the motion-search
 /// and mode-decision bodies that run only on an inter macroblock, where a
 /// reference picture is bound by construction.
-///
-/// **Why both forms exist.** 8 sites dereference unconditionally; 5 keep the
-/// `Option` — four `map_or` defaults in `svc_base_layer_md.rs` /
-/// `svc_mode_decision.rs` that stand in for "no reference yet", and one that
-/// hands the `Option` to a callee typed for it. That is a real branch on each of
-/// the five, so [`layer_ref_pic`] keeps its name and its shape.
 ///
 /// The `'a` is [`layer_ref_pic`]'s and is spelled out for the same reason: the
 /// borrow is the **context's**, not the layer's, and elision would retie it to
@@ -974,9 +679,8 @@ pub fn layer_ref_pic<'a>(
 ///
 /// # Panics
 /// If the layer has no reference picture bound — before the first inter frame,
-/// or on a layer not yet stamped for a frame. Every caller of this accessor
-/// dereferenced the answer without asking, so the panic replaces a null
-/// dereference, not a branch; the five that *do* ask keep [`layer_ref_pic`].
+/// or on a layer not yet stamped for a frame. The callers that *do* ask keep
+/// [`layer_ref_pic`].
 ///
 /// # Safety
 /// As [`layer_ref_pic`]: the layer must be stamped for the frame in progress,
@@ -990,77 +694,29 @@ pub fn layer_ref_pic_expect<'a>(
     layer_ref_pic(pCtx, pLayer).expect("the layer's reference picture is bound")
 }
 
-/// The reference picture's screen-content feature storage, resolved per call —
-/// **the dormant Phase-10 pointer's home** after the `sRefPicView` harvest
-/// (E3): the pointer lives on `SPicture` and this is the one place the
-/// per-frame stamped copy of it is re-derived. Null exactly where the stamped
-/// default was null: no reference bound, or no list.
+/// The reference picture's screen-content feature storage, resolved per call: the
+/// pointer lives on `SPicture` and this is the one place it is re-derived. `None`
+/// where no reference is bound, or there is no list.
 ///
 /// # Safety
-/// `pLayer` is a reference since **S6.A1**, so liveness is no longer the caller's;
-/// what remains is that the layer be stamped for the frame in progress.
+/// The layer must be stamped for the frame in progress.
 #[inline]
-// S11.44: the dormant-screen tag came off — the fn is safe and hands out a
-// borrow; the family marker belongs on allows, and this carries none.
 pub fn layer_ref_feature_storage<'a>(
     pCtx: &'a sWelsEncCtx,
     pLayer: &SDqLayer,
 ) -> Option<&'a crate::encoder::picture::SScreenBlockFeatureStorage> {
-    // **S5.C6c**: the picture owns the storage as an `Option<Box<..>>` now, so the
-    // pointer is derived from it rather than copied out of it. The far end —
-    // `SWelsME::pRefFeatureStorage` — is still raw and is C5's to convert; this
-    // bridges the two without changing which address either side sees. In this tree
-    // the answer is always null, because nothing ever fills the `Option` (F229).
-    // **S5.C6d**: an `Option<&..>` end to end now — the raw bridge C6c needed is gone
-    // with `SWelsME::pRefFeatureStorage`, the far end that had required it.
     layer_ref_pic(pCtx, pLayer)?.pScreenBlockFeatureStorage.as_deref()
 }
 
-// `layer_enc_pic` stood here — "the **source** picture this layer encodes from,
-// resolved through the spatial pool the layer was stamped with" (T9.B21).
-//
-// **S10.2, deleted: it has no caller.** Its twenty-one call sites were the ones
-// F254 named — each formed a `PlaneCursor` over the whole plane allocation of a
-// picture the fork *writes* (`VaaBackgroundMbDataUpdate`, F117, with
-// `bEnableBackgroundDetection` true by default), which is a shared claim on every
-// byte racing a concurrent write to any of them. They all read the source through
-// [`layer_enc_view`] now, and the S10.1 probe in `svc_mode_decision.rs` is what
-// keeps them there: its control is exactly this function's old shape, and it is
-// red.
-//
-// The `unsafe fn` goes with it. Nothing else in the tree resolves a source
-// picture by hand.
-
-// `layer_ref_pic_mut` stood here — the `&mut` form of [`layer_ref_pic`], for handing
-// out plane roots from the owning buffer. **S18, deleted in T9.B21**: it had no caller
-// anywhere in the tree, only four stale imports. It is also the wrong shape for this
-// family now — the exclusive borrow it hands out is a fresh whole-picture retag at
-// every call (F73), which is precisely what [`layer_enc_pic`] exists to avoid.
-
-// `layer_dec_pic` stood here — the shared form, "the reconstruction picture this
-// layer is decoding into". **S18, deleted in T9.C3**: its one caller was the
-// `sMvList.is_empty()` test at `svc_mode_decision.rs:1304`, which now asks the
-// seam's own `mv_list()` instead, so the shared read route into the
-// reconstruction picture has no caller at all. [`layer_rec_view`] below replaces
-// it; what is left of the `_mut` form is four plane sites and a deletion.
-
-/// **The reconstruction seam's route from a layer** — D-mt-3 option A, and the
-/// replacement for every in-frame use of [`layer_dec_pic_mut`].
-///
-/// Where `layer_dec_pic_mut` hands out `&mut SPicture` — a fresh whole-picture
-/// retag at every call, which is F73 and which Miri reports as a data race on
-/// `SRefList` itself when two workers do it at once — this hands out a shared
-/// view whose writes go through `&self`. Two workers may hold it at the same
-/// time; that is the whole point, and
+/// **The reconstruction seam's route from a layer** — a shared view whose writes
+/// go through `&self`. Two workers may hold it at the same time;
 /// [`crate::encoder::rec_view`] carries the argument for why it is sound.
 ///
-/// `None` means no frame has started (or the picture is unbound), which is what
-/// `layer_dec_pic_mut`'s `None` meant.
+/// `None` means no frame has started, or the picture is unbound.
 ///
 /// # Safety
 /// `pLayer` must be stamped by `WelsInitCurrentLayer`, and the frame it stamped
-/// must still be the frame in progress. Liveness is the reference's since
-/// **S6.A1**; both remaining obligations are the caller's.
+/// must still be the frame in progress.
 #[inline]
 pub fn layer_rec_view<'a>(
     pLayer: &'a SDqLayer,
@@ -1068,22 +724,12 @@ pub fn layer_rec_view<'a>(
     (*pLayer).pRecView.as_ref()
 }
 
-/// [`layer_rec_view`] for the 24 readers that **do not ask** — every consumer
+/// [`layer_rec_view`] for the readers that **do not ask** — every consumer
 /// inside a frame, where `WelsInitCurrentLayer` has already stamped the view.
 ///
-/// **Why both forms exist.** 24 sites dereference unconditionally; 2 ask, both
-/// in `slice_multi_threading.rs`, where the deblocking call is skipped entirely
-/// when no view is bound (`if let Some(view) = ..`). Deleting that branch would
-/// deblock a frame that has no reconstruction planes, so [`layer_rec_view`]
-/// keeps its name and its shape.
-///
-/// The `'a` is [`layer_rec_view`]'s: the borrow is the **layer's**, and there is
-/// no second reference here for elision to retie it to.
-///
 /// # Panics
-/// If no frame has started, or the picture is unbound. Every caller of this
-/// accessor dereferenced the answer without asking, so the panic replaces a null
-/// dereference, not a branch; the two that *do* ask keep [`layer_rec_view`].
+/// If no frame has started, or the picture is unbound. The callers that *do* ask
+/// keep [`layer_rec_view`].
 ///
 /// # Safety
 /// As [`layer_rec_view`]: the layer must be stamped by `WelsInitCurrentLayer`,
@@ -1098,15 +744,10 @@ pub fn layer_rec_view_expect<'a>(
 /// The layer's **reference** planes as a shared view — the read-only twin of
 /// [`layer_enc_view`], built on demand rather than stamped.
 ///
-/// # Why this exists, and why it is built per call
-///
-/// S10.2 moved the source-plane readers onto the seam, and the cost kernels they
-/// feed are reached through a **function pointer**
+/// The cost kernels this feeds are reached through a **function pointer**
 /// (`PSampleSadSatdCostFunc`), which cannot be generic. Its second operand
 /// position receives the enc plane, a scratch buffer **and the reference plane**
-/// at different call sites, so all three must be one type; the moment the source
-/// operand became `RecCursor` the reference operand had to follow. This is that
-/// route (F259).
+/// at different call sites, so all three must be one type.
 ///
 /// Unlike `pEncView`/`pRecView` it is not a layer field, because the reference
 /// picture is chosen per macroblock (`pRefPic` moves with the reference index)
@@ -1114,16 +755,9 @@ pub fn layer_rec_view_expect<'a>(
 /// build is three plane headers — twelve words, no allocation — against a pool
 /// resolution the caller was already paying for.
 ///
-/// Sound for the same reason [`RoPicView::build`] is: it makes no exclusive
-/// claim. It uses the seam rather than a `&[u8]` because the slot's single
-/// operand type says so — and because arguing about *which* writer might touch a
-/// plane is the reasoning S9.0a got wrong.
-///
 /// # Safety
 /// As [`layer_ref_pic`]: the layer must be stamped for the frame in progress.
 #[inline]
-// S11.44: the inherited S63 tag came off — its own text said nothing raw is
-// introduced here, and the census counts tags as claims.
 pub fn layer_ref_view(
     pCtx: &sWelsEncCtx,
     pLayer: &SDqLayer,
@@ -1131,22 +765,15 @@ pub fn layer_ref_view(
     Some(crate::encoder::rec_view::RoPicView::build(layer_ref_pic(pCtx, pLayer)?))
 }
 
-/// [`layer_ref_view`] for all 17 of its readers, which **none of them ask**.
-///
-/// **Why both forms exist even so.** Every call site is an unconditional
-/// dereference — the view feeds a `PSampleSadSatdCostFunc` slot on a path that
-/// has already selected an inter macroblock. The `Option` form stays beside it
-/// because the absence it reports is [`layer_ref_pic`]'s, which 5 sites *do*
-/// ask about; a future consumer that needs the question should find it typed
-/// rather than reinvent a `map_or`.
+/// [`layer_ref_view`] for its readers, none of which ask — the view feeds a
+/// `PSampleSadSatdCostFunc` slot on a path that has already selected an inter
+/// macroblock.
 ///
 /// No `'a`: [`layer_ref_view`] returns a value, not a borrow — `RoPicView` is
 /// three plane headers built on the spot.
 ///
 /// # Panics
-/// If the layer has no reference picture bound. Every caller of this accessor
-/// dereferenced the answer without asking, so the panic replaces a null
-/// dereference, not a branch.
+/// If the layer has no reference picture bound.
 ///
 /// # Safety
 /// As [`layer_ref_pic`]: the layer must be stamped for the frame in progress.
@@ -1160,8 +787,7 @@ pub fn layer_ref_view_expect(
 
 /// The frame's source planes, as `layer_rec_view` is its reconstruction planes.
 ///
-/// `None` on a layer whose frame has not been bound yet — the same state
-/// `pEncData`'s null roots stood for.
+/// `None` on a layer whose frame has not been bound yet.
 #[inline]
 pub fn layer_enc_view<'a>(
     pLayer: &'a SDqLayer,
@@ -1169,20 +795,13 @@ pub fn layer_enc_view<'a>(
     (*pLayer).pEncView.as_ref()
 }
 
-/// [`layer_enc_view`] for all 28 of its readers, which **none of them ask**.
-///
-/// **Why both forms exist even so.** Every call site is inside a frame, past the
-/// bind that `pEncData`'s null roots used to stand for, and dereferences the
-/// answer. The `Option` form keeps its name beside this one so the unbound state
-/// still has a type — it is the same state [`layer_rec_view`] reports, and two
-/// sites there genuinely branch on it.
+/// [`layer_enc_view`] for its readers, none of which ask — every call site is
+/// inside a frame, past the bind.
 ///
 /// The `'a` is [`layer_enc_view`]'s: the borrow is the **layer's**.
 ///
 /// # Panics
-/// If the layer's frame has not been bound yet. Every caller of this accessor
-/// dereferenced the answer without asking, so the panic replaces a null
-/// dereference, not a branch.
+/// If the layer's frame has not been bound yet.
 #[inline]
 pub fn layer_enc_view_expect<'a>(
     pLayer: &'a SDqLayer,
@@ -1190,23 +809,7 @@ pub fn layer_enc_view_expect<'a>(
     layer_enc_view(pLayer).expect("the layer's source view is built for this frame")
 }
 
-// `layer_dec_pic_mut` stood here, and **F73 was its name**. It handed out
-// `&mut SPicture` — a fresh whole-picture retag at every call — and the frame
-// loop called it fifteen times per macroblock's worth of work, inside the fork.
-// Miri's verdict on the ignored fork/join probe named it directly: "Data race
-// detected between (1) retag write on thread `unnamed-2` and (2) retag write of
-// type `SRefList` on thread `unnamed-3`", `WelsMdIntraInit` ->
-// `layer_dec_pic_mut` -> `SRefList::pic_mut` -> `Pool::get_mut`.
-//
-// **S18, deleted in T9.C4.** Ten of its call sites became `layer_rec_view`
-// (T9.C3), three were second derivations of numbers already on the layer, and
-// one — `pDecMb` — was a second derivation of `pCsMb`, proved and deleted. The
-// route into the reconstruction picture from inside a frame is now the seam and
-// nothing else.
-
 /// Not `repr(C)`: `pRefLayer` is an `Option<LayerIdx>`, which has no C shape.
-/// `assert_size!(SDqLayer, ...)` is re-pinned to the measured size in the same
-/// commit (phase6.md §5).
 pub struct SDqLayer {
     /// This layer's own position in `ppDqLayerList`, stamped at construction —
     /// `WelsSwapDqLayers` needs the *outgoing* layer's index and holds only its
@@ -1214,51 +817,25 @@ pub struct SDqLayer {
     pub iDqIdx: LayerIdx,
 
     pub sLayerInfo: SLayerInfo,
-    /// **S5.D2b — boxed, and the box is the point.**
-    ///
-    /// This array was *inline* in the layer, and the fork writes into it:
-    /// `ReallocateSliceList` takes `&mut ..[kiBank].pSliceBuffer` and
-    /// `ReallocateSliceInThread` stores `..[idx].iMaxSliceNum`, each on its own bank.
-    /// While those run, a sibling body holding `&SDqLayer` retags the whole layer —
-    /// and a whole-struct shared retag racing a write to an inline field is undefined
-    /// behaviour (F228 for the context, D2a's probe for this struct). That is the
-    /// second and last reason the 37 read-only `*mut SDqLayer` bodies cannot take
-    /// `&SDqLayer`; D2a removed the first.
-    ///
-    /// A `Box` moves the banks to **their own allocation**. The layer then holds one
-    /// pointer, which the fork only ever reads; every bank write lands in the boxed
-    /// allocation, which no whole-layer retag reaches. It is the same argument F163
-    /// makes for `Vec` buffers and C4b relies on for the MVD table — separate
-    /// allocations do not share a borrow stack.
+    /// **Boxed, and the box is the point.** The banks live in **their own
+    /// allocation**: the layer holds one pointer, which the fork only ever reads,
+    /// and every bank write lands in the boxed allocation, which no whole-layer
+    /// retag reaches — separate allocations do not share a borrow stack.
     ///
     /// `Box<[T; N]>` rather than `Vec<T>` deliberately: the length is
     /// `MAX_THREADS_NUM` by construction, and keeping it in the type means no site
     /// gains a bounds question it did not have.
     pub sSliceBufferInfo: Box<[SSliceBufferInfo; MAX_THREADS_NUM]>,
     /// One entry per slice in layer order, each naming its bank and its offset
-    /// in it — T6.D4. See [`SliceIdx`] and [`slice_in_layer`].
+    /// in it. See [`SliceIdx`].
     pub ppSliceInLayer: Vec<SliceIdx>,
     pub sSliceEncCtx: SSliceCtx,
-    // `pCsData: [*mut u8; 3]` stood here — the reconstruction picture's three
-    // plane roots, stamped by `WelsInitCurrentLayer` every frame.
-    //
-    // **S10.6, deleted: write-only, and its last three readers were dead
-    // bindings.** T9.C2 moved the reconstruction reads onto `pRecView`'s
-    // `RecPicView` and left `let pPred = ..mb_cursor(&layer.pCsData, ..)` behind in
-    // `WelsEncRecI16x16Y` and `WelsEncRecI4x4Y`, plus a `pPredI4x4` derived from
-    // one of them. Nothing read any of the three. `unused_variables` is allowed
-    // crate-wide *and* in `svc_encode_mb.rs`'s own module header, so the compiler
-    // never said so (F268).
     pub iCsStride: [i32; 3],
 
     pub iEncStride: [i32; 3],
 
-    /// The layer's macroblock records, **owned** since T6.D5. `InitMbListD` used to
-    /// cut one flat `WelsMallocz` block across every layer and hand each its slice,
-    /// storing the same pointers a second time in the context's `ppMbListD`; neither
-    /// field was a carrier — they were one allocation, cut disjointly and
-    /// contiguously, each cut exactly `iMbWidth * iMbHeight`. So each layer owns its
-    /// own cut, and the second copy is gone.
+    /// The layer's macroblock records, **owned**: each layer owns its own cut of
+    /// exactly `iMbWidth * iMbHeight` records.
     pub sMbDataP: MbArray<SMB>,
     pub iMbWidth: i16,
     pub iMbHeight: i16,
@@ -1274,53 +851,20 @@ pub struct SDqLayer {
     pub iInterLayerSliceBetaOffset: i8,
     pub bDeblockingParallelFlag: bool,
 
-    // `pRefList: *mut SRefList` stood here — a per-frame copy of
-    // `sWelsEncCtx::ppRefPicListExt[did]`, stamped by `WelsInitCurrentLayer`.
-    //
-    // **S10.8, deleted.** Unlike `pEncData` / `pCsData` / `pSrcPool` this one was
-    // *live*: `layer_ref_pic` resolved through it, and two deblocking bodies
-    // null-tested it. It resolves through the context now, on the layer's **own**
-    // `sLayerInfo.sNalHeaderExt.uiDependencyId` — the same value the stamp used —
-    // so multi-layer SVC, where the frame loop moves `pCtx.uiDependencyId` on, still
-    // names this layer's list. **The last of `SDqLayer`'s four `Sync` blockers.**
-
-    /// `SDqLayer::pFeatureSearchPreparation` — `svc_enc_frame.h:126`. **P10.1.B4**:
+    /// `SDqLayer::pFeatureSearchPreparation` — `svc_enc_frame.h:126`.
     /// `Some` on the last DQ layer under `SCREEN_CONTENT_REAL_TIME`
     /// (`encoder_ext.cpp:1125-1135`), `None` otherwise; `Drop` is `FreeDqLayer`'s
     /// release (`:973-977`). Written only outside the fork (`PreprocessSliceCoding`
-    /// and the post-join FME switch, both P10.3's); the workers read it (D-scc-5).
+    /// and the post-join FME switch); the workers read it.
     pub pFeatureSearchPreparation:
         Option<Box<crate::encoder::svc_motion_estimate::SFeatureSearchPreparation>>,
     pub pRefPic: Option<RecPicId>,
     pub pDecPic: Option<RecPicId>,
-    /// The **source** picture this frame encodes from, and the pool it is a slot
-    /// of — `pEncData`'s three raw roots said as a handle (T9.B21).
-    ///
-    /// The pair exists for exactly the reason [`pRefList`](Self::pRefList) does,
-    /// one picture over: ten mode-decision consumers reach the source through
-    /// `pCurDqLayer` and take no context (`WelsMdI16x16`, `WelsMdIntraChroma`,
-    /// `WelsMdP16x16`, `WelsMdP16x8`, `WelsMdP8x16`, `WelsMdP8x8`,
-    /// `WelsRecPskip`, and the three F115 names dead in the port), so a handle
-    /// here without the pool beside it would name a pool nothing in scope could
-    /// open. The reference half solves this with `pRefList`; this is the same
-    /// solution for the spatial pool, which lives in `pCtx->pVpp` and is
-    /// otherwise unreachable from a layer.
-    ///
-    /// Raw for `pRefList`'s reason as well: the pointee owns, the pointer does
-    /// not. Both are stamped by `WelsInitCurrentLayer` in the same statement
-    /// that stamps `pEncData`, from the same already-resolved `idEnc`.
+    /// The **source** picture this frame encodes from, as a slot of the spatial
+    /// pool, which lives in `pCtx->pVpp` and is otherwise unreachable from a
+    /// layer. Stamped by `WelsInitCurrentLayer`.
     pub pEncPic: Option<SrcPicId>,
-    // `pSrcPool: *mut SrcPicPool` stood here — the spatial picture pool the layer
-    // resolves `pEncPic` against, stamped per frame by `WelsInitCurrentLayer`.
-    //
-    // **S10.7, deleted: write-only.** Its one reader was `layer_enc_pic`, and that
-    // accessor went in S10.2 when the last of F254's twenty-one source-plane sites
-    // moved onto `pEncView`. Third of `SDqLayer`'s four Sync blockers to go, and
-    // the third in a row that a conversion had already emptied without anyone
-    // noticing the field was now dead (F268).
-    /// **The reconstruction seam** — D-mt-3 option A, built per frame by
-    /// `WelsInitCurrentLayer` in the same statement that stamps
-    /// [`pCsData`](Self::pCsData), from the same `&mut SPicture`.
+    /// **The reconstruction seam**, built per frame by `WelsInitCurrentLayer`.
     ///
     /// This is the layer's route to the picture *every worker writes*: three
     /// planes and four per-macroblock side arrays, shared and writable through
@@ -1330,35 +874,25 @@ pub struct SDqLayer {
     /// [`crate::encoder::rec_view`] for the soundness argument, which this
     /// field is one half of.
     ///
-    /// **The stability requirement, in one sentence** (F109's shape): while
-    /// this is `Some`, nothing may take `&mut` to the same picture through the
-    /// pool — `pic_mut(idDec)`, `layer_dec_pic_mut` — because that retag makes
-    /// the captured bases stale and, under the fork, races on `SRefList`
-    /// itself. `None` between frames is not decoration: `WelsInitCurrentLayer`
-    /// rebuilds it every frame, and nothing may read a view built for a frame
-    /// that has ended.
+    /// **The stability requirement, in one sentence**: while this is `Some`,
+    /// nothing may take `&mut` to the same picture through the pool —
+    /// `pic_mut(idDec)` — because that retag makes the captured bases stale and,
+    /// under the fork, races on `SRefList` itself. `None` between frames is not
+    /// decoration: `WelsInitCurrentLayer` rebuilds it every frame, and nothing
+    /// may read a view built for a frame that has ended.
     pub pRecView: Option<crate::encoder::rec_view::RecPicView>,
 
     /// The frame's **source** planes, as a read-only view — the counterpart to
-    /// `pRecView` and the read half of the same seam (S9.0).
+    /// `pRecView` and the read half of the same seam.
     ///
-    /// `pEncData`'s three raw roots stand for exactly these bytes; this is the
-    /// safe spelling of them, and `PlaneCursor`s taken from it bounds-check
-    /// against the whole allocation, so the top and left borders a motion search
-    /// legally reaches stay reads rather than becoming fresh panics.
+    /// `PlaneCursor`s taken from it bounds-check against the whole allocation, so
+    /// the top and left borders a motion search legally reaches stay reads rather
+    /// than becoming fresh panics.
     ///
     /// Rebuilt every frame with `pRecView`, and for the same reason: the pool may
     /// hand the next frame a different slot, so a view is only valid for the frame
     /// that built it.
     pub pEncView: Option<crate::encoder::rec_view::RoPicView>,
-    // `sRefPicView` and `sDecPicView` stood here — T6.F5's per-frame stamped
-    // copies of the two pictures' plane roots/strides/type. Phase 9 E3's harvest:
-    // `sDecPicView` had **zero readers** (write-only since the seam took the
-    // reconstruction writes, T9.C2); `sRefPicView`'s readers resolve the picture
-    // per call through [`layer_ref_pic`] instead (`SPicture::data_ptr_shared`,
-    // `stride`, `iPictureType`, and [`layer_ref_feature_storage`] for the
-    // dormant Phase-10 pointer). The stamp (`StampLayerPictureViews`) died with
-    // the fields.
     /// The *source* pictures behind the reference list — slots of the preprocessor's
     /// spatial pool, resolved through `pCtx->pVpp` (both readers hold the context).
     pub pRefOri: [Option<PicRef>; MAX_REF_PIC_COUNT as usize],
@@ -1366,16 +900,11 @@ pub struct SDqLayer {
     pub bThreadSlcBufferFlag: bool,
     pub bSliceBsBufferFlag: bool,
     pub iMaxSliceNum: i32,
-    /// **S5.D2a — atomics, and the reason is the `&SDqLayer` flip D2/D3 needs.**
-    ///
-    /// Both arrays live *inline* in the layer and are written **from inside the
-    /// encode**: `WelsISliceMdEncDynamic` and `WelsMdInterMbLoopOverDynamicSlice`
-    /// stamp `[kiPartitionId]` at six sites between them, one worker per partition.
-    /// While that happens, a body holding `&SDqLayer` would have a shared borrow of
-    /// the *whole* struct — and a whole-struct shared retag racing a concurrent write
-    /// to an inline field is undefined behaviour under Miri's model, which is F228's
-    /// finding about the context restated about the layer. As plain `i32` these two
-    /// arrays are the reason all 37 read-only `*mut SDqLayer` bodies must stay raw.
+    /// Atomic because both arrays live *inline* in the layer and are written
+    /// **from inside the encode**: `WelsISliceMdEncDynamic` and
+    /// `WelsMdInterMbLoopOverDynamicSlice` stamp `[kiPartitionId]` at six sites
+    /// between them, one worker per partition, while sibling bodies hold
+    /// `&SDqLayer`.
     ///
     /// `Relaxed` is the right ordering and the access pattern is why: **every slot has
     /// exactly one writer** — the worker that owns that partition — and every in-fork
@@ -1393,49 +922,32 @@ pub struct SDqLayer {
     pub FirstMbIdxOfPartition: [i32; MAX_THREADS_NUM],
     pub EndMbIdxOfPartition: [i32; MAX_THREADS_NUM],
     /// The first macroblock and the macroblock count of each slice, by layer-order
-    /// position — **owned since T6.D6**, and grown by `ExtendLayerBuffer`'s `resize`
-    /// where the C++ ran a malloc/copy/free triple for each.
+    /// position — **owned**, and grown by `ExtendLayerBuffer`'s `resize`.
     pub pFirstMbIdxOfSlice: Vec<i32>,
     pub pCountMbNumInSlice: Vec<i32>,
 
     pub bNeedAdjustingSlicing: bool,
 
-    // `pFeatureSearchPreparation` stood here. Its only writer was `null_mut()`, two
-    // lines under the guard that returns `ENC_RETURN_UNSUPPORTED_PARA` for the only
-    // configuration that would have allocated it, so `RequestFeatureSearchPreparation`
-    // and `UpdateFMESwitch` had no reachable caller at all — S18, deleted rather than
-    // converted (T6.D2).
     /// The base layer this one predicts from, as a position in `ppDqLayerList`
-    /// rather than as an address — T6.D3, the ordering rule's first application on
-    /// this struct. `None` is the raw spelling's null, and it is **written**, never
-    /// inherited from a zero image: `Option<LayerIdx>` has no niche to borrow, so
-    /// all-zero is not a defined `None` (F56's trap, read the other way), which is
-    /// why this conversion lands in the same commit as the constructor below.
+    /// rather than as an address. `None` when there is no base layer, and it is
+    /// **written**, never inherited from a zero image: `Option<LayerIdx>` has no
+    /// niche to borrow, so all-zero is not a defined `None`.
     pub pRefLayer: Option<LayerIdx>,
 }
 
 impl SDqLayer {
-    /// A layer exactly as `InitDqLayers` used to find it the moment `WelsMallocz`
-    /// returned — every field is that allocation's zero, with what the zero *meant*
-    /// written beside it (T5b's shells recipe).
-    ///
-    /// **Why there is a constructor at all**: the layer is now `Box`-built, which is
-    /// what lets it own containers a `WelsMallocz`'d block may not (S21, read the
-    /// way T3.6's `pOut` reads it). A zeroed `Vec` field is UB the moment it drops,
-    /// so the construction changes before the ownership does.
     pub fn new(idx: LayerIdx) -> Self {
         Self {
-            // Its own position, and the only field here that is not a zero: the
-            // C++ never needed it because it compared addresses.
+            // Its own position.
             iDqIdx: idx,
             // `InitDqLayers` fills the whole of this from the parameter sets before
-            // the first frame; its `Default` is the same zero block the C++ memset.
+            // the first frame.
             sLayerInfo: SLayerInfo::default(),
             // No bank allocated yet — `InitSliceThreadInfo` fills bank 0 (and, under
             // MT, one per thread) two calls later.
             sSliceBufferInfo: Box::new(std::array::from_fn(|_| SSliceBufferInfo::default())),
             // The slice position array, sized by `InitSliceInLayer` and regrown by
-            // `ExtendLayerBuffer`; empty is the raw spelling's null.
+            // `ExtendLayerBuffer`.
             ppSliceInLayer: Vec::new(),
             // Zero here means "no slice segmentation yet"; `InitSlicePEncCtx` sets
             // the mode, the geometry and the map.
@@ -1443,13 +955,12 @@ impl SDqLayer {
             // Plane aliases into the reconstructed and source pictures, re-aimed at
             // every frame by `WelsInitCurrentLayer`; null means "no frame started".
             iCsStride: [0; 3],
-            // The seam, rebuilt per frame beside `pCsData`; `None` is "no frame
-            // started", the same thing the null above means.
+            // The seam, rebuilt per frame; `None` is "no frame started".
             pRecView: None,
             pEncView: None,
             iEncStride: [0; 3],
             // The macroblock records, sized by `InitMbListD` once the geometry is
-            // known; empty is the raw spelling's null.
+            // known.
             sMbDataP: MbArray::empty(),
             // Overwritten by the caller on the next two lines; zero is "unsized".
             iMbWidth: 0,
@@ -1467,8 +978,7 @@ impl SDqLayer {
             iInterLayerSliceAlphaC0Offset: 0,
             iInterLayerSliceBetaOffset: 0,
             bDeblockingParallelFlag: false,
-            // Picture slots, aimed per frame; `None` is "no picture bound", and the
-            // list they name slots in is stamped with them (T6.F1).
+            // Picture slots, aimed per frame; `None` is "no picture bound".
             pFeatureSearchPreparation: None,
             pRefPic: None,
             pDecPic: None,
@@ -1486,14 +996,12 @@ impl SDqLayer {
             LastCodedMbIdxOfPartition: [const { AtomicI32::new(0) }; MAX_THREADS_NUM],
             FirstMbIdxOfPartition: [0; MAX_THREADS_NUM],
             EndMbIdxOfPartition: [0; MAX_THREADS_NUM],
-            // The two per-slice-index arrays, sized by `InitSliceInLayer`; empty is
-            // the raw spelling's null.
+            // The two per-slice-index arrays, sized by `InitSliceInLayer`.
             pFirstMbIdxOfSlice: Vec::new(),
             pCountMbNumInSlice: Vec::new(),
             // "The slicing does not need re-deriving"; `NeedDynamicAdjust` sets it.
             bNeedAdjustingSlicing: false,
-            // No base layer until `WelsSwapDqLayers` names one — the raw spelling's
-            // null, written rather than inherited.
+            // No base layer until `WelsSwapDqLayers` names one.
             pRefLayer: None,
         }
     }
@@ -1502,7 +1010,7 @@ impl SDqLayer {
 impl Default for SDqLayer {
     /// The layer at index 0, which is what the two test fixtures that call this
     /// want (`slice_multi_threading.rs`, `wels_task_management.rs`): both build a
-    /// single-layer context. It is no longer `mem::zeroed()` — see `new`.
+    /// single-layer context.
     fn default() -> Self {
         Self::new(LayerIdx(0))
     }
@@ -1510,21 +1018,10 @@ impl Default for SDqLayer {
 
 pub use crate::encoder::nal_encap::SWelsNalRaw;
 
-// **`SWelsOut` stood here and is deleted, not converted** (T6.H12). It was a
-// four-field struct with a `Default` that zeroed it, and the tree held exactly two
-// references to it: its own declaration and that `Default`. Nothing constructed one,
-// nothing named it as a field or a parameter, and `nal_encap.rs`'s
-// `SWelsEncoderOutput` is what the encoder actually writes NALs through. A type that
-// is only ever a declaration is not a zeroed `Default` to audit; it is a type to
-// remove — the same reading that deleted `SPicture::unref` at T5.B2 and six context
-// fields at T6.G3.
-
 pub use crate::encoder::encoder_context::{SWelsFuncPtrList, SWelsRcFunc};
 
 pub use crate::encoder::rc::SWelsSvcRc;
 pub use crate::encoder::wels_encoder_ext::SSpatialLayerInternal;
-
-
 
 pub use crate::encoder::encoder_context::sWelsEncCtx;
 pub use crate::encoder::encoder_context::SMVUnitXY;
@@ -1553,41 +1050,32 @@ pub use crate::encoder::md::SMB;
 
 // Function pointer dispatch table types
 //
-// **S11.1a: both slot types carry the bitstream pair.** `pSliceBsBuf` is the
-// buffer the slice's writer is positioned in, derived once at the chain's top
-// (the fork job or the inline dispatch) instead of re-derived from the shared
-// context at every use — F272's seam. `pCtxOutBs` is the frame-output writer
-// for the slice that shares `pOut` (`sSliceBs.pBs == None`); it is `None` on
-// the fork side, where F217 measured that arm main-thread-only. The
-// slice-owned writer arm needs no parameter: every body that needs it holds
-// `&mut SSlice` and resolves `sSliceBs.sBsWrite` field-precisely at the use
-// (`slice_bs_writer`).
+// Both slot types carry the bitstream pair. `pSliceBsBuf` is the buffer the
+// slice's writer is positioned in, derived once at the chain's top (the fork job
+// or the inline dispatch). `pCtxOutBs` is the frame-output writer for the slice
+// that shares `pOut` (`sSliceBs.pBs == None`); it is `None` on the fork side,
+// where that arm is main-thread-only. The slice-owned writer arm needs no
+// parameter: every body that needs it holds `&mut SSlice` and resolves
+// `sSliceBs.sBsWrite` field-precisely at the use (`slice_bs_writer`).
 pub type PWelsCodingSliceFunc = extern "C" fn(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
-    // **S11.27: the macroblock records this slice may write, carried like the
-    // bitstream pair above.** Each of the four md bodies below minted its own
-    // `&mut [SMB]` per macroblock with `mb_window` — out of a *shared*
-    // `&SDqLayer`, inside the fork. The window now arrives already owned: on
-    // the fork side from the pre-fork carve (S10.4's `split_at_mut` chain over
-    // the slice ranges), on the single-threaded side straight off a
-    // `&mut MbArray`. The bodies move the cursor with `set_cur` instead of
-    // re-minting.
+    // The macroblock records this slice may write, carried like the bitstream
+    // pair above: on the fork side from the pre-fork carve over the slice
+    // ranges, on the single-threaded side straight off a `&mut MbArray`. The
+    // bodies move the cursor with `set_cur`.
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
-    // **S11.30: the CABAC restore scratch, threaded like the pair above.** The
-    // dynamic loops used to mint it from the shared context per slice
-    // (`dynamic_bs_buffer`, F71); the owner hands it down now — the size-limited
+    // The CABAC restore scratch, threaded like the pair above: the size-limited
     // fork takes the partition's buffer beside its bitstream slot, the
-    // single-threaded callers take it around the call. `None` everywhere the
-    // old pointer was null: CAVLC dynamic slicing, and every fixed mode.
+    // single-threaded callers take it around the call. `None` for CAVLC dynamic
+    // slicing, and every fixed mode.
     pRestoreBuf: Option<&mut [u8]>,
-    // **S11.33: the slot the dynamic boundary writes forward into** — the bank
-    // record right after the current slice, split off by the resolver where the
-    // bank is owned. `AddSliceBoundary` copies the current header here when the
-    // size limit fires; `None` on every fixed path (the boundary never fires)
-    // and where the next slot does not exist (the old null answer).
+    // The slot the dynamic boundary writes forward into — the bank record right
+    // after the current slice. `AddSliceBoundary` copies the current header here
+    // when the size limit fires; `None` on every fixed path (the boundary never
+    // fires) and where the next slot does not exist.
     pNextSlice: Option<&mut SSlice>,
 ) -> i32;
 pub type PWelsSliceHeaderWriteFunc = extern "C" fn(
@@ -1599,33 +1087,24 @@ pub type PWelsSliceHeaderWriteFunc = extern "C" fn(
     pCtxOutBs: &mut Option<&mut BsWriter>,
 );
 
-/// The writer a slice's bits go through — the safe form of what `slice_writer`
-/// resolved through the context (deleted at S11.1a with `slice_bs_buffer`, the
-/// buffer half of the same choice).
+/// The writer a slice's bits go through.
 ///
-/// The discriminator is unchanged and per-use: **`sSliceBs.pBs`'s nullness**,
-/// the one bit `InitSliceBsBuffer` records when it decides whether the slice
-/// writes an independent output buffer — it allocates `pBs` exactly when it
-/// aims the slice at its own `sBsWrite`, leaves it `None` exactly when the
-/// slice shares `pOut->sBsWrite`, and the bit travels with the struct through
+/// The discriminator is per-use: **`sSliceBs.pBs`'s nullness**, the one bit
+/// `InitSliceBsBuffer` records when it decides whether the slice writes an
+/// independent output buffer — it allocates `pBs` exactly when it aims the slice
+/// at its own `sBsWrite`, leaves it `None` exactly when the slice shares
+/// `pOut->sBsWrite`, and the bit travels with the struct through
 /// `ReallocateSliceList`. Deriving the choice back from `iMultipleThreadIdc`
 /// and `uiSliceMode` would re-read parameters that can move between allocation
-/// and use; the allocation cannot. **Not a `bool` parameter**: a second copy of
-/// the choice would be the deleted `pSliceBsa` defect in a new spelling —
-/// `pBs`'s nullness is the one place the choice lives (the C++ stored the
-/// resolved pointer instead, and `InitBitStream` replacing `pOut->sBsWrite`
-/// wholesale every frame killed every slice's cached copy).
+/// and use; the allocation cannot.
 ///
 /// The slice-owned arm is a field projection of the `&mut SWelsSliceBs` the
 /// caller already holds; the shared arm reborrows the frame-output writer
 /// threaded from the chain's top.
 ///
-/// The `expect` arm is F217's measurement made structural: the `pOut` writer is
-/// main-thread-only (a thread-identity assert survived the eight MT
-/// single-slice configs and the full 895-case sweep), so a fork body asking for
-/// it — `pBs == None` with no threaded writer — is a state the C++ cannot
-/// reach either. Today that impossible state panics where the raw form would
-/// have handed a cross-thread writer out; a panic is the readable failure.
+/// The `expect` arm: the `pOut` writer is main-thread-only, so a fork body asking
+/// for it — `pBs == None` with no threaded writer — is a state the C++ cannot
+/// reach either, and it panics rather than handing a cross-thread writer out.
 #[inline]
 pub fn slice_bs_writer<'a>(
     sSliceBs: &'a mut SWelsSliceBs,
@@ -1659,37 +1138,7 @@ pub fn slice_bs_writer_ref<'a>(
 // ============================================================================
 
 // One writer family, `vlc_encoder.rs`'s, which is the transliteration of the C++
-// `codec/common/inc/golomb_common.h`. This module used to declare its own copy of
-// the five functions below, and it was the one copy of the four that **diverged**
-// (`phase0_findings.md` F2's fourth row). Four divergences died with it, all of
-// them defensive additions the C++ does not have:
-//
-//   * `pBs.is_null() || iLen <= 0` early-returns, where the canonical would
-//     dereference null or shift by a non-positive amount. Every call site here
-//     writes a length known positive at the call: `uiLog2MaxFrameNum` and
-//     `iLog2MaxPocLsb` are both at least 4, the two literals are 4, and the
-//     Exp-Golomb lengths are at least 1 by construction.
-//   * a **pre-mask** of the value to `iLen` bits, which the canonical does not
-//     do: the canonical ORs the value into the accumulator whole. This is the
-//     divergence with real teeth — a `iFrameNum` or `iPicOrderCntLsb` carrying
-//     bits above its field width would be truncated by the old copy here and
-//     would corrupt the neighbouring syntax elements under the canonical. The
-//     encoder keeps both counters reduced modulo their field width, and the
-//     sweeps are the referee for that claim: 341/341 both profiles, every RC
-//     mode, GOP length and slice mode, 18-20 frames each, so the wrap is
-//     exercised rather than assumed.
-//   * an inverted branch sense (`iLeftBits >= iLen` with a flush-when-empty tail,
-//     against the canonical's `iLen < iLeftBits`). The two converge on the
-//     `iLen == iLeftBits` boundary — both end with the word stored, `uiCurBits`
-//     zero and `iLeftBits` 32 — which F2 checked by hand and this deletes.
-//   * `wrapping_add(1)` in `BsWriteUE` and `& 1` in `BsWriteOneBit`, where the
-//     canonical adds and passes plainly. `u32::MAX` never reaches `BsWriteUE`,
-//     and every `BsWriteOneBit` here passes a literal 0/1 or a `bool` cast.
-//
-// F5 (`phase1_findings.md`) is deliberately NOT fixed here: the canonical writer
-// still shifts a full accumulator by 32 on a 32-bit write and still panics in a
-// debug build, and a Phase 1 differential test pins that. Arithmetic parity, not
-// repair (S6).
+// `codec/common/inc/golomb_common.h`.
 pub use crate::encoder::vlc_encoder::{
     BsGetBitsPos, BsWriteBits, BsWriteOneBit, BsWriteSE, BsWriteUE,
 };
@@ -1701,8 +1150,6 @@ pub use crate::encoder::vlc_encoder::{
 /// Copies non-zero coefficient counts from `SMB` into the slice's `SMbCache`.
 #[inline]
 pub fn UpdateNonZeroCountCache(pMb: &SMB, pMbCache: &mut SMbCache) {
-    // The `mb_nz.is_null()` guard that stood here was the port's own; the row is an
-    // inline array and cannot be absent.
     let mb_nz = &(*pMb).iNonZeroCount;
     let cache_nz = &mut (*pMbCache).iNonZeroCoeffCount;
 
@@ -1720,12 +1167,6 @@ pub fn UpdateNonZeroCountCache(pMb: &SMB, pMbCache: &mut SMbCache) {
 /// Computes the virtual slice identifier `uiSliceIdc` for a given macroblock linear index.
 #[inline]
 pub fn WelsMbToSliceIdc(pSliceCtx: Option<&SSliceCtx>, kiMbXY: i32) -> u16 {
-    // **S10.3c: the slice context, not the whole layer.** This body reads
-    // `sSliceEncCtx` and nothing else, and taking the layer meant a *whole-layer*
-    // shared borrow — which is what stopped a caller from holding `&mut` on the
-    // macroblock grid (a different field) at the same time, and so is what kept
-    // `mb_window`'s raw mint alive on the single-threaded path. Narrowing the
-    // parameter to what the body actually reads lets those two borrows coexist.
     let Some(pSliceCtx) = pSliceCtx else {
         return u16::MAX;
     };
@@ -1747,12 +1188,6 @@ pub fn UpdateMbNeighbor(
     kiMbWidth: i32,
     uiSliceIdc: u16,
 ) {
-    // **T9.D9**: `pMb.is_null()` went with the parameter — a reference cannot be
-    // absent. **S6.A1**: the layer followed, and its null guard came with it — the
-    // absent layer is the `None` arm now, so the obligation stayed in the callee
-    // rather than moving to the ~147 call sites. **S10.3c**: and the layer
-    // narrowed to `sSliceEncCtx`, the only field this body and `WelsMbToSliceIdc`
-    // read — see there for why the width of the borrow mattered.
     let Some(pSliceCtx) = pSliceCtx else {
         return;
     };
@@ -1790,12 +1225,8 @@ pub fn UpdateMbNeighbor(
 
 /// Updates neighbor availability information across dynamic slicing boundaries.
 ///
-/// **S11.27: safe, and the layer parameter is gone.** This body minted its own
-/// `&mut [SMB]` with `mb_window` — out of a *shared* layer, inside the fork. It
-/// now writes through the window its caller already owns; the walk's reach is
-/// unchanged (the next slice's first row-and-a-bit, bounded by the caller's own
-/// partition), and `MbWindow::at*` take raster addresses, so a partition-wide
-/// window indexes exactly as the per-call one did.
+/// Writes through the window its caller owns; `MbWindow::at*` take raster
+/// addresses, so a partition-wide window indexes as a per-slice one does.
 pub fn UpdateMbNeighbourInfoForNextSlice(
     pSliceCtx: &crate::encoder::slice_multi_threading::SSliceCtx,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -1812,13 +1243,8 @@ pub fn UpdateMbNeighbourInfoForNextSlice(
     // `kiFirstMbIdxOfNextSlice > kiLastMbIdxInPartition` -- which happens when the
     // boundary lands on the last macroblock of a partition. A `while` skips it.
     // The window is sized to exactly the records this walk touches — the next
-    // slice's first row-and-a-bit, bounded by the caller's own partition (the
-    // fork-disjointness argument: a worker updates only its partition's records).
+    // slice's first row-and-a-bit, bounded by the caller's own partition.
     loop {
-        // T9.E2h (F66's shape B, session J's fix): the idc is read BEFORE the
-        // call — once `UpdateMbNeighbor` takes `&mut SDqLayer`, its argument
-        // retag would kill a same-call read through the raw. Nothing between
-        // the read and the call reallocates.
         let kiSliceIdc = WelsMbToSliceIdc(Some(pSliceCtx), pMbs.at(iIdx as usize).iMbXY);
         UpdateMbNeighbor(
             Some(pSliceCtx), pMbs.at_mut(iIdx as usize), kiMbWidth, kiSliceIdc);
@@ -1838,12 +1264,6 @@ pub fn WelsSliceHeaderScalExtInit(pCurLayer: Option<&SDqLayer>, pSlice: &mut SSl
         return;
     };
     let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
-    // **T7.C3.** `addr_of_mut!`, not `&mut`: this is *layer* state and every worker
-    // runs this function, so a `&mut` retag here is a write as far as the data-race
-    // checker is concerned — and it is only ever read. See
-    // `StampLayerIdrFlagForSliceType` for the family and why it is the last of it.
-    // S10.3d: a shared borrow, not an `addr_of!` — the parameter is already
-    // `&SDqLayer` and every use below is a read.
     let pNalHeadExt = &pCurLayer.sLayerInfo.sNalHeaderExt;
 
     pSliceHeadExt.bSliceSkipFlag = false;
@@ -1860,9 +1280,6 @@ pub fn WelsSliceHeaderScalExtInit(pCurLayer: Option<&SDqLayer>, pSlice: &mut SSl
 }
 
 pub fn WelsSliceHeaderExtInit(pEncCtx: &sWelsEncCtx, pCurLayer: Option<&SDqLayer>, pSlice: &mut SSlice) {
-    // **S7.A5**: the `is_null()` guard and its early return retire with the
-    // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
-    // held by one of the three fork entry points or the frame loop, never a null.
     let Some(pCurLayer) = pCurLayer else {
         return;
     };
@@ -1873,21 +1290,12 @@ pub fn WelsSliceHeaderExtInit(pEncCtx: &sWelsEncCtx, pCurLayer: Option<&SDqLayer
     pCurSliceHeader.eSliceType = (*pEncCtx).eSliceType;
     pCurSliceExt.bStoreRefBasePicFlag = false;
 
-    // svc_encode_slice.cpp:97-98. Both of these were missing: `iFrameNum` stayed 0 for
-    // every frame, and `uiIdrPicId` stayed 0 where WriteSsvcParaset has already
-    // incremented the layer's counter to 1, so the IDR slice header wrote ue(0) (1 bit)
-    // where the C++ writes ue(1) (3 bits) -- the 2-bit offset that shifted the whole
-    // slice payload.
+    // svc_encode_slice.cpp:97-98.
     let pParamInternal = &(*pEncCtx).param().sDependencyLayers[uiDid];
     pCurSliceHeader.iFrameNum = pParamInternal.iFrameNum;
     pCurSliceHeader.uiIdrPicId = pParamInternal.uiIdrPicId;
 
     if let Some(id) = (*pEncCtx).pEncPic {
-        // S3.B1: the slot read, and the **shared** half of the pair. This exact
-        // line is where Miri refused the first draft's `Box` route (a retag that
-        // popped `pSrcPool`) and then the mid-row MT probe refused the second
-        // draft's `&mut` route (a retag write raced by every worker). See
-        // `ctx_vpp_ref`; the body is fork-reachable and reads one `Copy` field.
         pCurSliceHeader.iPicOrderCntLsb =
             crate::encoder::encoder_context::ctx_vpp_ref(pEncCtx).src_id(id).iFramePoc;
     }
@@ -1929,11 +1337,6 @@ pub fn WelsSliceHeaderExtInit(pEncCtx: &sWelsEncCtx, pCurLayer: Option<&SDqLayer
 }
 
 pub fn WriteReferenceReorder(buf: &mut [u8], pBs: &mut BsWriter, sSliceHeader: &mut SSliceHeader) {
-    // **S8.2**: the `pBs.is_null()` arm went with the parameter. It was already
-    // unreachable — every caller's writer comes from `slice_writer`, whose two arms
-    // both hand back `addr_of_mut!` of a live field and neither of which can be null.
-    // S10.15: the guard is inexpressible on a reference. T9.H's convention, and the
-    // comment above already recorded that the arm was unreachable.
     let pRefOrdering = &mut sSliceHeader.sRefReordering;
     let eSliceType = sSliceHeader.eSliceType;
 
@@ -1956,13 +1359,8 @@ pub fn WriteReferenceReorder(buf: &mut [u8], pBs: &mut BsWriter, sSliceHeader: &
     }
 }
 
-// **F274's fix**: `pNalHdrExt` is layer state read by every worker, so it is a
-// shared reference — S10.15's `&mut` here put a concurrent Unique retag over the
-// one header struct N workers share, the shape the probe below this file's tests
-// sees red ("retag write" vs "retag write").
+// `pNalHdrExt` is layer state read by every worker, so it is a shared reference.
 pub fn WriteRefPicMarking(buf: &mut [u8], pBs: &mut BsWriter, pSliceHeader: &mut SSliceHeader, pNalHdrExt: &SNalUnitHeaderExt) {
-    // S8.2, as `WriteReferenceReorder` above: the writer arm was unreachable.
-    // S10.15: and inexpressible now that both are references.
     let sRefMarking = &mut pSliceHeader.sRefMarking;
     let mut n: usize = 0;
 
@@ -2004,23 +1402,11 @@ pub fn WelsSliceHeaderWrite(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) {
-    // S11.2a: the null guard retires with the raw parameter (T9.H's convention —
-    // on a reference it is inexpressible), and the one caller dereferenced the
-    // layer before this call in any case.
-    //
-    // **S11.1a: the pair arrives threaded.** T9.E2b's objection — a caller
-    // cannot pass a writer cursor *beside* a `&mut SSlice`, the argument
-    // reborrow pops it (F114a's mechanism at whole-struct width) — was about a
-    // cursor pointing *into* the slice. Neither threaded half does: the buffer
-    // is pool or frame-output memory, and the slice-owned writer arm is derived
-    // here, field-precisely, from the parameter itself.
     let pBs = slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs);
     let buf = pSliceBsBuf;
     let pSps = layer_sps_ref(pCtx, pCurLayer);
     let pPps = layer_pps_ref(pCtx, pCurLayer);
     let pSliceHeader = &mut (*pSlice).sSliceHeaderExt.sSliceHeader;
-    // T7.C3, F274: **shared**, never `&mut` — layer state, read-only here, and
-    // every worker runs this. `WriteRefPicMarking` takes the shared reference.
     let pNalHead = &pCurLayer.sLayerInfo.sNalHeaderExt;
 
     BsWriteUE(buf, &mut *pBs, (*pSliceHeader).iFirstMbInSlice as u32);
@@ -2028,9 +1414,7 @@ pub fn WelsSliceHeaderWrite(
 
     // svc_encode_slice.cpp:285 / :361 — `pPps->iPpsId + pParametersetStrategy->
     // GetPpsIdOffset (pPps->iPpsId)`. The offset is 0 under CONSTANT_ID but not under
-    // INCREASING_ID, which is the FillDefault strategy. C++ dereferences both pointers
-    // unconditionally; the null guards' fallbacks stay verbatim on the `_ref` twins
-    // (F263's rule — `.expect()` would convert a handled state into a panic).
+    // INCREASING_ID, which is the FillDefault strategy.
     let pps_id = pPps.map_or(0, |p| p.iPpsId);
     let iPpsIdOffset = pParametersetStrategy.map_or(0, |s| s.GetPpsIdOffset(pps_id as i32));
     BsWriteUE(buf, &mut *pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
@@ -2100,9 +1484,6 @@ pub fn WelsSliceHeaderExtWrite(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) {
-    // S11.2a: the null guard retires with the raw parameter, as in
-    // `WelsSliceHeaderWrite` — whose notes on the threaded pair (S11.1a) and the
-    // shared header (T7.C3/F274) both apply here.
     let pBs = slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs);
     let buf = pSliceBsBuf;
     let pSps = layer_sps_ref(pCtx, pCurLayer);
@@ -2117,9 +1498,7 @@ pub fn WelsSliceHeaderExtWrite(
 
     // svc_encode_slice.cpp:285 / :361 — `pPps->iPpsId + pParametersetStrategy->
     // GetPpsIdOffset (pPps->iPpsId)`. The offset is 0 under CONSTANT_ID but not under
-    // INCREASING_ID, which is the FillDefault strategy. C++ dereferences both pointers
-    // unconditionally; the null guards' fallbacks stay verbatim on the `_ref` twins
-    // (F263's rule — `.expect()` would convert a handled state into a panic).
+    // INCREASING_ID, which is the FillDefault strategy.
     let pps_id = pPps.map_or(0, |p| p.iPpsId);
     let iPpsIdOffset = pParametersetStrategy.map_or(0, |s| s.GetPpsIdOffset(pps_id as i32));
     BsWriteUE(buf, &mut *pBs, pps_id.wrapping_add(iPpsIdOffset as u32));
@@ -2181,39 +1560,16 @@ pub fn WelsSliceHeaderExtWrite(
 // ============================================================================
 
 // `WelsInterMbEncode` lives in `svc_mode_decision.rs`, which is where the C++
-// has it (svc_mode_decision.cpp) and where all three call sites resolve. A
-// truncated second copy used to sit here: it did the DCT and dropped
-// quantisation and reconstruction entirely. It was dead, but one unqualified
-// call in this file would have silently activated it.
+// has it (svc_mode_decision.cpp) and where all three call sites resolve.
 
 pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
-    // S10.15: the layer is only read here — `current_layer_ref`, not the
-    // fork-shared raw.
     let pCurLayer = current_layer_expect(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
-    // `kiCsStride` stood here: the reconstruction stride, read for the two
-    // `pfIDctFourT4` calls alone. T9.C2 gave those calls the seam's cursor, which
-    // carries the stride, so the binding has no reader left.
-    // **T9.D6**: both cursors are re-derived at each use rather than held across the
-    // two `WelsEncRecUV` calls, which retag the whole arena once their parameter is a
-    // reference (F66). The chroma prediction's *half* is snapshotted here instead —
-    // S53: what has to survive the call is the flag's value, not a pointer — and
-    // nothing between here and the last use writes either half flag.
     let kiBestPredOff =
         best_pred_intra_chroma_off((*pMbCache).uiMemPredLumaHalf, (*pMbCache).uiBestPredIntraChromaHalf);
-    // **T9.C2**: `pCsCb`/`pCsCr` — two raw cursors into the reconstruction
-    // chroma planes — are the seam's two plane views plus this macroblock's
-    // chroma origin, which `SPicData`'s `iMbX`/`iMbY` carrier already holds.
     let view_chroma = layer_rec_view_expect(&*pCurLayer);
     let (kiChrOrgX, kiChrOrgY) = (*pMbCache).SPicData.chroma_origin();
 
-    // This previously ran both DCTs and then both IDCTs, omitting the two
-    // `WelsEncRecUV` calls between them. That is the quantise / zigzag /
-    // non-zero-count / chroma-CBP step: without it `pCurRS` reached the IDCT holding
-    // raw DCT coefficients, `pCurMb->uiCbp` never got its chroma bits and
-    // `pNonZeroCount[16..24]` stayed zero, so no chroma residual was ever coded.
-    // S9.0: the source planes through the frame's read-only view; the strides the
-    // raw form passed alongside now ride inside the cursors.
     let encView = layer_enc_view_expect(&*pCurLayer);
     let pFunc = (*pEncCtx).func_list();
     let pfDctFourT4 = (*pFunc).pfDctFourT4;
@@ -2225,10 +1581,8 @@ pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &m
         &RecCursor::over_owned(&mut (*pMbCache).sMemPredMb, kiBestPredOff, 8),
     );
     crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 0, 1);
-    // **T9.C2.** `pCsCb` is the reconstruction Cb plane at this macroblock's
-    // chroma origin; the prediction is `sMemPredMb`'s intra-chroma half at stride
-    // 8, an owned arena. Slot bypassed per F118 — `pfIDctFourT4` is constant
-    // after init, and `kiCsStride` leaves the call because the view carries it.
+    // The prediction is `sMemPredMb`'s intra-chroma half at stride 8, an owned
+    // arena. Slot bypassed: `pfIDctFourT4` is constant after init.
     idct_four_t4_rec_to_view(
         &view_chroma.plane(1).cursor(kiChrOrgX, kiChrOrgY),
         &(*pMbCache).sMemPredMb[kiBestPredOff..],
@@ -2252,19 +1606,15 @@ pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &m
 }
 
 pub fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
-    // S10.15: the layer is only read here — `current_layer_ref`, not the
-    // fork-shared raw.
     let pCurLayer = current_layer_expect(pEncCtx);
     let kiEncStride = (*pCurLayer).iEncStride[1];
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    // **T9.D6**, as in `WelsIMbChromaEncode` — but note the base: this one starts at
-    // `pCoeffLevel + 256` (`svc_encode_slice.cpp:499`) where the intra path starts at
-    // 0, which is why `WelsEncRecUV` takes the offset as a parameter rather than
-    // deriving it from `iUV`.
+    // Note the base: this one starts at `pCoeffLevel + 256`
+    // (`svc_encode_slice.cpp:499`) where the intra path starts at 0, which is why
+    // `WelsEncRecUV` takes the offset as a parameter rather than deriving it from
+    // `iUV`.
     let kiBestPredOff = mem_pred_chroma_off((*pMbCache).uiMemPredLumaHalf);
 
-    // S9.0: the source planes through the frame's read-only view; the strides the
-    // raw form passed alongside now ride inside the cursors.
     let encView = layer_enc_view_expect(&*pCurLayer);
     let pFunc = (*pEncCtx).func_list();
     let dct = (*pFunc).pfDctFourT4;
@@ -2280,17 +1630,11 @@ pub fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &
     );
 
     // `svc_encode_slice.cpp:WelsPMbChromaEncode` quantises both chroma planes here.
-    // Both calls were missing, so a P macroblock's chroma reached the reconstruction
-    // holding raw DCT coefficients and never set its chroma CBP bits — the same
-    // defect Phase 4.5 found in `WelsIMbChromaEncode`.
     crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, &mut *pMbCache, 256, 1);
     crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, &mut *pMbCache, 320, 2);
 }
 
 pub fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: &sWelsEncCtx, pDq: Option<&SDqLayer>, pSlice: &mut SSlice, pMb: &SMB) {
-    // **S7.A5**: the `is_null()` guard and its early return retire with the
-    // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
-    // held by one of the three fork entry points or the frame loop, never a null.
     let Some(pDq) = pDq else {
         return;
     };
@@ -2298,26 +1642,14 @@ pub fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: &sWelsEncCtx, pDq: Option<&SDqL
     //intra have been reconstructed, NO COPY from CS to pDecPic--
     if (IS_INTER(mb_type) && !IS_SKIP(mb_type)) || IS_I_BL(mb_type) {
         let pMbCache = &mut (*pSlice).sMbCacheInfo;
-        // **T9.C2 — the in-place family, and the reason `idct_*_in_place` exists
-        // at all (F59).** `pRec` *is* `pPred` at all three of these sites: the
-        // raw form passed `pDecY`/`pDecU`/`pDecV` twice each, with two identical
-        // strides, to spell an aliasing pair Rust cannot build from two
-        // references. One seam cursor per plane, read and written by value, says
-        // the same thing and says it soundly.
-        //
-        // The strides go with them: T9.C4 had already replaced a whole-picture
-        // retag with `iCsStride`, and the view carries those same numbers —
-        // `WelsInitCurrentLayer` stamps `iCsStride[i]` and the view's plane
-        // stride from one `SPicture::stride(i)`.
+        // The in-place family: `pRec` *is* `pPred` at all three of these sites.
+        // One seam cursor per plane, read and written by value. The view carries
+        // the strides — `WelsInitCurrentLayer` stamps `iCsStride[i]` and the
+        // view's plane stride from one `SPicture::stride(i)`.
         let view = layer_rec_view_expect(pDq);
         let (lx, ly) = (*pMbCache).SPicData.luma_origin();
         let (cx, cy) = (*pMbCache).SPicData.chroma_origin();
 
-        // The luma half of this function was missing: no `pDecY`, no
-        // `WelsIDctT4RecOnMb`. Every inter macroblock's luma residual was therefore
-        // never added back into the reconstruction, so the encoder's reference frame
-        // diverged from what a decoder produces from its own (correct) bitstream —
-        // invisible until a second P frame referenced it.
         idct_t4_rec_on_mb_in_place_view(
             &view.plane(0).cursor(lx, ly),
             blk_mb256(&(*pMbCache).sCoeffLevel, 0),
@@ -2343,17 +1675,7 @@ pub fn UpdateQpForOverflow(pCurMb: &mut SMB, kuiChromaQpIndexOffset: u8) {
 // Macroblock Search & Traversal Loops
 // ============================================================================
 
-// **S11.26: the parameter is the field the body reads.** The layer form dated
-// from the C++'s `SDqLayer*`; every use below is `sSliceEncCtx`, and the
-// deblocking walker now holds only the ctx (its layer parameter is gone), so
-// the borrow-width rule (F275) says the signature follows the reads. The old
-// `None` arm answered `-1` for a null layer no live caller passes.
 pub fn WelsGetNextMbOfSlice(pSliceSeg: &crate::encoder::slice_multi_threading::SSliceCtx, kiMbXY: i32) -> i32 {
-    // **`&`, T9.C5.** Nothing below writes; the `&mut` was a transliteration of the
-    // C++'s `SSliceCtx*`, and under multi-threading every worker walks its own
-    // slice through this function per macroblock, so it was a whole-`SSliceCtx`
-    // retag taken concurrently — Miri's fourth verdict on the fork/join probe,
-    // and the same shape as the stride tables' (T9.C4).
     if kiMbXY < 0 || kiMbXY >= pSliceSeg.iMbNumInFrame {
         return -1;
     }
@@ -2369,8 +1691,7 @@ pub fn WelsGetNextMbOfSlice(pSliceSeg: &crate::encoder::slice_multi_threading::S
         if iNextMbIdx < pSliceSeg.iMbNumInFrame
             && {
                 let map: &[AtomicU16] = &pSliceSeg.pOverallMbMap;
-                // Was `Option<&u16>` equality, which is false unless *both* are
-                // `Some`; the pair match keeps that exactly.
+                // Equality holds only when *both* lookups are `Some`.
                 match (map.get(iNextMbIdx as usize), map.get(kiMbXY as usize)) {
                     (Some(a), Some(b)) => {
                         a.load(Ordering::Relaxed) == b.load(Ordering::Relaxed)
@@ -2396,9 +1717,9 @@ pub fn WelsInitInterMDStruc<'a>(
 ) {
     let luma_qp = (*pCurMb).uiLumaQp as usize;
     (*pMd).iLambda = g_kiQpCostTable[luma_qp];
-    // S5.C4b: `!pMvdCostTable.is_null()` — the cursor spells the same test, and the
-    // row bump is `offset` rather than `add` because the table it arrives parked in
-    // is already biased to the zero-MVD entry (`MvdCostCursor::origin`'s job).
+    // The row bump is `offset` rather than `add` because the table it arrives
+    // parked in is already biased to the zero-MVD entry
+    // (`MvdCostCursor::origin`'s job).
     if !pMvdCostTable.is_none() {
         (*pMd).pMvdCost = pMvdCostTable.offset(luma_qp as i32 * kiMvdInterTableStride);
     }
@@ -2416,25 +1737,16 @@ pub fn WelsISliceMdEnc(
     pRestoreBuf: Option<&mut [u8]>,
     pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
-    // **S7.A5**: the `is_null()` guard and its early return retire with the
-    // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
-    // held by one of the three fork entry points or the frame loop, never a null.
-    // S11.4: the layer is read-only in this body, so it takes the reference —
-    // and the null disjunct retires as inexpressible with it (T9.H).
     let Some(pCurLayer) = current_layer_ref(pEncCtx) else {
         return ENC_RETURN_SUCCESS;
     };
-    // S11.27: the grid-emptiness arm reads the *window* — under the carve (and
-    // the ST take-and-restore) the layer's `sMbDataP` slot is legitimately empty
-    // while this runs, and reading it here would silently skip the slice.
+    // The grid-emptiness arm reads the *window*: under the carve (and the
+    // single-threaded take-and-restore) the layer's `sMbDataP` slot is
+    // legitimately empty while this runs, and reading it here would silently
+    // skip the slice.
     if pMbs.stride() == 0 || pCurLayer.iMbWidth <= 0 || pCurLayer.iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
-    // S29 and the D-session playbook (T9.E7): the arena root is derived per
-    // use-cluster inside the loop, never held across a slice-taking call —
-    // the callees re-derive their own borrows of the same fields (the encode
-    // probe's fourth red, session B), and after the flip each window is what
-    // keeps the derivation alive.
     let kiSliceFirstMbXY = pSlice.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
@@ -2457,7 +1769,7 @@ pub fn WelsISliceMdEnc(
 
     loop {
         if !kbCabac {
-            {  // A6: the block is the shared borrow's scope (F191/F212)
+            {
                 let func_list = (*pEncCtx).func_list();
                 func_list
                     .eEntropyCoder
@@ -2467,7 +1779,7 @@ pub fn WelsISliceMdEnc(
         iCurMbIdx = iNextMbIdx;
         pMbs.set_cur(iCurMbIdx as usize);
 
-        {  // A6: the block is the shared borrow's scope (F191/F212)
+        {
             let func_list = (*pEncCtx).func_list();
             func_list
                 .pfRc
@@ -2482,16 +1794,13 @@ pub fn WelsISliceMdEnc(
 
         // TRY_REENCODING
         loop {
-            // T9.E2c: the cache borrow lives per loop iteration — the entropy
-            // writer below takes the whole slice, and a borrow held across it
-            // would not compile (which is the point of F112's one step).
             let pMbCache = &mut pSlice.sMbCacheInfo;
             sMd.iLambda = g_kiQpCostTable[pMbs.cur().uiLumaQp as usize];
             crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pMbs.cur_mut(), &mut *pMbCache);
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn;
-            {  // A6: the block is the shared borrow's scope (F191/F212)
+            {
                 let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
@@ -2499,7 +1808,7 @@ pub fn WelsISliceMdEnc(
             }
 
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && pMbs.cur().uiLumaQp < 50 {
-                {  // A6: the block is the shared borrow's scope (F191/F212)
+                {
                     let func_list = (*pEncCtx).func_list();
                     func_list
                         .eEntropyCoder
@@ -2519,7 +1828,7 @@ pub fn WelsISliceMdEnc(
         pMbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
 
         let pMbCache = &mut pSlice.sMbCacheInfo;
-        {  // A6: the block is the shared borrow's scope (F191/F212)
+        {
             let func_list = (*pEncCtx).func_list();
             (func_list.pfMdBackgroundInfoUpdate)(
                 pEncCtx,
@@ -2556,16 +1865,7 @@ pub fn WelsISliceMdEncDynamic(
     pRestoreBuf: Option<&mut [u8]>,
     mut pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
-    // **S7.A5**: the `is_null()` guard and its early return retire with the
-    // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
-    // held by one of the three fork entry points or the frame loop, never a null.
     let pCurLayer = current_layer_expect(pEncCtx);
-    // S29: raw, not `&mut` — both of these are held across the macroblock loop,
-    // whose callees derive their own borrows of the same fields. `sSliceEncCtx` is
-    // the dynamic-slice probe's third red (session D): `WelsGetNextMbOfSlice` takes
-    // its own `&mut (*pCurDq).sSliceEncCtx` every iteration, which pops the `Unique`
-    // this binding held, and `DynSlcJudgeSliceBoundaryStepBack` then reads through
-    // the dead tag. `pMbCache` is the encode probe's fourth red (session B).
     let kiSliceFirstMbXY = pSlice.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let kiTotalNumMb: i32 = pCurLayer.iMbWidth as i32 * pCurLayer.iMbHeight as i32;
@@ -2591,7 +1891,7 @@ pub fn WelsISliceMdEncDynamic(
         iCurMbIdx = iNextMbIdx;
         pMbs.set_cur(iCurMbIdx as usize);
 
-        {  // A6: the block is the shared borrow's scope (F191/F212)
+        {
             let func_list = (*pEncCtx).func_list();
             func_list
                 .eEntropyCoder
@@ -2615,16 +1915,13 @@ pub fn WelsISliceMdEncDynamic(
 
         // TRY_REENCODING
         loop {
-            // T9.E2c: the cache borrow lives per loop iteration — the entropy
-            // writer below takes the whole slice, and a borrow held across it
-            // would not compile (which is the point of F112's one step).
             let pMbCache = &mut pSlice.sMbCacheInfo;
             sMd.iLambda = g_kiQpCostTable[pMbs.cur().uiLumaQp as usize];
             crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pMbs.cur_mut(), &mut *pMbCache);
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn;
-            {  // A6: the block is the shared borrow's scope (F191/F212)
+            {
                 let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
@@ -2632,7 +1929,7 @@ pub fn WelsISliceMdEncDynamic(
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && pMbs.cur().uiLumaQp < 50 {
-                {  // A6: the block is the shared borrow's scope (F191/F212)
+                {
                     let func_list = (*pEncCtx).func_list();
                     func_list
                         .eEntropyCoder
@@ -2649,7 +1946,7 @@ pub fn WelsISliceMdEncDynamic(
             break;
         }
 
-        {  // A6: the block is the shared borrow's scope (F191/F212)
+        {
             let func_list = (*pEncCtx).func_list();
             sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs.as_deref()), &pSlice.sCabacCtx);
         }
@@ -2657,8 +1954,6 @@ pub fn WelsISliceMdEncDynamic(
         if DynSlcJudgeSliceBoundaryStepBack(
             pEncCtx,
             pSlice,
-            // S11.30: a shared field borrow at the use — the `addr_of_mut!` that
-            // stood here fed a `*mut SSliceCtx` parameter that only ever read.
             &pCurLayer.sSliceEncCtx,
             pMbs.cur().iMbXY,
             &mut sDss,
@@ -2668,7 +1963,7 @@ pub fn WelsISliceMdEncDynamic(
             // first (non-firing) call and hand the real boundary `None`.
             pNextSlice.as_deref_mut(),
         ) {
-            {  // A6: the block is the shared borrow's scope (F191/F212)
+            {
                 let func_list = (*pEncCtx).func_list();
                 func_list
                     .eEntropyCoder
@@ -2682,7 +1977,7 @@ pub fn WelsISliceMdEncDynamic(
 
         pMbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
 
-        {  // A6: the block is the shared borrow's scope (F191/F212)
+        {
             let func_list = (*pEncCtx).func_list();
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx,
@@ -2709,9 +2004,6 @@ pub fn WelsISliceMdEncDynamic(
 /// Debug hook matching the `OH264_MBDUMP` block the C++ carries at the same point in
 /// `WelsMdInterMbLoop`. Prints the per-macroblock mode-decision state so the two
 /// encoders can be diffed line by line. Off unless `OH264_MBDUMP` is set.
-///
-/// # Safety
-/// All three pointers must be valid, with `pCurMb`'s side arrays allocated.
 fn mb_dump(pCurMb: &SMB, pMd: &SWelsMD<'_>, pSlice: & SSlice) {
     if !crate::encoder::dump_enabled(&MB_DUMP, "OH264_MBDUMP") {
         return;
@@ -2757,23 +2049,16 @@ pub fn WelsMdInterMbLoop<'a>(
     pRestoreBuf: Option<&mut [u8]>,
     pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
-    // **S7.A5**: the first arm retires with the parameter; the other four are live.
-    // S11.27: the grid-emptiness arm reads the window, as in `WelsISliceMdEnc`.
     if current_layer_ref(pEncCtx).is_none() || pMbs.stride() == 0 || current_layer_expect(pEncCtx).iMbWidth <= 0 || current_layer_expect(pEncCtx).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
     let pCurLayer = current_layer_expect(pEncCtx);
-    // S29: raw, held across the MB loop (see `WelsISliceMdEnc`).
     let mut iNumMbCoded = 0;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let mut iCurMbIdx: i32;
     let kiTotalNumMb: i32 = (*pCurLayer).iMbWidth as i32 * (*pCurLayer).iMbHeight as i32;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
-    // **S5.C4b.** Field-precise on purpose — `&(*pEncCtx).pMvdCostTable` retags the
-    // `Vec` header and nothing else, where a `&self` accessor would retag the whole
-    // context. Read `MvdCostCursor::origin` for why that difference decides whether
-    // this borrow may be held across the macroblock loop it is held across.
     let pMvdCostTable = MvdCostCursor::origin(
         &(&(*pEncCtx).pMvdCostTable)[..],
         (*pEncCtx).iMvdCostTableSize,
@@ -2795,7 +2080,7 @@ pub fn WelsMdInterMbLoop<'a>(
 
     loop {
         if !kbCabac {
-            {  // A6: the block is the shared borrow's scope (F191/F212)
+            {
                 let func_list = (*pEncCtx).func_list();
                 func_list.eEntropyCoder.StashMBStatus(
                     &mut *pSliceBsBuf,
@@ -2811,7 +2096,7 @@ pub fn WelsMdInterMbLoop<'a>(
         pMbs.set_cur(iCurMbIdx as usize);
 
         //step(1): set QP for the current MB
-        {  // A6: the block is the shared borrow's scope (F191/F212)
+        {
             let func_list = (*pEncCtx).func_list();
             func_list
                 .pfRc
@@ -2835,23 +2120,15 @@ pub fn WelsMdInterMbLoop<'a>(
 
         loop {
             WelsInitInterMDStruc(pMbs.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
-            {  // A6: the block is the shared borrow's scope (F191/F212)
+            {
                 let func_list = (*pEncCtx).func_list();
                 if let Some(func) = func_list.pfInterMd {
                     func(pEncCtx, pMd, &mut *pSlice, &mut *pMbs);
                 }
-                // T9.E7: fresh window — `pfInterMd` goes through the dispatch
-                // slot (q1c cannot attribute it, F111's second limit) and its
-                // type carries `*mut SSlice`, so it is a crossing like any
-                // named callee.
                 let pMbCache = &mut pSlice.sMbCacheInfo;
 
                 //step (4): save from the MD process for future use
                 {
-                    // Two disjoint fields of one picture (T6.F0 — `pMbCache->pEncSad`
-                    // no longer carries either), reached through the seam: the pair of
-                    // `&mut Vec` borrows this used to take retagged both arrays whole,
-                    // which is the shape no worker may hold under the fork.
                     crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
                         layer_rec_view_expect(&*pCurLayer),
                         pMbs.cur(),
@@ -2873,7 +2150,7 @@ pub fn WelsMdInterMbLoop<'a>(
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn;
-            {  // A6: the block is the shared borrow's scope (F191/F212)
+            {
                 let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
@@ -2881,7 +2158,7 @@ pub fn WelsMdInterMbLoop<'a>(
             }
 
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && pMbs.cur().uiLumaQp < 50 {
-                {  // A6: the block is the shared borrow's scope (F191/F212)
+                {
                     let func_list = (*pEncCtx).func_list();
                     (*pSlice).iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                         &mut *pSliceBsBuf,
@@ -2904,7 +2181,7 @@ pub fn WelsMdInterMbLoop<'a>(
         pMbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
         OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, Some(pCurLayer), pSlice, pMbs.cur());
 
-        {  // A6: the block is the shared borrow's scope (F191/F212)
+        {
             let func_list = (*pEncCtx).func_list();
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx,
@@ -2923,8 +2200,6 @@ pub fn WelsMdInterMbLoop<'a>(
     }
 
     if (*pSlice).iMbSkipRun > 0 {
-        // Minted at the use, after the loop (T9.E2e's placement) — field-precise
-        // now, so the discipline the comment described is borrow-checked.
         let kiMbSkipRun = (*pSlice).iMbSkipRun as u32;
         BsWriteUE(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), kiMbSkipRun);
     }
@@ -2943,24 +2218,16 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
     pRestoreBuf: Option<&mut [u8]>,
     mut pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
-    // **S7.A5**: the first arm retires with the parameter; the other four are live.
-    // S11.27: the grid-emptiness arm reads the window, as in `WelsISliceMdEnc`.
     if current_layer_ref(pEncCtx).is_none() || pMbs.stride() == 0 || current_layer_expect(pEncCtx).iMbWidth <= 0 || current_layer_expect(pEncCtx).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
     }
     let pMd = pWelsMd;
     let pCurLayer = current_layer_expect(pEncCtx);
-    // S29, both: held across the MB loop, whose callees re-derive the same fields.
-    // See `WelsISliceMdEncDynamic` for `sSliceEncCtx`'s red and its invalidator.
     let mut iNumMbCoded = 0;
     let kiTotalNumMb: i32 = pCurLayer.iMbWidth as i32 * pCurLayer.iMbHeight as i32;
     let mut iNextMbIdx = kiSliceFirstMbXY;
     let mut iCurMbIdx: i32;
     let kiMvdInterTableStride = (*pEncCtx).iMvdCostTableStride;
-    // **S5.C4b.** Field-precise on purpose — `&(*pEncCtx).pMvdCostTable` retags the
-    // `Vec` header and nothing else, where a `&self` accessor would retag the whole
-    // context. Read `MvdCostCursor::origin` for why that difference decides whether
-    // this borrow may be held across the macroblock loop it is held across.
     let pMvdCostTable = MvdCostCursor::origin(
         &(&(*pEncCtx).pMvdCostTable)[..],
         (*pEncCtx).iMvdCostTableSize,
@@ -2977,13 +2244,12 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         sDss.iCurrentPos = 0;
         sDss.pRestoreBuffer = pRestoreBuf;
     } else {
-        // Minted at the use (T9.E2e): before the loop; the post-loop use mints its own.
         sDss.iStartPos = slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs).bits_pos();
     }
     pSlice.iMbSkipRun = 0;
 
     loop {
-        {  // A6: the block is the shared borrow's scope (F191/F212)
+        {
             let func_list = (*pEncCtx).func_list();
             func_list.eEntropyCoder.StashMBStatus(
                 &mut *pSliceBsBuf,
@@ -2997,7 +2263,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         iCurMbIdx = iNextMbIdx;
         pMbs.set_cur(iCurMbIdx as usize);
 
-        {  // A6: the block is the shared borrow's scope (F191/F212)
+        {
             let func_list = (*pEncCtx).func_list();
             func_list
                 .pfRc
@@ -3010,9 +2276,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             pMbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
 
-        // step (2): save some values for future use, initialise pWelsMd. Both of
-        // these were missing: WelsMdInterInit is what installs the reference-block
-        // pointers in pMbCache, so pfInterMd read a null pSample2.
+        // step (2): save some values for future use, initialise pWelsMd.
         let pMbCache = &mut pSlice.sMbCacheInfo;
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(
             pEncCtx,
@@ -3030,26 +2294,22 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         // TRY_REENCODING
         loop {
             WelsInitInterMDStruc(pMbs.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
-            {  // A6: the block is the shared borrow's scope (F191/F212)
+            {
                 let func_list = (*pEncCtx).func_list();
                 if let Some(func) = func_list.pfInterMd {
                     func(pEncCtx, pMd, &mut *pSlice, &mut *pMbs);
                 }
             }
-            // T9.E7: fresh window — `pfInterMd` goes through the dispatch slot
-            // (q1c cannot attribute it, F111's second limit) and its type
-            // carries `*mut SSlice`, so it is a crossing like any named callee.
             let pMbCache = &mut pSlice.sMbCacheInfo;
             // step (4): save from the MD process for future use
             {
-                // As above.
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
                     layer_rec_view_expect(pCurLayer),
                     pMbs.cur(),
                     pMd,
                 );
             }
-            {  // A6: the block is the shared borrow's scope (F191/F212)
+            {
                 let func_list = (*pEncCtx).func_list();
                 (func_list.pfMdBackgroundInfoUpdate)(
                     pEncCtx,
@@ -3062,7 +2322,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn;
-            {  // A6: the block is the shared borrow's scope (F191/F212)
+            {
                 let func_list = (*pEncCtx).func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
@@ -3070,7 +2330,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             }
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && pMbs.cur().uiLumaQp < 50 {
-                {  // A6: the block is the shared borrow's scope (F191/F212)
+                {
                     let func_list = (*pEncCtx).func_list();
                     pSlice.iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                         &mut *pSliceBsBuf,
@@ -3090,7 +2350,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             break;
         }
 
-        {  // A6: the block is the shared borrow's scope (F191/F212)
+        {
             let func_list = (*pEncCtx).func_list();
             sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs.as_deref()), &pSlice.sCabacCtx);
         }
@@ -3098,8 +2358,6 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         if DynSlcJudgeSliceBoundaryStepBack(
             pEncCtx,
             pSlice,
-            // S11.30: a shared field borrow at the use — the `addr_of_mut!` that
-            // stood here fed a `*mut SSliceCtx` parameter that only ever read.
             &pCurLayer.sSliceEncCtx,
             pMbs.cur().iMbXY,
             &mut sDss,
@@ -3109,7 +2367,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             // first (non-firing) call and hand the real boundary `None`.
             pNextSlice.as_deref_mut(),
         ) {
-            {  // A6: the block is the shared borrow's scope (F191/F212)
+            {
                 let func_list = (*pEncCtx).func_list();
                 pSlice.iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                     &mut *pSliceBsBuf,
@@ -3127,7 +2385,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         pMbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
         OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, Some(pCurLayer), pSlice, pMbs.cur());
 
-        {  // A6: the block is the shared borrow's scope (F191/F212)
+        {
             let func_list = (*pEncCtx).func_list();
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx,
@@ -3148,8 +2406,6 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
     }
 
     if pSlice.iMbSkipRun > 0 {
-        // Minted at the use, after the loop (T9.E2e's placement) — field-precise
-        // now, so the discipline the comment described is borrow-checked.
         let kiMbSkipRun = pSlice.iMbSkipRun as u32;
         BsWriteUE(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), kiMbSkipRun);
     }
@@ -3175,14 +2431,10 @@ pub fn WelsPSliceMdEnc(
     // for fields every path assigns before reading.
     let mut sMd = SWelsMD::default();
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
-    // `svc_encode_slice.cpp:698`. This assignment was missing, so `bMdUsingSad` was
-    // always false and every skip/refinement cost was taken from SATD where the gate
-    // configuration (LOW_COMPLEXITY) costs with SAD.
+    // `svc_encode_slice.cpp:698`.
     sMd.bMdUsingSad = (*pEncCtx).param().iComplexityMode
         == crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 
-    // S11.4: the MD loop stays `unsafe fn` (its own callees are unconverted);
-    // the claim is the loop's own and nothing is derived here.
     WelsMdInterMbLoop(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
@@ -3200,15 +2452,10 @@ pub fn WelsPSliceMdEncDynamic(
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
     let mut sMd = SWelsMD::default();
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
-    // `svc_encode_slice.cpp:715`. The same assignment was already missing from
-    // `WelsPSliceMdEnc` and fixed there; this twin still had the defect, so every
-    // dynamic-slice P macroblock costed with SATD where LOW_COMPLEXITY costs with
-    // SAD.
+    // `svc_encode_slice.cpp:715`.
     sMd.bMdUsingSad = (*pEncCtx).param().iComplexityMode
         == crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 
-    // S11.4: the MD loop stays `unsafe fn` (its own callees are unconverted);
-    // the claim is the loop's own and nothing is derived here.
     WelsMdInterMbLoopOverDynamicSlice(pEncCtx, pSlice, &mut sMd, kiSliceFirstMbXY, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
@@ -3221,15 +2468,12 @@ pub fn WelsCodePSlice(
     pRestoreBuf: Option<&mut [u8]>,
     pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
-    // S10.15: the layer is only read here — `current_layer_ref`, not the
-    // fork-shared raw.
     let pCurLayer = current_layer_expect(pEncCtx);
     // `svc_encode_slice.cpp:733/736` picks `pfInterMd` HERE, per slice, into the
     // shared function list — which under MT is every worker writing the same
-    // bytes with no ordering (F132 round 7, the fixed-slice probe's verdict once
-    // round 5 stopped aborting first). The stamp is loop-invariant across a
-    // frame's slices, so it lives in `PreprocessSliceCoding` now (F71's
-    // pattern); only the `kbHighestSpatial` the MD callee needs stays.
+    // bytes with no ordering. The stamp is loop-invariant across a frame's
+    // slices, so it lives in `PreprocessSliceCoding`; only the
+    // `kbHighestSpatial` the MD callee needs stays.
     let kbHighestSpatial = if (*pEncCtx).param_opt().is_some() {
         (*pEncCtx).param().iSpatialLayerNum == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
     } else {
@@ -3247,12 +2491,10 @@ pub fn WelsCodePOverDynamicSlice(
     pRestoreBuf: Option<&mut [u8]>,
     pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
-    // S10.15: the layer is only read here — `current_layer_ref`, not the
-    // fork-shared raw.
     let pCurLayer = current_layer_expect(pEncCtx);
     // `svc_encode_slice.cpp:750/753`, the dynamic-slicing twin of
-    // `WelsCodePSlice` — same hoist, same reason (F132 round 7): the per-slice
-    // `pfInterMd` stamp lives in `PreprocessSliceCoding` now.
+    // `WelsCodePSlice` — same hoist, same reason: the per-slice `pfInterMd`
+    // stamp lives in `PreprocessSliceCoding`.
     let kbHighestSpatial = if (*pEncCtx).param_opt().is_some() {
         (*pEncCtx).param().iSpatialLayerNum == ((*pCurLayer).sLayerInfo.sNalHeaderExt.uiDependencyId as i32 + 1)
     } else {
@@ -3270,14 +2512,6 @@ pub extern "C" fn WelsCodePSlice_c(
     pRestoreBuf: Option<&mut [u8]>,
     pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
-    // **S11.4: the audited call, at the slot boundary.** The slot type
-    // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
-    // ~115 bodies that only *call through* these tables drop their own
-    // `unsafe` (F276). This thunk is where the remaining claim lives: the
-    // target is still `unsafe fn` because its own callee subtree
-    // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
-    // The claim is exactly the target's: the arguments are the references this
-    // signature already guarantees, and nothing here derives a pointer.
     WelsCodePSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
@@ -3290,14 +2524,6 @@ pub extern "C" fn WelsCodePOverDynamicSlice_c(
     pRestoreBuf: Option<&mut [u8]>,
     pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
-    // **S11.4: the audited call, at the slot boundary.** The slot type
-    // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
-    // ~115 bodies that only *call through* these tables drop their own
-    // `unsafe` (F276). This thunk is where the remaining claim lives: the
-    // target is still `unsafe fn` because its own callee subtree
-    // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
-    // The claim is exactly the target's: the arguments are the references this
-    // signature already guarantees, and nothing here derives a pointer.
     WelsCodePOverDynamicSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
@@ -3310,14 +2536,6 @@ pub extern "C" fn WelsISliceMdEnc_c(
     pRestoreBuf: Option<&mut [u8]>,
     pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
-    // **S11.4: the audited call, at the slot boundary.** The slot type
-    // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
-    // ~115 bodies that only *call through* these tables drop their own
-    // `unsafe` (F276). This thunk is where the remaining claim lives: the
-    // target is still `unsafe fn` because its own callee subtree
-    // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
-    // The claim is exactly the target's: the arguments are the references this
-    // signature already guarantees, and nothing here derives a pointer.
     WelsISliceMdEnc(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
@@ -3330,14 +2548,6 @@ pub extern "C" fn WelsISliceMdEncDynamic_c(
     pRestoreBuf: Option<&mut [u8]>,
     pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
-    // **S11.4: the audited call, at the slot boundary.** The slot type
-    // (`PWelsCodingSliceFunc`) is a safe fn pointer now, which is what lets the
-    // ~115 bodies that only *call through* these tables drop their own
-    // `unsafe` (F276). This thunk is where the remaining claim lives: the
-    // target is still `unsafe fn` because its own callee subtree
-    // (`mb_window`, the entropy stash pair, `WelsMdIntraMb`) is unconverted.
-    // The claim is exactly the target's: the arguments are the references this
-    // signature already guarantees, and nothing here derives a pointer.
     WelsISliceMdEncDynamic(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
@@ -3373,26 +2583,15 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
     WelsSliceHeaderExtWrite_c,
 ];
 
-// **S11.30: `dynamic_bs_buffer` is deleted.** The mint read the per-partition
-// restore scratch out of the shared context inside the fork (F71's spelling);
-// the scratch now travels as `Option<&mut [u8]>` down the coding slot — taken
-// pre-fork by the size-limited entry beside its bitstream slot, and around the
-// call by the single-threaded callers. `SDynamicSlicingStack::pRestoreBuffer`
-// carries the borrow, and both CABAC stash arms are safe slice copies.
-
-/// **F71's residue, closed — T7.C3.** The one write `WelsCodeOneSlice` made into
-/// *layer* state rather than slice state, lifted out of the slice encode to the
-/// thread that owns the frame.
+/// The one write `WelsCodeOneSlice` made into *layer* state rather than slice
+/// state, lifted out of the slice encode to the thread that owns the frame.
 ///
 /// `svc_encode_slice.cpp:1655` sets `pNalHeadExt->bIdrFlag = 1` inside
 /// `WelsCodeOneSlice`, which every worker runs once per slice — so N workers write
-/// the same layer byte concurrently. The C++ makes that write too and brackets it in
-/// nothing, so it was never a port divergence; it was the last shared write the
-/// fork/join carried, the reason the MT Miri probe was `#[cfg_attr(miri, ignore)]`,
-/// and the thing F71 handed to Phase 9.
+/// the same layer byte concurrently.
 ///
-/// **It did not need Phase 9, because the write is loop-invariant across the fork**,
-/// and that is checkable rather than plausible:
+/// **The write is loop-invariant across the fork**, and that is checkable rather
+/// than plausible:
 ///
 /// * the condition is `pEncCtx->eSliceType == I_SLICE`, a **frame**-level value fixed
 ///   before the fork — every worker takes the same arm;
@@ -3415,21 +2614,12 @@ pub static g_pWelsWriteSliceHeader: [PWelsSliceHeaderWriteFunc; 2] = [
 /// and moving the write across everything in between would be a behaviour change
 /// rather than a hoist. Each single-threaded caller keeps it exactly where the
 /// statement stood, one line above its own `WelsCodeOneSlice`.
-///
-/// **S10.3a: safe.** The `# Safety` clause that stood here required "a live context
-/// whose current layer is set for this frame"; both halves are now carried by the
-/// types — the `&mut sWelsEncCtx` and `current_layer_mut`'s `Option`.
 pub fn StampLayerIdrFlagForSliceType(pEncCtx: &mut sWelsEncCtx) {
-    // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if pEncCtx.eSliceType != EWelsSliceType::I_SLICE {
         return;
     }
-    // **S10.3a.** This body runs on the calling thread *before* either fork
-    // spawns — T7.C3 hoisted it there precisely so the write would not race — so
-    // the `&mut sWelsEncCtx` it already holds can reach the layer directly.
-    // `current_layer`'s raw was carrying a fork-shared tag for a body that is by
-    // construction not in the fork.
+    // This body runs on the calling thread *before* either fork spawns,
+    // precisely so the write does not race.
     let Some(pCurLayer) = current_layer_mut(pEncCtx) else {
         return;
     };
@@ -3446,18 +2636,7 @@ pub fn WelsCodeOneSlice(
     pRestoreBuf: Option<&mut [u8]>,
     pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
-    // **S7.A5**: the `is_null()` guard and its early return retire with the
-    // parameter — every context reaching this body comes from a `&mut sWelsEncCtx`
-    // held by one of the three fork entry points or the frame loop, never a null.
     let pCurLayer = current_layer_expect(pEncCtx);
-    // **S11.31: the held NAL-header cursor is two scalar reads.** S29 kept it
-    // raw so it would survive the header writers' derivations; S10.3d recorded
-    // that premise as looking expired but deferred to the full-encode probes,
-    // because a *held* shared borrow across those calls is what they refereed.
-    // Reading `bIdrFlag` and `uiTemporalId` out here holds nothing across
-    // anything — each read is a momentary shared retag, both values are stable
-    // for the slice (`StampLayerIdrFlagForSliceType` runs pre-fork, T7.C3) —
-    // so the question those probes would have answered no longer exists.
 
     let kiDynamicSliceFlag = if (*pEncCtx).param_opt().is_some() {
         let did = (*pEncCtx).uiDependencyId as usize;
@@ -3471,11 +2650,10 @@ pub fn WelsCodeOneSlice(
     };
 
     if (*pEncCtx).eSliceType == EWelsSliceType::I_SLICE {
-        // The `pNalHeadExt->bIdrFlag = 1` of `svc_encode_slice.cpp:1655` is not here:
-        // it is layer state, every caller runs it one line above this call, and
-        // T7.C3 explains why moving it is byte-neutral. `sScaleShift` is the slice's
-        // own and stays. The assert is the hoist's contract, checked where the
-        // statement used to be.
+        // The `pNalHeadExt->bIdrFlag = 1` of `svc_encode_slice.cpp:1655` is not
+        // here: it is layer state, and every caller runs it one line above this
+        // call. `sScaleShift` is the slice's own and stays. The assert is the
+        // hoist's contract, checked where the statement used to be.
         debug_assert!(
             pCurLayer.sLayerInfo.sNalHeaderExt.bIdrFlag,
             "StampLayerIdrFlagForSliceType was not run before WelsCodeOneSlice on an I_SLICE"
@@ -3490,9 +2668,6 @@ pub fn WelsCodeOneSlice(
     WelsSliceHeaderExtInit(pEncCtx, Some(pCurLayer), &mut *pCurSlice);
 
     //RomRC init slice by slice
-    // A2: the raw accessor answered null on an empty array and this is the one
-    // caller that asked. `rc_at` panics instead (T9.H3's ruling for `ctx_ltr_at`),
-    // so the emptiness question moves back out to the array, where it was.
     if !(*pEncCtx).rc().is_empty() {
         let pWelsSvcRc = (*pEncCtx).rc_at((*pEncCtx).uiDependencyId as usize);
         if pWelsSvcRc.bGomRC {
@@ -3503,12 +2678,8 @@ pub fn WelsCodeOneSlice(
     let ext_hdr_idx = if (*pCurSlice).bSliceHeaderExtFlag { 1 } else { 0 };
     (g_pWelsWriteSliceHeader[ext_hdr_idx])(
         pEncCtx,
-        // S11.2a: the writers take the layer shared. This whole-layer retag sits
-        // where `WelsSliceHeaderExtInit`'s already did (the S6.A1/F239 note two
-        // lines up), so the re-derivation discipline below it is unchanged.
         pCurLayer,
         &mut *pCurSlice,
-        // T6.I1: was guarded on the table being non-null; it is owned now.
         (*pEncCtx).func_list().pParametersetStrategy.as_deref(),
         &mut *pSliceBsBuf,
         &mut *pCtxOutBs,
@@ -3518,8 +2689,6 @@ pub fn WelsCodeOneSlice(
     (*pCurSlice).uiLastMbQp =
         (pic_init_qp as i32 + (*pCurSlice).sSliceHeaderExt.sSliceHeader.iSliceQpDelta as i32) as u8;
 
-    // S11.31: a fresh scalar read — the F239 re-derivation note retired with
-    // the held cursor it explained.
     let idr_idx = pCurLayer.sLayerInfo.sNalHeaderExt.bIdrFlag as usize;
     let func = g_pWelsSliceCoding[idr_idx][kiDynamicSliceFlag];
     let iEncReturn = func(pEncCtx, &mut *pCurSlice, &mut *pSliceBsBuf, &mut *pCtxOutBs, pMbs, pRestoreBuf, pNextSlice);
@@ -3527,12 +2696,6 @@ pub fn WelsCodeOneSlice(
         return iEncReturn;
     }
 
-    // **S11.1a**: the buffer and the writer used to be re-derived here, at their
-    // use, because a top-held derivation was popped by `func`'s own internal
-    // ones (S29's boundary clause, the encode probe's fifth red, session B).
-    // The threaded pair dissolves that class: there is exactly one derivation,
-    // at the chain's top, and everything below — `func` included — reborrows
-    // it, so holding it across the call is nesting, not aliasing.
     let bEntropyCodingModeFlag = (*pEncCtx).param().iEntropyCodingModeFlag != 0;
     WelsWriteSliceEndSyn(
         &mut *pSliceBsBuf,
@@ -3546,9 +2709,8 @@ pub fn WelsCodeOneSlice(
 
 /// `set_mb_syn_cavlc.cpp:279`. Terminates the slice bitstream.
 ///
-/// This was missing entirely, and with it the `BsRbspTrailingBits` + `BsFlush` pair
-/// that pushes the last partial 32-bit accumulator word out to the buffer -- so every
-/// slice lost its final byte.
+/// The CAVLC branch is a `BsRbspTrailingBits` + `BsFlush` pair, which pushes the
+/// last partial 32-bit accumulator word out to the buffer.
 ///
 /// The CABAC branch hands the bitstream cursor back to `SBitStringAux` from the
 /// arithmetic coder's own buffer pointer -- there is no `BsRbspTrailingBits` /
@@ -3556,8 +2718,7 @@ pub fn WelsCodeOneSlice(
 /// bytes directly.
 ///
 /// `pBs` must be the slice's writer (`slice_bs_writer`) and `buf` the threaded
-/// buffer that writer is positioned in — both arrive from the chain's one
-/// derivation since S11.1a.
+/// buffer that writer is positioned in.
 pub fn WelsWriteSliceEndSyn(
     buf: &mut [u8],
     pBs: &mut BsWriter,
@@ -3566,11 +2727,8 @@ pub fn WelsWriteSliceEndSyn(
 ) {
     if bEntropyCodingModeFlag {
         crate::encoder::set_mb_syn_cabac::WelsCabacEncodeFlush(buf, &mut *pCabacCtx);
-        // Both coders now count in the same units over the same buffer, so
-        // handing the position back is an assignment. This used to be
-        // `set_pos(end.offset_from(buf.as_ptr()))` around a pointer the coder
-        // had derived from an offset in the first place; `BsWriter::set_pos`
-        // existed for this one caller and is deleted with it.
+        // Both coders count in the same units over the same buffer, so handing
+        // the position back is an assignment.
         *pBs = BsWriter::at(crate::encoder::set_mb_syn_cabac::WelsCabacEncodePos(
             &mut *pCabacCtx,
         ));
@@ -3587,33 +2745,16 @@ pub fn WelsWriteSliceEndSyn(
 pub fn AddSliceBoundary(
     pEncCtx: &sWelsEncCtx,
     pCurSlice: &mut SSlice,
-    // **S11.30: shared.** Every touch through this parameter is a shared read
-    // or an element-wise atomic store (`pOverallMbMap`) — the borrow-width
-    // rule (F275), measured by stripping and reading the errors.
     pSliceCtx: &SSliceCtx,
-    // **T9.D11**: this was `pCurMb: &SMB`, and the reference — not the read — was the
-    // defect. A `&`/`&mut` *argument* is **strongly protected** for the whole call, and
-    // this one covers a macroblock that `UpdateMbNeighbourInfoForNextSlice` re-borrows
-    // mutably while walking the MB list one frame below (`UpdateMbNeighbor(.., &mut
-    // *pMb, ..)`). A `*mut SMB` parameter carried no protector, so the conversion in
-    // T9.D9 created the conflict rather than exposing one. The body wanted a single
-    // `i32`; it takes the `i32` (F114).
     kiCurMbIdx: i32,
     iFirstMbIdxOfNextSlice: i32,
     kiLastMbIdxInPartition: i32,
-    // S11.27: the worker's own records, threaded down from the md loop.
+    // The worker's own records, threaded down from the md loop.
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
-    // **S11.33: the forward slot arrives resolved.** This body used to walk
-    // the bank for it (`slice_bank_root` + the MT/ST index arms) — the last
-    // raw operation it had. The loop that owns the bank resolves the slot
-    // beside the current slice and threads it down; `None` is what the old
-    // null answered (the slot past the bank's end), and the write below is
-    // skipped for it exactly as before.
+    // The forward slot, resolved by the loop that owns the bank; `None` is the
+    // slot past the bank's end, and the write below is skipped for it.
     pNextSlice: Option<&mut SSlice>,
 ) {
-    // **S7.A5**: the context arm retired with that parameter; S11.30 retires the
-    // `pSliceCtx.is_null()` arm the same way — a `&SSliceCtx` cannot be null,
-    // and both callers derive it from the layer they already hold.
     let pCurLayer = current_layer_expect(pEncCtx);
     let iCurMbIdx = kiCurMbIdx;
     let iCurSliceIdc = {
@@ -3630,9 +2771,9 @@ pub fn AddSliceBoundary(
         pNextSlice.sSliceHeaderExt = (*pCurSlice).sSliceHeaderExt;
         pNextSlice.sSliceHeaderExt.sSliceHeader.iFirstMbInSlice = iFirstMbIdxOfNextSlice;
 
-        // C++ calls WelsSetMemMultiplebytes_c, whose count is a signed int32_t; the
-        // open-coded `for i in 0..count as usize` here wrapped to ~2^64 iterations
-        // when the boundary landed past the end of the partition.
+        // C++ calls WelsSetMemMultiplebytes_c, whose count is a signed int32_t:
+        // the count can be negative when the boundary lands past the end of the
+        // partition.
         {
             let map: &[AtomicU16] = &(*pSliceCtx).pOverallMbMap;
             crate::encoder::slice_multi_threading::fill_mb_map(
@@ -3655,11 +2796,7 @@ pub fn AddSliceBoundary(
 pub fn DynSlcJudgeSliceBoundaryStepBack(
     pEncCtx: &sWelsEncCtx,
     pCurSlice: &mut SSlice,
-    // S11.30: shared, as `AddSliceBoundary` — reads and atomics only.
     pSliceCtx: &SSliceCtx,
-    // **T9.D11**, as `AddSliceBoundary` above: the body reads one field of the
-    // macroblock, and a reference parameter would protect it across the
-    // `AddSliceBoundary` call below.
     kiCurMbIdx: i32,
     pDss: &mut SDynamicSlicingStack<'_>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -3689,25 +2826,20 @@ pub fn DynSlcJudgeSliceBoundaryStepBack(
         && JUMPPACKETSIZE_JUDGE(uiLen, iCurMbIdx, (*pSliceCtx).uiSliceSizeConstraint)
         && kbCurMbNotLastMbOfCurPartition
     {
-        // **F69 — the lock the raw translation dropped, restored.**
         // `svc_encode_slice.cpp:1776-1791` brackets exactly these two statements in
         // `WelsMutexLock(&pSliceThreading->mutexSliceNumUpdate)` when
         // `iMultipleThreadIdc > 1`, with the C++'s own comment on the lock line
         // saying what it is for: "lock the acessing to this variable:
-        // pSliceCtx->iSliceNumInFrame". `68c4f6a5 "Raw translation"` kept the two
-        // statements and neither lock, and nothing has locked
-        // `mutexSliceNumUpdate` in this crate since — the field was initialised in
-        // `RequestMtResource`, destroyed in `ReleaseMtResource`, and never used.
+        // pSliceCtx->iSliceNumInFrame".
         //
-        // `pSliceCtx` is `addr_of_mut!((*pCurLayer).sSliceEncCtx)` — the **layer's**
-        // slice context, shared by every worker on the dynamic path — so the `+= 1`
-        // is a read-modify-write racing across threads, and `AddSliceBoundary`
-        // writes `pOverallMbMap` and the next slice's header through the same
-        // shared parent (the C++ calls it "complex memory operation" on the line
-        // above the lock). A lost increment leaves
-        // `iEncodeSliceNum != iSliceNumInFrame` in `ReOrderSliceInLayer`, which
-        // answers `ENC_RETURN_UNEXPECTED` and the frame comes back **empty** —
-        // F3's shape in 18 of the 25 hits of its before-arm.
+        // `pSliceCtx` is the **layer's** slice context, shared by every worker on
+        // the dynamic path — so the `+= 1` is a read-modify-write racing across
+        // threads, and `AddSliceBoundary` writes `pOverallMbMap` and the next
+        // slice's header through the same shared parent (the C++ calls it
+        // "complex memory operation" on the line above the lock). A lost
+        // increment leaves `iEncodeSliceNum != iSliceNumInFrame` in
+        // `ReOrderSliceInLayer`, which answers `ENC_RETURN_UNEXPECTED` and the
+        // frame comes back **empty**.
         //
         // The null-mutex arm of `with_wels_mutex` runs the closure unlocked, which
         // is the C++'s `iMultipleThreadIdc <= 1` path: `pSliceThreading` is null
@@ -3716,18 +2848,12 @@ pub fn DynSlcJudgeSliceBoundaryStepBack(
             let bMt = (*pEncCtx).param_opt().is_some()
                 && (*pEncCtx).param().iMultipleThreadIdc > 1;
             if bMt {
-                // S11.30: a field-scoped shared borrow (S10.13's route) — every
-                // worker may hold `&pCtx.pSliceThreading` at once, and locking
-                // takes `&self`. The slot read (S3.B1) retired with the raw.
                 pEncCtx.pSliceThreading.as_deref().map(|pSmt| &pSmt.mutexSliceNumUpdate)
             } else {
                 None
             }
         };
         crate::encoder::slice_multi_threading::with_wels_mutex(pSmtMutex, || {
-            // S11.33: safe — the boundary's forward slot arrives resolved
-            // (`pNextSlice`), so the callee's bank walk and the claim it
-            // carried are gone within one checkpoint of being written down.
             AddSliceBoundary(pEncCtx, pCurSlice, pSliceCtx, iCurMbIdx, iCurMbIdx, kiEndMbIdxOfPartition, pMbs, pNextSlice);
             pSliceCtx.iSliceNumInFrame.fetch_add(1, Ordering::Relaxed);
         });
@@ -3741,21 +2867,11 @@ pub fn DynSlcJudgeSliceBoundaryStepBack(
 // Memory Management, Buffer Allocation & Dynamic Expansion
 // ============================================================================
 
-// `AllocMbCacheAligned` and `FreeMbCache` stood here: eight `WelsMallocz` calls per
-// slice and their eight `WelsFree`s, for scratch the slice always owned alone.
-// **T6.C3** made all eight inline arrays of `SMbCache`, so the slice's block carries
-// them and there is nothing to allocate, nothing to fail, and nothing to free —
-// including on `ReallocateSliceList`'s error paths, which freed the *new* list while
-// the first `kiMaxSliceNumOld` entries still held the old list's copied pointers.
-// The `+ 16` accommodation (F14) and its reasoning moved onto `SMbCache::sMemPredMb`
-// with the buffer.
-
 pub fn InitSliceBoundaryInfo(
     pCurLayer: &mut SDqLayer,
     pSliceArgument: &SSliceArgument,
     kiSliceNumInFrame: i32,
 ) -> i32 {
-    // A7: the parameter is a reference now, so its null arm is gone with the raw.
     let kiMBWidth: i32 = (*pCurLayer).iMbWidth as i32;
     let kiMBHeight: i32 = (*pCurLayer).iMbHeight as i32;
     let kiCountNumMbInFrame: i32 = kiMBWidth * kiMBHeight;
@@ -3819,20 +2935,9 @@ pub fn SetSliceBoundaryInfo(pCurLayer: Option<&SDqLayer>, pSlice: &mut SSlice, k
     ENC_RETURN_SUCCESS
 }
 
-// `AllocateSliceMBBuffer` stood here and forwarded to `AllocMbCacheAligned`. With the
-// cache's eight buffers inline it had an empty body and two callers that checked its
-// return, so it went with them (S18).
-
 /// `bIndependenceBsBuffer` is recorded as `sSliceBs.pBs`'s nullness and nowhere
 /// else — `slice_bs_writer` and the chain-top buffer derivations read it back
-/// from there (S11.1a; `slice_writer`/`slice_bs_buffer` before that). The C++'s
-/// `pBsWrite` parameter (the frame writer this stamped into `pSliceBsa` in the
-/// shared arm) is gone with the field.
-/// **T7.C4 — the slice owns its bitstream.** The `CMemoryAlign` block and the
-/// `ENC_RETURN_MEMALLOCERR` arm behind it are gone: `vec![0; n]` is the `WelsMallocz`
-/// this replaces, zeros included, and its failure is a panic-on-OOM — the same trade
-/// every owned buffer in this port has made since T3.6. `pMa` goes with the
-/// allocation.
+/// from there.
 pub fn InitSliceBsBuffer(
     pSlice: &mut SSlice,
     bIndependenceBsBuffer: bool,
@@ -3852,26 +2957,15 @@ pub fn InitSliceBsBuffer(
     ENC_RETURN_SUCCESS
 }
 
-/// Releases one slice bank — **T6.D8, finished at T7.C4.**
-///
-/// The bank has been a `Vec<SSlice>` since T6.D8, so `clear()` was already the old
-/// `WelsFree(slice_array)`. What still needed walking was `sSliceBs.pBs`, one
-/// `CMemoryAlign` block per slice held by raw pointer — and **that walk is gone with
-/// the pointer**: the buffer is the slice's own `Option<Vec<u8>>`, so dropping the
-/// bank drops every one of them, in the same order, with nothing to null out and
-/// nothing to get wrong on an error path. `pMa` goes with the walk, and this is the
-/// last thing `FreeDqLayer` had to release by hand.
+/// Releases one slice bank. Each slice's bitstream buffer is its own
+/// `Option<Vec<u8>>`, so dropping the bank drops every one of them.
 pub fn FreeSliceBuffer(pDqLayer: &mut SDqLayer, kiBank: usize) {
     let bank: &mut Vec<SSlice> = &mut (*pDqLayer).sSliceBufferInfo[kiBank].pSliceBuffer;
     bank.clear();
     bank.shrink_to_fit();
 }
 
-/// **S11.32: safe — the parameter is the bank it walks.** The layer form
-/// resolved each slot through `slice_in_bank`'s raw; the caller owns the layer
-/// (`InitSliceThreadInfo` holds `&mut SDqLayer`) and hands the one bank down.
-/// The old null answer for a missing slot is the loop bound itself now: the
-/// caller sized the bank to `kiMaxSliceNum` two lines before this call.
+/// Initialises the slices of one bank, which the caller sized to `kiMaxSliceNum`.
 pub fn InitSliceList(
     pBank: &mut SSliceBufferInfo,
     kiMaxSliceNum: i32,
@@ -3901,9 +2995,7 @@ pub fn InitSliceList(
     ENC_RETURN_SUCCESS
 }
 
-/// **S11.32: safe** — this runs on the calling thread before the fork, under
-/// `&mut sWelsEncCtx`; the raw walk was the borrow checker's job all along.
-/// `slice_in_layer_mut` answers the same `None` the null answered.
+/// Runs on the calling thread before the fork, under `&mut sWelsEncCtx`.
 pub fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
     let pCurDqLayer = current_layer_expect_mut(pCtx);
     for iSliceIdx in 0..pCurDqLayer.iMaxSliceNum {
@@ -3919,15 +3011,6 @@ pub fn InitAllSlicesInThread(pCtx: &mut sWelsEncCtx) -> i32 {
 
     ENC_RETURN_SUCCESS
 }
-
-// **S11.34: `ResolveSliceInOwnBank` is deleted.** It minted `&mut SSlice` from
-// a *shared* layer on the claim "kiSlcBuffIdx must be this worker's own bank
-// slot" — true only by the static-partition argument. The size-limited job owns
-// its bank now (taken pre-fork beside the grid and the scratch), so the resolve
-// is `split_at_mut` at `iCodedSliceNum`: the current slot exclusively, the
-// boundary's forward slot beside it, and the claim is the compiler's. Its dead
-// arm (`bThreadSlcBufferFlag == false`, bank 0 by slice index) was unreachable
-// from its one caller — the flag is true exactly when the fork runs.
 
 pub fn InitOneSliceInThread(
     pCtx: &sWelsEncCtx,
@@ -3966,17 +3049,14 @@ pub fn InitSliceThreadInfo(
     while iIdx < iSlcBufferNum {
         (*pDqLayer).sSliceBufferInfo[iIdx as usize].iMaxSliceNum = iMaxSliceNum;
         (*pDqLayer).sSliceBufferInfo[iIdx as usize].iCodedSliceNum = 0;
-        // Built rather than handed a zeroed block: `SSlice::new` writes every field
-        // that block's zero stood for (T6.D8). Field-wise, not built-once-and-cloned —
-        // `SSlice` is 6544 bytes of mostly inline scratch since T6.C3 and carries no
-        // `Clone`, and the compiler can flatten a field-wise constructor into the
-        // `Vec`'s storage where a clone would build and copy.
+        // Field-wise, not built-once-and-cloned — `SSlice` is 6544 bytes of
+        // mostly inline scratch and carries no `Clone`, and the compiler can
+        // flatten a field-wise constructor into the `Vec`'s storage where a clone
+        // would build and copy.
         (*pDqLayer).sSliceBufferInfo[iIdx as usize].pSliceBuffer =
             (0..iMaxSliceNum as usize).map(|_| SSlice::new()).collect();
 
-        // T9.E2h, shape B as above: the flag is read before the call.
         let kbSliceBsBufferFlag = (*pDqLayer).bSliceBsBufferFlag;
-        // S11.32: safe — the bank goes down exclusively, sized two lines up.
         let iRet = InitSliceList(
             &mut (*pDqLayer).sSliceBufferInfo[iIdx as usize],
             iMaxSliceNum,
@@ -4004,17 +3084,9 @@ pub fn InitSliceInLayer(
     pDqLayer: &mut SDqLayer,
     kiDlayerIndex: i32,
 ) -> i32 {
-    // S29, and F13's production site: this was `&mut ...sSliceArgument`, whose
-    // `Unique` retag popped the tag of `InitDqLayers`'s `pDlayer` — a pointer into
-    // the *same* layer, derived one call up and read again after this function
-    // returns. Found by the encoder aliasing probe (Phase 6 session A) on its first
-    // run. It became `addr_of_mut!` then, and **A7 retires the cursor entirely**:
     // `SSliceArgument` is `Copy` (`codec_api.rs:577`) and this body only reads it,
-    // so §4.6's fourth shape applies — copy it out. Nothing writes it in between
-    // (`InitSliceThreadInfo` reads `iMultipleThreadIdc` and nothing else of the
-    // parameter block), so the copy is the re-read. `InitSliceBoundaryInfo` takes
-    // `&SSliceArgument` now, and `ReallocateSliceList` takes the slice *mode* — the
-    // one field it ever read.
+    // so it is copied out; nothing writes it in between (`InitSliceThreadInfo`
+    // reads `iMultipleThreadIdc` and nothing else of the parameter block).
     let sSliceArgument = pCtx.param().sSpatialLayers[kiDlayerIndex as usize].sSliceArgument;
     let kuiSliceMode = sSliceArgument.uiSliceMode;
 
@@ -4034,14 +3106,13 @@ pub fn InitSliceInLayer(
         (*pDqLayer).iMaxSliceNum += (*pDqLayer).sSliceBufferInfo[iSlcBuffIdx as usize].iMaxSliceNum;
     }
 
-    // One `Vec` sized to the layer's slice count; `WelsMallocz` zeroed the block
-    // and `SliceIdx::NONE` is that zero's meaning — "no slice at this position yet".
+    // One `Vec` sized to the layer's slice count; `SliceIdx::NONE` means "no
+    // slice at this position yet".
     (*pDqLayer).ppSliceInLayer = vec![SliceIdx::NONE; (*pDqLayer).iMaxSliceNum as usize];
 
     (*pDqLayer).pFirstMbIdxOfSlice = vec![0i32; (*pDqLayer).iMaxSliceNum as usize];
     (*pDqLayer).pCountMbNumInSlice = vec![0i32; (*pDqLayer).iMaxSliceNum as usize];
 
-    // T9.E2h, shape B as above: the count is read before the call.
     let kiMaxSliceNum = (*pDqLayer).iMaxSliceNum;
     let iRet2 = InitSliceBoundaryInfo(pDqLayer, &sSliceArgument, kiMaxSliceNum);
     if iRet2 != ENC_RETURN_SUCCESS {
@@ -4066,9 +3137,8 @@ pub fn InitSliceHeadWithBase(pSlice: &mut SSlice, pBaseSlice: &SSlice) {
     let pSHExt = &mut (*pSlice).sSliceHeaderExt;
 
     (*pSlice).bSliceHeaderExtFlag = (*pBaseSlice).bSliceHeaderExtFlag;
-    // T6.G3: the C++ copies each id and then the pointer derived from it
-    // (`svc_encode_slice.cpp:1169-1172`). The pointers are gone; the ids they were
-    // derived from are these two lines, unchanged.
+    // The C++ copies each id and then the pointer derived from it
+    // (`svc_encode_slice.cpp:1169-1172`); the ids are these two lines.
     pSHExt.sSliceHeader.iPpsId = pBaseSHExt.sSliceHeader.iPpsId;
     pSHExt.sSliceHeader.iSpsId = pBaseSHExt.sSliceHeader.iSpsId;
 }
@@ -4098,37 +3168,22 @@ pub fn InitSliceRC(pSlice: &mut SSlice, kiGlobalQp: i32) -> i32 {
     ENC_RETURN_SUCCESS
 }
 
-/// `ReallocateSliceList` — svc_encode_slice.cpp:1206, as a **`resize`** since
-/// **T6.D8**, and a real defect closes with it.
+/// `ReallocateSliceList` — svc_encode_slice.cpp:1206, as a **`resize`**.
 ///
-/// **The defect** (handed over by session C, whose face 2 closed the `SMbCache`
-/// half of the same aliasing): the C++ allocated a new block,
-/// `copy_nonoverlapping`d the old slices into it — **their raw `sSliceBs.pBs`
-/// included** — and then, on any of three error paths, `FreeSliceBuffer`d the *new*
-/// list. Freeing the new list walks all `kiMaxSliceNumNew` entries and frees each
-/// `pBs`; the first `kiMaxSliceNumOld` of those pointers are the *old* list's, and
-/// the old list is still live and still owns them. Every one of those is a double
-/// free waiting for the caller to release the old bank.
+/// Under `Vec<SSlice>::resize_with` the existing slices *move* into the grown
+/// buffer rather than being copied beside a live original, so each `pBs` is held
+/// by exactly one `SSlice` at every point, and the error paths return the bank as
+/// it stands instead of freeing a list that shares pointers with a live one. The
+/// only reachable difference from the C++ is on an error path the gates cannot
+/// reach — allocation failure, or a negative global QP — where this leaves the
+/// bank grown with an uninitialised tail and the C++ left a double free; both
+/// then propagate `ENC_RETURN_*` to the same caller.
 ///
-/// **Under `Vec<SSlice>::resize_with` there is no second owner to free.** The
-/// existing slices *move* into the grown buffer rather than being copied beside a
-/// live original, so each `pBs` is held by exactly one `SSlice` at every point, and
-/// the error paths return the bank as it stands instead of freeing a list that
-/// shares pointers with a live one. The only reachable difference from the C++ is on
-/// an error path the gates cannot reach — allocation failure, or a negative global
-/// QP — where this leaves the bank grown with an uninitialised tail and the C++ left
-/// a double free; both then propagate `ENC_RETURN_*` to the same caller.
-/// **S11.32: safe — the parameter is the bank it grows.** Slice 0 is the
-/// template every new slot copies its header and reference info from, and it
-/// stays readable across the new slots' writes because `split_at_mut` makes
-/// the old/new halves disjoint halves of one borrow — S28's re-derivation
-/// discipline ("the resize is what moves the root") becomes the compiler's:
-/// the split is taken *after* the resize, so there is no pre-resize derivation
-/// left to go stale.
+/// Slice 0 is the template every new slot copies its header and reference info
+/// from, and it stays readable across the new slots' writes because
+/// `split_at_mut` — taken *after* the resize — makes the old and new halves
+/// disjoint halves of one borrow.
 pub fn ReallocateSliceList(
-    // S11.32: four context scalars, not `&sWelsEncCtx` — a shared context
-    // parameter cannot coexist with a `&mut` to a bank *inside* it, which is
-    // exactly what the single-threaded caller holds (F275).
     kiMaxSliceBufferSize: i32,
     kbIndependenceBsBuffer: bool,
     kiNumRef0: u8,
@@ -4174,15 +3229,10 @@ pub fn ReallocateSliceList(
 
 pub fn CalculateNewSliceNum(
     pCtx: &sWelsEncCtx,
-    // S11.32: was `pLastCodedSlice: &mut SSlice` — the body reads exactly one
-    // field of it (`iSliceIdx`, to recover the partition), so it takes the
-    // `i32` (F114). The borrow that had to reach *into a bank inside the
-    // context* beside `&sWelsEncCtx` goes with it.
     kiLastCodedSliceIdx: i32,
     iMaxSliceNumOld: i32,
     iMaxSliceNumNew: &mut i32,
 ) -> i32 {
-    // **S7.A5**: the context arm retires; the other two are live.
     if iMaxSliceNumOld == 0 {
         return ENC_RETURN_INVALIDINPUT;
     }
@@ -4211,13 +3261,8 @@ pub fn CalculateNewSliceNum(
     ENC_RETURN_SUCCESS
 }
 
-/// **S11.34: safe — the worker owns the bank it grows.** The raw layer
-/// parameter carried exactly one storage this body touched (its own bank's
-/// counters, last-coded slice and buffer), and ownership makes the growth an
-/// ordinary `Vec` resize on an exclusive borrow. `CalculateNewSliceNum` reads
-/// the context shared (partition arrays, atomics) beside the bank's `&mut`
-/// with no conflict, because the bank is no longer *inside* the context — the
-/// pre-fork take is what makes that sentence true.
+/// Grows the bank the calling worker owns, taken out of the layer before the
+/// fork.
 pub fn ReallocateSliceInThread(
     pCtx: &sWelsEncCtx,
     kiDlayerIdx: i32,
@@ -4232,8 +3277,7 @@ pub fn ReallocateSliceInThread(
         .sSliceArgument
         .uiSliceMode;
 
-    // The last-coded slice's one wanted field, as a scalar — `get`'s bound is
-    // the old null arm (T9.E2b).
+    // The last-coded slice's one wanted field, as a scalar.
     let Some(kiLastCodedSliceIdx) = pBank
         .pSliceBuffer
         .get((iCodedSliceNum - 1) as usize)
@@ -4271,10 +3315,6 @@ pub fn ExtendLayerBuffer(
     kiMaxSliceNumOld: i32,
     kiMaxSliceNumNew: i32,
 ) -> i32 {
-    // S11.8: this body holds `&mut sWelsEncCtx` and only *writes* the layer's
-    // three vectors, so the layer comes through `current_layer_mut` — the
-    // borrow that cannot exist while the fork is live, which is the type-level
-    // form of the restriction the raw only stated (S10.3b).
     let Some(pCurLayer) = current_layer_mut(pCtx) else {
         return ENC_RETURN_SUCCESS;
     };
@@ -4304,14 +3344,10 @@ pub fn ExtendLayerBuffer(
     ENC_RETURN_SUCCESS
 }
 
-/// **S11.32: safe.** This body runs single-threaded (the ST dynamic realloc
-/// path), and the raw layer cursor existed only to span `ExtendLayerBuffer` —
-/// which takes the whole `&mut` context. The layer is re-derived after that
-/// call instead (a bounds-checked index, once per realloc), and every bank
-/// touch is an index into storage the context exclusively owns here.
+/// Runs single-threaded, on the dynamic realloc path. The layer is re-derived
+/// after `ExtendLayerBuffer`, which takes the whole `&mut` context.
 pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
     let kiCurDid = pCtx.uiDependencyId as usize;
-    // A7: as `InitSliceInLayer` — the mode, not a cursor.
     let kuiSliceMode =
         pCtx.param().sSpatialLayers[kiCurDid].sSliceArgument.uiSliceMode;
 
@@ -4319,8 +3355,7 @@ pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
     let iMaxSliceNumOld = pCurLayer.sSliceBufferInfo[0].iMaxSliceNum;
     let mut iMaxSliceNumNew = 0;
 
-    // The last slot's one wanted field, as a scalar — the held cursor and its
-    // null arm collapse into `get`'s bound (T9.E2b's arm kept).
+    // The last slot's one wanted field, as a scalar.
     let Some(kiLastCodedSliceIdx) = pCurLayer.sSliceBufferInfo[0]
         .pSliceBuffer
         .get((iMaxSliceNumOld - 1) as usize)
@@ -4333,8 +3368,7 @@ pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
         return iRet;
     }
 
-    // The callee's four context inputs are scalars, read before the bank's
-    // `&mut` — which is why its context parameter is gone (F275).
+    // The callee's four context inputs are scalars, read before the bank's `&mut`.
     let kiMaxSliceBufferSize = pCtx.iSliceBufferSize[kiCurDid];
     let kbIndependenceBsBuffer = pCtx.param().iMultipleThreadIdc > 1
         && kuiSliceMode != SliceMode::SM_SINGLE_SLICE;
@@ -4384,8 +3418,6 @@ pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
 
 #[inline]
 pub fn CheckAllSliceBuffer(pCurLayer: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
-    // S10.3d: `&mut SDqLayer` proves there is no fork, so the bank is reached
-    // safely. The `is_null()` arm is `None`.
     for iSliceIdx in 0..kiCodedSliceNum {
         match slice_in_layer_mut(pCurLayer, iSliceIdx) {
             Some(slice) if iSliceIdx == slice.iSliceIdx => {}
@@ -4395,10 +3427,9 @@ pub fn CheckAllSliceBuffer(pCurLayer: &mut SDqLayer, kiCodedSliceNum: i32) -> i3
     ENC_RETURN_SUCCESS
 }
 
-/// **S11.32: safe** — post-join, on the calling thread, under `&mut`. The two
-/// storages the walk writes (`sSliceBufferInfo`'s slices and `ppSliceInLayer`)
-/// are disjoint fields of one destructured `&mut SDqLayer`, so the interleaved
-/// stamp-and-index loop the raw cursor licensed is now the borrow checker's.
+/// Runs post-join, on the calling thread. The two storages the walk writes
+/// (`sSliceBufferInfo`'s slices and `ppSliceInLayer`) are disjoint fields of one
+/// destructured `&mut SDqLayer`.
 pub fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMode, kiThreadNum: i32) -> i32 {
     let pCurLayer = current_layer_expect_mut(pCtx);
     let mut iEncodeSliceNum = 0;
@@ -4421,9 +3452,8 @@ pub fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMode, kiTh
         return ENC_RETURN_UNEXPECTED;
     }
 
-    // The two storages the walk writes, split from one `&mut SDqLayer` — the
-    // per-slot stamp and the layer-order index are disjoint fields, which is
-    // the whole aliasing question the raw bank walk was answering.
+    // The two storages the walk writes, split from one `&mut SDqLayer`: the
+    // per-slot stamp and the layer-order index are disjoint fields.
     let SDqLayer { sSliceBufferInfo, ppSliceInLayer, iMaxSliceNum, .. } = &mut *pCurLayer;
     for (iSlcBuffIdx, pBank) in sSliceBufferInfo.iter_mut().take(kiThreadNum as usize).enumerate() {
         let iSliceNumInThread = pBank.iMaxSliceNum;
@@ -4455,7 +3485,6 @@ pub fn ReOrderSliceInLayer(pCtx: &mut sWelsEncCtx, kuiSliceMode: SliceMode, kiTh
 }
 
 pub fn GetCurLayerNalCount(pCurDq: &mut SDqLayer, kiCodedSliceNum: i32) -> i32 {
-    // S10.3d, as `CheckAllSliceBuffer`.
     let mut iTotalNalCount = 0;
     for iSliceIdx in 0..kiCodedSliceNum {
         if let Some(slice) = slice_in_layer_mut(pCurDq, iSliceIdx) {
@@ -4479,76 +3508,45 @@ pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
     pCurDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed)
 }
 
-/// `FrameBsRealloc` — svc_encode_slice.cpp:1562.
-///
-/// # Safety
-/// `pCtx` must be a context built by `WelsInitEncoderExt`; `pLayerBsInfo` must be
-/// one of `(*pFrameBsInfo).sLayerInfo`'s entries, which is what every caller
-/// passes and what the C++'s own `while (pLBI1 != pLayerBsInfo)` assumes.
+/// `FrameBsRealloc` — svc_encode_slice.cpp:1562. `iLbi` indexes
+/// `pFbi.sLayerInfo`.
 pub fn FrameBsRealloc(
     pCtx: &mut sWelsEncCtx,
-    // **S11.20: the frame and an index.** The pointer pair carried an index
-    // the whole time — the body recovered it with `offset_from` and then
-    // walked *backwards* from it. Passing the index directly deletes both the
-    // recovery and the retag argument the comment below spent six lines on:
-    // there is no array-wide child tag to pop when the walk is `sLayerInfo[i]`.
     pFbi: &mut SFrameBSInfo,
     iLbi: usize,
     kiMaxSliceNumOld: i32,
 ) -> i32 {
-    // (S3.B1: the S67/H2 audit note that stood here is borrowck's job now — this
-    // is a field-scoped borrow of an owned box, not a context retag.)
-    // §4.6's reorder: the count is a scalar, so the `pOut` borrow ends on this line
-    // and the `param()` reads below are free.
+    // The count is a scalar, so the `pOut` borrow ends on this line and the
+    // `param()` reads below are free.
     let mut iCountNals =
         pCtx.out().sNalList.len() as i32;
     let spatial_layers = if pCtx.param_opt().is_some() { pCtx.param().iSpatialLayerNum } else { 1 };
     iCountNals += kiMaxSliceNumOld * (spatial_layers + if pCtx.bNeedPrefixNalFlag { 1 } else { 0 });
 
-    // Was: allocate a bigger block, `copy_nonoverlapping` the old contents in,
-    // free the old, store the new — twice, with a null check each. `Vec::resize`
-    // is the same three steps and keeps the same guarantee, that the existing
-    // `iCountNals` entries survive at their indices and the new tail is zeroed
-    // (`WelsMallocz` zeroed it too).
+    // `Vec::resize` keeps the guarantee that the existing `iCountNals` entries
+    // survive at their indices and the new tail is zeroed.
     let pOut = pCtx.out_mut();
     pOut.sNalList.resize(iCountNals as usize, SWelsNalRaw::default());
     pOut.sNalLen
         .resize_with(iCountNals as usize, || std::sync::atomic::AtomicI32::new(0));
 
-    // **F60**, and the C++'s closing loop is the fix (`svc_encode_slice.cpp:1589`).
-    // The resize moves `sNalLen`, so every `sLayerInfo[..].pNalLengthInByte` handed
-    // out before it — `wels_encoder_ext.rs:617`, `encoder_ext.rs:2077`/`:3113`, and
-    // every `.add(iCountNal)` derived from those — names the freed block from here
-    // on. The C++ re-stamps them from the new root, layer by layer, each layer's
-    // cursor being the previous layer's plus that layer's own NAL count, and the
-    // port dropped the loop when the two allocations became `Vec`s.
-    //
-    // **Every write below goes through `pLayerBsInfo`, not through
-    // `pFrameBsInfo`** — the probe's fourth red, and the first spelling of this fix
-    // caused it. `WelsEncoderEncodeExt` builds its layer cursor once, as
-    // S11.20: the walk is over indices `0..=iLbi`, back to front. The
-    // NAL-length values it distributes are the application's C-ABI pointer, so
-    // `cursor` stays raw; the *layers* it walks are checked array elements.
+    // The C++'s closing loop (`svc_encode_slice.cpp:1589`). The resize moves
+    // `sNalLen`, so every `sLayerInfo[..].pNalLengthInByte` handed out before it
+    // names the freed block from here on; the C++ re-stamps them from the new
+    // root, layer by layer, each layer's cursor being the previous layer's plus
+    // that layer's own NAL count.
     debug_assert!(
         iLbi < MAX_LAYER_NUM_OF_FRAME,
         "FrameBsRealloc: layer index {iLbi} is outside pFbi.sLayerInfo"
     );
-    // **Ascending, and the order is load-bearing.** The raw form walked
-    // `pLayerBsInfo.offset(-iBack)` for `iBack` counting *down* from
-    // `kiLayersBefore`, which visits layer 0 first and this layer last — each
-    // layer's `pNalLengthInByte` is the previous one's plus its NAL count, so
-    // the cursor must accumulate front to back. Indexing `sLayerInfo[iBack]`
-    // over the same reversed range walks it backwards instead, which leaves
-    // every layer pointing at the wrong slot; `encode_loop_runs_over_size_
-    // limited_dynamic_slices_under_the_aliasing_checker` catches exactly that
-    // (F60's staleness assertion), and did.
-    // S11.31 kept the cursor raw here because `pNalLengthInByte` is frozen ABI;
-    // **S11.47: the walk is over indices into `pOut.sNalLen`**, which is the
+    // **Ascending, and the order is load-bearing.** Each layer's base is the
+    // previous one's plus that layer's NAL count, so the walk must accumulate
+    // front to back; walking it backwards leaves every layer pointing at the
+    // wrong slot. The walk is over indices into `pOut.sNalLen`, which is the
     // array the realloc above just rebuilt and the thing every one of those
-    // pointers points into. Each layer's base is the previous one's plus that
-    // layer's NAL count — the same accumulation, and the ABI pointer is the
-    // reslice at each stop. The current layer's base is restored last, so the
-    // encoder's own writes continue where they left off.
+    // pointers points into; the ABI pointer is the reslice at each stop. The
+    // current layer's base is restored last, so the encoder's own writes
+    // continue where they left off.
     let mut kiBase = 0usize;
     for i in 0..=iLbi {
         pOut.iNalLenBase = kiBase;
@@ -4561,7 +3559,6 @@ pub fn FrameBsRealloc(
 
 pub fn SliceLayerInfoUpdate(
     pCtx: &mut sWelsEncCtx,
-    // S11.20: the frame and an index — see `FrameBsRealloc`.
     pFbi: &mut SFrameBSInfo,
     iLbi: usize,
     kuiSliceMode: SliceMode,
@@ -4572,7 +3569,6 @@ pub fn SliceLayerInfoUpdate(
     }
 
     if iMaxSliceNum > current_layer_expect(pCtx).iMaxSliceNum {
-        // T9.G6: hoisted (shape B).
         let iCurMaxSliceNum = current_layer_expect(pCtx).iMaxSliceNum;
         let iRet = ExtendLayerBuffer(pCtx, iCurMaxSliceNum, iMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
@@ -4581,9 +3577,7 @@ pub fn SliceLayerInfoUpdate(
         current_layer_expect_mut(pCtx).iMaxSliceNum = iMaxSliceNum;
     }
 
-    // T9.G6: hoisted (shape B).
     let iActiveThreadsNum = pCtx.iActiveThreadsNum as i32;
-    // S11.32: safe — the walk is a destructured `&mut SDqLayer` now.
     let mut iRet = ReOrderSliceInLayer(pCtx, kuiSliceMode, iActiveThreadsNum);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
@@ -4594,7 +3588,6 @@ pub fn SliceLayerInfoUpdate(
     let iCodedNalCount = GetTotalCodedNalCount(pFbi);
 
     if iCodedNalCount > pCtx.out().sNalList.len() as i32 {
-        // T9.G6: hoisted (shape B).
         let iCurMaxSliceNum = current_layer_expect(pCtx).iMaxSliceNum;
         iRet = FrameBsRealloc(pCtx, pFbi, iLbi, iCurMaxSliceNum);
         if iRet != ENC_RETURN_SUCCESS {
@@ -4619,70 +3612,24 @@ mod tests {
     use crate::api::codec_api::SliceModeEnum;
     use crate::api::codec_api::abi_test_driver::{EncoderProbeOptions, drive_encoder_over};
 
-    /// D-gate-6's scaling knob (the user, 2026-08-24: the session gate is capped at
-    /// 15 minutes, coverage yields). `small` under the Miri interpreter, `full` on
-    /// every native run — and under Miri again when the battery exports
-    /// `MIRI_FULL=1`, which is how the phase-exit tiers restore the full drive
-    /// (`gates.sh` sets it for `full`/`exit`; the env read needs
-    /// `-Zmiri-disable-isolation`, which the `--lib` step has always passed).
+    /// Drive-size knob: `small` under the Miri interpreter, `full` on every native
+    /// run — and under Miri again when the battery exports `MIRI_FULL=1`. The env
+    /// read needs `-Zmiri-disable-isolation`, which the `--lib` step passes.
     fn miri_scaled(full: i32, small: i32) -> i32 {
         if cfg!(miri) && std::env::var_os("MIRI_FULL").is_none() { small } else { full }
     }
 
-    /// **The encoder's aliasing probe** — Phase 6 session A, and the first Miri
-    /// coverage the encode path has ever had.
-    ///
-    /// Before this test the only encoder-adjacent Miri test in the tree installed a
-    /// deblocking table and was `#[cfg_attr(miri, ignore)]` besides, so **no
-    /// encoder line had ever been executed under the aliasing checker**. F47 is
-    /// what that costs: real UB on the *ordinary* CAVLC path survived five phases
-    /// of green gates because no probe drove it, and the probe that finally did
-    /// found it on its first execution.
-    ///
-    /// **Every assertion below carries the reason it exists** — the decoder probes'
-    /// pattern (`decoder/decode_slice.rs`), and for the decoder's reason: an encode
-    /// that merely "produced bytes" can cover almost nothing.
-    ///
-    /// * **48 x 32, read back from the encoder rather than from this test's own
-    ///   argument.** That is a 3 x 2 macroblock grid, so MB(1, 1) has all four
-    ///   neighbours, MB(0, 1) is missing only its left and MB(2, 1) only its
-    ///   top-right. **F34's lesson, on the encoder side**: a single-macroblock
-    ///   picture has no neighbour, so no neighbour-dependent mode-decision or
-    ///   motion-vector-prediction path runs, and a probe over one can return green
-    ///   on UB that is simply unreachable in it.
-    /// * **At least two frames and the second inter-coded.** An all-intra sequence
-    ///   executes no motion estimation and no inter mode decision at all — the
-    ///   larger half of what this phase converts.
-    /// * **The second frame's payload is far above the all-skip floor.** Two
-    ///   identical input pictures encode to all-skip macroblocks and motion
-    ///   estimation does essentially nothing, so the driver synthesises a sequence
-    ///   that moves. **Measured on this exact configuration**, by running it both
-    ///   ways: a static source encodes frame 1 to **12** bytes and this one encodes
-    ///   it to **618** — 51x — so the 200-byte assertion sits an order of magnitude
-    ///   above any all-skip frame and a third below the real one. (The three frames
-    ///   read 728 / 618 / 549 moving and 728 / 12 / 94 static.)
-    ///
-    /// **Coverage is proven, not asserted** (the F21 rule): with F57's
-    /// `+ kuiMvdCostTableOvershoot` deleted, the live probe goes red under Miri at
-    /// `md.rs:1544` — "attempting to offset pointer by 1042 bytes ... only 11 bytes
-    /// from the end" — and green when it is restored (measured, session A, both
-    /// directions). Each of the other nine defects it found was observed red before
-    /// its fix and green after, which is the same evidence taken the natural way.
-    ///
-    /// **The live half of the encoder probe: initialisation, under the checker.**
+    /// **Encoder initialisation under the aliasing checker.**
     ///
     /// `frames = 0` drives create -> `GetDefaultParams` -> `InitializeExt` ->
-    /// `GetOption` -> `Uninitialize` -> destroy and stops there. That is not a
-    /// consolation prize: encoder initialisation is where the multi-MiB context,
-    /// the DQ layers, the slice buffers, the MVD cost table and the parameter sets
-    /// are all built, and **every defect this probe found on that path is fixed**,
-    /// so this test is what keeps them fixed. It is the encoder's one *live* Miri
-    /// probe until 6.4 unblocks the encode loop below.
+    /// `GetOption` -> `Uninitialize` -> destroy and stops there. Encoder
+    /// initialisation is where the multi-MiB context, the DQ layers, the slice
+    /// buffers, the MVD cost table and the parameter sets are all built.
     ///
-    /// What it covers, measured rather than claimed — each of these was red here
-    /// before its fix and green after: F13's remaining production site
-    /// (`InitDqLayers`), **F57** (`MvdCostInit`'s cursor leaving the table), and the
-    /// `sSpatialLayers` / `sDependencyLayers` `&mut`-through-a-raw-parent family.
+    /// 48 x 32 is a 3 x 2 macroblock grid, so MB(1, 1) has all four neighbours,
+    /// MB(0, 1) is missing only its left and MB(2, 1) only its top-right. A
+    /// single-macroblock picture has no neighbour, so no neighbour-dependent
+    /// mode-decision or motion-vector-prediction path runs.
     #[test]
     fn encoder_initialisation_runs_under_the_aliasing_checker() {
         let (frames, dims) = drive_encoder_over(48, 32, 0, EncoderProbeOptions::default());
@@ -4695,48 +3642,24 @@ mod tests {
         );
     }
 
-    /// **The encode loop under the aliasing checker — live in the `--lib` Miri step
-    /// since Phase 6 session B.**
+    /// **The encode loop over a macroblock grid.**
     ///
-    /// Session A left this `#[cfg_attr(miri, ignore)]`, blocked at its first frame:
-    /// `InitSliceBsBuffer` cached the *shared* writer in every slice at init
-    /// (`SSlice.pSliceBsa = &pOut->sBsWrite`) and `InitBitStream` replaced that
-    /// writer wholesale every frame, so `WelsSliceHeaderWrite` read through a dead
-    /// pointer — a write through the parent, which no spelling fixes. Session B's
-    /// settlement (T6.B3): the pointer was a cache of one bit that `sSliceBs.pBs`'s
-    /// nullness already records, and the writer resolver (`slice_bs_writer`
-    /// since S11.1a) derives it fresh at each use.
-    /// The two neighbouring caches went with it — `SWelsSliceBs.pBsBuffer`
-    /// (T6.B5, `pThreadBsBuffer[uiBufferIdx]`) and `SWelsNalRaw.pRawData` (T6.B4,
-    /// `iStartPos`) — and the attribute came off. Every red the walk then found is
-    /// recorded in the session B log entry, red-before and green-after observed.
+    /// The `--lib` Miri step runs this with `-Zmiri-disable-isolation`, for
+    /// `WelsTime()` (`SystemTime::now()`, the library's one clock site, called by
+    /// `EncodeFrameInternal` around every frame; it does not reach the
+    /// bitstream). That flag disables host isolation and nothing else.
     ///
-    /// The `--lib` step runs this with `-Zmiri-disable-isolation`, for `WelsTime()`
-    /// (`SystemTime::now()`, the library's one clock site, called by
-    /// `EncodeFrameInternal` around every frame; it does not reach the bitstream).
-    /// That flag disables host isolation and nothing else — aliasing and validity
-    /// checking are exactly what they were.
+    /// Two frames under Miri, three everywhere else. What the third frame adds is
+    /// a second inter frame — the same ME/MD/reconstruction paths as frame 1 with
+    /// one more picture in the reference list, and the list update itself runs
+    /// after frames 0 and 1 alike. Every assertion below is on frames 0 and 1.
     ///
-    /// **Two frames under Miri, three everywhere else (D-gate-5, the `scale()`
-    /// pattern).** The seam made every reconstruction access a bounds-checked
-    /// `Cell` index and Miri interprets each one (F140: 96.5 s → 258.5 s for this
-    /// probe, uniform, no hot spot). What the third frame added was a second
-    /// inter frame — the same ME/MD/reconstruction paths as frame 1 with one more
-    /// picture in the reference list, and the list update itself runs after
-    /// frames 0 and 1 alike. Every assertion below is on frames 0 and 1, and the
-    /// 3x2 neighbour grid (F34) is untouched. Full size on every plain
-    /// `cargo test`.
-    ///
-    /// **Ignored under Miri — D-gate-7 (the user, 2026-08-24), a cost scope,
-    /// not a defect skip.** This probe's distinguishing axes are CABAC entropy
-    /// over LOW_COMPLEXITY on a single slice; under Miri both are covered more
-    /// deeply elsewhere — the size-limited probe drives the CABAC writers *and*
-    /// their stash/restore arm at LOW_COMPLEXITY (its options default `cabac:
-    /// true`), the fork probes drive CABAC multi-slice at `full`/`exit`, and
-    /// the CAVLC probe carries the other entropy family — so its marginal Miri
-    /// coverage no longer pays its ~4 minutes in every encoder run. It runs at
-    /// full size on every native `cargo test`, where its measured anchors
-    /// (F34's grid, the 618-byte inter floor) keep their teeth.
+    /// Ignored under Miri, on cost: this probe's distinguishing axes are CABAC
+    /// entropy over LOW_COMPLEXITY on a single slice, and under Miri both are
+    /// covered more deeply elsewhere — the size-limited probe drives the CABAC
+    /// writers *and* their stash/restore arm at LOW_COMPLEXITY (its options
+    /// default `cabac: true`), and the CAVLC probe carries the other entropy
+    /// family. It runs at full size on every native `cargo test`.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn encode_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
@@ -4773,62 +3696,27 @@ mod tests {
         );
     }
 
-    /// **The fork/join under the aliasing checker** — T7.B4, and the reason F12's
-    /// Miri skip could be deleted rather than merely renamed.
-    ///
-    /// Before this test, **no test in this crate had ever set `iMultipleThreadIdc`
-    /// above 1**: every probe hard-coded 1, the unit tests build contexts they never
-    /// dispatch through, and the multi-threaded path's only coverage was the
-    /// diffharness, which is a byte instrument and cannot see aliasing at all. So the
-    /// `--skip wels_thread_pool` line in `gates.sh` was hiding a module *and* the
-    /// path that module served, and deleting the line without adding this would only
-    /// have stopped naming the gap.
+    /// **The fork/join under the aliasing checker.**
     ///
     /// What it drives: `SM_FIXEDSLCNUM_SLICE` with two slices at two threads, which
     /// is `EncodeFixedSlicesForked` — two `SliceJobHandle`s moved across two
     /// `thread::scope` spawns, each owning one bs scratch slot, both calling
-    /// `WelsCodeOneSlice` through the same raw context pointer, joined by the scope
-    /// before `AppendSliceToFrameBs` walks the slices in index order. Miri checks
-    /// what the byte gate cannot: that the two workers' derivations of the shared
-    /// context do not invalidate each other, and that the assembly reads what they
-    /// wrote.
+    /// `WelsCodeOneSlice`, joined by the scope before `AppendSliceToFrameBs` walks
+    /// the slices in index order. Miri checks what the byte gate cannot: that the
+    /// two workers' derivations of the shared context do not invalidate each
+    /// other, and that the assembly reads what they wrote.
     ///
-    /// **112x112, and the size is forced rather than chosen.** `MIN_NUM_MB_PER_SLICE`
-    /// is 48 (`wels_encoder_ext.rs:106`), and
+    /// **112x112, and the size is forced rather than chosen.**
+    /// `MIN_NUM_MB_PER_SLICE` is 48 (`wels_encoder_ext.rs:106`), and
     /// `SliceArgumentValidationFixedSliceMode` silently rewrites any multi-slice
     /// request on a smaller picture to `SM_SINGLE_SLICE` — which is what the other
-    /// probes' 48x32 (a 3x2 grid, six macroblocks) gets. The first version of this
-    /// test asked for two slices at 48x32, got one VCL NAL per frame, and would have
-    /// passed every assertion that did not count NALs while driving **exactly the
-    /// single-threaded path it exists to avoid**. 7x7 = 49 macroblocks is the
-    /// smallest grid above the threshold, and Miri's clock is the reason it is the
-    /// smallest rather than a comfortable one.
+    /// probes' 48x32 (a 3x2 grid, six macroblocks) gets. 7x7 = 49 macroblocks is
+    /// the smallest grid above the threshold.
     ///
     /// Two frames, not three: an IDR to build the slice banks and one inter frame so
     /// the fork runs with the mode-decision and motion-estimation halves of the tree
     /// live. `bUseLoadBalancing` is off (the probe forces it), so the slice
     /// boundaries are a function of the input and these assertions mean something.
-    ///
-    /// **Live under Miri since T9.E8 — the ignore attribute retired with the last
-    /// fork race.** It stood from T7.B4 to session E as a work queue, not a shrug:
-    /// each run aborts at the first undefined behaviour it meets, a session fixed
-    /// that family, and the next run reached deeper — F70, F71, F73/F107 (the
-    /// reconstruction seam), F132's rounds 1-6, then this session's round 5
-    /// (deblocking's cross-slice `uiSliceIdc` reads, closed by the map
-    /// substitution, T9.E4) and the rounds it had been masking: the per-slice
-    /// `pfInterMd` stamp into the shared function list (hoisted, T9.E7) and the
-    /// in-fork `as_mut_ptr` autoref mints on shared state (re-spelled on
-    /// `addr_of!`, T9.E7; F143 carries the enumeration).
-    ///
-    /// **First green run: 3356 s under Miri, 2026-08-24** — a complete two-frame
-    /// two-worker encode with zero reports. The cost is why the session-level
-    /// gate skips both fork probes BY NAME (D-gate-6's 15-minute cap; see
-    /// gates.sh): they run at `full`/`exit` and by the explicit command in that
-    /// block, and any session that touches the fork, the slice structures, or
-    /// deblocking owes them one explicit run at its close.
-    ///
-    /// The test runs normally in both profiles and is the only coverage the fork/join
-    /// has outside the diffharness.
     #[test]
     fn fork_join_encodes_a_multi_slice_frame_under_the_aliasing_checker() {
         let (frames, dims) = drive_encoder_over(
@@ -4862,14 +3750,10 @@ mod tests {
             "the second frame must be inter-coded, or the fork runs over an all-intra \
              frame and the mode-decision half of the tree stays dark"
         );
-        // The assertion that made the size matter. Two slices means two VCL NALs; one
-        // means the request was rewritten to `SM_SINGLE_SLICE` and the fork never ran.
-        // Without it this test is green on the path it was written to leave.
-
-        // Two slices means two VCL NALs per frame. One would mean the fork ran a
-        // single job and the second slice's bytes never reached the frame — exactly
-        // the failure `AppendSliceToFrameBs` exists to make impossible, and worth
-        // asserting where a thread is involved.
+        // Two slices means two VCL NALs per frame. One would mean either that the
+        // request was rewritten to `SM_SINGLE_SLICE` and the fork never ran, or
+        // that the fork ran a single job and the second slice's bytes never
+        // reached the frame.
         assert!(
             frames.iter().all(|f| f.vcl_nals >= 2),
             "a frame carried fewer than two VCL NALs, so a slice did not make it out \
@@ -4878,42 +3762,15 @@ mod tests {
         );
     }
 
-    /// **The mid-row fork/join probe — F107's second acceptance, and the one the
-    /// existing probe cannot be.**
+    /// **The `UpdateMbMapForked` fork, at a size Miri can afford.**
     ///
-    /// The probe above drives `SM_FIXEDSLCNUM_SLICE` with RC on, which F107 §1
-    /// measured as the **one** row-aligned configuration of the four
-    /// multi-threaded ones: its slice runs are whole macroblock rows, so a design
-    /// that only works on row-aligned slices passes it. Three modes out of four
-    /// put a boundary *mid-row*, and that is the case every `&mut [u8]` band, every
-    /// per-macroblock `PlaneCursorMut` and every per-worker `&mut SPicture` fails
-    /// on — so the seam is not tested until one of them runs.
-    ///
-    /// **F226's referee — the `UpdateMbMapForked` fork, at a size Miri can afford.**
-    ///
-    /// `UpdateMbListNeighborParallel` held `&mut (*pCurDq).sSliceEncCtx` for one
-    /// scalar read while every worker in `UpdateMbMapForked`'s scope called it on
-    /// the same layer. That is F223's third rule — in-fork a `&mut` retag is a
-    /// write — and **nothing in this project could see it**: the fork needs
-    /// `bUseLoadBalancing`, which both diffharness drivers and both §4.7 MT probes
-    /// pin off, and `load_balancing_completes_frames_with_sane_slice_counts` below
-    /// is the only test that reaches the path and is `#[cfg_attr(miri, ignore)]`.
-    /// Its doc says "the aliasing question this path raises is the fork/join's, and
-    /// that probe answers it", and for this site that is false — the fork probe
-    /// forces the flag off and never enters this fork at all.
-    ///
-    /// **This probe does not drive the encoder**, which is what makes it
-    /// affordable where that test is not: the aliasing question is about two
+    /// This probe does not drive the encoder: the aliasing question is about two
     /// workers and one layer, not about encoding, so it builds the layer by hand
     /// and spawns the same shape `UpdateMbMapForked` does — one scoped thread per
     /// slice, each walking its own slice's macroblocks. Under Miri it is the
-    /// instrument that refuses the `&mut`; natively it is a neighbour-map
-    /// correctness test, and both assertions below hold either way.
-    ///
-    /// **It has teeth, checked rather than assumed**: restoring the `&mut` binding
-    /// in `UpdateMbListNeighborParallel` makes this fail under Miri with "Data race
-    /// detected between (1) retag write on thread `<unnamed>` and (2) retag write
-    /// ... on thread `<unnamed>`", and removing it makes it pass.
+    /// instrument that refuses a `&mut` to layer state held across the fork;
+    /// natively it is a neighbour-map correctness test, and both assertions below
+    /// hold either way.
     #[test]
     fn update_mb_map_forked_workers_share_the_layer_without_racing() {
         use crate::safe::mb_grid::{MbArray, MbDims};
@@ -4955,20 +3812,11 @@ mod tests {
         dq.pFirstMbIdxOfSlice = (0..SLICES).map(|s| (s * MB_W) as i32).collect();
         dq.pCountMbNumInSlice = (0..SLICES).map(|_| MB_W as i32).collect();
 
-        // **S10.4: the address-as-integer is gone, and so is the argument it
-        // carried.** This probe used to hand every worker the layer's address so
-        // each could resolve the grid itself — the production shape at the time —
-        // and its job was to keep honest the claim that "each writes only its own
-        // slice's macroblock records, disjoint by `pFirstMbIdxOfSlice` /
-        // `pCountMbNumInSlice`".
-        //
-        // That claim is not asserted any more; it is *constructed*. The grid is
-        // carved into per-slice `&mut [SMB]` before the spawn, exactly as
-        // `UpdateMbMapForked` now does, so two workers naming one record is not a
-        // race this test could catch — it is a program that does not compile.
-        // What the probe still checks is the half that could still be wrong: that
-        // the partition arithmetic hands each worker the records it should, and
-        // that the neighbour walk respects the slice boundary.
+        // The grid is carved into per-slice `&mut [SMB]` before the spawn, exactly
+        // as `UpdateMbMapForked` does, so two workers naming one record is a
+        // program that does not compile. What the probe checks is that the
+        // partition arithmetic hands each worker the records it should, and that
+        // the neighbour walk respects the slice boundary.
         let SDqLayer { sMbDataP, sSliceEncCtx, pFirstMbIdxOfSlice, pCountMbNumInSlice, .. } =
             &mut dq;
         let kiGridWidth = sMbDataP.dims().mb_width();
@@ -5029,33 +3877,14 @@ mod tests {
         );
     }
 
-    /// **S11.2a's referee — the layer's NAL header, read shared by every worker.**
+    /// **The layer's NAL header, read shared by every worker.**
     ///
     /// The slice-header writers read `pCurLayer.sLayerInfo.sNalHeaderExt` on every
     /// slice, from every worker: `bIdrFlag`, `uiTemporalId`, the ref-marking gate.
-    /// T7.C3's discipline for that was a raw ferried retag-free (`addr_of_mut!`,
-    /// "layer state, read-only here, and every worker runs this"). S10.15's flip of
-    /// `WriteRefPicMarking` broke it — `pNalHdrExt: &mut SNalUnitHeaderExt`, with
-    /// both call sites forming `&mut *pNalHead` **inside fork-reachable bodies** —
-    /// F274. The sweeps could never see it (bytes never diverge) and the session
-    /// lane's encode probes are single-threaded (the fork pair is E3-only, F168),
-    /// which is why this probe exists: it asks Miri the two-worker question the
-    /// lane otherwise cannot.
-    ///
-    /// What it certifies: N workers may each take a **shared** borrow of the one
-    /// header struct and read it concurrently — the S11.2a shape
-    /// (`&SNalUnitHeaderExt` down the writer chain).
-    ///
-    /// **It has teeth, checked rather than assumed**: replacing the two shared
-    /// borrows below with the defect's own spelling — `&mut *p` in each worker,
-    /// unwritten, exactly S10.15's `&mut *pNalHead` — fails under Miri with "Data
-    /// race detected between (1) retag write of type `SNalUnitHeaderExt` on thread
-    /// `<unnamed>` and (2) retag write of type `SNalUnitHeaderExt` on thread
-    /// `<unnamed>`" on the first pair of rounds (control seen red; deterministic,
-    /// two rounds suffice — ROUNDS stays at 8 for margin, calibrated on this
-    /// probe's own failure, not inherited).
+    /// What this certifies: N workers may each take a **shared** borrow of the one
+    /// header struct and read it concurrently, which is the shape
+    /// (`&SNalUnitHeaderExt`) the writer chain takes.
     #[test]
-    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn workers_read_the_layer_nal_header_through_shared_borrows() {
         use crate::common::wels_common_defs::SNalUnitHeaderExt;
@@ -5072,8 +3901,8 @@ mod tests {
                 s.spawn(move || unsafe {
                     let p = kHdrAddr as *mut SNalUnitHeaderExt;
                     for _ in 0..ROUNDS {
-                        // The S11.2a shape: a shared reborrow per read, the way
-                        // `WelsCodeOneSlice` and both header writers take it now.
+                        // A shared reborrow per read, the way `WelsCodeOneSlice`
+                        // and both header writers take it.
                         let hdr: &SNalUnitHeaderExt = &*p;
                         assert!(hdr.bIdrFlag);
                         let _ = hdr.uiTemporalId;
@@ -5085,35 +3914,24 @@ mod tests {
         assert!(sHdr.bIdrFlag, "nothing wrote the header");
     }
 
-    /// **S5.D2b's referee — the boxed banks, under the same two workers.**
+    /// **The boxed banks, under two workers.**
     ///
-    /// The second half of what the `&SDqLayer` flip needs, and the same question D2a
-    /// asked of the partition counters: may a body hold a whole-layer shared borrow
-    /// while a sibling worker writes its own slice-buffer bank? With
-    /// `sSliceBufferInfo` *inline* the answer was no — `ReallocateSliceList` and
-    /// `ReallocateSliceInThread` write into the layer's own bytes, and a sibling's
-    /// entry retag races them. Boxed, every bank write lands in the box's allocation,
-    /// which no retag of the layer reaches: F163's argument, the one C4b relies on for
-    /// the MVD table.
+    /// May a body hold a whole-layer shared borrow while a sibling worker writes
+    /// its own slice-buffer bank? With `sSliceBufferInfo` *inline* the answer is
+    /// no — `ReallocateSliceList` and `ReallocateSliceInThread` would write into
+    /// the layer's own bytes, and a sibling's entry retag races them. Boxed, every
+    /// bank write lands in the box's allocation, which no retag of the layer
+    /// reaches.
     ///
-    /// **The spelling is `ReallocateSliceList`'s, deliberately.** The write below is
-    /// `&mut (*p).sSliceBufferInfo[w]` — a real `&mut`, not an `addr_of_mut!` — because
-    /// that is what the in-fork writer does, and the two are not equivalent: a probe
-    /// using `addr_of_mut!` would create no reference and so would not exercise the
-    /// retag that matters. It passes because `Box` place-deref is built into rustc: no
-    /// `&mut Box<..>` is created for `..sSliceBufferInfo[w]`, so nothing retags the
-    /// eight header bytes that do live inline.
-    ///
-    /// **Teeth, checked (F234).** Putting the array back inline —
-    /// `[SSliceBufferInfo; MAX_THREADS_NUM]` as a field — makes this fail under Miri
-    /// with "Data race detected between (1) **retag write** on thread `unnamed-2` and
-    /// (2) retag read of type `SDqLayer` on thread `unnamed-3`". Note *retag* write,
-    /// not non-atomic write: with the array inline the `&mut` itself is the conflicting
-    /// access, which is why boxing rather than atomics is the fix for this half. The
-    /// round count and the per-round re-borrow are load-bearing exactly as in D2a's
-    /// probe.
+    /// **The spelling is `ReallocateSliceList`'s, deliberately.** The write below
+    /// is `&mut (*p).sSliceBufferInfo[w]` — a real `&mut`, not an `addr_of_mut!` —
+    /// because that is what the in-fork writer does, and the two are not
+    /// equivalent: a probe using `addr_of_mut!` would create no reference and so
+    /// would not exercise the retag that matters. It passes because `Box`
+    /// place-deref is built into rustc: no `&mut Box<..>` is created for
+    /// `..sSliceBufferInfo[w]`, so nothing retags the eight header bytes that do
+    /// live inline.
     #[test]
-    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn slice_banks_take_a_shared_layer_borrow_across_the_forked_writes() {
         use super::{SDqLayer, SSliceBufferInfo};
@@ -5153,56 +3971,39 @@ mod tests {
         }
     }
 
-    /// **S5.D2a's referee — a whole-layer `&SDqLayer` held while workers stamp their
-    /// own partition counters.**
+    /// **A whole-layer `&SDqLayer` held while workers stamp their own partition
+    /// counters.**
     ///
-    /// This is the property D2/D3's flip is bought with, so it is asked of Miri
-    /// directly rather than inferred. The brief's account of why the 37 read-only
-    /// `*mut SDqLayer` bodies cannot simply take `&SDqLayer` is that
-    /// `NumSliceCodedOfPartition` and `LastCodedMbIdxOfPartition` live **inline in the
-    /// layer** and are written from inside the encode — six sites across
-    /// `WelsISliceMdEncDynamic` and `WelsMdInterMbLoopOverDynamicSlice`, each stamping
-    /// `[kiPartitionId]`. A whole-struct shared retag racing a concurrent write to an
-    /// inline field is undefined behaviour under Miri's model; that is F228's finding
-    /// about the context, restated about the layer.
+    /// `NumSliceCodedOfPartition` and `LastCodedMbIdxOfPartition` live **inline in
+    /// the layer** and are written from inside the encode — six sites across
+    /// `WelsISliceMdEncDynamic` and `WelsMdInterMbLoopOverDynamicSlice`, each
+    /// stamping `[kiPartitionId]`. A whole-struct shared retag racing a concurrent
+    /// write to an inline field is undefined behaviour under Miri's model.
     ///
-    /// With the two arrays atomic, the race is gone by construction and a body may take
-    /// a whole-layer shared borrow while its siblings write. That is what this asserts:
-    /// each worker re-takes `&*p` every round — the entry retag a called body performs
-    /// — and stamps only its own partition slot.
-    ///
-    /// **It has teeth, checked rather than assumed.** Pointing the same two workers at
-    /// a *non-atomic* inline field instead — `iMaxSliceNum`, written through a raw
-    /// place while the other worker holds its `&SDqLayer` — makes this fail under Miri
-    /// with "Data race detected between (1) non-atomic write on thread `unnamed-1` and
-    /// (2) retag read of type `SDqLayer` on thread `unnamed-2`". That is precisely the
-    /// diagnosis this checkpoint exists to remove, and it is why
-    /// `sSliceBufferInfo` — the other inline field the fork writes — still blocks the
-    /// flip and is the next checkpoint's subject.
+    /// With the two arrays atomic, the race is gone by construction and a body may
+    /// take a whole-layer shared borrow while its siblings write. That is what this
+    /// asserts: each worker re-takes `&*p` every round — the entry retag a called
+    /// body performs — and stamps only its own partition slot.
     ///
     /// Like the layer probe above, this does not drive the encoder: the question is
     /// about two workers and one struct, not about encoding.
     #[test]
-    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn partition_counters_take_a_shared_layer_borrow_across_the_forked_writes() {
         use std::sync::atomic::Ordering;
         use super::SDqLayer;
         const WORKERS: usize = 2;
-        // **200, and the number is load-bearing.** Miri reports a data race only when
-        // the schedule it runs actually interleaves the two accesses. At 8 rounds this
-        // probe's teeth check came back *green* — the non-atomic control was silent —
-        // and only at 200 does the sibling retag land inside the write. A round count
-        // too small does not make a weak referee, it makes a blind one that reads as a
-        // passing test (F234).
+        // **200, and the number is load-bearing.** Miri reports a data race only
+        // when the schedule it runs actually interleaves the two accesses; only at
+        // 200 rounds does the sibling retag land inside the write.
         const ROUNDS: i32 = 200;
 
         let mut dq = SDqLayer::default();
         dq.iMbWidth = 4;
         dq.iMbHeight = 2;
 
-        // The address as an integer, for the reason the probe above gives: D1 pins the
-        // tree's hand-written `Send` impls at two and a test may not spend that pin.
+        // The address as an integer, so the test does not add a hand-written
+        // `Send` impl.
         let layer_addr = (&mut dq as *mut SDqLayer) as usize;
 
         std::thread::scope(|s| {
@@ -5210,14 +4011,11 @@ mod tests {
                 s.spawn(move || unsafe {
                     let p = layer_addr as *mut SDqLayer;
                     for r in 0..ROUNDS {
-                        // **The borrow under test, re-taken every round** — because
-                        // that is the shape of the thing being bought. The 37
+                        // **The borrow under test, re-taken every round**: the
                         // read-only bodies are *called*, many times per frame, and
-                        // each retags the whole layer on entry. A probe that borrows
-                        // once at the top and holds it never interleaves its retag
-                        // with the other worker's writes, and so proves nothing: the
-                        // first draft of this probe did exactly that and its teeth
-                        // check came back green, which is how the shape was found.
+                        // each retags the whole layer on entry. A probe that
+                        // borrows once at the top and holds it never interleaves
+                        // its retag with the other worker's writes.
                         let layer: &SDqLayer = &*p;
                         let _ = layer.EndMbIdxOfPartition[w];
                         layer.LastCodedMbIdxOfPartition[w].store(r, Ordering::Relaxed);
@@ -5241,46 +4039,29 @@ mod tests {
         }
     }
 
-    /// **S5.C4b's referee — the MVD cursor, held across a slice, under two workers.**
+    /// **The MVD cursor, held across a slice, under two workers.**
     ///
-    /// C4b turned `SWelsMD::pMvdCost` from a `*mut u16` into a borrow of the
-    /// context's `pMvdCostTable`, and the two `WelsMdInterMbLoop` bodies derive that
-    /// borrow once and hold it for the whole macroblock loop. Under the fork that is
-    /// a claim about shared data, and no byte gate can see it: the differential sweep
-    /// certifies output, and a stale-tag read produces the same bytes right up until
-    /// the optimiser decides otherwise. So the claim is asked of Miri directly, at a
-    /// size Miri can afford — this probe does not drive the encoder, because the
+    /// `SWelsMD::pMvdCost` is a borrow of the context's `pMvdCostTable`, and the
+    /// two `WelsMdInterMbLoop` bodies derive that borrow once and hold it for the
+    /// whole macroblock loop. This probe does not drive the encoder, because the
     /// question is about two workers and one table, not about encoding.
     ///
     /// **The claim, in three parts.**
     ///
     /// 1. The `&[u16]` lands in the `Vec`'s *heap buffer*, which is a different
-    ///    allocation from the context — F163's argument, the one the accessor-sibling
-    ///    test above already turns on. So no retag of the context can reach it, and
+    ///    allocation from the context, so no retag of the context can reach it and
     ///    holding it across the loop's calls is lawful.
     /// 2. The table is written exactly once, by `MvdCostInit` inside
     ///    `WelsInitEncoderExt`, before any slice worker exists. Concurrent *readers*
     ///    of one buffer coexist freely; a concurrent writer would not, and there is
     ///    none.
     /// 3. Deriving it must be **field-precise** — `&(*p).pMvdCostTable`, never a
-    ///    `&self` accessor. This is the part with teeth, and the part that decided
-    ///    the shape of `MvdCostCursor::origin`.
-    ///
-    /// **It has teeth, checked rather than assumed.** Respelling the derivation
-    /// below as the whole-context borrow a `&self` accessor would make —
-    /// `let c: &sWelsEncCtx = &*p; MvdCostCursor::origin(&c.pMvdCostTable[..], n)` —
-    /// makes this fail under Miri with "Data race detected between (1) non-atomic
-    /// write on thread `unnamed-1` and (2) retag read of type `sWelsEncCtx` on
-    /// thread `unnamed-2`". That is F228, and it is why the raw
-    /// `sWelsEncCtx::mvd_cost_origin` this replaced could not simply start returning
-    /// a reference: its `&self` was harmless only because the borrow died on the
-    /// next line.
+    ///    `&self` accessor, which would borrow the whole context.
     ///
     /// The per-worker write below is the *class* of concurrent inline-context write
     /// the fork performs, reduced to its smallest form — one disjoint scalar slot per
     /// worker. It is what makes part 3 observable; parts 1 and 2 hold without it.
     #[test]
-    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn mvd_cursor_survives_a_slice_held_across_the_forked_workers() {
         use crate::safe::mvd_cost::MvdCostCursor;
@@ -5299,9 +4080,7 @@ mod tests {
         ctx.iActiveThreadsNum = 0;
         ctx.iMaxSliceCount = 0;
 
-        // The address as an integer, for the reason the layer probe above gives:
-        // D1 pins the tree's hand-written `Send` impls at two, and a test may not
-        // spend that pin.
+        // The address as an integer, for the reason the layer probe above gives.
         let ctx_addr = (&mut *ctx as *mut sWelsEncCtx) as usize;
 
         std::thread::scope(|s| {
@@ -5353,19 +4132,7 @@ mod tests {
     /// 112x112 for `MIN_NUM_MB_PER_SLICE`'s reason (see the probe above), and
     /// `uiSliceSizeConstraint` above `MAX_MACROBLOCK_SIZE_IN_BYTE` because
     /// `SliceArgumentValidation` refuses anything at or below it — 1000 rather
-    /// than 600 so the IDR comes out in nine slices rather than sixteen, which is
-    /// Miri's clock talking.
-    ///
-    /// **Live under Miri since T9.E8** — round 5 (the cross-slice `uiSliceIdc`
-    /// read this comment used to quote) closed when deblocking's guards moved to
-    /// `pOverallMbMap` (T9.E4, F142), and what round 5 had been masking on this
-    /// probe's path — the `sLayerInfo` array-autoref mint the size-limited
-    /// branch's sibling write popped — closed with it (T9.E7, F143).
-    ///
-    /// **First green run: 3449 s under Miri, 2026-08-24** — two frames, two
-    /// workers, a mid-row boundary asserted from the bitstream, zero reports.
-    /// Session-scope cost policy is the fixed-slice probe's (D-gate-6): skipped
-    /// by name in the session lane, live at `full`/`exit` and by explicit run.
+    /// than 600 so the IDR comes out in nine slices rather than sixteen.
     #[test]
     fn fork_join_encodes_a_frame_whose_slice_boundary_is_mid_row() {
         let (frames, dims) = drive_encoder_over(
@@ -5417,43 +4184,29 @@ mod tests {
         }
     }
 
-    /// **The second encode probe — CAVLC and the fine mode-decision family, both
-    /// knobs flipped together** (Phase 6 session C, face 1).
+    /// **CAVLC and the fine mode-decision family, both knobs flipped together.**
     ///
     /// The probe above is CABAC over `LOW_COMPLEXITY`, and those two choices leave
-    /// two bodies of code dark under Miri: the CAVLC writers
-    /// (`svc_set_mb_syn_cavlc.rs`) and everything `bFastMode` switches off —
-    /// `WelsMdIntraFinePartition`, `WelsMdI4x4` and the `pMemPredBlk4` ping-pong
-    /// (`svc_base_layer_md.rs`). Session C converts sites in both, and **F47 is what
-    /// a probe gap costs**: real UB on the ordinary CAVLC path survived five phases
-    /// of green gates because no probe drove it.
+    /// two bodies of code dark: the CAVLC writers (`svc_set_mb_syn_cavlc.rs`) and
+    /// everything `bFastMode` switches off — `WelsMdIntraFinePartition`,
+    /// `WelsMdI4x4` and the `pMemPredBlk4` ping-pong (`svc_base_layer_md.rs`).
     ///
-    /// **The byte gate does not cover the complexity half either**, which is the
-    /// stronger reason this test exists: all 341 diffharness configurations set
-    /// `iComplexityMode = LOW_COMPLEXITY` (`diffharness/cxx_enc.cpp:81`) — CABAC vs
-    /// CAVLC is a sweep axis (`kiCabac`) but complexity is not — so the fine
-    /// partition search is checked by *neither* instrument today. This is the only
-    /// coverage it has.
+    /// The byte gate does not cover the complexity half either: all 341
+    /// diffharness configurations set `iComplexityMode = LOW_COMPLEXITY`
+    /// (`diffharness/cxx_enc.cpp:81`) — CABAC vs CAVLC is a sweep axis (`kiCabac`)
+    /// but complexity is not — so the fine partition search is checked by neither
+    /// instrument, and this is the only coverage it has.
     ///
-    /// One test rather than two, per S32: each Miri probe pays a multi-MiB
-    /// `Initialize` under the interpreter, and the two knobs are independent code
-    /// selections that a single encode drives together. A third probe needs a number
-    /// behind it; the size-limited dynamic-slice path
-    /// (`WelsMdInterMbLoopOverDynamicSlice`) is named for session D with the slice
-    /// structures it converts.
+    /// One test rather than two: each Miri probe pays a multi-MiB `Initialize`
+    /// under the interpreter, and the two knobs are independent code selections
+    /// that a single encode drives together.
     ///
     /// The assertions are the first probe's, for the first probe's reasons — the
-    /// 3x2 macroblock grid read back from the encoder (F34), three frames with the
+    /// 3x2 macroblock grid read back from the encoder, three frames with the
     /// second inter-coded, and an inter frame an order of magnitude above the
-    /// all-skip floor.
-    ///
-    /// **Two frames under Miri, three everywhere else — the grid probe's shrink,
-    /// for the grid probe's reason (F141).** D-gate-5 and F140 name "the two
-    /// full-encode Miri probes"; this is a third, in the same cost class
-    /// (216.5 s at session E's start against the grid probe's 258.5 s — measured,
-    /// not assumed), because it drives the same encode loop through the same
-    /// seam. The third frame's marginal coverage is the grid probe's: a second
-    /// inter frame over paths frame 1 already ran.
+    /// all-skip floor. Two frames under Miri, three everywhere else, for the grid
+    /// probe's reason: the third frame's marginal coverage is a second inter frame
+    /// over paths frame 1 already ran.
     #[test]
     fn encode_loop_runs_with_cavlc_and_fine_mode_decision_under_the_aliasing_checker() {
         let kiFrames = miri_scaled(3, 2) as usize;
@@ -5498,42 +4251,22 @@ mod tests {
         );
     }
 
-    /// **The mint's instrument, re-aimed (S36).** Its predecessor
-    /// (`mb_list_root_reaches_the_whole_array_in_both_directions`) proved two
-    /// properties of the raw root hand-out: whole-array provenance, and that a
-    /// second derivation does not pop the first. The window mint restates both
-    /// structurally — a window's reach *is* its range, and an out-of-range access
-    /// panics instead of walking — so what is left to pin under Miri is the pair
-    /// of properties the fork relies on: a whole-grid window really reaches every
-    /// record in both directions from the middle, and **two disjoint windows of
-    /// one grid coexist under interleaved writes** (each worker's mint is a
-    /// sibling derivation from the array root, F71; overlapping live windows are
-    /// the shape the design forbids and does not need).
-    // `mb_window_reaches_its_range_and_disjoint_windows_coexist` stood here —
-    // the mint's own instrument (S36 re-aimed it from the deleted walker pair).
-    // S11.27 deleted the mint, so the sibling-derivation property it probed is
-    // no longer anyone's claim: disjointness is `split_at_mut`'s, checked at
-    // compile time, and `MbWindow`'s own unit tests cover the accessors.
-
-    /// **The dynamic-slice probe — `SM_SIZELIMITED_SLICE`, Phase 6 session D,
-    /// face 0.**
+    /// **The dynamic-slice probe — `SM_SIZELIMITED_SLICE`.**
     ///
-    /// The two probes above encode one slice a frame, so an entire encode path was
-    /// dark under Miri: `SM_SIZELIMITED_SLICE` is the only mode with a
+    /// The two probes above encode one slice a frame, so an entire encode path is
+    /// otherwise dark: `SM_SIZELIMITED_SLICE` is the only mode with a
     /// macroblock loop of its own (`WelsMdInterMbLoopOverDynamicSlice`,
     /// `WelsISliceMdEncDynamic`), the only caller of the stash-and-rollback pair
     /// (`StashMBStatus`/`StashPopMBStatus`, `wels_func_ptr_def.rs`) and of
     /// `pDynamicBsBuffer`, and the only path that reaches
     /// `CalculateNewSliceNum` → `ReallocSliceBuffer` → `ExtendLayerBuffer` →
-    /// `ReOrderSliceInLayer` — **the machinery this session's faces 2 to 4
-    /// rewrite**. It found `F60` on its first execution.
+    /// `ReOrderSliceInLayer`.
     ///
     /// **It is single-threaded, and that is settled by reading rather than by
-    /// configuration**: the two flags that put a size-limited encode on Phase 7's
+    /// configuration**: the two flags that put a size-limited encode on the
     /// multi-threaded slice path, `bSliceBsBufferFlag` and `bThreadSlcBufferFlag`,
     /// both require `iMultipleThreadIdc > 1` (`InitSliceInLayer`, this file), and
-    /// the driver fixes `iMultipleThreadIdc = 1`. The `st` sweep preset already
-    /// encodes `sm=3` at constraints 1500 and 600 with one thread.
+    /// the driver fixes `iMultipleThreadIdc = 1`.
     ///
     /// **112x96 and a 401-byte constraint, and both numbers are measured.** A slice
     /// closes when its payload passes `uiSliceSizeConstraint - AVER_MARGIN_BYTES`
@@ -5556,38 +4289,27 @@ mod tests {
     /// grid that crosses**. `frames[0].vcl_nals >= 35` is the assertion, and it is
     /// exactly the realloc's own trigger condition rather than a proxy for it.
     ///
-    /// **`bytes == frame_size` is F60's covering assertion.** `bytes` is summed
-    /// through `sLayerInfo[..].pNalLengthInByte`, which is what `FrameBsRealloc`
-    /// invalidates and re-stamps; `iFrameSizeInBytes` is accumulated as the slices
-    /// are written and survives independently. With the re-stamp deleted this test
-    /// reads **686,479,506 bytes against a frame_size of 10,244** at 128x128 and
-    /// then dies — measured in both directions.
+    /// **`bytes == frame_size` is the covering assertion for the NAL-length
+    /// re-stamp.** `bytes` is summed through `sLayerInfo[..].pNalLengthInByte`,
+    /// which is what `FrameBsRealloc` invalidates and re-stamps;
+    /// `iFrameSizeInBytes` is accumulated as the slices are written and survives
+    /// independently.
     ///
     /// The remaining assertions are the first probe's, for the first probe's
-    /// reasons: the grid read back from the encoder (F34), three frames with the
+    /// reasons: the grid read back from the encoder, three frames with the
     /// second inter-coded, and an inter frame an order of magnitude above the
     /// all-skip floor.
     ///
-    /// **48x32 x 2 frames under Miri, 112x96 x 3 everywhere else (D-gate-6).**
-    /// D-gate-5's first cut kept 112x96 under Miri because that geometry *is* the
-    /// realloc (35 slices trigger `DynSliceRealloc`, and 112x96 is the smallest
-    /// grid whose IDR codes 35 — measured above); at the seam's interpreter cost
-    /// that made this one test ~13 minutes and the session gate ~40, and the
-    /// user capped the gate at 15 (2026-08-24). So under Miri the drive is now
-    /// 48x32 at the same 401-byte constraint — measured **3 / 3 / 3** slices
-    /// across three frames (64x48 gives 9/4/4 and measured 534 s in the sharded
-    /// lane — still the critical path, so the smaller grid it is). Every frame
-    /// still splits, each frame still closes slices through
-    /// `DynSlcJudgeSliceBoundaryStepBack` / `AddSliceBoundary` / stash-rollback,
-    /// and `WelsMdInterMbLoopOverDynamicSlice` and the F60 accounting assertion
-    /// stay live. **What the aliasing checker loses at session scope is the
-    /// realloc chain itself**
-    /// (`CalculateNewSliceNum` -> `ReallocSliceBuffer` -> `ExtendLayerBuffer`):
-    /// its assertion below is gated to the full drive, which every native
-    /// `cargo test` still runs — and Miri runs it again wherever the battery
-    /// exports `MIRI_FULL=1` (the `full`/`exit` tiers), which is where that
-    /// coverage now lives. Named plainly per D-cov-1: a session-scope Miri run
-    /// no longer sees slice-buffer moves.
+    /// **48x32 x 2 frames under Miri, 112x96 x 3 everywhere else.** Under Miri the
+    /// drive is 48x32 at the same 401-byte constraint — measured 3 / 3 / 3 slices
+    /// across three frames. Every frame still splits, each frame still closes
+    /// slices through `DynSlcJudgeSliceBoundaryStepBack` / `AddSliceBoundary` /
+    /// stash-rollback, and `WelsMdInterMbLoopOverDynamicSlice` and the accounting
+    /// assertion stay live. What the small drive cannot reach is the realloc chain
+    /// itself (`CalculateNewSliceNum` -> `ReallocSliceBuffer` ->
+    /// `ExtendLayerBuffer`): its assertion below is gated to the full drive, which
+    /// every native `cargo test` runs, and Miri runs wherever the battery exports
+    /// `MIRI_FULL=1`.
     #[test]
     fn encode_loop_runs_over_size_limited_dynamic_slices_under_the_aliasing_checker() {
         let kiFrames = miri_scaled(3, 2) as usize;
@@ -5638,9 +4360,8 @@ mod tests {
         // this mode (AVERSLICENUM_CONSTRAINT = MAX_SLICES_NUM = 35) and
         // WelsCodeOnePicPartition reallocates before coding slice index
         // `iMaxSliceNum - iActiveThreadsNum` = 34, so >= 35 coded slices is the
-        // trigger itself. Full drive only (D-gate-6): the 64x48 Miri geometry
-        // cannot reach 35 slices by construction, so at session scope this
-        // assertion would only ever restate the geometry choice.
+        // trigger itself. Full drive only: the small Miri geometry cannot reach
+        // 35 slices by construction.
         if kbFullDrive {
             assert!(
                 slices[0] >= 35,
@@ -5651,9 +4372,9 @@ mod tests {
             );
         }
 
-        // F60. The NAL-length cursors and the frame size are two independent
+        // The NAL-length cursors and the frame size are two independent
         // accountings of the same bytes; FrameBsRealloc moves the array the first
-        // one reads through, and until this session did not re-stamp it.
+        // one reads through and re-stamps it.
         for (i, f) in frames.iter().enumerate() {
             assert_eq!(
                 f.bytes as i32, f.frame_size,

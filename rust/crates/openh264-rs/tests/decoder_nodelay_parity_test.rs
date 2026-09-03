@@ -1,5 +1,5 @@
-//! **F82's covering test** (Phase 8 session C, T8.C8) — `DecodeFrameNoDelay` is a
-//! *different entry point* from `DecodeFrame2`, and it is refereed as one.
+//! `DecodeFrameNoDelay` is a *different entry point* from `DecodeFrame2`, and it is
+//! refereed as one.
 //!
 //! `welsDecoderExt.cpp:720–725`, the whole of the reference's single-threaded body:
 //!
@@ -9,29 +9,14 @@
 //! ```
 //!
 //! The second call is what "no delay" *means*: it forces reconstruction so the caller
-//! gets its frame on the call that fed the access unit. **The port forwarded once** —
-//! T8.B7 named the divergence at the slot and deferred it, which was reasonable while
-//! nothing measured what it cost. T8.C5b measured it: **21 of the 81 `test/api`
-//! failures** were this one missing statement, every one of them
-//! `ASSERT_EQ (dstBufInfo_.iBufferStatus, 1)` reading 0 on a frame the encoder had
-//! just produced.
-//!
-//! # Why this file exists rather than an extra assertion somewhere
-//!
-//! Every gate this project owns drives `DecodeFrame2`: the conformance 58, the 2919
-//! corpus rows, the 504-decode reachability sweep, and the ABI harness. The two tests
-//! that do call `DecodeFrameNoDelay` cannot see its behaviour —
-//! `api_lifecycle_test.rs` calls it with `(null, 0)`, and `loopback_sha1_test.rs:258`
-//! follows every call with **its own explicit `DecodeFrame2(NULL, 0, …)`**, which is
-//! by hand exactly the statement that was missing. An entry point with no referee is
-//! how this one survived seven phases.
+//! gets its frame on the call that fed the access unit.
 //!
 //! The rows below are the **C++ decoder's**, from
-//! `rust/tools/ecref/ecref <asset> 99999999 --nodelay` against `libopenh264.dylib`
-//! (the `--nodelay` flag is T8.C8's, added for exactly this). The flow here is
-//! `ecref`'s statement for statement: annex-B split, `ERROR_CON_SLICE_COPY`, one NAL
-//! per call, EOS, a final `DecodeFrameNoDelay(NULL, 0)`, then `FlushFrame` for what
-//! `GetOption` reports remaining, capped at 24.
+//! `rust/tools/ecref/ecref <asset> 99999999 --nodelay` against `libopenh264.dylib`.
+//! The flow here is `ecref`'s statement for statement: annex-B split,
+//! `ERROR_CON_SLICE_COPY`, one NAL per call, EOS, a final
+//! `DecodeFrameNoDelay(NULL, 0)`, then `FlushFrame` for what `GetOption` reports
+//! remaining, capped at 24.
 //!
 //! # What the rows show, and what must not be "fixed"
 //!
@@ -40,9 +25,7 @@
 //! when the first call emits a picture and the second does not, the second call's
 //! `iBufferStatus = 0` overwrites it and the frame is lost to that caller. The
 //! reference has the restore written out and **commented out**
-//! (`welsDecoderExt.cpp:726–732`), so it is upstream's considered behaviour. A port
-//! that repaired it here would diverge from every consumer's expectations, and these
-//! rows are what keeps anyone from trying.
+//! (`welsDecoderExt.cpp:726–732`), so it is upstream's considered behaviour.
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
@@ -64,7 +47,7 @@ struct Row {
 
 /// Diversity over the axes that change emission timing: CAVLC, CABAC with B-frames,
 /// a one-macroblock frame, all-IPCM, and the resolution-change stream. Every number
-/// is `ecref --nodelay`'s, not the port's.
+/// is `ecref --nodelay`'s.
 const ROWS: &[Row] = &[
     Row {
         asset: "BA_MW_D.264",
@@ -207,7 +190,7 @@ fn decode_frame_no_delay_matches_the_reference_on_every_axis() {
         let data = std::fs::read(res.join(row.asset))
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", row.asset));
         let (frames, dims, sha1, codes, bufs) = unsafe { nodelay_row(&data) };
-        // S13 — counts before hashes: a hash mismatch whose frame count also moved is
+        // Counts before hashes: a hash mismatch whose frame count also moved is
         // a different defect from one whose count held.
         assert_eq!(frames, row.frames, "{}: emitted frame count", row.asset);
         assert_eq!(dims, row.dims, "{}: first emitted frame's dimensions", row.asset);

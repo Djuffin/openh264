@@ -12,10 +12,6 @@
 
 #![allow(non_snake_case, dead_code)]
 
-// **S11.5 (step 5): sealed.** the encoder-side inverse-transform kernels holds no `unsafe` at all —
-// no product allow and no test instrument — so the `deny` it carried
-// since its conversion becomes `forbid`, which no inner `allow` can
-// reopen. This is the end state for a file that is simply done.
 #![forbid(unsafe_code)]
 
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -33,23 +29,6 @@ fn WelsClip1(iX: i32) -> u8 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Safe kernels (plan §Phase 2, recipe R2). These are the implementations for
-// the whole C++ `decode_mb_aux.cpp` family — including the five kernels whose
-// raw bodies live in `svc_encode_mb.rs` (the port split the file; this module
-// re-exports them and is the single place that describes it). The raw `Wels*`
-// functions in both files are strangler shims (R7) onto these.
-//
-// Arithmetic parity (rule R-e): each kernel reproduces the raw port's widths
-// and operations exactly — including two shapes worth naming. The dequant
-// kernels' `wrapping_mul`/`wrapping_add` in `i16` match the C++'s implicit
-// `int -> int16_t` narrowing (truncation mod 2^16 commutes with + and *, so
-// wrapping `i16` arithmetic equals computing in `int` and narrowing each
-// store). And `ihadamard_4x4_dc` keeps the port's **plain** `i16` additions,
-// which can overflow and panic in a debug build where the C++ wraps — that is
-// finding F11 (`phase2_findings.md`), reproduced rather than repaired.
-// ---------------------------------------------------------------------------
-
 use crate::encoder::svc_encode_mb::g_kuiDequantCoeff;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 use crate::encoder::rec_view::RecCursor;
@@ -58,9 +37,8 @@ use crate::encoder::rec_view::RecCursor;
 /// dequantisation multiplier. The qp >= 12 path (the qp < 12 path is
 /// [`ihadamard_4x4_dc`] + [`dequant_luma_dc_4x4`]).
 ///
-/// All arithmetic is wrapping `i16`, exactly the raw port's — equal to the
-/// C++'s `int` arithmetic narrowed at every `int16_t` store, so it is total
-/// over the full input range.
+/// All arithmetic is wrapping `i16`, equal to the C++'s `int` arithmetic
+/// narrowed at every `int16_t` store, so it is total over the full input range.
 ///
 /// C++: `WelsDequantIHadamard4x4_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
@@ -153,11 +131,9 @@ pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[
 /// [`idct_t4_rec`] with the prediction already *in* `rec` — the inter-macroblock
 /// reconstruction, where the C++ passes the reconstruction plane as both `pRec`
 /// and `pPred` (`OutputPMbWithoutConstructCsRsNoCopy`, `svc_encode_slice.cpp`) and
-/// the kernel adds each residual to the sample it then overwrites. Element-wise
-/// that is well defined; as two Rust references over one span it is not, and the
-/// encoder aliasing probe caught the shim building exactly that pair (**F59**,
-/// Phase 6 session B). Same arithmetic, one cursor: the sample is read where
-/// [`idct_t4_rec`] reads `pred`, and written where it writes `rec`.
+/// the kernel adds each residual to the sample it then overwrites. Same
+/// arithmetic, one cursor: the sample is read where [`idct_t4_rec`] reads
+/// `pred`, and written where it writes `rec`.
 pub fn idct_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
@@ -190,8 +166,7 @@ fn idct_t4_residual(dct: &[i16; 16]) -> [[i32; 4]; 4] {
 
     // The C++ walks columns with four strided stores each; every sample is
     // written exactly once, so transposing to row-major is bit-exact and each
-    // row becomes one bounds check and a fixed-size window (the decoder
-    // pilot's shape, plan §7.4).
+    // row becomes one bounds check and a fixed-size window.
     let mut res = [[0i32; 4]; 4];
     for i in 0..4usize {
         let sum_l = tmp[i] as i32 + tmp[8 + i] as i32;
@@ -218,7 +193,7 @@ pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc
     }
 }
 
-/// [`idct_t4_rec_in_place`] over the four 4x4 blocks of one 8x8 quadrant (F59).
+/// [`idct_t4_rec_in_place`] over the four 4x4 blocks of one 8x8 quadrant.
 pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
@@ -236,14 +211,13 @@ pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) 
 /// destination writes go through [`RecCursor::write_row`] by value. Everything
 /// else — the transform, the `+32 >> 6` rounding, the `WelsClip1` saturation, the
 /// `as i16` narrowing in the horizontal pass — is [`idct_t4_residual`], shared
-/// with the `PlaneCursorMut` forms so the arithmetic exists exactly once and the
-/// differential tests below have something to be differential *about*.
+/// with the `PlaneCursorMut` forms so the arithmetic exists exactly once.
 ///
 /// **The prediction operand is a slice, not a cursor.** Every blocked idct site
 /// takes its prediction from the macroblock cache's `sMemPredMb` arena at a fixed
 /// stride (16 for luma, 16 for the chroma pair as the C++ calls them) — a plain
 /// owned array, never the picture. The in-place pair takes no prediction at all:
-/// there `pRec` *is* `pPred` (F59).
+/// there `pRec` *is* `pPred`.
 ///
 /// 4x4 residual added to an arena prediction, saturated into the shared view.
 pub fn idct_t4_rec_to_view(
@@ -297,7 +271,7 @@ pub fn idct_rec_i16x16_dc_to_view(
 }
 
 /// [`idct_t4_rec_in_place`]'s seam flavour — the inter reconstruction where the
-/// prediction is already in the picture (F59). Reads and writes the same four
+/// prediction is already in the picture. Reads and writes the same four
 /// rows, which `RecCursor`'s by-value `row`/`write_row` pair does without ever
 /// naming a `&mut [u8]`.
 pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
@@ -326,8 +300,7 @@ pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
 ///
 /// In-place only, because that is the only way its one caller ever used it —
 /// `OutputPMbWithoutConstructCsRsNoCopy` passes `pDecY` as both `pDst` and
-/// `pPred` (F59), and the raw form's two independent stride parameters existed
-/// solely to spell that aliasing pair. One cursor, one stride, no pair.
+/// `pPred`. One cursor, one stride, no pair.
 pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
     const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
     for (k, &(dx, dy)) in QUADS.iter().enumerate() {
@@ -338,11 +311,10 @@ pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
 
 /// Inverse 4x4 Hadamard for the I16x16 luma DC block, qp < 12 path.
 ///
-/// The additions are **plain `i16`**, exactly the raw port's: with a 16x
-/// worst-case gain across the two passes, an input above `+-2047` can
-/// overflow an intermediate — a debug build panics where the C++'s `int`
-/// arithmetic narrows (finding F11, `phase2_findings.md`). Reproduced, not
-/// repaired; in-contract DC levels are far below the threshold.
+/// The additions are **plain `i16`**: with a 16x worst-case gain across the two
+/// passes, an input above `+-2047` can overflow an intermediate — a debug build
+/// panics where the C++'s `int` arithmetic narrows. In-contract DC levels are
+/// far below the threshold.
 ///
 /// C++: `WelsIHadamard4x4Dc`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn ihadamard_4x4_dc(res: &mut [i16; 16]) {
@@ -378,9 +350,8 @@ pub fn ihadamard_4x4_dc(res: &mut [i16; 16]) {
 /// `(v * mf + round) >> shift` in `i32`, narrowed per store.
 ///
 /// `qp < 12` is part of the contract: at `qp >= 12` the shift count
-/// `1 - qp/6` goes negative, which panics in a debug build exactly as the
-/// raw port does (the one caller is gated on `uiQp < 12`,
-/// `svc_encode_mb.rs:586`).
+/// `1 - qp/6` goes negative, which panics in a debug build (the one caller is
+/// gated on `uiQp < 12`, `svc_encode_mb.rs:586`).
 ///
 /// C++: `WelsDequantLumaDc4x4`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn dequant_luma_dc_4x4(res: &mut [i16; 16], qp: i32) {
@@ -412,43 +383,6 @@ pub fn dequant_ihadamard_2x2_dc(dct: &mut [i16; 4], mf: u16) {
     dct[3] = (((del_u - del_d) * m) >> 1) as i16;
 }
 
-
-
-
-// **S9.1: `WelsIDctRecI16x16Dc_c` deleted.** It was a shim over the safe kernel below it,
-// kept only because the differential tests drove it by name — its dispatch slot
-// was deleted in S18 (F138/F139: installed, asserted, never called), and the
-// production reconstruction has gone through the seam's kernels since T9.C2. The
-// probe now drives the safe kernel directly and keeps the two assertions that
-// were ever about more than the shim: sources unmoved, and no write beyond each
-// row's block.
-
-// **`WelsIDctT4RecOnMb` stood here — deleted in T9.C2g.**
-//
-// `decode_mb_aux.cpp:209`, the four-quadrant walk over a macroblock's luma. It
-// had exactly one caller, `OutputPMbWithoutConstructCsRsNoCopy`, and T9.C2d gave
-// that caller `idct_t4_rec_on_mb_in_place_view` — so this function was orphaned
-// by this session's own commit, which is why deleting it is cleanup rather than
-// a ruling (contrast F135, where the dead twin predated the session).
-//
-// Its replacement keeps the provenance and drops the parameter that only existed
-// to spell an alias: the raw form took `pDst` *and* `pPred` with two strides, and
-// its one caller passed the same pointer and the same stride to both (F59).
-//
-// **Consequence, recorded in F138 — and since resolved.** This was the last raw
-// reader of `pfIDctFourT4`, which left all three `pfIDct*` slots installed,
-// asserted-installed by two tests, and called by nothing — `pGomCost`'s shape
-// (F133) in a dispatch table.
-//
-// **The three slots are gone.** Session F's step 0 deleted them under S18; the
-// installer's own note twenty lines below carries the read greps taken at that
-// deletion. Do not read the paragraph above as a description of the tree: it
-// describes the tree as it stood before session F, and the sentence that used to
-// end it — "'left as measured' is now waiting on a ruling" — was already false
-// when F160 quoted it, which is how F160's item 2 came to ask the user for a
-// ruling on slots that no longer existed (D-dead-4 corrected the scope; the
-// ruling executed against `SharedMbArray::capture` alone).
-
 /// `decode_mb_aux.cpp:251`. Installs the scalar dequantisation and IDCT tables.
 ///
 /// # Safety
@@ -459,15 +393,6 @@ pub fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag:
     fl.pfDequantization4x4 = dequant_4x4;
     fl.pfDequantizationFour4x4 = dequant_four_4x4;
     fl.pfDequantizationIHadamard4x4 = dequant_ihadamard_4x4;
-
-    // The three `pfIDct*` installs stood here. The slots were write-only
-    // (F138/F139: installed, asserted, never called — the reconstruction writes
-    // go through the seam's kernels directly since T9.C2) and are deleted, S18.
-    // Read greps at deletion (session F step 0): `pfIDctT4` — field, default,
-    // this install, one `is_some` assert; `pfIDctFourT4` — those plus
-    // `encoder_context.rs`'s init assert; `pfIDctI16x16Dc` — field, default,
-    // install, assert. No call through any of the three anywhere in src/ or
-    // tests/. The kernels stay: the differential tests drive them by name.
 }
 
 #[cfg(test)]
@@ -477,11 +402,11 @@ mod tests {
     use crate::encoder::rec_view::shared_plane_for_test;
     use crate::safe::plane::PaddedPlane;
 
-    /// **The seam kernels' acceptance (T9.C2, step 1).** Each `RecCursor` form is
-    /// run against its `PlaneCursorMut` twin over *two planes built the same way*,
-    /// from the same coefficients and the same prediction, and the whole
-    /// allocations are compared — not just the block, so a write that lands one
-    /// row or one column out is a failure rather than a silent pass.
+    /// **The seam kernels' acceptance.** Each `RecCursor` form is run against its
+    /// `PlaneCursorMut` twin over *two planes built the same way*, from the same
+    /// coefficients and the same prediction, and the whole allocations are
+    /// compared — not just the block, so a write that lands one row or one column
+    /// out is a failure rather than a silent pass.
     ///
     /// Pseudo-random but fixed: a 64-bit LCG seeded per test, because a constant
     /// pattern cannot tell a transposed write from a correct one and real
@@ -586,7 +511,7 @@ mod tests {
 
     /// The in-place pair reads *and* writes the same block, so the twin planes
     /// must start equal — which `twin_planes` guarantees — and the prediction is
-    /// whatever noise is already there (F59's shape).
+    /// whatever noise is already there.
     #[test]
     fn idct_t4_rec_in_place_view_matches_the_plane_cursor_form() {
         let mut seed = 0x2545F4914F6CDD1D;
@@ -681,9 +606,6 @@ mod tests {
         let mut dc = [0i16; 16];
         dc[5] = 64;
 
-        // S9.1: the `_c` shim is gone and this drives the kernel directly, so the
-        // test's own `instrument(test)` allow retires with the raw call it existed
-        // for — the assertions below are unchanged.
         idct_rec_i16x16_dc(
             &mut PlaneCursorMut::new(&mut rec, 0, stride),
             &PlaneCursor::new(&pred, 0, stride),
@@ -697,11 +619,4 @@ mod tests {
             }
         }
     }
-
-    // **`init_fills_every_reconstruction_slot` stood here and is deleted.** Its
-    // subject was "every slot the reconstruction path dereferences must be filled",
-    // asserted as three `is_some()`s after this installer ran. The three slots are
-    // plain `fn` since the `Option` sweep, so being filled is the type's claim, and
-    // an equality against `SWelsFuncPtrList::default()` — which names the same three
-    // kernels — would only check the constructor against itself.
 }

@@ -1,50 +1,33 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
 
 //! Port of `codec/processing/src/downsample/` — the plugin reached through
-//! `METHOD_DOWNSAMPLE`, and the single missing piece behind every multi-layer
-//! encode. `CWelsPreProcess::SingleLayerPreprocess` scales the source into each
-//! lower spatial layer through `DownsamplePadding`, one step per layer.
+//! `METHOD_DOWNSAMPLE`. `CWelsPreProcess::SingleLayerPreprocess` scales the source
+//! into each lower spatial layer through `DownsamplePadding`, one step per layer.
 //!
-//! # Which downsampler this is a port of (F97, F98)
+//! # Which downsampler this is a port of
 //!
 //! This module is **not** a transliteration of `downsample.cpp`. Two things in that
-//! file read the opposite way round from how they behave, and both were settled by
-//! measurement against `libopenh264.a` itself — `rust/tools/vp_kernel_probe/`, which
-//! is checked in and re-runnable:
+//! file read the opposite way round from how they behave:
 //!
-//! 1. **The `_c` kernels and their AArch64 NEON siblings are bit-identical** — 40
-//!    comparisons across eight frame sizes, both stride branches, every kernel with a
-//!    sibling. So the port translates the `_c` bodies and parity holds against the
-//!    NEON library the tests link. Upstream's own hedge — two golden hashes on
-//!    `EncoderOutputTest` rows 5 and 7, "depending on whether averaging is done
-//!    vertically or horizontally first" — does not bite here.
-//!
-//! 2. **The dispatch table is what differs, not the kernels.**
+//! 1. **The dispatch table is what differs, not the kernels.**
 //!    `InitDownsampleFuncs` binds `pfGeneralRatioLuma` to
 //!    `GeneralBilinearFastDownsampler_c` in the scalar table and then *rebinds it to
 //!    the accurate wrapper* on aarch64 (`downsample.cpp:130-140`) — there is no NEON
-//!    fast downsampler. Fast and Accurate are different functions (measured: up to
-//!    3366 of 26624 pixels differ). This module therefore uses **Accurate for luma
-//!    and chroma alike**, and does not port `GeneralBilinearFastDownsampler_c` at
-//!    all: on this target nothing can reach it, and a kernel with no caller and no
-//!    referee is worse than an absent one.
+//!    fast downsampler. Fast and Accurate are different functions. This module
+//!    therefore uses **Accurate for luma and chroma alike**, and does not port
+//!    `GeneralBilinearFastDownsampler_c` at all: on this target nothing can reach it.
 //!
-//! 3. **`m_bNoSampleBuffer` selects the *other* arm than it reads like.** It is
+//! 2. **`m_bNoSampleBuffer` selects the *other* arm than it reads like.** It is
 //!    `AllocateSampleBuffer()`'s return value, `false` on success and `true` only
 //!    when a `WelsMalloc` failed. So [`Process`]'s second arm — repeated halving
 //!    through a scratch buffer — is the normal path, and the first arm is the
 //!    out-of-memory / oversized fallback. In particular a 4:1 step is **two cascaded
 //!    half-averages, not `pfQuarterDownsampler`**.
 //!
-//! The first arm is still reachable and still ported: `ParamValidationExt` admits any
-//! picture up to `MAX_MBS_PER_FRAME << 8` = 9437184 samples, so a source wider than
+//! The first arm is still reachable: `ParamValidationExt` admits any picture up to
+//! `MAX_MBS_PER_FRAME << 8` = 9437184 samples, so a source wider than
 //! `2 * MAX_SAMPLE_WIDTH` (3840) or taller than `2 * MAX_SAMPLE_HEIGHT` (2176) takes
 //! it — 4096x2304 is legal and does.
-//!
-//! `dispatch_model.cpp` in the probe carries the same algorithm this module does and
-//! is diffed against `CDownsampling::Process` over 19 source/destination pairs
-//! covering 2:1, 4:1, 8:1, 3:1 and four general ratios, all three planes: 19/19
-//! exact. That is where this code came from.
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -72,7 +55,7 @@ fn WELS_ROUND(x: f32) -> i32 {
 ///
 /// `kiSrcWidth` is **not** the picture width — see [`DownsampleHalfAverage`], which
 /// rounds it up to a multiple of 32 or 16 and so writes into the destination's
-/// padding. That is the reference's behaviour and the goldens contain it.
+/// padding. That is the reference's behaviour.
 fn DyadicBilinearDownsampler(
     pDst: &mut [u8],
     kiDstStride: usize,
@@ -242,8 +225,7 @@ fn GeneralBilinearAccurateDownsampler(
 /// `pfHalfAverageWidthx16`) land on the same kernel, so the branch here changes only
 /// the **width passed**: the source width rounded up to a multiple of 32 when the
 /// source stride is 32-aligned, of 16 otherwise. That rounding is why the destination
-/// gets more columns than its nominal width — the reference writes into the padding
-/// and the goldens contain those bytes.
+/// gets more columns than its nominal width — the reference writes into the padding.
 fn DownsampleHalfAverage(
     pDst: &mut [u8],
     iDstStride: usize,
@@ -264,11 +246,8 @@ fn DownsampleHalfAverage(
 /// `downsample.cpp:56-66`.
 ///
 /// The C++ allocates all six buffers in the constructor and records whether that
-/// failed; here they are `Vec`s grown on first use. The distinction is not
-/// observable: the *only* thing the C++ does with the allocation's outcome is set
-/// `m_bNoSampleBuffer`, which picks [`Process`]'s arm, and a `Vec` allocation that
-/// fails aborts rather than returning empty. Growing lazily keeps the ~6 MB off every
-/// single-layer encoder, which is all of them outside this path.
+/// failed; here they are `Vec`s grown on first use. Growing lazily keeps the ~6 MB
+/// off every single-layer encoder, which is all of them outside this path.
 #[derive(Default)]
 pub struct SampleBuffer {
     bufs: [[Vec<u8>; 3]; 2],
@@ -365,7 +344,7 @@ pub fn Downsample(
             DyadicBilinearOneThirdDownsampler(du, dst_stride[1], pSrc.planes[1], pSrc.stride[1], iSrcWidthUV, iDstHeightUV);
             DyadicBilinearOneThirdDownsampler(dv, dst_stride[2], pSrc.planes[2], pSrc.stride[2], iSrcWidthUV, iDstHeightUV);
         } else {
-            // aarch64 binds luma to the *accurate* wrapper, not the fast one (F97)
+            // aarch64 binds luma to the *accurate* wrapper, not the fast one
             GeneralBilinearAccurateDownsampler(dy, dst_stride[0], iDstWidthY, iDstHeightY, pSrc.planes[0], pSrc.stride[0], iSrcWidthY, iSrcHeightY);
             GeneralBilinearAccurateDownsampler(du, dst_stride[1], iDstWidthUV, iDstHeightUV, pSrc.planes[1], pSrc.stride[1], iSrcWidthUV, iSrcHeightUV);
             GeneralBilinearAccurateDownsampler(dv, dst_stride[2], iDstWidthUV, iDstHeightUV, pSrc.planes[2], pSrc.stride[2], iSrcWidthUV, iSrcHeightUV);
@@ -495,7 +474,7 @@ mod tests {
         assert_eq!(dst[0], 1, "two-stage rounding lifts this to 1; a flat average gives 0");
     }
 
-    /// `DownsampleHalfAverage`'s alignment branch is the subtle one (F98): the width
+    /// `DownsampleHalfAverage`'s alignment branch is the subtle one: the width
     /// it passes is rounded up, so the destination gets `align(w)/2` columns, not
     /// `w/2`. A 32-aligned source stride rounds to 32, otherwise to 16.
     #[test]

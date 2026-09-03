@@ -39,16 +39,6 @@
 //! - Fast O(1) macroblock-to-slice-group queries (`FmoMbToSliceGroup`) and sequential iterators (`FmoNextMb`).
 
 #![deny(unsafe_code)]
-// Phase 5 W6 (T5.V4). The module's nine `unsafe fn` were all the same shape — a raw
-// pointer, a null test at the top, and a body that dereferences it — so the
-// conversion is `Option<&TagFmo>`/`Option<&mut TagFmo>` and the null test stays
-// exactly where it was, spelled as a `let … else`. `UninitFmoList` walked
-// `pFmo.add(i)` over an array and takes `&mut [TagFmo]`; its `kiCnt` was the array's
-// length, which a slice carries.
-//
-// `pMa: *mut CMemoryAlign` left four signatures as the dead parameter it had been
-// since T5.R3 deleted the allocator helpers — nothing in any of these bodies had read
-// it since.
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -81,18 +71,10 @@ pub const ERR_INFO_INVALID_PARAM: i32 = 4;
 pub const ERR_INFO_UNSUPPORTED_FMOTYPE: i32 = 1063;
 
 /// Flexible Macroblock Ordering (FMO) context structure.
-///
-/// **T5.R3: the map is owned.** It was the last `WelsMallocz`/`WelsFree` pair in
-/// `src/decoder/`, allocated per parameter set and freed by `UninitFmoList` walking an
-/// array of these — which is exactly the shape a `Vec` makes unforgettable. The struct
-/// loses `Copy` with the raw pointer (a `Vec` field cannot be bitwise-copied) and
-/// `sFmoList`'s 256 entries are therefore written at construction rather than left to
-/// the context's zeroed shell (S21).
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct TagFmo {
-    /// Slice group ID per macroblock, `iCountMbNum` long — empty when there is no map,
-    /// which is the state the old null pointer named.
+    /// Slice group ID per macroblock, `iCountMbNum` long — empty when there is no map.
     pub pMbAllocMap: Vec<u8>,
     /// Total number of macroblocks in the active picture (iMbWidth * iMbHeight).
     pub iCountMbNum: i32,
@@ -122,20 +104,10 @@ impl Default for TagFmo {
 }
 
 // ============================================================================
-// Internal Memory Helpers
-// ============================================================================
-
-// T5.R3: `free_mb_alloc_map` and `mallocz_mb_alloc_map` stood here — the module's
-// half of the decoder's last `WelsFree`/`WelsMallocz` pair, each with its own
-// `pMa`-or-global arm and its own allocation tag. A `Vec<u8>` is the allocation, the
-// zeroing and the free, so there is nothing left for either helper to do.
-
-// ============================================================================
 // Core FMO Map Generation Routines
 // ============================================================================
 
 /// Generates the macroblock allocation map for Interleaved Slice Groups (Type 0).
-///
 pub fn FmoGenerateMbAllocMapType0(pFmo: &mut TagFmo, pPps: &SPps) -> i32 {
     let uiNumSliceGroups = (*pPps).uiNumSliceGroups;
     let iMbNum = (*pFmo).iCountMbNum;
@@ -177,7 +149,6 @@ pub fn FmoGenerateMbAllocMapType0(pFmo: &mut TagFmo, pPps: &SPps) -> i32 {
 }
 
 /// Generates the macroblock allocation map for Dispersed Slice Groups (Type 1).
-///
 pub fn FmoGenerateMbAllocMapType1(pFmo: &mut TagFmo, pPps: &SPps, kiMbWidth: i32) -> i32 {
     let uiNumSliceGroups = (*pPps).uiNumSliceGroups;
     let iMbNum = (*pFmo).iCountMbNum;
@@ -205,7 +176,6 @@ pub fn FmoGenerateMbAllocMapType1(pFmo: &mut TagFmo, pPps: &SPps, kiMbWidth: i32
 }
 
 /// Internal helper allocating `pMbAllocMap` and dispatching map generation according to PPS parameters.
-///
 pub fn FmoGenerateSliceGroup(
     pFmo: Option<&mut TagFmo>,
     kpPps: Option<&SPps>,
@@ -221,18 +191,14 @@ pub fn FmoGenerateSliceGroup(
         return ERR_INFO_INVALID_PARAM;
     }
 
-    // The free-then-allocate pair the two deleted helpers were: assigning the new map
-    // drops the old one, and `vec![0; n]` is `WelsMallocz`'s zeroing. The
-    // `ERR_INFO_OUT_OF_MEMORY` arm goes with the null return it tested for — the same
-    // argument T5.H3 made for the layer's grid.
     (*pFmo).pMbAllocMap = vec![0u8; iNumMb as usize];
 
     (*pFmo).iCountMbNum = iNumMb;
 
     if (*kpPps).uiNumSliceGroups < 2 && iNumMb > 0 {
-        // The C's `memset(pMbAllocMap, 0, iNumMb)` on this arm, kept where it stood
-        // even though the allocation above already zeroed: it is what the single
-        // slice-group map *is*, not a leftover of the allocator.
+        // The C's `memset(pMbAllocMap, 0, iNumMb)` on this arm, even though the
+        // allocation above already zeroed: it is what the single slice-group map
+        // *is*, not a leftover of the allocator.
         (*pFmo).pMbAllocMap.fill(0);
         (*pFmo).iSliceGroupCount = 1;
         return ERR_NONE;
@@ -275,7 +241,6 @@ pub fn FmoGenerateSliceGroup(
 // ============================================================================
 
 /// Initializes a Flexible Macroblock Ordering (FMO) context.
-///
 pub fn InitFmo(
     pFmo: Option<&mut TagFmo>,
     pPps: Option<&SPps>,
@@ -287,9 +252,8 @@ pub fn InitFmo(
 
 /// Frees all dynamically allocated memory across the FMO context array.
 ///
-/// The C's `kiCnt` is the array's length and `pFmo` its base, so the pair is one
-/// slice; `kiCnt < kiAvail` — a count smaller than the number of entries to clear —
-/// is the same refusal it always was, now spelled against `pFmo.len()`.
+/// `kiCnt` is the array's length; `kiCnt < kiAvail` — a count smaller than the
+/// number of entries to clear — is refused.
 pub fn UninitFmoList(pFmo: &mut [TagFmo], kiAvail: i32) {
     let kiCnt = pFmo.len() as i32;
     if kiAvail <= 0 || kiCnt < kiAvail {
@@ -299,8 +263,6 @@ pub fn UninitFmoList(pFmo: &mut [TagFmo], kiAvail: i32) {
     let mut iFreeNodes: i32 = 0;
     for pIter in pFmo.iter_mut() {
         if pIter.bActiveFlag {
-            // T5.R3: the free is the assignment, and it needs neither the allocator
-            // nor a null test — an already-empty map drops nothing.
             pIter.pMbAllocMap = Vec::new();
             pIter.iSliceGroupCount = 0;
             pIter.iSliceGroupType = -1;
@@ -315,7 +277,6 @@ pub fn UninitFmoList(pFmo: &mut [TagFmo], kiAvail: i32) {
 }
 
 /// Detects whether SPS or PPS parameter sets have changed relative to the cached FMO state.
-///
 pub fn FmoParamSetsChanged(
     pFmo: Option<&TagFmo>,
     kiCountNumMb: i32,
@@ -332,9 +293,6 @@ pub fn FmoParamSetsChanged(
 }
 
 /// Updates/inserts an FMO parameter unit for the active access unit.
-///
-/// # Safety
-/// Pointers must be valid or null.
 pub fn FmoParamUpdate(
     pFmo: Option<&mut TagFmo>,
     pSps: Option<&SSps>,
@@ -370,7 +328,6 @@ pub fn FmoParamUpdate(
 }
 
 /// Converts a linear macroblock index (`kiMbXy`) to its corresponding slice group ID.
-///
 pub fn FmoMbToSliceGroup(pFmo: Option<&TagFmo>, kiMbXy: MB_XY_T) -> i32 {
     let Some(pFmo) = pFmo else {
         return -1;
@@ -387,7 +344,6 @@ pub fn FmoMbToSliceGroup(pFmo: Option<&TagFmo>, kiMbXy: MB_XY_T) -> i32 {
 }
 
 /// Returns the next successive macroblock in raster sequence belonging to the same slice group.
-///
 pub fn FmoNextMb(pFmo: Option<&TagFmo>, kiMbXy: MB_XY_T) -> MB_XY_T {
     let Some(pFmo) = pFmo else {
         return -1;

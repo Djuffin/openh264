@@ -8,20 +8,6 @@
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
-// Phase 5 W7. This module holds none of the three forms the lint denies — no
-// `unsafe fn`, no `unsafe` block, no unsafe trait implementation — so the lint
-// is a statement of fact rather than a goal, and it is here to keep it one: the
-// ratchet counts tokens (S16) and cannot see one of those arriving in a file
-// that had none.
-//
-// The wording above is deliberate and the ratchet is why: spelling the third
-// form as its two-word token made this comment itself count as an occurrence,
-// and the gate went red on three files whose code had not changed at all —
-// S16's floor, met from the direction of a comment written to celebrate it.
-//
-// Raw pointer **types** in a signature do not trip this lint; dereferencing one
-// does. That is why a module can carry `*mut` fields and still be deny-clean,
-// and it is the distinction the phase's exit condition 2 is written against.
 
 //! H.264 / AVC and SVC Sequence Parameter Set (SPS), Picture Parameter Set (PPS),
 //! and Video Usability Information (VUI) data structures.
@@ -241,29 +227,18 @@ pub struct TagSps {
     pub iScalingList4x4: [[u8; 16]; 6],
     pub iScalingList8x8: [[u8; 64]; 6],
     pub sVui: SVui,
-    // **T5b.9: `pSLevelLimits` is deleted, and T5.Y2 is the ruling it follows.** The
-    // C++ stores the level's limit row here and reads it back in exactly four
-    // places, all `WELS_CHECK_SE_BOTH_WARNING (pMv[1], iMinVmv, iMaxVmv, …)` — a
-    // `WelsLog` warning and nothing else (`dec_golomb.h:288`). T5.Y2 deleted the
-    // parse paths' local lookups on that argument; what it left behind was the
-    // field, written once by `ParseSubsetSps` and read by nothing in the port, plus
-    // two null initializers. `au_parser.cpp`'s frame-size checks use a *local*
-    // `pSLevelLimits`, not this field, so nothing in the C++ reaches it except the
-    // warnings. Porting those warnings re-adds it; until then it is dead data with a
-    // pointer's spelling.
 }
 
 impl TagSps {
     /// The all-zero SPS the C's `memset (pSps, 0, sizeof (SSps))` produces — every
-    /// field's zero *meaning*, written out (S21/F54).
+    /// field's zero *meaning*, written out.
     ///
     /// **This is not [`Default`], and the difference is load-bearing.** `Default` is
     /// the port's *useful* SPS: `uiBitDepthLuma`/`uiBitDepthChroma` are 8 and
     /// `bFrameMbsOnlyFlag` is `true`, because those are the values a parse that never
     /// writes them must still read. `au_parser.cpp`'s `ParseSps` starts from the
-    /// memset instead, and eleven conformance assets tell the two apart
-    /// (`test_scalinglist_jm` among them, measured at T5b.3). Use this where the C
-    /// memsets; use `Default` where the port wants a usable SPS.
+    /// memset instead. Use this where the C memsets; use `Default` where the port
+    /// wants a usable SPS.
     pub fn memset_zero() -> Self {
         Self {
             iSpsId: 0,
@@ -307,8 +282,6 @@ impl TagSps {
             iScalingList8x8: [[0; 64]; 6],
             // `TagVui`'s `Default` is field-for-field zero already.
             sVui: SVui::default(),
-            // The zero of a pointer is its null, and this one is resolved from
-            // `g_ksLevelLimits` at parse time.
         }
     }
 }
@@ -457,7 +430,7 @@ pub struct TagPps {
 
 impl TagPps {
     /// The all-zero PPS the C's `memset (pPps, 0, sizeof (SPps))` produces — every
-    /// field's zero *meaning*, written out (S21/F54).
+    /// field's zero *meaning*, written out.
     ///
     /// **Not [`Default`]**, which is the port's usable PPS: `uiNumSliceGroups`,
     /// `uiNumRefIdxL0Active` and `uiNumRefIdxL1Active` are 1 and `iPicInitQp`/`iPicInitQs`

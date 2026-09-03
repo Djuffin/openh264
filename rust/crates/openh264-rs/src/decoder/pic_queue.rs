@@ -27,12 +27,6 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 #![deny(unsafe_code)]
-// **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
-// `src/decoder/` carries **two** `#[allow(unsafe_code)]` items in total (T8.A8), and
-// both are `picture.rs`'s Miri provenance tests for `data_ptr` — the instruments S28
-// mandates for that accessor, not production code. The two that used to sit beside
-// them, `decoder_context.rs`'s `api_alias`/`api_alias_mut`, retired with the api-owned
-// fields they dereferenced. Nothing here is one of them.
 
 //! # Decoded Picture Buffer Pool & Recycled Picture Queue (`pic_queue.rs`)
 //!
@@ -86,39 +80,13 @@ pub use crate::safe::plane::PaddedPlane;
 use crate::safe::mb_grid::MbDims;
 pub use crate::safe::pool::{Pool, PoolRest};
 
-/// A handle to one slot of the decoder's [`PicPool`] — plan §2.2.3's `PicId`.
+/// A handle to one slot of the decoder's [`PicPool`].
 ///
-/// Identity is slot equality, which is the predicate the P3 tests pin: two pictures
-/// are "the same reference" when they occupy the same pool slot, never when they
-/// merely share a POC.
+/// Identity is slot equality: two pictures are "the same reference" when they occupy
+/// the same pool slot, never when they merely share a POC.
 pub type PicId = crate::safe::pool::Id;
 
 /// The decoder's recycled picture pool — C++ `SPicBuff` (`pic_queue.h:45-49`).
-///
-/// **T5.N1: the pool addresses, it does not own.** The C's `ppPic`/`iCapacity` pair
-/// — a `WelsMallocz`'d array of `SPicture*` plus a length nothing related to it — is
-/// one [`Pool`] of slots, so a slot index is bounds-checked once by the container
-/// instead of by each of the four scans that walked it. What has **not** moved is
-/// ownership: [`AllocPicture`]'s `Box::into_raw` is still the constructor and
-/// [`FreePicture`]'s `Box::from_raw` still the dropper (T5.C3's pair), so F19's
-/// check — *which line frees this?* — has the same answer it had before, and the
-/// pool is not a second owner.
-///
-/// **T5.Q2 — the slots own.** The paragraph that stood here explained why they could
-/// not: `pCtx->pDec` was a raw pointer *into* a slot, so a pool-issued `&mut` and a
-/// live alias to the same picture were the S25 overlap with nothing to discharge it.
-/// W2a and W2b removed every such alias — `pDec`, `pECRefPic`, the layer's copy and
-/// both reference lists carry [`PicId`]s — and W3's three earlier seams moved the
-/// decode path's resolutions to three slice bracket tops. What is left is this type,
-/// and with it the pool is the pictures' one owner: [`Pool::mut_and_rest`] proves the
-/// current-vs-reference split in safe code, and drop glue reaches every picture.
-///
-/// F19, decoder-side, closes here. `AllocPicture`'s `Box::into_raw`/`FreePicture`'s
-/// `Box::from_raw` pair is gone from the pool's lifecycle: [`CreatePicBuff`] pushes
-/// owners into a `Vec` and [`DestroyPicBuff`] drops them. R4 — "the port frees
-/// exactly what the C++ frees" — is discharged by construction rather than by
-/// inspection, because there is no longer a spelling in which a slot can be dropped
-/// without its picture.
 #[derive(Debug)]
 pub struct PicPool {
     /// One slot per pre-allocated picture. Never grows or shrinks: the C++ sizes the
@@ -134,32 +102,12 @@ pub struct PicPool {
 /// What one pool slot holds: the picture, owned, or nothing.
 pub type PicSlot = Option<Box<SPicture>>;
 
-/// The C's name for [`PicPool`], kept at the raw-pointer alias for the same reason
-/// `PDqLayer` keeps its own (T5.M1): it is a pointer *to* the pool, and Phase 5's
-/// remaining steps delete it rather than convert it.
+/// The C's name for [`PicPool`].
 pub type SPicBuff = PicPool;
-/// **Phase 8's** (T5b.9). Nothing in `src/decoder/` names this type; its one use is
-/// `api/codec_api.rs`'s `pool_for`, which is what the C++'s
-/// `pCtx ? pCtx->pPicBuff : m_pPicBuff` became at T8.A7 once `m_pPicBuff` was shown
-/// to be provably null here. It retires with the boundary.
 pub type PPicBuff = *mut PicPool;
 
-/// **A decode bracket's view of the pool** (T5.P″2): `PicId` → picture, with the
-/// pool reached once at the bracket top and nowhere below it.
-///
-/// This is the type W3's settlement is built on. With owned slots a resolution stops
-/// being a copy and becomes a derivation through the slot's `Box`, so two live
-/// results conflict and per-use resolution cannot survive; the answer is a scope —
-/// **the slice** for the decode path, one operation for EC, DPB and output — that
-/// borrows the pool at its top and threads this view down. Everything below reads
-/// `PicId`s out of the context and resolves them *here*, never through
-/// `(*pCtx).pPicBuff`.
-///
-/// Under `PPicture` slots (the hoist, T5.P″2) it wraps a shared borrow of the pool
-/// and [`get`](Self::get) is a slot copy, so threading it changes nothing a byte
-/// gate can see. At the flip it becomes the `PoolRest` half of
-/// [`Pool::mut_and_rest`] and the current picture becomes the `&mut` half — which is
-/// why the two travel together through every signature this face touches.
+/// **A decode bracket's view of the pool**: `PicId` → picture, with the pool reached
+/// once at the bracket top and nowhere below it.
 #[derive(Clone, Copy, Debug)]
 pub struct PicRefs<'a> {
     view: PicView<'a>,
@@ -167,11 +115,9 @@ pub struct PicRefs<'a> {
 
 /// The three states a bracket's view can be in.
 ///
-/// [`Split`](PicView::Split) is the one the decode brackets take and the one the
-/// settlement is about; the other two exist because a bracket can open with no pool
-/// (`None` before `CreatePicBuff` and after `DestroyPicBuff` — the state `pool_pic`'s
-/// null arm was testing for) or with no current picture, and both of those were
-/// reachable before the flip and must stay reachable after it.
+/// [`Split`](PicView::Split) is the one the decode brackets take; the other two exist
+/// because a bracket can open with no pool (`None` before `CreatePicBuff` and after
+/// `DestroyPicBuff`) or with no current picture.
 #[derive(Clone, Copy, Debug)]
 enum PicView<'a> {
     /// No pool.
@@ -180,9 +126,7 @@ enum PicView<'a> {
     Whole(&'a PicPool),
     /// [`PicPool::cur_and_rest_mut`]'s half: one slot held mutably by the caller,
     /// every other readable — [`Pool::mut_and_rest`]'s halves. The current picture
-    /// is the caller's `&mut`, so this side keeps its *identity* and no address:
-    /// there is nothing here for a retag on that borrow to invalidate, which is what
-    /// [`PicRefs::classify`] and [`PicRefs::resolve`] are built on (**F42**).
+    /// is the caller's `&mut`, so this side keeps its *identity* and no address.
     Split { rest: PoolRest<'a, PicSlot>, cur: PicId },
 }
 
@@ -210,10 +154,7 @@ impl<'a> PicRefs<'a> {
     ///
     /// Most of what the decode path does below a bracket top is *read* a reference —
     /// POCs, `bIsComplete`, `bIsLongRef`, the colocated macroblock's motion — and for
-    /// those the current picture is just another source: a shared reborrow of the
-    /// caller's `&mut` coexists with the `&SPicture` the rest hands out, because both
-    /// are shared. So **F42's arm costs a parameter here and nothing else**, where
-    /// the pointer form it replaces cost every caller its `unsafe`.
+    /// those the current picture is just another source.
     ///
     /// The current slot is still never resolved through [`PoolRest::get`], which
     /// panics on it — that is what `cur` is kept for. Motion compensation, which
@@ -221,9 +162,7 @@ impl<'a> PicRefs<'a> {
     /// directly.
     ///
     /// `cur` is an `Option` because a bracket can open on an empty slot: the pool
-    /// hands back no picture and this view still knows the slot's *identity*, which
-    /// is the state the pointer form answered with a null. `None` here is that null,
-    /// arm for arm.
+    /// hands back no picture and this view still knows the slot's *identity*.
     #[inline]
     pub fn resolve<'s>(
         &self,
@@ -249,13 +188,6 @@ impl<'a> PicRefs<'a> {
     /// are one. It is also what **motion compensation** asks: the `Current` arm is
     /// `mc_luma_same`'s (`common/mc.rs`), where source and destination are one
     /// allocation and there is no second cursor to build.
-    ///
-    /// [`RefSlot::Current`] carries no reference **by construction**, so the
-    /// `&SPicture` in [`RefSlot::Other`] is provably disjoint from the `&mut` the
-    /// bracket holds and the two travel together in safe code. No behaviour moves:
-    /// the arms are the same three the pointer form's callers were writing by hand,
-    /// and the current slot is still never resolved through `PoolRest::get`, which
-    /// panics on it.
     #[inline]
     pub fn classify(&self, slot: Option<PicId>) -> RefSlot<'a> {
         let Some(id) = slot else {
@@ -269,7 +201,7 @@ impl<'a> PicRefs<'a> {
             },
             PicView::Split { rest, cur } => {
                 if id == cur {
-                    RefSlot::Current // F42 — never `rest.get(cur)`, which panics.
+                    RefSlot::Current // never `rest.get(cur)`, which panics.
                 } else {
                     match rest.get(id) {
                         Some(pic) => RefSlot::Other(pic),
@@ -281,13 +213,12 @@ impl<'a> PicRefs<'a> {
     }
 }
 
-/// [`PicRefs::classify`]'s answer — the three states its callers were testing for
-/// with a null check and a `same_picture` comparison.
+/// [`PicRefs::classify`]'s answer.
 #[derive(Debug)]
 pub enum RefSlot<'a> {
-    /// No pool, no handle, or an empty slot — the pointer form's null.
+    /// No pool, no handle, or an empty slot.
     Empty,
-    /// The handle names the picture the bracket holds mutably (**F42**).
+    /// The handle names the picture the bracket holds mutably.
     Current,
     /// A reference picture, disjoint from the bracket's mutable half.
     Other(&'a SPicture),
@@ -296,8 +227,7 @@ pub enum RefSlot<'a> {
 impl RefSlot<'_> {
     /// The resolved picture's `iFramePoc`, or `None` for the two arms that carry no
     /// picture. Error concealment's one read of a reference it may also be *writing*
-    /// — the `Current` arm answers `None` there, which is what the pointer form's
-    /// `map(|pic| pic.iFramePoc)` over a null answered.
+    /// — the `Current` arm answers `None` there.
     #[inline]
     pub fn poc(&self) -> Option<i32> {
         match self {
@@ -306,13 +236,6 @@ impl RefSlot<'_> {
         }
     }
 }
-
-// **T5b.9: `slot_ptr` deleted dead with `slot_at` (S18); `slot_ptr_mut` followed at
-// S12.8.** Between them these named four consumers needing an address — `PicRefs::
-// get`'s F42 arm, `slot_at`, the thread prefetch F36 owns, and `slot_at_mut`. The
-// first became an identity at T5b.1, the third went with F36's probe, and the last
-// stopped wanting a pointer when `EmitBufferedPicture` — its only caller in the
-// tree — took the decoder context by reference. There is no cast left to spell.
 
 impl PicPool {
     /// Slot count — the C's `iCapacity`.
@@ -337,14 +260,6 @@ impl PicPool {
     }
 
     /// The picture in slot `id`, read-only, or null when the slot is empty.
-    ///
-    /// **One derivation, ended by the caller's expression.** Under owned slots this
-    /// is no longer a pointer copy: it borrows the slot's `Box` and hands out its
-    /// pointee's address, so two *live* results for the same slot are two derivations
-    /// of one allocation and the later one invalidates the earlier. Coexisting shared
-    /// results are fine — that is the discriminator the write paths are read against
-    /// — but a result that outlives the expression it was taken in wants a bracket
-    /// ([`cur_and_rest`](Self::cur_and_rest)), not this.
     #[inline]
     pub fn slot(&self, id: PicId) -> Option<&SPicture> {
         self.slots.get(id).as_deref()
@@ -358,21 +273,11 @@ impl PicPool {
         self.slots.get_mut(id).as_deref_mut()
     }
 
-    // **T5b.9: the shared `slot_at` is deleted dead (S18).** Of the two C++ index
-    // paths its doc named, `PrefetchLastPicForThread` is D3's threaded decoder and
-    // `welsDecoderExt.cpp`'s release path reaches the *mutable* form below; the
-    // shared one has had no caller since T5b.1.
-
     /// The picture in slot `index`, or `None` if `index` is outside the pool.
     ///
     /// The out-of-range arm is the C's own: `welsDecoderExt.cpp`'s release path
     /// tests the index against `iCapacity` before indexing and means "no picture"
-    /// by a failed test. **S12.8 made that `None` rather than a null pointer.** The
-    /// accessor was `-> PPicture` because its one consumer, `EmitBufferedPicture` in
-    /// `api/codec_api.rs`, held the decoder context as a raw pointer and could not
-    /// have named a borrow out of it. It holds a `&mut` now, so the two arms this
-    /// already had — a resolved slot and a failed range test — are exactly `Option`,
-    /// and `slot_ptr_mut` retires with the cast.
+    /// by a failed test.
     #[inline]
     pub fn slot_at_mut(&mut self, index: i32) -> Option<&mut SPicture> {
         if index >= 0 && index < self.capacity() {
@@ -387,19 +292,12 @@ impl PicPool {
     /// other slot — [`Pool::mut_and_rest`] in the decoder's terms.
     ///
     /// This is what the three slice brackets, the DPB regions and error concealment's
-    /// copy operations open with, and the reason the hoist came first: below one of
-    /// these the pool is not reached at all, so the whole scope runs on a single
-    /// borrow.
+    /// copy operations open with: below one of these the pool is not reached at all,
+    /// so the whole scope runs on a single borrow.
     ///
-    /// **The view carries no address for the current slot**, and that is structural
-    /// rather than documentary: handing back the `&mut` *and* a pointer to the same
-    /// picture would be two live derivations of one allocation, and the caller's
-    /// first retag would pop the pointer. There is none to pop —
-    /// [`PicView::Split`] does not have the field — so F42's arm is answered by
-    /// *identity* (`RefSlot::Current`) and the caller supplies the picture it is
-    /// already holding. **T5b.2 retired the pointer form of this bracket**: with
-    /// `PicRefs::resolve` for the readers and `mc_luma_same` for the one writer, no
-    /// caller in the decoder needs an address for the current picture, and the
+    /// **The view carries no address for the current slot**, so the current picture
+    /// is answered by *identity* (`RefSlot::Current`) and the caller supplies the
+    /// picture it is already holding.
     #[inline]
     pub fn cur_and_rest_mut(&mut self, cur: PicId) -> (Option<&mut SPicture>, PicRefs<'_>) {
         let (slot, rest) = self.slots.mut_and_rest(cur);
@@ -415,14 +313,6 @@ impl PicPool {
     /// **The recycling predicate**, and the whole of what "free" means to this pool:
     /// a slot holds a recyclable picture when it holds a picture at all and that
     /// picture is [`SPicture::is_free`] — `!bUsedAsRef && iRefCount <= 0`.
-    ///
-    /// Both scans below used to spell this inline, which is why the null test and the
-    /// two flags could drift apart between them.
-    ///
-    /// **Safe now**, and that is the flip arriving at the smallest place it changes:
-    /// the predicate used to deref a slot pointer the pool did not own, so it carried
-    /// the whole "every slot is null or a live `AllocPicture`" contract. The slot is
-    /// the owner, so the contract is the type's.
     #[inline]
     fn is_recyclable(&self, index: usize) -> bool {
         match self.slots.get(self.id(index)) {
@@ -439,21 +329,6 @@ impl PicPool {
     /// can run off the end of `ppPic`: each failed prefetch leaves `iCurrentIdx` one
     /// higher, so an exhausted DPB eventually indexes past `iCapacity`. The port
     /// already guarded that with `iPicIdx < iCapacity`; here the bound is the pool's.
-    ///
-    /// **The slot, not the picture** (W3's settled fact 4). Both callers want the
-    /// slot — one stores it straight into `pCtx->pDec`, the other writes several
-    /// fields through it — and with owned slots a `&mut SPicture` return would borrow
-    /// the pool for the whole of the caller's expression. A `PicId` borrows nothing.
-    ///
-    /// It is also the identical value the callers were computing: `pic_slot(pPic)`
-    /// read back the stamp [`stamp_slots`](Self::stamp_slots) wrote from this same
-    /// iteration, and a picture never moves between slots (T5.N2).
-    ///
-    /// **Safe since T5.W3**, and the `# Safety` clause it used to carry was already
-    /// stale: it read "as `is_recyclable`", and `is_recyclable` became safe at the
-    /// flip (T5.Q2 — the slot owns the picture, so the contract is the type's). What
-    /// kept the `unsafe fn` was the stamp below going out through `slot_at_mut` and
-    /// back in through a deref; the pool owns the slot, so it writes to it directly.
     pub fn prefetch_free(&mut self) -> Option<PicId> {
         let capacity = self.capacity();
         if capacity == 0 {
@@ -493,13 +368,7 @@ impl PicPool {
     /// A pool over pictures that already exist.
     ///
     /// [`CreatePicBuff`]'s tail, named — it is also the only way a fixture can put its
-    /// own pictures into a pool, which is what a `PicId` field asks of a test now that
-    /// `pCtx->pDec` is one (T5.P2).
-    ///
-    /// **It takes the owners.** The `Vec<PPicture>` this used to accept was the last
-    /// place a picture could enter the pool without the pool becoming responsible for
-    /// it; a `Vec<PicSlot>` is the same list with that hole closed, and it is why the
-    /// function stops being `unsafe`.
+    /// own pictures into a pool.
     pub fn over(slots: Vec<PicSlot>) -> Box<Self> {
         let mut pool = Box::new(PicPool { slots: Pool::new(slots), cursor: 0 });
         pool.stamp_slots();
@@ -512,7 +381,6 @@ impl PicPool {
     /// anything else. A picture never moves between slots, so this is the only
     /// assignment its [`PicId`] ever gets — which is what makes slot equality a
     /// usable identity where `iPicBuffIdx`, written at prefetch, is not.
-    ///
     fn stamp_slots(&mut self) {
         let ids: Vec<PicId> = self.slots.ids().collect();
         for id in ids {
@@ -524,8 +392,6 @@ impl PicPool {
 
     /// `PrefetchPicForThread`'s round-robin step: the slot under the cursor, and the
     /// cursor advanced one with a wrap.
-    ///
-    /// Safe since T5.W3, for [`prefetch_free`](Self::prefetch_free)'s reason.
     pub fn next_for_thread(&mut self) -> Option<PicId> {
         let capacity = self.capacity();
         if capacity == 0 {
@@ -533,8 +399,6 @@ impl PicPool {
         }
 
         let taken = self.cursor;
-        // `pPic.is_null()` was "the slot at `taken` holds no picture", which the slot
-        // now answers directly; the stamp happens on exactly the same condition.
         let occupied = self.stamp_buff_idx(taken);
 
         self.cursor += 1;
@@ -549,8 +413,7 @@ impl PicPool {
     }
 
     /// Writes `iPicBuffIdx` into the picture at `index`, and answers whether there
-    /// was one — the two scans' shared stamp, which each used to spell as a deref of
-    /// a [`slot_at_mut`](Self::slot_at_mut) result (T5.W3).
+    /// was one — the two scans' shared stamp.
     #[inline]
     fn stamp_buff_idx(&mut self, index: i32) -> bool {
         if index < 0 || index >= self.capacity() {
@@ -584,50 +447,12 @@ pub use crate::decoder::decoder_core::GetThreadCount;
 // ============================================================================
 // Picture Memory Lifecycle Functions
 // ============================================================================
-//
-// S25 for this file (T5.C3, enumerated with the conversion as plan §7.6 asks):
-// *who else reaches this `SPicture` while a borrow of it is held?*
-//
-// The pool is where the question is sharpest, because `SPicBuff.ppPic` is
-// a pointer to an array of picture pointers, and `pCtx->pDec` points **into that
-// array** — the picture the
-// decoder is writing is one of the slots the recycling scan walks. Four answers:
-//
-// 1. **`PrefetchPic` holds no borrow of a picture.** It reads `bUsedAsRef` and
-//    `iRefCount` through the slot pointer, one field per expression, and writes
-//    `iPicBuffIdx` on the winner after the scan has stopped. The two other prefetch
-//    functions are shorter still. Nothing in this file takes a `&mut SPicture` that
-//    spans a call, so the conversion introduces no borrow here at all: an owned
-//    plane changes `AllocPicture`/`FreePicture` and leaves the scan untouched.
-//    **T5.N1 re-checked this and the answer is unchanged**, because the borrow the
-//    pool now takes is of the *slot array*, not of a picture: `is_recyclable` reads
-//    one slot and derefs it inside one expression, and `prefetch_free`'s `&mut self`
-//    covers `cursor` and the slots — never the pictures those slots point at, which
-//    is exactly why the slots are still pointers (see [`PicPool`]).
-// 2. **The scan cannot see a half-built picture.** `CreatePicBuff` fills its slot
-//    `Vec` before the pool exists at all, so a picture is either absent from the pool
-//    or fully constructed — the C's "fill `ppPic`, then set `iCapacity`" ordering,
-//    now enforced by construction rather than by statement order. That is what lets
-//    `AllocPicture` hand back a `Box::into_raw`.
-// 3. **The re-entrancy that does exist is one level up**, in `manage_dec_ref.rs`,
-//    where `WelsInitRefList`'s concealment prefetch takes a slot from this pool and
-//    copies into it from `pPreviousDecodedPictureInDpb` — another slot of the same
-//    array. That pair is enumerated at its own site (T5.C2), guarded by
-//    `pRef == prev_pic`, and pinned by the `narrow_16x16_idr_lost` golden row.
-// 4. **`FreePicture` is the one place ownership actually moves**, and it is
-//    reachable only from `DestroyPicBuff` (which nulls the slot it just freed) and
-//    from `decoder_core.rs:1899` for `pTempDec` (which nulls `pCtx->pTempDec`). No
-//    other pointer to a freed picture survives either path — which is the same
-//    property `Box::from_raw` needs and the reason it can be used here.
-
-
 
 /// `len` bytes of `fill`, or `None` if the allocation fails.
 ///
 /// The C's `WelsMallocz` returned null on failure and `AllocPicture`'s callers all
 /// test for it; `vec![fill; len]` would abort the process instead. `try_reserve_exact`
-/// keeps the C's contract, which is `RawDataBuffer::try_new_zeroed`'s answer to the
-/// same question at T3.4 — and it matters more here, because a plane is megabytes.
+/// keeps the C's contract.
 fn try_filled(len: usize, fill: u8) -> Option<Vec<u8>> {
     let mut buf = Vec::new();
     buf.try_reserve_exact(len).ok()?;
@@ -638,31 +463,7 @@ fn try_filled(len: usize, fill: u8) -> Option<Vec<u8>> {
 /// Allocates and initializes an [`SPicture`] container with its three owned sample
 /// planes and its macroblock tracking metadata arrays.
 ///
-/// **T5.C3: the picture is heap-constructed, not `WelsMallocz`'d.** A struct with
-/// owned fields cannot come out of a zeroing malloc (S21/F19), so the header is a
-/// `Box` and the planes are [`PaddedPlane`]s. What has *not* moved is the geometry:
-/// every expression below is `AllocPicture`'s own arithmetic, because the kernels'
-/// output depends on it byte for byte and the goldens are the referee.
-///
-/// **T5.P″1: this is the constructor, and it returns the owner.** T5.P′3 made the
-/// `Box` a *complete* owner — the four per-macroblock families are containers, so
-/// drop glue reaches every byte the picture holds — which is what lets a caller keep
-/// the `Box` instead of a pointer to it. [`AllocPicture`] below is the raw spelling
-/// for the callers that still hand pointers around (the pool, until W3's flip).
-///
-/// `None` is the C's null return, and it carries the same three failures: no context,
-/// no allocator, and a plane allocation that could not be reserved.
-///
-/// **T5.W3: the context is gone and `bParseOnly` arrives as the `bool` it always
-/// was.** The two guards the signature used to carry — a null context and a null
-/// `pMemAlign` — gated on things this function stopped using at T5.P′3, when the
-/// planes became owned Rust allocations and `pMa` went unread; they were never
-/// dropped, only left. They are **kept and moved to the callers**, which are the two
-/// places that hold a context to test: `CreatePicBuff` already tested both before its
-/// loop, and `decode_slice.rs`'s lazy `pTempDec` arm now tests `pMemAlign` where the
-/// callee used to. Neither widens nor narrows — the C++ `AllocPicture` derefs `pMa`
-/// unconditionally, so the port's guard was always the more defensive of the two, and
-/// it stays exactly as defensive.
+/// `None` is the C's null return.
 pub fn alloc_picture(
     bParseOnly: bool,
     kiPicWidth: i32,
@@ -689,7 +490,7 @@ pub fn alloc_picture(
         // into three by pointer arithmetic, became three allocations each filled with
         // 128. Nothing walks from one plane into the next — `pBuffer[1]` and
         // `pBuffer[2]` were only ever bases for their own plane's `pData` — so the
-        // contiguity was incidental, and every plane's own bytes are unchanged.
+        // contiguity was incidental.
         let (Some(y), Some(u), Some(v)) = (
             try_filled(iLumaSize as usize, 128),
             try_filled(iChromaSize as usize, 128),
@@ -730,9 +531,9 @@ pub fn alloc_picture(
     };
     let _ = iPicChromaHeight;
 
-    // **T5.P′3**: `AllocPicture`'s own macroblock geometry, unchanged — the six
-    // `WelsMallocz` calls that used to follow were all sized `uiMbCount * elem`, and
-    // this is that count, stated once and handed to the containers.
+    // `AllocPicture`'s own macroblock geometry, unchanged — the six `WelsMallocz`
+    // calls that used to follow were all sized `uiMbCount * elem`, and this is that
+    // count, stated once and handed to the containers.
     let dims = MbDims::new(
         ((kiPicWidth + 15) >> 4) as usize,
         ((kiPicHeight + 15) >> 4) as usize,
@@ -749,36 +550,11 @@ pub fn alloc_picture(
     Some(pic)
 }
 
-// **T5.Q3: `AllocPicture` and `FreePicture` stood here, and the flip deleted their
-// callers.** They were the C's raw pair — `Box::into_raw` into a `PPicture` slot,
-// `Box::from_raw` out of one — and the whole reason the picture's constructor was
-// split in two at T5.P″1. With owned slots `CreatePicBuff` pushes `alloc_picture`'s
-// `Box` straight into the `Vec` and `DestroyPicBuff` drops it, so **the decoder holds
-// no raw picture allocation at all**: F19's question has no site left to ask at, and
-// S18's straggler rule says a definition whose last caller went with a conversion goes
-// with it rather than waiting for the sweep.
-//
-// `FreePicture`'s `pMa` parameter is the fossil worth naming: T5.P′3 emptied its body
-// to a `drop` and kept the parameter because the C's lifecycle still spelled the pair.
-// The pair is gone, and with it the last place the decoder passed a `CMemoryAlign` to
-// free a picture.
-
 // ============================================================================
 // Queue Retrieval Interface Routines
 // ============================================================================
 
-// T5.P″1: `PrefetchPic(PPicBuff)` stood here — the C's free-function spelling of
-// [`PicPool::prefetch_free`], kept "until its two call sites hold a pool rather than
-// a pointer to one". `pCtx->pPicBuff` owns its pool now, so both of them do
-// (`decoder_core.rs`'s prefetch and `manage_dec_ref.rs`'s concealment prefetch), and
-// they call the scan through `pic_pool_mut`.
-
 /// Retrieves the next circular picture node in round-robin FIFO sequence for multi-threaded decoding.
-///
-/// T5.W3: the pool arrives as `Option<&mut PicPool>` and the null test is the
-/// `Option`, unmoved. T5b.6 takes the return the same way — the two have no
-/// production caller (F36's list), so nothing outside this module's own test ever
-/// wanted the pointer.
 pub fn PrefetchPicForThread(pPicBuf: Option<&mut PicPool>) -> Option<&mut SPicture> {
     let pool = pPicBuf?;
     let id = pool.next_for_thread()?;
@@ -786,15 +562,12 @@ pub fn PrefetchPicForThread(pPicBuf: Option<&mut PicPool>) -> Option<&mut SPictu
 }
 
 /// Retrieves an explicit picture node by its recorded buffer pool index (`iLastPicBuffIdx`).
-///
-/// T5.W3, as [`PrefetchPicForThread`].
 pub fn PrefetchLastPicForThread(
     pPicBuf: Option<&mut PicPool>,
     iLastPicBuffIdx: i32,
 ) -> Option<&mut SPicture> {
     let pool = pPicBuf?;
-    // `slot_at_mut`'s range test, spelled here because that accessor's raw return is
-    // the api boundary's (`codec_api.rs`'s release path) and not this one's.
+    // `slot_at_mut`'s range test, spelled here.
     if iLastPicBuffIdx < 0 || iLastPicBuffIdx >= pool.capacity() {
         return None;
     }
@@ -808,32 +581,11 @@ pub fn PrefetchLastPicForThread(
 
 /// Allocates a [`PicPool`] and pre-allocates `kiSize` [`SPicture`] nodes into it.
 ///
-/// **T5.N1: the pool and its slot array are one heap value, not two `WelsMallocz`
-/// blocks.** S21 asks what happens to a struct gaining an owned field: this one is
-/// `WelsMallocz`'d nowhere and comes out of `Box::new` fully built, so no zeroed
-/// shell exists to be valid or invalid.
-///
-/// F19, per allocation: the `Box<PicPool>` here by the `Box::from_raw` in
-/// [`DestroyPicBuff`]; the slot `Vec` by that same drop; each picture by the
-/// [`FreePicture`] call that same function makes for its slot. **The pool adds no
-/// owner** — every picture in it is still exactly one [`AllocPicture`] `Box`.
-///
 /// The partial-failure arm frees what it has already built, which is what the C++
 /// means by `decoder.cpp:91`'s `pPicBuf->iCapacity = iPicIdx;` and its comment
-/// "init capacity first for free memory". The port set no capacity before calling
-/// `DestroyPicBuff` there, so its loop ran zero times and every picture allocated
-/// before the failure leaked; with a `Vec` the count and the contents are the same
-/// fact and the arm cannot disagree with itself.
+/// "init capacity first for free memory".
 ///
-/// **T5.P″1: it returns the pool instead of writing it through an out-parameter.**
-/// The C's `ppPicBuf` existed to carry `pCtx->pPicBuff`'s address into this function;
-/// with the field owning its pool, that address is a `&mut` into the context held
-/// across the `AllocPicture` calls that read the context — S25's overlap, written for
-/// no reason. `None` is the C's `1` return, and the C's `*ppPicBuf = NULL` is the
-/// caller leaving the field as it found it.
-///
-/// T5.W3: the context is gone for [`alloc_picture`]'s reason, and this function's
-/// two guards went with it — its callers hold the context and test there.
+/// `None` is the C's `1` return.
 pub fn CreatePicBuff(
     bParseOnly: bool,
     kiSize: i32,
@@ -847,11 +599,6 @@ pub fn CreatePicBuff(
 
     {
         for _ in 0..kiSize {
-            // **T5.Q2: the partial-failure arm is the `Vec` going out of scope.** The
-            // loop that stood here called `FreePicture` over what it had built, which
-            // was the C's `iCapacity = iPicIdx` dance rewritten; an owning `Vec`
-            // drops exactly those pictures on the early return, so the arm cannot
-            // disagree with itself about how many there were.
             let Some(pic) = alloc_picture(bParseOnly, kiPicWidth, kiPicHeight) else {
                 return None;
             };
@@ -862,19 +609,16 @@ pub fn CreatePicBuff(
     }
 }
 
-/// `IncreasePicBuff` — `decoder.cpp:107`. **F80/F87.**
+/// `IncreasePicBuff` — `decoder.cpp:107`.
 ///
 /// A stream that raises its reference-frame count without changing resolution takes
 /// `WelsRequestMem`'s third arm (`decoder.cpp:493-509`), which resizes the pool in
-/// place and keeps decoding. The port had only two of the three arms and answered
-/// `dsOutOfMemory` from the switch onward — `tests/data/f80/num_ref_change_320x192.264`
-/// decoded 34 of its 48 frames.
+/// place and keeps decoding.
 ///
 /// **Handles survive this.** The C++ `memcpy`s the old `PPicture` array into the front
 /// of the new one, so a picture keeps its position; [`Pool::grow`] appends and leaves
-/// every existing index and generation alone, which is the same statement in the
-/// port's terms. `iCurrentIdx` is carried over for the same reason — it names a slot
-/// that has not moved.
+/// every existing index and generation alone. `iCurrentIdx` is carried over for the
+/// same reason — it names a slot that has not moved.
 ///
 /// The C++'s partial-failure arm (`iCapacity = iPicIdx`, then `DestroyPicBuff`) is the
 /// `Vec` going out of scope on the early return, exactly as in [`CreatePicBuff`].
@@ -1016,42 +760,19 @@ fn ResetPoolPictureFlags(pool: &mut PicPool) {
 
 /// Releases every picture the pool addresses, then the pool.
 ///
-/// # The reordering reset (F37)
+/// # The reordering reset
 ///
 /// C++ `decoder.cpp:260` opens this function with
 /// `ResetReorderingPictureBuffers (pCtx->pPictReoderingStatus, pCtx->pPictInfoList,
-/// false)` and the port did not, calling it in exactly one place — decoder *creation*.
-/// The two buffers were `CWelsDecoderImpl`'s members, wired into the context by
-/// `decoder_init_c`, so they **outlived the context**: across an
-/// Initialize/Uninitialize/Initialize cycle `sPictInfoList` kept POCs and
-/// `iPicBuffIdx` values naming slots of a pool that had been freed and rebuilt, and
-/// `EmitBufferedPicture` indexed the new pool with the old picture's index. Restored
-/// here as parity, not as invention — the reset runs before the early returns, exactly
-/// where the C++ has it.
-///
-/// **T8.A7 moved both buffers into the context**, so they no longer outlive it and
-/// the cycle above is closed twice over: `Uninitialize` drops them with the context
-/// *and* this reset runs first. The reset stays because the C++ has it and because
-/// `DestroyPicBuff` also runs on a pool rebuild inside one session
-/// (`WelsFreeDynamicMemory`), where nothing is dropped.
-///
-/// **T5.P″1: it takes the pool by value.** `ppPicBuf` was the address of
-/// `pCtx->pPicBuff` and its two jobs were to read the pool and to null the field;
-/// `(*pCtx).pPicBuff.take()` at the call site does both, in one expression, and the
-/// "null it afterwards" step cannot be forgotten because there is nothing left to
-/// null. A null `pMa` used to abandon the pool; by T5.Q2 it abandoned nothing at
-/// all, which is the same C behaviour with the pool's own leak removed.
-///
-/// **T5b.9: `pMa` is gone too.** T5.Q2 left the parameter in place with `let _ =
-/// pMa;` under it, because the teardown had stopped going through the C's
-/// allocator; what stayed was a raw pointer no line read and four
-/// `&mut ma` casts at the call sites keeping it fed. The signature says what
-/// the body does now.
+/// false)`; the reset runs before the early returns, exactly where the C++ has it.
+/// Without it, `sPictInfoList` keeps POCs and `iPicBuffIdx` values naming slots of a
+/// pool that has been freed and rebuilt, and `EmitBufferedPicture` indexes the new
+/// pool with the old picture's index. It matters because `DestroyPicBuff` also runs
+/// on a pool rebuild inside one session (`WelsFreeDynamicMemory`), where nothing is
+/// dropped.
 pub fn DestroyPicBuff(pCtx: &mut SWelsDecoderContext, pool: Option<Box<PicPool>>) {
-    // F37's reset, at the head of the function and before the early returns, where
-    // `decoder.cpp:260` has it. Both reordering buffers are the context's own fields
-    // since T8.A7, so the C's two null tests — which were two `Option`s here — have
-    // nothing left to test and the pair is destructured for disjointness alone.
+    // The reset, at the head of the function and before the early returns, where
+    // `decoder.cpp:260` has it. The pair is destructured for disjointness alone.
     let SWelsDecoderContext { pPictReoderingStatus, pPictInfoList, .. } = &mut *pCtx;
     crate::decoder::decoder_core::ResetReorderingPictureBuffers(
         pPictReoderingStatus,
@@ -1059,14 +780,6 @@ pub fn DestroyPicBuff(pCtx: &mut SWelsDecoderContext, pool: Option<Box<PicPool>>
         false,
     );
 
-    // **T5.Q2: the release is the `Box` going out of scope.** The `FreePicture` loop
-    // that stood here — and with it the `pMa.is_null()` early return that used to
-    // abandon every picture in the pool — is drop glue: `pool` owns its slots, each
-    // slot owns its picture, and each picture has owned its planes and its four
-    // per-macroblock families since T5.P′3. R4's equivalence (the port frees what the
-    // C++ frees) is discharged by construction, and the C's allocator is not reached
-    // from this teardown at all — which is why the `pMa` parameter went with the
-    // loop rather than outliving it.
     drop(pool);
 }
 
@@ -1076,11 +789,6 @@ pub fn DestroyPicBuff(pCtx: &mut SWelsDecoderContext, pool: Option<Box<PicPool>>
 
 #[cfg(test)]
 mod tests {
-    // **T5b.9: the file head's exception 2 is vestigial and the allow is deleted.**
-    // It covered the resolver family's raw answers (W3 fact 1); those became
-    // identities at T5b.1 and the module's `unsafe` went with them. With this gone,
-    // `#[allow(unsafe_code)]` in `src/decoder/` reads **three by grep** — the two
-    // api aliases and `picture.rs`'s Miri test — which is what the module heads say.
     use crate::decoder::decoder_context::parse_only;
     use super::*;
     
@@ -1104,19 +812,13 @@ mod tests {
         ctx.pParam = param;
 
         {
-            // T5.Q3: `AllocPicture`'s raw pair is gone, so the fixture holds the
-            // owner the pool holds and the `Box` is what releases it.
             let mut pic = alloc_picture(false, 160, 120)
                 .expect("the picture allocates");
-            // T5b.6: a borrow — the fixture never needed the alias, and `(*p_pic)`
-            // reads the same either way.
             let p_pic: &mut SPicture = &mut *pic;
             assert_eq!((*p_pic).iWidthInPixel, 160);
             assert_eq!((*p_pic).iHeightInPixel, 120);
             assert!(!(*p_pic).data_ptr(0).is_null());
 
-            // T5.C3: the geometry the C computed is now the plane's, and pinning it
-            // here is what makes "same arithmetic" a check rather than a claim.
             // stride = WELS_ALIGN(160 + 64, 32) = 224, rows = WELS_ALIGN(120 + 64, 32)
             // = 192, so the luma allocation is 224*192 and the padded picture needs
             // 224*(120+64) — the alignment leaves eight spare rows, and `from_parts`
@@ -1129,8 +831,7 @@ mod tests {
             assert_eq!((*p_pic).plane(1).origin(), ((1 + 112) * 32) >> 1);
             assert_eq!((*p_pic).plane(0).as_slice().len(), 224 * 192);
             assert_eq!((*p_pic).plane(1).as_slice().len(), 112 * 96);
-            // The 128 fill covers the whole allocation, corners included — the EC
-            // prefetch and `narrow_16x16_idr_lost` both depend on it.
+            // The 128 fill covers the whole allocation, corners included.
             assert!((*p_pic).plane(0).as_slice().iter().all(|&b| b == 128));
             assert_eq!((*p_pic).plane(0).at(-32, -32), 128);
 
@@ -1143,10 +844,6 @@ mod tests {
     /// `iLinesize[i]` encoded, which every caller still tests with `.is_null()`.
     #[test]
     fn test_alloc_picture_parse_only_carries_strides_and_no_bytes() {
-        // T5.W3: the fixture context stays, because `parse_only(&pCtx.pParam)` is what a
-        // production caller passes and this asserts the two agree — the mechanical
-        // pass through this file set the argument to `false` here and the test caught
-        // it, which is the whole reason the flag is read back rather than written in.
         let param = SDecodingParam { bParseOnly: true, ..Default::default() };
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pParam = param;
@@ -1159,8 +856,6 @@ mod tests {
             );
             let mut pic = alloc_picture(parse_only(&pCtx.pParam), 160, 120)
                 .expect("the picture allocates");
-            // T5b.6: a borrow — the fixture never needed the alias, and `(*p_pic)`
-            // reads the same either way.
             let p_pic: &mut SPicture = &mut *pic;
             assert_eq!((*p_pic).linesize(0), 224);
             assert_eq!((*p_pic).linesize(1), 112);
@@ -1200,27 +895,13 @@ mod tests {
         }
     }
 
-    /// **F42 — the current slot resolves through the mutable half, and must.**
+    /// **The current slot resolves through the mutable half, and must.**
     ///
     /// A malformed stream can legally put the picture being decoded into a reference
     /// list: `pRefList[i]` is filled from a `ref_idx` the bitstream chooses, and the
     /// C++ resolves it to `pCtx->pDec` and reads on. `PoolRest::get` *panics* on the
     /// slot its split lends out, so answering a reference resolution out of the rest
-    /// would turn a decodable-with-garbage stream into an abort — a behaviour change
-    /// on exactly the input class the goldens, the sweeps and the conformance corpus
-    /// never reach (S6's never-widen default).
-    ///
-    /// **Red under revert**, per F21: make [`PicRefs::classify`] answer the
-    /// `id == cur` case through `rest` and this test panics with "held mutably" —
-    /// which is what the decoder would do on that stream.
-    ///
-    /// **T5b.2 rewrote the test's second half, and the rewrite is the face.** It used
-    /// to assert that the reference answer and the current picture are *one address
-    /// with one tag*, because that was the only way a read through the reference could
-    /// coexist with a write through `pDec`. There is no address now: `classify`
-    /// answers by identity and [`PicRefs::resolve`] hands back the caller's own
-    /// borrow, so the coexistence is two shared borrows — the thing the compiler
-    /// checks rather than the thing Miri had to be asked about.
+    /// would turn a decodable-with-garbage stream into an abort.
     #[test]
     fn f42_a_reference_list_entry_naming_the_current_picture_resolves_not_panics() {
         let param = SDecodingParam::default();
@@ -1266,36 +947,22 @@ mod tests {
         }
     }
 
-    /// F37: destroying the pool resets the reordering buffers, because they outlive it.
+    /// Destroying the pool resets the reordering buffers, because they outlive it.
     ///
-    /// The cycle this pins is the public one — Initialize, decode, Uninitialize,
-    /// Initialize — and since T8.A7 the buffers are the context's own, so the
-    /// pool-rebuild *inside* one session is what the reset still guards:
+    /// The pool-rebuild *inside* one session is what the reset guards:
     /// `WelsFreeDynamicMemory` destroys and re-creates the pool without touching the
     /// context, and without the reset the new pool is indexed with the old one's
-    /// `iPicBuffIdx`. `api_lifecycle_test`'s re-init probe covers the public cycle.
+    /// `iPicBuffIdx`.
     #[test]
     fn destroying_the_pool_resets_the_reordering_buffers() {
         use crate::decoder::decoder_context::{IMinInt32, SPictInfo, SPictReoderingStatus};
 
         let param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();
-        // A mutable reference coerces to a raw pointer at an assignment or an
-        // argument, so this fixture spells no pointer type at all (S16: the metric
-        // counts types written, and a test that writes casts it does not need
-        // inflates it — including in a comment).
         ctx.pParam = param;
 
         // The decoder object's own members, and a decode's leavings in them: two
         // buffered pictures naming pool slots 2 and 3.
-        // **The fixture is the context, and T8.A7 is why.** It used to be two locals
-        // wired in afterwards, and the ordering carried a paragraph: written the
-        // other way round the stores retagged the locals, the writes went through the
-        // locals and popped those retags, and `DestroyPicBuff`'s reset read a dead
-        // tag — Miri convicted exactly that, on the closing battery, in the test
-        // written to prove F37, by the session that had just found F38. Both buffers
-        // are the context's own fields now; there is no alias to order against and no
-        // hazard to write a paragraph about.
         ctx.pPictReoderingStatus.iLargestBufferedPicIndex = 1;
         ctx.pPictReoderingStatus.iNumOfPicts = 2;
         ctx.pPictReoderingStatus.bHasBSlice = true;
@@ -1322,10 +989,8 @@ mod tests {
         }
     }
 
-    /// T5.N2's half of the P3 identity property, and the half the five P3 tests
-    /// cannot reach: they build fixtures, which have no slot, so they exercise
-    /// `same_picture`'s address arm. This exercises the slot arm — two **pooled**
-    /// pictures carrying one POC are still two references.
+    /// `same_picture`'s slot arm — two **pooled** pictures carrying one POC are still
+    /// two references.
     #[test]
     fn pooled_pictures_are_identified_by_slot_not_by_poc() {
         use crate::decoder::picture::same_picture;
@@ -1342,8 +1007,6 @@ mod tests {
             assert_eq!(pool.slot(id_a).unwrap().pic_id(), Some(id_a), "a picture knows its slot");
             assert_eq!(pool.slot(id_b).unwrap().pic_id(), Some(id_b));
 
-            // Owned slots: each write derives its own borrow and ends it, rather than
-            // holding two `&mut`s into one pool across both statements.
             pool.slot_mut(id_a).unwrap().iFramePoc = 4;
             pool.slot_mut(id_b).unwrap().iFramePoc = 4; // duplicate POC, distinct slots
             let (a, b) = (pool.slot(id_a), pool.slot(id_b));
@@ -1351,12 +1014,6 @@ mod tests {
             assert!(same_picture(a, a));
 
             // A picture outside the pool has no slot and is its own identity only.
-            // Both writes happen before either address is taken, and the addresses
-            // come from `addr_of!` rather than from `&loose` — S29's spelling for
-            // S29's reason. The first draft of this test took `&loose`, then wrote
-            // `iFramePoc`, then read through the raw pointer: the write invalidated
-            // the shared tag the reads were using. Miri convicted it and nothing
-            // else in the battery could have.
             let mut loose = SPicture::default();
             let mut loose2 = SPicture::default();
             loose.iFramePoc = 4;
@@ -1368,8 +1025,6 @@ mod tests {
             assert!(!same_picture(Some(l), Some(l2)), "and POC joins nothing");
             assert!(!same_picture(Some(l), a));
 
-            // T5.W1: the two null pointers are two absent pictures now, and the
-            // `as_ref()` above is the null test that used to live inside the callee.
             assert!(same_picture(None, None));
             assert!(!same_picture(None, a));
 
@@ -1431,11 +1086,6 @@ mod tests {
         {
             let mut pool = CreatePicBuff(false, 3, 64, 64)
                 .expect("pool");
-            // T5.W3: the two thread prefetches take `Option<&mut PicPool>` now, so
-            // the fixture hands over a borrow per call instead of deriving one raw
-            // pointer and holding it across all four. They still have no production
-            // caller (F36's list) and W7's straggler sweep still decides them; what
-            // changed is only that the null test is the `Option`.
             let pic0 = PrefetchPicForThread(Some(&mut pool)).map(|p| p.iPicBuffIdx);
             assert_eq!(pic0, Some(0));
             assert_eq!(pool.cursor(), 1);

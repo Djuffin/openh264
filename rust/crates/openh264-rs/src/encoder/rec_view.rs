@@ -1,22 +1,17 @@
-// **`deny`, not `forbid`, and the end state names this file as the one product
-// exception**: the seam below crosses `UnsafeCell` at exactly one accessor and
-// carries the tree's single remaining `unsafe impl`. S11.49 writes the posture
-// down at the file it applies to.
 #![deny(unsafe_code)]
 // Copyright (c) 2009-2013, Cisco Systems
 // All rights reserved.
 //
-// This file has no C++ counterpart: it is the port's answer to a shape the C++
-// expresses with a bare pointer.
+// This file has no C++ counterpart.
 
-//! The **reconstruction seam** — decision D-mt-3, option A.
+//! The **reconstruction seam**.
 //!
 //! Every multi-threaded worker of the encoder writes into *one* reconstruction
 //! picture: the three pixel planes, and the four per-macroblock side arrays
 //! (`sMvList`, `pRefMbQp`, `pMbSkipSad`, `uiRefMbType`) that the mode-decision
-//! half stamps as it goes. The byte sets are disjoint per worker — F107 §2
-//! measured that a worker reads back only what it wrote — but **no `&mut` can
-//! say so**: a macroblock's pixel span is the full width of its rows (three of
+//! half stamps as it goes. The byte sets are disjoint per worker — a worker
+//! reads back only what it wrote — but **no `&mut` can say so**: a
+//! macroblock's pixel span is the full width of its rows (three of
 //! the four MT slice modes put a slice boundary mid-row), and a `&mut Vec<T>`
 //! side-array borrow is a `Unique` retag over the whole array whichever single
 //! index it goes on to write.
@@ -28,23 +23,14 @@
 //! # The soundness argument, stated once
 //!
 //! [`RecPicView::build`] takes `&mut SPicture`, so for the view's lifetime
-//! nothing else may borrow the picture — that exclusive borrow is what retires
-//! F73, and it is the whole reason the view is built where the frame's plane
-//! roots are stamped rather than inside the loop. From it the view captures, per
+//! nothing else may borrow the picture. From it the view captures, per
 //! storage, exactly two numbers: the allocation's base address and its length.
 //! Every later access re-derives a `&[Cell<T>]` from that captured pair
 //! ([`SharedCells::cells`], the one place raw parts cross into cell land), so no
-//! access is a child of any other and none of them can pop a sibling — S40's
-//! retag-stable root shape, one level down.
+//! access is a child of any other and none of them can pop a sibling.
 //!
 //! Writes then go through [`Cell`] with **no synchronisation at all**, which is
-//! sound **iff** no two workers touch the same byte. That "iff" is not asserted
-//! here; it is F107 §2's measurement, and it is *checked* by the two Miri
-//! data-race probes this type exists to make possible — the fork/join probe in
-//! `svc_encode_slice.rs` and the mid-row-boundary probe beside it. A shared
-//! `Cell` retag performs no memory access, so Miri reports an **actual
-//! overlapping access** rather than a retag conflict: if two macroblocks ever
-//! shared a byte, the probes say so.
+//! sound **iff** no two workers touch the same byte.
 //!
 //! Publication to post-join readers is the scope join, which is a
 //! happens-before edge: everything a worker wrote before `thread::scope`
@@ -54,8 +40,7 @@
 //!
 //! The view does not make overlapping writes safe, and it does not check
 //! disjointness at run time — bounds are checked, ownership is not. It is
-//! exactly as sound as the slice partition, which is why the probes are the
-//! acceptance and not a nicety.
+//! exactly as sound as the slice partition.
 
 use std::cell::Cell;
 
@@ -114,7 +99,6 @@ impl<T: Copy> SharedCells<T> {
     /// view's whole lifetime, so the range is allocated and no `&mut` to it
     /// exists. A `Cell` retag is `SharedReadWrite`, which performs no memory
     /// access, so this call cannot itself race.
-    // unsafe-cat: recon-seam
     #[allow(unsafe_code)]
     #[inline]
     fn cells(&self) -> &[Cell<T>] {
@@ -132,27 +116,19 @@ impl<T: Copy> SharedCells<T> {
     }
 }
 
-/// **The seam's one promise, and the reason the two MT Miri probes are this
-/// session's acceptance rather than a nicety.**
+/// **The seam's one promise.**
 ///
 /// A captured base address is `!Sync` by inference, and every view in this
 /// module is built on one — so this single `impl` is what lets a worker hold
 /// `&RecPicView` across `thread::scope`. What makes the sharing sound is not
-/// the `impl` but F107 §2's measurement: each worker touches only its own
-/// macroblocks' bytes and entries. The `impl` is where that claim is written
-/// down, and it is placed on the type that holds the raw parts rather than on
-/// the picture view, because the parts are what is being promised about.
-///
-/// It is *exercised* — `two_threads_write_disjoint_stripes_of_one_row` and
-/// `two_threads_stamp_disjoint_entries_of_one_side_array` below share one view
-/// across `thread::scope` in safe code and do not compile without it — and it
-/// is *checked* by those two probes and by the encoder's two fork/join probes,
-/// all four under Miri's data-race detector.
+/// the `impl`: each worker touches only its own macroblocks' bytes and entries.
+/// The `impl` is where that claim is written down, and it is placed on the type
+/// that holds the raw parts rather than on the picture view, because the parts
+/// are what is being promised about.
 ///
 /// Note what does **not** become `Sync`: [`RecCursor`] holds `&[Cell<u8>]` and
 /// stays thread-local by inference, so a worker must make its own from the
 /// shared plane rather than being handed one.
-// unsafe-cat: recon-seam
 #[allow(unsafe_code)]
 unsafe impl<T: Copy> Sync for SharedCells<T> {}
 
@@ -375,7 +351,6 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
 /// a `W`x`h` block copied out of a contiguous prediction buffer into the shared
 /// view.
 ///
-/// **This is the "write-through-`&self` flavour" F107 §3 priced into D-mt-3.**
 /// `PlaneCursorMut::row_mut` hands out `&mut [u8]`, which a shared view cannot
 /// do and must not do — a macroblock's contiguous plane span is the full width
 /// of its rows, so `&mut [u8]` over it would claim the neighbouring slice's
@@ -387,8 +362,7 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
 ///
 /// # Panics
 /// If `src` is shorter than `(h - 1) * src_stride + W`, or the block runs off the
-/// plane. Both are geometry bugs in the caller, and the raw form they replace
-/// would have written into another picture.
+/// plane. Both are geometry bugs in the caller.
 #[inline]
 pub fn copy_block_to_view<const W: usize>(
     src: &[u8],
@@ -415,23 +389,6 @@ pub struct SharedMbArray<T: Copy> {
 }
 
 impl<T: Copy> SharedMbArray<T> {
-    // **`SharedMbArray::capture` stood here — deleted under D-dead-4 (the user,
-    // 2026-08-25).** It was made public for the rate controller's `pGomCost` —
-    // same shape, same fork (T9.C5) — which never took it (the field went to
-    // `Vec<AtomicI32>` instead) and was deleted whole by D-dead-3. So the method
-    // was dead at the moment its justification was written, and the justification
-    // is now dead too. Every construction in this module builds the struct literal
-    // directly (`SharedMbArray { cells: SharedCells::capture(…) }`).
-    //
-    // Read greps at deletion: `grep -rn '::capture(' src | grep -v SharedCells`
-    // read **0** before and after — `SharedCells::capture`, the inner one this
-    // wrapped, is untouched and has seven callers. F160 carried the evidence and
-    // the ruling that reached `pGomCost` reached this by name.
-    //
-    // The module's contract is unchanged and lives on `SharedCells::capture`: the
-    // exclusive borrow taken there must be the last one until the view is dropped,
-    // and the workers' index sets must be disjoint.
-
     /// Entry `i`.
     #[inline]
     pub fn get(&self, i: usize) -> T {
@@ -475,9 +432,7 @@ impl RecPicView {
     /// Captures the picture for the frame.
     ///
     /// `&mut SPicture` is load-bearing: it is the exclusive borrow the whole
-    /// module contract rests on, and taking it here — once, before the fork —
-    /// is what removes the per-macroblock `layer_dec_pic_mut` retags that F73
-    /// named and that Miri reported as a data race on `SRefList` itself.
+    /// module contract rests on, and it is taken here once, before the fork.
     pub fn build(pic: &mut SPicture) -> Self {
         let [y, u, v] = pic.planes_mut3();
         let planes = [y, u, v].map(|p| {
@@ -546,7 +501,7 @@ impl crate::safe::plane::SampleCursor for RecCursor<'_> {
 /// `W` bytes of each of `height` rows, from one shared cursor to another.
 ///
 /// The shared-seam twin of `mc::copy_rows`, and the kernel behind every `pfCopyNxM`
-/// slot since S9.0c. Both operands are [`RecCursor`] because the slot's two callers
+/// slot. Both operands are [`RecCursor`] because the slot's two callers
 /// disagree about storage — the background path copies picture-to-picture, the
 /// mode-decision path copies an owned prediction scratch into a picture plane — and
 /// `RecCursor::over_owned` brings the scratch to the same type without a raw.
@@ -561,27 +516,20 @@ pub fn copy_rows_shared<const W: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>
 /// A three-plane view of a picture the encode **reads** — the source surface, and
 /// the analysis surface for the preprocess.
 ///
-/// # Why this is `SharedPlane` and not a plain slice — S9.0b corrects S9.0a
+/// # Why this is `SharedPlane` and not a plain slice
 ///
-/// S9.0a shipped this as an `RoPlane` holding a base and a length, reconstructing a
-/// `&[u8]` over the whole plane at each use, on the argument that source pictures and
-/// reconstruction pictures live in disjoint pools so no writer could alias them.
-/// **That argument covers the wrong writer.** `VaaBackgroundMbDataUpdate` copies
-/// previous-source into current-source through raw roots, in-fork, per macroblock,
-/// and F117 measured the destination to be the very picture `pEncData` reads —
-/// `same:true` on 18 frames of 18. `bEnableBackgroundDetection` is `true` by default
+/// `VaaBackgroundMbDataUpdate` copies previous-source into current-source through
+/// raw roots, in-fork, per macroblock, and the destination is the very picture
+/// `pEncData` reads. `bEnableBackgroundDetection` is `true` by default
 /// (`param_svc.rs:293`), so that is the ordinary configuration, not a corner.
 ///
 /// A whole-plane `&[u8]` claims **every byte** of the plane, so it races a concurrent
-/// write to any of them — while the raw pointers it replaced were byte-precise and
-/// disjoint between workers. That is this project's own standing rule ("a shared `&T`
-/// claims the whole struct — it races any concurrent write to any byte inside")
-/// violated by the very type that quoted it.
+/// write to any of them: a shared `&T` claims the whole struct — it races any
+/// concurrent write to any byte inside.
 ///
 /// So the source planes are reached exactly as the reconstruction planes are: through
 /// [`SharedPlane`], whose cells make a concurrent write lawful by construction, and
-/// whose [`RecCursor`] never lends a slice. The `unsafe` block S9.0a added here goes
-/// with the design that needed it.
+/// whose [`RecCursor`] never lends a slice.
 ///
 /// Built through `&SPicture` — unlike [`RecPicView`] it makes no exclusive claim, so
 /// its constructor is public and unrestricted: several readers of one picture need no
@@ -600,9 +548,9 @@ impl RoPicView {
             if p.is_empty() {
                 SharedPlane { cells: SharedCells::empty(), stride: p.stride(), origin: 0 }
             } else {
-                // `root_ptr_shared`, not `root_ptr` — F71's shape for the picture
-                // pool: `&mut self` would be a `Unique` retag over the plane header
-                // and every worker resolves the same picture.
+                // `root_ptr_shared`, not `root_ptr`: `&mut self` would be a `Unique`
+                // retag over the plane header and every worker resolves the same
+                // picture.
                 SharedPlane {
                     cells: SharedCells::from_parts(p.root_ptr_shared(), p.buf_len()),
                     stride: p.stride(),
@@ -662,20 +610,14 @@ mod tests {
 
     /// **The new row accessors must agree with the old ones, sample for sample.**
     ///
-    /// S10.2 gave `RefSamples` two run-time row readers so the SAD family and
-    /// `common/mc.rs` could serve a shared cell view and a plain plane from one
+    /// `RefSamples` has two run-time row readers so the SAD family and
+    /// `common/mc.rs` can serve a shared cell view and a plain plane from one
     /// body: `row_blocks` (the folded const-size block walk) and `row_view` (the
     /// run-time-length row, borrowed for a plane and owned for a cell view). Each
     /// exists only to move *where* the read comes from, never *what* is read — so
     /// this asserts the three routes over one buffer give identical bytes:
     /// `PlaneCursor`'s inherent `row`, the trait's `row_blocks`, and the trait's
     /// `row_view`, on both cursor types.
-    ///
-    /// This is the same acceptance `row_windows_yields_the_same_samples_as_a_row_walk`
-    /// applies one level down, and it is what the byte sweep cannot localise: a
-    /// wrong offset here changes an encode by one sample in one filter, which the
-    /// differential harness reports as "a stream differs" and this reports as a
-    /// coordinate.
     #[test]
     fn the_row_accessors_agree_across_both_cursor_types() {
         use crate::safe::plane::{PlaneCursor, RefSamples};
@@ -723,25 +665,9 @@ mod tests {
 
     /// **The probe the seam's one `Sync` impl exists for, and the mid-row case in
     /// miniature.** Two scoped threads write *the same rows* at different
-    /// columns — the shape F107 §3 proved no `&mut [u8]` can express — through
-    /// one shared view. Under Miri's data-race detector (on by default) this
-    /// passes only because the byte sets are disjoint.
-    ///
-    /// **Calibration recipe, deliberately not a live test — and it was run.**
-    /// Widen the second thread's column range from `16..32` to `0..32` so the
-    /// two overlap, and re-run under Miri. Measured at this commit:
-    ///
-    /// ```text
-    /// error: Undefined Behavior: Data race detected between (1) non-atomic
-    /// write on thread `unnamed-2` and (2) retag write of type `u8` on thread
-    /// `unnamed-3` at alloc296466+0x188
-    /// ```
-    ///
-    /// That is the detector confirming it can see this class at all — S55's
-    /// planted fault, aimed at the aliasing instrument rather than the byte
-    /// one, and reverted. It stays a recipe rather than a `#[should_panic]`
-    /// test because Miri aborts the process on UB: there is no unwinding to
-    /// catch, so a live negative test would abort the whole battery.
+    /// columns — the shape no `&mut [u8]` can express — through one shared view.
+    /// Under Miri's data-race detector (on by default) this passes only because
+    /// the byte sets are disjoint.
     #[test]
     fn two_threads_write_disjoint_stripes_of_one_row() {
         let mut plane = PaddedPlane::new(32, 4, 8, 48);
@@ -775,8 +701,7 @@ mod tests {
     /// The side arrays' half of the same promise: two workers stamping
     /// per-macroblock entries at disjoint indices of one `Vec`. This is the
     /// case a `&mut Vec<T>` cannot express *at all* — the retag covers the
-    /// whole array however narrow the write — and it is the half of the seam
-    /// the design brief did not scope (see the session's findings).
+    /// whole array however narrow the write.
     #[test]
     fn two_threads_stamp_disjoint_entries_of_one_side_array() {
         let mut mvs: Vec<SMVUnitXY> = vec![SMVUnitXY::default(); 64];
@@ -786,12 +711,6 @@ mod tests {
         // Interleaved, not split: consecutive indices land on different
         // threads, so neighbouring entries share a cache line and any
         // whole-array retag would be caught.
-        //
-        // Calibrated the same way as the plane probe, and also run: replacing
-        // `let mut i = t` with `let mut i = 0` makes both threads write every
-        // entry, and Miri stops with "Data race detected between (1)
-        // non-atomic write on thread `unnamed-2` and (2) retag write of type
-        // `SMVUnitXY` on thread `unnamed-3`". Reverted.
         std::thread::scope(|s| {
             for t in 0..2usize {
                 let (arr, qp) = (&arr, &qp);

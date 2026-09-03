@@ -41,10 +41,6 @@
 //! `codec/encoder/core/inc/svc_set_mb_syn.h`, and `codec/encoder/core/inc/set_mb_syn_cabac.h`.
 
 #![deny(unsafe_code)]
-// **S12.14 sealed this file.** Its one allow — the tree's last `C-ABI(test)` —
-// covered an `unsafe {}` around `WelsCabacEncodeInit(&mut SCabacCtx, ..)`, which
-// is a safe `extern "C" fn`. `extern "C"` is a calling convention, not a safety
-// claim, and the tag had been reading it as one.
 #![forbid(unsafe_code)]
 
 pub use crate::encoder::encoder_context::SMVUnitXY;
@@ -170,33 +166,9 @@ pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
-
-
-// `SWelsPps` used to be declared here: a one-field struct holding
-// `uiChromaQpIndexOffset: u32`. C++ has no such type -- the real one is
-// `param_svc.h`'s `SWelsPPS`, where `uiChromaQpIndexOffset` is a `uint8_t` at offset 10,
-// behind `iSpsId`/`iPpsId`/`iPicInitQp`/`iPicInitQs`. Reading it through the fake would
-// have returned `iSpsId`. It was dead code, and it is deleted rather than fixed.
-
-
-
 // ============================================================================
 // Low-Level CABAC Bitstream & Arithmetic Routines
 // ============================================================================
-//
-// There are none here any more, and that is the point. Upstream splits the two
-// CABAC files exactly this way: `set_mb_syn_cabac.cpp` owns the arithmetic
-// engine, `svc_set_mb_syn_cabac.cpp` owns only the macroblock *syntax* that
-// drives it. The port had transliterated the engine a second time into this
-// module — nine functions and five tables — and because a module-local item
-// beats a `use`, this file's syntax layer silently ran the local copy while
-// `WelsWriteSliceEndSyn` flushed through the canonical one. Two engines, one
-// `SCabacCtx`, split across a slice.
-//
-// That exact mechanism has already produced one real defect in this file: see
-// the `BsAlign` note below, where a local copy missing its trailing `BsFlush`
-// beat the import and corrupted every CABAC slice's first bytes. The engine is
-// now imported, once, and the shadowing cannot recur.
 pub use crate::encoder::set_mb_syn_cabac::{
     cabac_low_t, g_kiClz5Table, g_kuiCabacRangeLps, g_kuiStateTransTable, PropagateCarry,
     WelsCabacEncodeBypassOne, WelsCabacEncodeDecision, WelsCabacEncodeDecisionLps_,
@@ -205,12 +177,7 @@ pub use crate::encoder::set_mb_syn_cabac::{
     WELS_CONTEXT_COUNT, WELS_QP_MAX,
 };
 
-// `BsAlign` — svc_enc_golomb.h:112. This module used to declare its own copy
-// **without the trailing `BsFlush (pBs)`**, and being a local item it beat the
-// import in `WelsInitSliceCabac`. Without the flush, `pBs->pCurBuf` still points
-// before the pending accumulator word, so `WelsCabacEncodeInit` started the
-// arithmetic coder on top of bytes of the slice header that had already been
-// written. Use the one faithful copy.
+// `BsAlign` — svc_enc_golomb.h:112.
 pub use crate::encoder::vlc_encoder::BsAlign;
 
 // ============================================================================
@@ -227,8 +194,6 @@ pub fn WelsCabacMbType(
     {
         if eSliceType == EWelsSliceType::I_SLICE {
             let uiNeighborAvail = mbs.cur().uiNeighborAvail;
-            // F14's shape retired with the window: the neighbour is asked for
-            // only under its availability guard, and the ask itself is checked.
             let mut iCtx = 3;
 
             if (uiNeighborAvail & LEFT_MB_POS) != 0 && !IS_INTRA4x4(mbs.left().uiMbType) {
@@ -660,9 +625,7 @@ pub fn WelsCabacSubMbType(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pCurMb: &SM
                 WelsCabacEncodeDecision(buf, pCabacCtx, 21, 1);
                 continue;
             }
-            // D-dead-2 / F122 — the `_8x4`/`_4x8`/`_4x4` bins (contexts 22 and 23)
-            // are gone with the sub-8x8 search that produced their partitions. Every
-            // writer of `uiSubMbType` in this encoder sets `SUB_MB_TYPE_8x8`
+            // Every writer of `uiSubMbType` in this encoder sets `SUB_MB_TYPE_8x8`
             // (`svc_base_layer_md.rs:1164`/`:1249`/`:1262`,
             // `svc_mode_decision.rs:2495`); upstream's only other writers are inside
             // `#if 0 //Disable for sub8x8 modes for now`
@@ -699,9 +662,7 @@ pub fn WelsCabacSubMbMvd(
                 cur.sMvd[4 + idx].sAssignMv(sMvd);
                 cur.sMvd[5 + idx].sAssignMv(sMvd);
             } else {
-                // D-dead-2 / F122 — the `_4x4`/`_8x4`/`_4x8` motion-vector-difference
-                // arms go with the partitions. See `WelsCabacSubMbType` above for the
-                // reachability argument.
+                // See `WelsCabacSubMbType` above for the reachability argument.
                 unreachable!(
                     "sub_mb_type {:#x} — the sub-8x8 search is #if 0 upstream and \
                      unwritten here (D-dead-2/F122)",
@@ -758,8 +719,6 @@ pub fn WelsWriteBlockResidualCabac(
     eCtxBlockCat: ECtxBlockCat,
     iIdx: i16,
     iNonZeroCount: i16,
-    // S11.45: the residual cursor is the block it walked — every read below is
-    // bounds-checked against the caller's array.
     pBlock: &[i16],
     iEndIdx: i16,
 ) {
@@ -865,14 +824,6 @@ pub fn WelsWriteMbResidualCabac(
 ) -> i32 {
     {
         let uiMbType = mbs.cur().uiMbType;
-        // Both of these used to arrive as parameters *alongside* `pSlice`, which is
-        // where they come from — and the body reaches `pSlice.uiLastMbQp` between
-        // uses of them. Two live paths to one slice is the aliasing bug this session
-        // is here to remove, so they are derived here and reborrowed per call: each
-        // `&mut *` below is a child of `pSlice`'s tag that dies at the call it is
-        // made for, and the `(*pSlice)` accesses in between never overlap one.
-        // `sMbCacheInfo` was already dead as a parameter — the old body re-derived
-        // `pMbCache` from `pSlice` and never read the argument.
         let pMbCache = &mut pSlice.sMbCacheInfo;
         let pCabacCtx = &mut pSlice.sCabacCtx;
         let kpNonZeroCoeffCount = &pMbCache.iNonZeroCoeffCount;
@@ -894,18 +845,10 @@ pub fn WelsWriteMbResidualCabac(
             WelsCabacMbDeltaQp(buf, mbs, &mut *pCabacCtx, bFirstMbOfSlice);
             pSlice.uiLastMbQp = mbs.cur().uiLumaQp;
 
-            // S11.45: a shared borrow — every block below is read, and the
-            // non-zero-count array is a sibling field, so the two coexist by
-            // disjointness where the raw had to argue it.
             let pDct = &pMbCache.sDct;
 
             if uiMbType == MB_TYPE_INTRA16x16 {
                 let dc_buf = &pDct.iLumaI16x16Dc[..];
-                // The `is_some()` arm and its open-coded fallback (a filter/count
-                // over the same array) retired with the slot's `Option`:
-                // `pfGetNoneZeroCount` is installed by `Default` and re-installed by
-                // `WelsInitEncodingFuncs`, so the fallback was unreachable and the
-                // two arms had to be kept in agreement by hand.
                 let iNonZeroCount = (pFuncList.pfGetNoneZeroCount)(&pDct.iLumaI16x16Dc);
 
                 WelsWriteBlockResidualCabac(buf, 
@@ -1063,20 +1006,10 @@ pub fn WelsInitSliceCabac(
     /* init cabac */
     let iCabacInitIdc = (*pSlice).iCabacInitIdc;
     crate::encoder::set_mb_syn_cabac::WelsCabacContextInit(
-        // **S7.A2**: the callee takes `&sWelsEncCtx`. This body still holds the
-        // context raw, so the shared borrow is formed here — and it is a
-        // *whole-context* retag (F239). Nothing in this body derives a
-        // field-precise exclusive pointer from `pEncCtx` across it, which the
-        // F239 scan confirms tree-wide with its control seen red.
         &*pEncCtx,
         &mut (*pSlice).sCabacCtx,
         iCabacInitIdc,
     );
-    // The arithmetic coder's cursor is now three offsets into this same
-    // buffer, so the slice's start is the writer's position and nothing
-    // becomes a pointer on the way. What used to be
-    // `base.add(pBs.pos())` / `base.add(buf.len())` is what it always
-    // meant: where this slice begins, and where the buffer ends.
     let end = buf.len();
     let kiBsPos = crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs).pos();
     WelsCabacEncodeInit(&mut (*pSlice).sCabacCtx, kiBsPos, end);
@@ -1089,13 +1022,9 @@ pub fn WelsSpatialWriteMbSynCabac(
     pSliceBsBuf: &mut [u8],
     _pCtxOutBs: &mut Option<&mut crate::encoder::vlc_encoder::BsWriter>,
 ) -> i32 {
-    // **S11.1a reverses 4b's fence with the seam it guarded.** The fence
-    // kept this signature stable so the entropy dispatch would not carry a
-    // buffer; the bitstream pair now threads from the chain's top through
-    // that dispatch (F272), and deriving here from the shared context is
-    // the exact shape the conversion retires. The CABAC arm spends its bits
-    // through `sCabacCtx` and touches no `BsWriter`, so the threaded writer
-    // is unused here — the CAVLC arm is its consumer.
+    // The CABAC arm spends its bits through `sCabacCtx` and touches no
+    // `BsWriter`, so the threaded writer is unused here — the CAVLC arm is its
+    // consumer.
     let buf = pSliceBsBuf;
     let pCabacCtx = &mut pSlice.sCabacCtx;
     let pMbCache = &mut pSlice.sMbCacheInfo;

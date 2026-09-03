@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Padded pixel planes and the cursors that walk them — the safe replacement for
-//! taxonomy class **T2** (plan §1.2, contract §2.2.1).
+//! Padded pixel planes and the cursors that walk them.
 //!
 //! # The invariant being encoded
 //!
@@ -22,22 +21,10 @@
 //! picture after clamping the vector, and why `ExpandPicture` may write above row 0.
 //!
 //! **`pad` and `stride` are constructor parameters, never constants.** The C computes
-//! both with its own alignment rules and Phase 5 has to match them byte for byte; a
-//! type that baked in 32/16 would force the port to lie about chroma or about aligned
-//! strides.
+//! both with its own alignment rules.
 //!
-//! # What this buys
-//!
-//! The hazard in the raw form is not the arithmetic, it is that the size relationship
-//! between the buffer and the accesses lives *only* in pointer reinterpretations —
-//! precisely the shape of finding F1, where a 16-byte array was written 32 bytes deep
-//! through `from_raw_parts_mut` and nothing in the type system disagreed. Here the
-//! buffer and its geometry are one value: two call sites cannot disagree about a size,
-//! because there is only one size, and every access ends in a slice index.
-//!
-//! A panic from this module is a **port bug** (plan P13): the same call in the C++
-//! would have read or written out of bounds silently. Negative logical coordinates
-//! are *not* an error — they are the padding, and they are addressable.
+//! Negative logical coordinates are *not* an error — they are the padding, and they
+//! are addressable.
 
 /// Biased index arithmetic: logical `(dx, dy)` around `center` → byte offset.
 ///
@@ -78,18 +65,15 @@ impl PaddedPlane {
     /// Allocates a zeroed plane with `pad` pixels of padding on every side.
     ///
     /// `stride` is a parameter rather than `width + 2*pad` because the C aligns it
-    /// (`WELS_ALIGN(.., PICTURE_RESOLUTION_ALIGNMENT)`) and Phase 5 must reproduce the
-    /// alignment exactly.
+    /// (`WELS_ALIGN(.., PICTURE_RESOLUTION_ALIGNMENT)`).
     ///
     /// # Panics
     /// If `stride < width + 2*pad`, i.e. if a row of the padded picture would not fit
-    /// in a row of the allocation. That is a geometry bug in the caller, and the C++
-    /// equivalent would silently overlap rows.
+    /// in a row of the allocation. That is a geometry bug in the caller.
     ///
     /// Note the C++ fills freshly allocated picture buffers with `128`, not `0`
-    /// (`pic_queue.rs:236`, `write_bytes(pBuf0, 128u8, ..)`); a Phase 5 `Picture::new`
-    /// that replaces `AllocPicture` has to do that explicitly through
-    /// [`as_mut_slice`](Self::as_mut_slice).
+    /// (`pic_queue.rs:236`, `write_bytes(pBuf0, 128u8, ..)`); a `Picture::new` has to
+    /// do that explicitly through [`as_mut_slice`](Self::as_mut_slice).
     pub fn new(width: usize, height: usize, pad: usize, stride: usize) -> Self {
         assert!(
             stride >= width + 2 * pad,
@@ -107,10 +91,6 @@ impl PaddedPlane {
     }
 
     /// Adopts an existing buffer whose logical origin sits at byte `origin`.
-    ///
-    /// This is the constructor the Phase 2 shims feed: they own a `Vec` that the C
-    /// code allocated the layout of, and hand it here rather than re-deriving the
-    /// geometry at each call site.
     ///
     /// The padding is taken to be square, as every C allocation site builds it:
     /// `pad` is recovered as `origin % stride` and checked against `origin / stride`.
@@ -161,13 +141,11 @@ impl PaddedPlane {
     /// `AllocPicture`'s `bParseOnly` arm builds exactly this: it sets `iLinesize[i]`
     /// from the picture geometry and leaves `pData[i]` null, because a parse-only
     /// decode never reconstructs a sample. Every coordinate accessor panics on an
-    /// empty plane — there is no addressable byte — which is the same "nothing here"
-    /// the null pointer meant, reported at the access rather than at the crash.
+    /// empty plane — there is no addressable byte.
     ///
     /// `stride` may be zero **here and nowhere else**: with no bytes to index it is
     /// metadata, not geometry, and [`from_parts`](Self::from_parts) would have to
-    /// divide by it to recover the padding. `SPicture::default()` uses `empty(0)` to
-    /// go on reporting the `iLinesize` of zero that its all-null pointer form had.
+    /// divide by it to recover the padding. `SPicture::default()` uses `empty(0)`.
     pub fn empty(stride: usize) -> Self {
         Self {
             buf: Vec::new(),
@@ -248,8 +226,7 @@ impl PaddedPlane {
     /// The buffer's **root address**, without taking a slice of it.
     ///
     /// **This is not a convenience over `as_mut_slice().as_mut_ptr()`; it is a
-    /// different aliasing statement, and Phase 6 session F's exit battery is what
-    /// made the difference visible.** `&mut self.buf` deref-coerces to `&mut [u8]`
+    /// different aliasing statement.** `&mut self.buf` deref-coerces to `&mut [u8]`
     /// and that is a **`Unique` retag over the whole allocation**, so it pops every
     /// pointer previously derived from this plane. A caller that hands out a raw
     /// cursor, keeps it, and later asks the same plane for another one therefore
@@ -269,8 +246,7 @@ impl PaddedPlane {
         self.buf.as_mut_ptr()
     }
 
-    /// The same root, reached through `&self` — **F71's shape for the picture
-    /// pool** (Phase 9 E3, the `sRefPicView` harvest).
+    /// The same root, reached through `&self`.
     ///
     /// [`root_ptr`](Self::root_ptr) is sound for one thread and wrong under the
     /// fork: `&mut self` is a `Unique` retag over the plane's own header words,
@@ -279,7 +255,7 @@ impl PaddedPlane {
     /// even though neither writes the header. This reads the buffer pointer out
     /// through a shared borrow instead — identical address, the buffer's own
     /// whole-allocation provenance, no exclusive claim on the container. See
-    /// `MbArray::root_ptr` for the argument's first application.
+    /// `MbArray::root_ptr`.
     #[inline]
     pub fn root_ptr_shared(&self) -> *mut u8 {
         self.buf.as_ptr() as *mut u8
@@ -330,15 +306,13 @@ impl PaddedPlane {
 /// The read half of a plane cursor — and the whole of what an intra predictor
 /// needs of its reference.
 ///
-/// **Why this exists (T9.C2).** The encoder's intra predictors read the
-/// *reconstruction* picture, which under multi-threading is reached through the
-/// reconstruction seam's `RecCursor`: a shared, interior-mutable view that cannot
-/// lend `&[u8]` and therefore cannot be a [`PlaneCursor`]. The kernels never
-/// needed a slice. Measured over `encoder/get_intra_predictor.rs` and
-/// `common/intra_pred_common.rs`, every read of the reference is one of exactly
-/// two calls — `at` (45 sites) and `row` (6). Abstracting those two lets one set
-/// of kernels serve an ordinary plane and the shared view alike, with no copy and
-/// no second implementation to keep in step.
+/// The encoder's intra predictors read the *reconstruction* picture, which under
+/// multi-threading is reached through the reconstruction seam's `RecCursor`: a
+/// shared, interior-mutable view that cannot lend `&[u8]` and therefore cannot be
+/// a [`PlaneCursor`]. The kernels never needed a slice. Every read of the
+/// reference is one of exactly two calls — `at` and `row`. Abstracting those two
+/// lets one set of kernels serve an ordinary plane and the shared view alike, with
+/// no copy and no second implementation to keep in step.
 ///
 /// Static dispatch only: every consumer takes `&impl RefSamples`, so each kernel
 /// monomorphises to exactly the code it had and the trait costs nothing at run
@@ -352,9 +326,9 @@ impl PaddedPlane {
 /// that walk sub-blocks need to rebase, and they need to do it over *both* a plain
 /// slice plane (`PlaneCursor`) and a shared interior-mutable one (`RecCursor`).
 ///
-/// **Why a kernel must accept both** — S9.0b: the encoder's *source* picture is not
+/// **Why a kernel must accept both** — the encoder's *source* picture is not
 /// read-only. `VaaBackgroundMbDataUpdate` copies previous-source into current-source
-/// in-fork, per macroblock (F117), so a source plane is reached through the shared
+/// in-fork, per macroblock, so a source plane is reached through the shared
 /// seam exactly as the reconstruction planes are, while a prediction scratch on
 /// `SMbCache` is an owned array and stays a plain slice. One kernel, two storages.
 pub trait SampleCursor: Copy {
@@ -415,19 +389,12 @@ pub trait RefSamples {
     /// # The row type, and why the fold is the point
     ///
     /// Yields [`Row`](Self::Row) — a borrow for the plane cursors, an owned
-    /// `RowBuf` only for the cell view — for the reason that type exists (F264).
-    /// `N` sizes the *slice*, not the returned type.
+    /// `RowBuf` only for the cell view. `N` sizes the *slice*, not the returned
+    /// type.
     ///
     /// What matters for cost is **where the bounds checks land**: this walk slices
     /// once per block per side, where a per-row `row_n` walk makes a 16x8 SAD emit
     /// 32 branches before reading a sample.
-    ///
-    /// **Measured, not assumed (F259).** A standalone 16x16 SAD over a
-    /// 1952-stride plane, 4096 anchors x 300 iterations, timed three ways — the
-    /// inherent `&[u8; N]` walk, a by-value walk over a slice, and the same over
-    /// cells — came out at **33.8 / 33.8 / 33.9 ms** on warm rounds: ratios 1.000
-    /// and 1.004. **Compiled, by-value costs nothing; interpreted it does not**
-    /// (F267), which is why this yields `Row` rather than `[u8; N]`.
     ///
     /// # Panics
     /// If the block leaves the buffer, at the first slicing.
@@ -457,14 +424,9 @@ pub trait RefSamples {
     /// motion-compensation filters in `common/mc.rs` read rows whose length is a
     /// run-time `width`, so they need this.
     ///
-    /// **This is an associated type because a copy here is measurable (F264).**
-    /// The first draft of this method copied every row into a caller-supplied
-    /// buffer, which is what a cell view must do — and made the *decoder*, which
-    /// can simply lend, pay for it: `decode_1080p_bench` fell from 358.8 to
-    /// 334.2 fps on Constrained Baseline (**-7%**, ratio 1.62 -> 1.73) and about
-    /// 3% on Main and High. With `Row<'a> = &'a [u8]` for the plane cursors the
-    /// borrow is restored and only [`RecCursor`](crate::encoder::rec_view::RecCursor)
-    /// pays, which is the one case with no alternative.
+    /// **This is an associated type because a copy here is measurable.**
+    /// `Row<'a> = &'a [u8]` for the plane cursors, and only
+    /// [`RecCursor`](crate::encoder::rec_view::RecCursor) pays for a copy.
     ///
     /// The bound is `Deref<Target = [u8]>`, so a consumer writes `row[j]` and
     /// `row.iter()` without knowing which it got.
@@ -577,14 +539,12 @@ impl RefSamples for PlaneCursor<'_> {
 
 /// A plane cursor that can be read *and* written — [`RefSamples`] plus `set`.
 ///
-/// **Why this exists (T9.C2).** The deblocking filters are the one kernel family
-/// that reads and writes the same samples, and they run over two different
-/// storages: the decoder's ordinary picture, reached as [`PlaneCursorMut`], and
-/// the encoder's reconstruction picture, reached under multi-threading through
-/// the seam's `RecCursor`. Abstracting the two calls they actually make lets one
-/// set of filters serve both — measured over `common/deblocking_common.rs`, the
-/// six kernels and their two line helpers use `at` 22 times and `set` 18 times,
-/// and nothing else.
+/// The deblocking filters are the one kernel family that reads and writes the
+/// same samples, and they run over two different storages: the decoder's ordinary
+/// picture, reached as [`PlaneCursorMut`], and the encoder's reconstruction
+/// picture, reached under multi-threading through the seam's `RecCursor`.
+/// Abstracting the two calls they actually make lets one set of filters serve
+/// both.
 ///
 /// Note `set` takes `&mut self` even though `RecCursor` can write through
 /// `&self`: the stricter of the two signatures is the one that fits both, and
@@ -603,8 +563,7 @@ pub trait PlaneSamples: RefSamples {
 ///
 /// Same-plane read-while-write — intra prediction reading `(-1, dy)` and `(dx, -1)`
 /// while writing `(0..16, 0..16)`, deblocking straddling an MB edge — is a serial
-/// read/write through one `&mut`, which safe Rust permits. What it forbids is the
-/// thing that is genuinely illegal today: two live pointers into one allocation.
+/// read/write through one `&mut`, which safe Rust permits.
 #[derive(Debug)]
 pub struct PlaneCursorMut<'a> {
     buf: &'a mut [u8],
@@ -654,17 +613,10 @@ impl<'a> PlaneCursor<'a> {
     /// pointer. A per-row `row()` walk of a 16x8 block then emits **32** compare-and-
     /// branch pairs before the first sample is read, and on a kernel as cheap per
     /// sample as SAD that is most of the run time. This walker pays one bounds check
-    /// for the whole block and one `[..W]` per row, and measured 1.32-1.69x -> 0.83-
-    /// 1.14x across the seven SAD shapes (T5; table in `perf_baseline.md`).
+    /// for the whole block and one `[..W]` per row.
     ///
-    /// **This does not repeal T4's negative result**, which is about a different
-    /// thing. T4 built a `rows()` walker yielding *runtime-length* slices that each
-    /// needed `[..WIDTH]` and a `try_into`, and measured it worse than `row()` in
-    /// `mc.rs` — where the widths are const-generic and the checks genuinely do fold,
-    /// so `row()`'s two branches cost nothing and `Chunks::next`'s `min` and
-    /// `split_at` cost something. Both results hold: **use `row` where the window is
-    /// statically sized and the compiler can fold the checks, and this where it
-    /// cannot.** `mc.rs` was deliberately not refitted onto this.
+    /// **Use `row` where the window is statically sized and the compiler can fold
+    /// the checks, and this where it cannot.**
     ///
     /// # Panics
     /// If the block leaves the buffer, at the first slicing — same contract as `row`.
@@ -741,7 +693,7 @@ impl<'a> PlaneCursorMut<'a> {
     }
 
     /// Mutable form of [`row`](Self::row) — hoist this out of inner loops rather
-    /// than calling [`set`](Self::set) per sample (plan §7.4).
+    /// than calling [`set`](Self::set) per sample.
     #[inline]
     pub fn row_mut(&mut self, dy: isize, dx0: isize, len: usize) -> &mut [u8] {
         let start = idx(self.center, dx0, dy, self.stride);
@@ -751,12 +703,11 @@ impl<'a> PlaneCursorMut<'a> {
     /// `len` samples of relative row `sy` starting at relative column `sx0`, copied
     /// onto relative row `dy` starting at column `0` — **within this one plane**.
     ///
-    /// This is the F42 copy: a reference list entry naming the picture being decoded
-    /// makes motion compensation read and write one allocation, so there is no second
-    /// cursor to hand [`row`](Self::row) and [`row_mut`](Self::row_mut) at once. Both
-    /// windows are indices into the same slice and `copy_within` is what a single
-    /// `&mut` can express — memmove semantics, so an overlapping window is *defined*
-    /// rather than the `memcpy` the two-cursor form would have been.
+    /// A reference list entry naming the picture being decoded makes motion
+    /// compensation read and write one allocation, so there is no second cursor to
+    /// hand [`row`](Self::row) and [`row_mut`](Self::row_mut) at once. Both windows
+    /// are indices into the same slice and `copy_within` is what a single `&mut` can
+    /// express — memmove semantics, so an overlapping window is *defined*.
     ///
     /// # Panics
     /// If either window leaves the buffer, at the slice index — same contract as
@@ -791,8 +742,7 @@ impl<'a> PlaneCursorMut<'a> {
     /// (`pDstY = pDstY.add(16)`) and wrong for the composite kernels, where an outer
     /// kernel hands each of its sub-blocks to an inner one and then carries on —
     /// `IdctFourResAddPred_c` calling `IdctResAddPred_c` four times is the shape.
-    /// Added in Phase 2's pilot for exactly that; the returned cursor borrows `self`,
-    /// so the two can never be live at once.
+    /// The returned cursor borrows `self`, so the two can never be live at once.
     ///
     /// # Panics
     /// If the new anchor is outside the buffer, per [`new`](Self::new).
@@ -959,7 +909,7 @@ mod tests {
     #[test]
     fn empty_carries_a_stride_and_owns_nothing() {
         // The `bParseOnly` picture: `iLinesize[0]` set from the geometry, `pData[0]`
-        // null. Both halves of that state have to survive the conversion.
+        // null.
         let p = PaddedPlane::empty(224);
         assert!(p.is_empty());
         assert_eq!(p.stride(), 224);
@@ -972,8 +922,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn empty_addresses_no_coordinate_at_all() {
-        // Not even (0, 0): there is no byte to read, and the slice index says so
-        // rather than handing back whatever the null pointer used to point at.
+        // Not even (0, 0): there is no byte to read, and the slice index says so.
         PaddedPlane::empty(224).at(0, 0);
     }
 
@@ -1014,7 +963,7 @@ mod tests {
     #[should_panic]
     fn reading_beyond_the_padding_panics_rather_than_reading_a_neighbour() {
         let p = qcif_luma();
-        // One row below the last padded row: in the C++ this is somebody else's heap.
+        // One row below the last padded row.
         p.at(0, 144 + 32);
     }
 

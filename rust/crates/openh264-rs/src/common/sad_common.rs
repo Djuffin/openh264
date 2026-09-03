@@ -12,13 +12,6 @@
 //!
 //! Translated from `codec/common/inc/sad_common.h` and `codec/common/src/sad_common.cpp`.
 
-// `PSampleSadSatdCostFunc` and `PSample4SadCostFunc` were declared here too, the
-// former with `*const u8` parameters where `wels_func_ptr_def.h:127` says `uint8_t*`
-// -- a fifth identity for that alias, and a distinct function type from the one the
-// SSampleDealingFunc tables hold. The canonical declarations are
-// `encoder::md::PSampleSadSatdCostFunc` and
-// `encoder::svc_motion_estimate::PSample4SadCostFunc`; re-exported rather than
-// redeclared so there stays one definition each.
 pub use crate::encoder::md::PSampleSadSatdCostFunc;
 pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
 
@@ -42,48 +35,14 @@ pub fn WELS_ABS(iX: i32) -> i32 {
     iX.abs()
 }
 
-// **T8.C3 — the fourteen `#[unsafe(no_mangle)]` attributes in this file are deleted.**
-//
-// They were transliteration residue: the C++ has these names because it links one
-// object file per translation unit, and nothing in this crate ever reached them by
-// symbol. Every caller is a Rust path (`sad::WelsSampleSad4x4_c` in
-// `tests/kernels_differential_phase2.rs` and `benches/sad_bodies_bench.rs`), and the
-// dispatch tables hold function *items*.
-//
-// With `crate-type = ["cdylib", ...]` they stopped being harmless: a Rust cdylib
-// exports exactly its `#[no_mangle] pub extern` items, so these fourteen plus
-// `set_mb_syn_cabac.rs`'s three appeared in `nm -gU` beside the seven upstream names
-// — **and they are the same names `libopenh264` exports**, so a consumer that loaded
-// both libraries would have had one interpose on the other. `tools/abi_exports.sh` is
-// the gate that will not let them come back.
-
-// The fourteen raw `WelsSampleSad*_c` / `WelsSampleSadFour*_c` shims stood
-// here (the "Single-Block" and "4-Directional Diamond" sections) — the parked
-// raw half of the SAD family, installed only into T9.B25's transitional raw
-// tables after B2-B4 flipped the production tables safe. Session F converted
-// the tables' last readers (the ME family, the chroma P-skip check, and the
-// dormant SCD sites) and deleted the tables, so the raw bodies went per the
-// park's own charter: `sample_sad::<W, H>` / `sample_sad_four::<W, H>` below
-// are the family, refereed by the 583-row byte gates on every commit. This
-// file carries `#![deny(unsafe_code)]` with zero allows from this commit on.
-
 //=================== Safe kernels =====================//
 
-// The three `sample_sad_4x4/8x8/16x16` wrappers that used to sit here were a second,
-// unused SAD API — a `(&[u8], stride)` pair per surface, three fixed shapes, no
-// four-point form, and no caller anywhere in the tree. They are absorbed into the two
-// const-generic kernels below rather than left beside them: one safe SAD API, not two.
-//
-// **Why the composites flatten.** The raw kernels build the larger shapes out of the
-// smaller ones — `WelsSampleSad16x16_c` sums four 8x8 quadrants, `WelsSampleSad8x4_c`
-// sums two 4x4 halves — and the safe side computes each shape in one pass instead.
-// That is not an approximation. The summands are the same set of `|a - b|` terms and
-// `i32` addition is associative, so the only way regrouping could change the result is
-// overflow; the largest shape sums 16 x 16 terms of at most 255, i.e. **65 280**, four
-// orders of magnitude inside `i32`. No grouping of these operands can overflow, which
-// is what makes the flattening exact rather than merely close (contrast the 8x8 IDCT,
-// `phase2_findings.md` F8, where the intermediates *can* overflow and the port
-// therefore reproduces the old grouping operation for operation).
+// The C kernels build the larger shapes out of the smaller ones —
+// `WelsSampleSad16x16_c` sums four 8x8 quadrants, `WelsSampleSad8x4_c` sums two 4x4
+// halves — and these kernels compute each shape in one pass instead. The summands are
+// the same set of `|a - b|` terms and `i32` addition is associative, so the only way
+// regrouping could change the result is overflow; the largest shape sums 16 x 16 terms
+// of at most 255, i.e. 65 280, four orders of magnitude inside `i32`.
 
 use crate::safe::plane::RefSamples;
 #[cfg(test)]
@@ -95,7 +54,7 @@ use crate::safe::plane::PlaneCursor;
 /// The displacement is what the four-point kernels need and is a parameter rather than
 /// four rebased cursors because `PlaneCursor::advance` re-runs the anchor assertion:
 /// folding the offset into the row lookup keeps the four probes at one bounds check
-/// per row each, which is where this family's checks are meant to land (plan §7.4).
+/// per row each.
 #[inline(always)]
 fn sad_at<const W: usize, const H: usize, S: RefSamples>(
     sample1: &S,
@@ -107,8 +66,7 @@ fn sad_at<const W: usize, const H: usize, S: RefSamples>(
     // One bounds check per block per side, not two per row per side. Through a shim
     // neither the stride nor the buffer length is a compile-time value, so a per-row
     // `row()` walk cannot fold its checks and a 16x8 emits 32 branches before reading
-    // a sample — see `PlaneCursor::row_windows` for the measurement and for why this
-    // is the right call here and the wrong one in `mc.rs`.
+    // a sample — see `PlaneCursor::row_windows`.
     let rows1 = sample1.row_blocks::<W>(0, 0, H);
     let rows2 = sample2.row_blocks::<W>(dy, dx, H);
     for (a, b) in rows1.zip(rows2) {
@@ -163,11 +121,6 @@ mod tests {
         assert_eq!(WELS_ABS(0), 0);
     }
 
-    // Session F: these value tests drove the raw `WelsSampleSad*_c` shims
-    // (deleted with T9.B25's transitional tables); the same values now pin the
-    // safe kernels — which also ends F10's third instance for good: the raw
-    // bodies' trailing `pSrc += iStride` needed `(h + 1) * stride` buffers,
-    // and the safe kernels read exactly `W` x `H`.
     #[test]
     fn test_sample_sad_4x4_identical() {
         let buf = [42u8; 64];

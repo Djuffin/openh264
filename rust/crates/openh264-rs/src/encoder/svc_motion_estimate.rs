@@ -134,14 +134,6 @@ pub static QStepx16ByQp: [i32; 52] = [
 
 /// Dual-use scalar storing the predicted-SAD threshold before the search and
 /// the SATD after it.
-///
-/// **S11.28: was `union { uiSadPred: u32, uiSatd: u32 }`** — two names for the
-/// same 32 bits, so every access was an unsafe union read of whatever the other
-/// name last stored, and the `unsafe` said nothing a `u32` read does not. One
-/// field at the same offset, size and alignment (`repr(C)` both ways); the
-/// phase naming the C++ union carried lives here instead: writers before the
-/// search store the SAD prediction, `CalculateSatdCost` overwrites it with the
-/// SATD, and each reader knows its phase exactly as it had to before.
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub struct SadPredISatdUnit {
@@ -154,12 +146,6 @@ pub struct SadPredISatdUnit {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct SWelsME<'a> {
-    /// **S5.C4b**: was `*mut u16` into `pCtx->pMvdCostTable`. The lifetime this
-    /// introduces is the whole reason the struct has one: see
-    /// [`MvdCostCursor`](crate::safe::mvd_cost::MvdCostCursor) for why the biased
-    /// pointer cannot be a plain slice, and `SWelsMD` for how far the parameter
-    /// travels (three structs, all of them slice-encode locals — it reaches no
-    /// context field).
     pub pMvdCost: MvdCostCursor<'a>,
     pub uSadPredISatd: SadPredISatdUnit,
     pub uiSadCost: u32,
@@ -170,29 +156,10 @@ pub struct SWelsME<'a> {
     pub uiBlockSize: u8,
     pub uiReserved: u8,
 
-    // `pEncMb`/`pRefMb`/`pColoRefMb` stood here — the C++'s three per-block
-    // plane cursors. Session F deleted them on B3's coordinate identity,
-    // re-verified at this tree (583/583 rows, ~3.09M search entries/exits
-    // asserted, zero violations): `pEncMb == encRoot + (y*strideEnc + x)`,
-    // `pColoRefMb == refRoot + (y*strideRef + x)`, and `pRefMb == colo + mv`
-    // at every read. The search family takes the two planes as parameters and
-    // derives each position from `iCurMeBlockPixX/Y` + the MV it is probing —
-    // S37's value half: the *coordinates* are the information, and no retag
-    // can invalidate them.
-
     pub sMvp: SMVUnitXY,
     pub sMvBase: SMVUnitXY,
     pub sDirectionalMv: SMVUnitXY,
 
-    /// **S5.C6d**: was `*mut SScreenBlockFeatureStorage`. It is resolved from
-    /// `SPicture::pScreenBlockFeatureStorage`, which C6c made an `Option<Box<..>>` that
-    /// nothing ever fills, so this is `None` on every path the port can take. The
-    /// lifetime is the one `pMvdCost` already introduced (C4b) — a search block borrows
-    /// the frame's tables for the slice encode and no longer.
-    // Live since P10.3.D4: `InitMe` stamps the reference picture's storage here
-    // and `SetFeatureSearchIn` reads it (measured live at P10.3.D7 on three screen rows, zero on the camera control — 1304/4185/565 reads, and every one
-    // of them `Some`, because the accessor answers `false` for `None` and the
-    // feature search ran on all of them).
     pub pRefFeatureStorage: Option<&'a SScreenBlockFeatureStorage>,
 
     pub sMv: SMVUnitXY,
@@ -220,20 +187,10 @@ impl Default for SWelsME<'_> {
 }
 
 /// Input configuration block for the hash-based feature search engine.
-///
-/// Session F: `pSad` holds the safe cost slot, and the two block cursors
-/// (`pEnc`/`pColoRef`, with their strides) became the two planes plus the
-/// `iCurPixX/Y` coordinates the struct already carried — the same identity
-/// the search family converted on. The mvd-cost and hash cursors stay raw
-/// (the ctx family's and Phase 10's respectively).
-// Live since P10.3.D4 — `SetFeatureSearchIn` fills one per 8x8 feature search
-// (measured live at P10.3.D7 on three screen rows, zero on the camera control).
 pub struct SFeatureSearchIn<'a> {
     pub pSad: Option<PSampleSadSatdCostFunc>,
-    /// **S6.B1**: the storage's three read-side buffers, borrowed rather than
-    /// pointed at. `pQpelLocationOfFeature` held per-value *addresses* into the arena;
-    /// it holds per-value offsets now, so the arena itself has to travel with it —
-    /// hence `pLocationPointer`, which the pointer spelling did not need to name.
+    /// The storage's three read-side buffers. `pQpelLocationOfFeature` holds
+    /// per-value offsets into the arena — hence `pLocationPointer`.
     pub pTimesOfFeature: &'a [u32],
     pub pQpelLocationOfFeature: &'a [usize],
     pub pLocationPointer: &'a [u16],
@@ -257,8 +214,6 @@ impl Default for SFeatureSearchIn<'_> {
     fn default() -> Self {
         Self {
             pSad: None,
-            // Empty, where the pointers were null — and the guard at the end of
-            // `SetFeatureSearchIn` asks `is_empty()` for what it asked `is_null()`.
             pTimesOfFeature: &[],
             pQpelLocationOfFeature: &[],
             pLocationPointer: &[],
@@ -281,12 +236,6 @@ impl Default for SFeatureSearchIn<'_> {
 }
 
 /// Output container populated during feature search passes.
-///
-/// Session F: `pBestRef: *mut u8` is deleted — it cached `colo + sBestMv`,
-/// which is `sBestMv`'s information (the identity the whole family converted
-/// on), and its one consumer wrote it into the deleted `SWelsME::pRefMb`.
-// Live since P10.3.D4 — `SaveFeatureSearchOut` writes one per feature search
-// (measured live at P10.3.D7 on three screen rows, zero on the camera control).
 #[derive(Copy, Clone, Default)]
 pub struct SFeatureSearchOut {
     pub sBestMv: SMVUnitXY,
@@ -307,44 +256,13 @@ pub struct SFeatureSearchOut {
 // Function Pointer Types
 // ============================================================================
 
-// `PSampleSadSatdCostFunc` was declared here a second time (`md.rs` is the other),
-// and `census_allowlist.txt` carried the pair as `alias PSampleSadSatdCostFunc x2`.
-// **T9.B25**: one declaration, in `md.rs`, re-exported here — the slot type is
-// safe now and a second spelling of it is exactly the divergence the census exists
-// to catch (the allowlist entry retires with the duplicate). The `*Raw` alias
-// went with the transitional triple (session F).
 pub use crate::encoder::md::PSampleSadSatdCostFunc;
 
 /// `PSample4SadCostFunc` — the four-candidate SAD the diamond search steps with:
 /// `sample1`'s block against `sample2`'s at each whole-sample neighbour, written to
 /// `sad[0..4]` in the order **up, down, left, right**
 /// (`common/sad_common.rs::sample_sad_four::<W, H>`).
-///
-/// Safe since T9.B25; see [`PSampleSadSatdCostFunc`] for the rule and
-/// [`PSample4SadCostFuncRaw`] for the shape this replaces.
 pub type PSample4SadCostFunc = fn(&RecCursor<'_>, &RecCursor<'_>, &mut [i32; 4]);
-
-// `PSample4SadCostFuncRaw` — the transitional raw four-candidate shape — went
-// with the raw triple (session F).
-
-// `PSampleSadHor8Func` stood here — it typed `pfSampleSadHor8`, the
-// screen-content SIMD horizontal-SAD pair, which had zero writers and zero
-// readers in the whole tree. Both deleted, S18 (session F step 0).
-
-// **Session F — the five self-referential typedefs de-virtualized** (Phase
-// 4a's `pfMdCost` move, applied to the whole family). Each used to take
-// `*mut SWelsFuncPtrList` — the table handed back into its own callees so
-// they could reach the cost slots and the sub-search slots. The callees now
-// take exactly what they reach: `&SMeFuncs` (the sub-search group) and/or
-// `&SSampleDealingFunc` (the safe cost tables), plus the two planes the
-// deleted `SWelsME` cursors pointed into. Strides travel inside the planes.
-// The layer parameter died with the strides: it was read for nothing else.
-//
-// All remain `unsafe fn` — every body still walks `pMe.pMvdCost`, the raw
-// MVD-cost cursor (the ctx family's, G–H) — but nothing in the signatures is
-// raw, and under MT every reference parameter is a shared read of pre-fork
-// state (the table is written only by `PreprocessSliceCoding`, before the
-// fork — F132 round 7's hoist is what makes the `&` lawful).
 
 pub type PMotionSearchFunc = fn(
     pMeFuncs: &SMeFuncs,
@@ -392,9 +310,6 @@ pub type PLineFullSearchFunc = fn(
     bVerticalSearch: bool,
 );
 
-/// **S6.B1**: safe, and `pBuf` is gone with the pointers. It was the arena's base
-/// address, which every entry of the two tables was an offset from; the tables hold
-/// those offsets directly now, so the base is the constant 0 and needs no parameter.
 pub type PInitializeHashforFeatureFunc = fn(
     pTimesOfFeatureValue: &[u32],
     kiListSize: i32,
@@ -402,8 +317,6 @@ pub type PInitializeHashforFeatureFunc = fn(
     pFeatureValuePointerList: &mut [usize],
 );
 
-/// **S6.B1**: safe, and the arena arrives as its own slice — the cursors used to be
-/// pointers into it, so it did not need naming; they are indices now, so it does.
 pub type PFillQpelLocationByFeatureValueFunc = fn(
     pFeatureOfBlock: &[u16],
     kiWidth: i32,
@@ -412,8 +325,6 @@ pub type PFillQpelLocationByFeatureValueFunc = fn(
     pFeatureValuePointerList: &mut [usize],
 );
 
-/// **S6.B1**: the two storage buffers are slices; `pRef` stays raw, because it is a
-/// *plane* root and the plane family is not this checkpoint's.
 pub type PCalculateBlockFeatureOfFrame = fn(
     kpRef: &[u8],
     kiWidth: i32,
@@ -423,44 +334,18 @@ pub type PCalculateBlockFeatureOfFrame = fn(
     pTimesOfFeatureValue: &mut [u32],
 );
 
-/// Session F: the slot's one reader is `SetFeatureSearchIn`, whose block
-/// origin is a plane cursor now — the raw `SumOf*SingleBlock_c` kernels stay
-/// for the frame-feature builders, which walk a whole raw plane, and the slot
-/// holds the safe per-block twins below.
 pub type PCalculateSingleBlockFeature = fn(cRef: &RecCursor<'_>) -> i32;
 
-/// **D-scc-13**: the layer arrives exclusively, and `Option` is gone from the
-/// parameter. `UpdateFMESwitch` writes `uiFMEGoodFrameCount` on the layer's
-/// `pFeatureSearchPreparation` — the C++'s `SDqLayer*` is not const — so the
-/// slot's shared borrow could not carry the real body. The **table's** wrapper
-/// stays (`SWelsFuncPtrList::pfUpdateFMESwitch: Option<PUpdateFMESwitch>`): that
-/// one says "unset", which is a different question. The slot's one call site is
-/// after the join (`WelsEncoderEncodeExt`, "update scc related"), where a
-/// `&mut sWelsEncCtx` exists again, so nothing fork-reachable is retyped here.
 pub type PUpdateFMESwitch = fn(pCurLayer: &mut SDqLayer);
 
-/// The motion-estimation dispatch group — every slot the search family reaches
-/// *through the table it used to be handed back* (session F, the Phase 4a
-/// de-virtualization move applied to the five self-referential typedefs).
-///
-/// The C++ hands each search function `SWelsFuncPtrList*` so it can reach
-/// these five surfaces plus `sSampleDealingFuncs`; the port groups the five
-/// here and passes `&SMeFuncs` + `&SSampleDealingFunc` instead, so the table
-/// parameter dies and the typedefs stop naming the struct that contains them.
-/// Membership is the measured reach set: `pfSearchMethod` (the top-level
-/// search's per-block dispatch), `pfCalculateSatd` (fast/normal per frame),
-/// `pfCheckDirectionalMv` (screen-content arm), the two line-search slots and
-/// `pfCalculateSingleBlockFeature` (both FME, dormant). `pfMotionSearch`
-/// stays in the table proper: its readers are the mode-decision callers,
-/// which hold the whole table lawfully.
+/// The motion-estimation dispatch group — every slot the search family reaches.
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct SMeFuncs {
     pub pfSearchMethod: [Option<PSearchMethodFunc>; BLOCK_SIZE_ALL],
     pub pfCalculateSatd: Option<PCalculateSatdFunc>,
     pub pfCheckDirectionalMv: Option<PCheckDirectionalMv>,
-    // The cross/feature-search half. Live since P10.3.D4: `WelsMotionCrossSearch`
-    // takes both `if let Some(..)` on every screen frame (measured live at P10.3.D7 on three screen rows, zero on the camera control).
+    // The cross/feature-search half.
     pub pfVerticalFullSearch: Option<PLineFullSearchFunc>,
     pub pfHorizontalFullSearch: Option<PLineFullSearchFunc>,
     /// 0 - for 8x8, 1 for 16x16
@@ -489,18 +374,11 @@ impl Default for SMeFuncs {
 // ============================================================================
 
 /// Calculates MVD rate cost: `table[mx] + table[my]`.
-///
-/// **S5.C4b**: safe. The `*const u16` this took was the encoder's biased cursor
-/// into `pMvdCostTable`; it is a [`MvdCostCursor`] now, and with it every body in
-/// the search family that was `unsafe` *only* because of this call.
 #[inline(always)]
 pub fn COST_MVD(table: MvdCostCursor<'_>, mx: i32, my: i32) -> u32 {
     (table.at(mx) as u32) + (table.at(my) as u32)
 }
 
-/// Session F: the `pRef` argument and the `pRefMb` store are gone — the
-/// pointer was `colo + ksBestMv` at every call site (the verified identity),
-/// so the MV alone carries the result.
 #[inline]
 pub fn UpdateMeResults(ksBestMv: SMVUnitXY, kiBestSadCost: u32, pMe: &mut SWelsME<'_>) {
     pMe.sMv = ksBestMv;
@@ -545,8 +423,6 @@ pub fn SetMvWithinIntegerMvRange(
     }
 }
 
-// Live since P10.3.D4 — `PreprocessSliceCoding`'s screen block calls it once per
-// screen P frame (measured live at P10.3.D7 on three screen rows, zero on the camera control: 57/57/59, which is the P-frame count of each clip).
 #[inline]
 pub fn CalcFMESwitchFlag(
     uiFMEGoodFrameCount: u8,
@@ -567,10 +443,6 @@ pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
 // ============================================================================
 
 /// Populates motion estimation function pointer table based on CPU capabilities and content type.
-///
-/// Session F: `&mut` — the init path's exclusive borrow, taken before anything
-/// shares the table (the C-ABI init chain is single-threaded); the null
-/// tolerance guarded a pointer that no longer exists.
 pub fn WelsInitMeFunc(
     pFuncList: &mut SWelsFuncPtrList,
     uiCpuFlag: u32,
@@ -608,10 +480,6 @@ pub fn WelsInitMeFunc(
 // ============================================================================
 
 /// Top-level motion estimation search for a macroblock or sub-partition.
-// **S5.C4b re-tagged this.** It read `port-raw(Phase 9) — pMvdCost`, and pMvdCost is
-// a `MvdCostCursor` now. What is left unsafe here is the `ME_DUMP` arm: a read of
-// the `uSadPredISatd` union and two calls through the `unsafe fn` cost-function
-// pointers. Neither is this checkpoint's family.
 pub fn WelsMotionEstimateSearch(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
@@ -633,7 +501,7 @@ pub fn WelsMotionEstimateSearch(
         let kiY = (*pMe).iCurMeBlockPixY as isize;
         let cEnc = pEncPlane.cursor(kiX, kiY);
         // Entry state: the reference position is colocated (mv not yet
-        // searched), which is what the deleted `pRefMb` held here.
+        // searched).
         let cRef = pRefPlane.cursor(kiX, kiY);
         let mut enc = String::new();
         let mut rf = String::new();
@@ -692,7 +560,6 @@ pub fn WelsMotionEstimateSearch(
 }
 
 /// Shortcut motion estimation search for static macroblocks (forced MV = (0,0)).
-// Live since P10.3.D4 — `pfMotionSearch[COLLOCATED_STATIC]` (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1228/1244/669).
 pub fn WelsMotionEstimateSearchStatic(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
@@ -722,7 +589,6 @@ pub fn WelsMotionEstimateSearchStatic(
 }
 
 /// Shortcut motion estimation search for scrolled macroblocks.
-// Live since P10.3.D4 — `pfMotionSearch[SCROLLED_STATIC]` (measured live at P10.3.D7 on three screen rows, zero on the camera control: 3021/3300/1399).
 pub fn WelsMotionEstimateSearchScrolled(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
@@ -852,8 +718,7 @@ pub fn WelsMotionEstimateInitialPoint(
 // ============================================================================
 
 /// Runs after `MeEndIntepelSearch`, so `sMv` is quarter-pel and the integer
-/// reference position is `colo + (sMv >> 2)` — `MeRefineFracPixel`'s spelling
-/// of the same identity.
+/// reference position is `colo + (sMv >> 2)`.
 pub fn CalculateSatdCost(
     pSatd: Option<PSampleSadSatdCostFunc>,
     pMe: &mut SWelsME<'_>,
@@ -889,11 +754,6 @@ pub fn NotCalculateSatdCost(
 // Small Diamond Search (ME_DIA)
 // ============================================================================
 
-/// **S5.C4b**: safe, and no longer `extern "C"`. Both call sites are direct
-/// (`WelsDiamondSearch` and this file's own test) — the body was never installed in
-/// a dispatch table and no C consumer names it — so the four raw out-parameters
-/// become the `&mut`s the call sites already had in hand, and the four-SAD array
-/// becomes the `[i32; 4]` both sites already declared.
 #[inline]
 pub fn WelsMeSadCostSelect(
     iSadCost: &[i32; 4],
@@ -975,8 +835,7 @@ pub fn WelsDiamondSearch(
             }
 
             // The centre of this iteration's probe: colo + the current
-            // integer MV — the walking `pRefMb` this loop used to maintain,
-            // proven equal by the identity probe (session F step 1).
+            // integer MV.
             let kiRx = kiX + (*pMe).sMv.iMvX as isize;
             let kiRy = kiY + (*pMe).sMv.iMvY as isize;
 
@@ -1075,11 +934,6 @@ pub fn CheckDirectionalMvFalse(
 // 1D Orthogonal Cross Search (ME_CROSS)
 // ============================================================================
 
-// F125's site, live since P10.3.D4. `WelsInitMeFunc` installs this body into
-// `pfVerticalFullSearch`/`pfHorizontalFullSearch` **only** in its `bScreenContent`
-// arm, and both slots default to `None`, so the two call sites in
-// `WelsMotionCrossSearch` take their `if let Some(..)` never for camera content and
-// on every screen frame (measured live at P10.3.D7 on three screen rows, zero on the camera control: 4333/12273/1709).
 pub fn LineFullSearch_c(
     sdf: &SSampleDealingFunc,
     pMe: &mut SWelsME<'_>,
@@ -1122,7 +976,6 @@ pub fn LineFullSearch_c(
     let mut iBestPos: i32 = 0;
 
     for iTargetPos in iMinPos..iMaxPos {
-        // The walking pRef was colo + d rows (vertical) or d columns.
         let d = (iTargetPos - iCurMeBlockPix) as isize;
         let cRef = if bVerticalSearch {
             pRefPlane.cursor(kiX, kiY + d)
@@ -1205,8 +1058,6 @@ pub fn WelsDiamondCrossSearch(
     }
 }
 
-// Live since P10.3.D4 — `SetMeMethod(ME_DIA_CROSS_FME, ..)` puts it in
-// `pfSearchMethod[BLOCK_8x8]` (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1599/4942/749).
 pub fn WelsDiamondCrossFeatureSearch(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
@@ -1240,12 +1091,6 @@ pub fn WelsDiamondCrossFeatureSearch(
 /// `SetMeMethod` — `encoder_ext.cpp:2639-2662`. Aims one `pfSearchMethod` slot at a
 /// search family; `false` means the request was not honoured and the slot holds the
 /// diamond search (`ME_FULL` and every unknown value).
-///
-/// **Re-ported at P10.3.D1.** S18, session F deleted it as callerless: the C++'s only
-/// caller is `PreprocessSliceCoding`'s SCREEN_CONTENT block, which the port did not
-/// translate until P10.3.D4. The slot is `&mut Option<PSearchMethodFunc>` where the
-/// C++ takes `PSearchMethodFunc&` — the table's entries are `Option`s here, so the
-/// out-parameter is the option, not the pointer inside it.
 pub fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: &mut Option<PSearchMethodFunc>) -> bool {
     match uiMethod {
         ME_DIA => {
@@ -1277,11 +1122,8 @@ pub fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: &mut Option<PSearchMethodFu
 // Feature Search (FME / Screen Content Coding)
 // ============================================================================
 
-/// The safe per-block twin of [`SumOf8x8SingleBlock_c`] — what the
-/// `pfCalculateSingleBlockFeature` slot holds since session F. The raw kernel
-/// stays for the frame-feature builders, which walk a whole raw plane.
-// Live since P10.3.D4 — the `pfCalculateSingleBlockFeature[0]` slot, read by
-// `SetFeatureSearchIn` (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1304/4185/565).
+/// The per-block twin of [`SumOf8x8SingleBlock_c`] — what the
+/// `pfCalculateSingleBlockFeature` slot holds.
 pub fn sum_of_8x8_single_block(cRef: &RecCursor<'_>) -> i32 {
     let mut iSum = 0i32;
     for y in 0..8 {
@@ -1294,18 +1136,14 @@ pub fn sum_of_8x8_single_block(cRef: &RecCursor<'_>) -> i32 {
 
 /// As [`sum_of_8x8_single_block`], 16x16.
 ///
-/// **Unreachable in upstream's own configuration, and not because anything here is
-/// unfinished — F332.** `pfCalculateSingleBlockFeature[1]` is selected only for a
+/// `pfCalculateSingleBlockFeature[1]` is selected only for a
 /// `BLOCK_16x16` feature search, and `encoder_ext.cpp:1030-1031` fixes
 /// `kiMe16x16 = ME_DIA_CROSS` (no `ME_FME` bit) against
 /// `kiMe8x8 = ME_DIA_CROSS_FME`, so `SetMeMethod` puts the feature search in
 /// `pfSearchMethod[BLOCK_8x8]` and never in `[BLOCK_16x16]`. The same pair of
 /// constants makes `bIsBlock8x8` always true in `AllocPicture`, hence
 /// `iIs16x16 == 0` on every storage and `pfCalculateBlockFeatureOfFrame[1]`
-/// (`SumOf16x16BlockOfFrame_c`) unreachable with it. Measured 0 on all three screen
-/// rows at P10.3.D7 while its 8x8 twin read 1304/4185/565. Kept because it is a
-/// faithful port of a body upstream ships; deleting it would be deleting the
-/// reference, not dead port code.
+/// (`SumOf16x16BlockOfFrame_c`) unreachable with it.
 pub fn sum_of_16x16_single_block(cRef: &RecCursor<'_>) -> i32 {
     let mut iSum = 0i32;
     for y in 0..16 {
@@ -1317,10 +1155,6 @@ pub fn sum_of_16x16_single_block(cRef: &RecCursor<'_>) -> i32 {
 }
 
 pub fn SumOf8x8SingleBlock_c(kpRef: &[u8], kiRefStride: i32) -> i32 {
-    // S11.6: the pointer walk becomes an offset walk over the caller's slice.
-    // The rows are `kiRefStride` apart and `8` wide, exactly as the raw form
-    // read them, and every access is bounds-checked — where the raw version
-    // would have walked off a short plane silently, this panics.
     let mut iSum = 0i32;
     for r in 0..8 {
         let kiOff = r * kiRefStride as usize;
@@ -1337,10 +1171,6 @@ pub fn SumOf8x8SingleBlock_c(kpRef: &[u8], kiRefStride: i32) -> i32 {
 }
 
 pub fn SumOf16x16SingleBlock_c(kpRef: &[u8], kiRefStride: i32) -> i32 {
-    // S11.6: the pointer walk becomes an offset walk over the caller's slice.
-    // The rows are `kiRefStride` apart and `16` wide, exactly as the raw form
-    // read them, and every access is bounds-checked — where the raw version
-    // would have walked off a short plane silently, this panics.
     let mut iSum = 0i32;
     for r in 0..16 {
         let kiOff = r * kiRefStride as usize;
@@ -1373,14 +1203,8 @@ pub fn SumOf8x8BlockOfFrame_c(
     pTimesOfFeatureValue: &mut [u32],
 ) {
     for y in 0..kiHeight {
-        // **S6.B1**: the plane walk stays raw and the two writes are indexed. `iSum` is
-        // bounded by the kernel's own arithmetic — a sum of 8x8 bytes — and
-        // `pTimesOfFeatureValue` is `iActualListSize` long, which the allocator sizes
-        // from exactly that bound, so the index is in range for every well-formed
-        // storage. Out of range now panics where it used to write past the buffer.
         let row = (kiWidth * y) as usize;
-        // S11.6: the plane walk is an offset now. The row base is the same
-        // `kiRefStride * y`, and each block starts `x` bytes into it.
+        // The row base is `kiRefStride * y`, and each block starts `x` bytes into it.
         let kiRowBase = (kiRefStride * y) as usize;
         for x in 0..kiWidth {
             let iSum =
@@ -1400,14 +1224,8 @@ pub fn SumOf16x16BlockOfFrame_c(
     pTimesOfFeatureValue: &mut [u32],
 ) {
     for y in 0..kiHeight {
-        // **S6.B1**: the plane walk stays raw and the two writes are indexed. `iSum` is
-        // bounded by the kernel's own arithmetic — a sum of 16x16 bytes — and
-        // `pTimesOfFeatureValue` is `iActualListSize` long, which the allocator sizes
-        // from exactly that bound, so the index is in range for every well-formed
-        // storage. Out of range now panics where it used to write past the buffer.
         let row = (kiWidth * y) as usize;
-        // S11.6: the plane walk is an offset now. The row base is the same
-        // `kiRefStride * y`, and each block starts `x` bytes into it.
+        // The row base is `kiRefStride * y`, and each block starts `x` bytes into it.
         let kiRowBase = (kiRefStride * y) as usize;
         for x in 0..kiWidth {
             let iSum =
@@ -1424,10 +1242,9 @@ pub fn InitializeHashforFeature_c(
     pLocationOfFeature: &mut [usize],
     pFeatureValuePointerList: &mut [usize],
 ) {
-    // **S6.B1**, and this is the loop the whole shape follows from: `pBufPos` was a
-    // cursor walking the arena, laying each feature value's group base and giving that
-    // value's write cursor the same start. It is the running offset now — the identical
-    // arithmetic, `times << 1` per value because each position is an (x, y) pair.
+    // `pBufPos` is the running offset into the arena, laying each feature value's
+    // group base and giving that value's write cursor the same start —
+    // `times << 1` per value because each position is an (x, y) pair.
     let mut pBufPos = 0usize;
     for i in 0..kiListSize as usize {
         pLocationOfFeature[i] = pBufPos;
@@ -1443,12 +1260,9 @@ pub fn FillQpelLocationByFeatureValue_c(
     pLocationPointer: &mut [u16],
     pFeatureValuePointerList: &mut [usize],
 ) {
-    // **S6.B1**: `target_ptr` was the roving cursor for this feature value and
-    // `target_ptr.add(2)` its advance; `target` is that cursor as an arena offset and
-    // `+ 2` the same advance. Each value's cursor starts at its group base
-    // (`InitializeHashforFeature_c`) and is advanced once per position carrying that
-    // value, so the writes exactly fill `2 * times[value]` slots — the invariant the
-    // family's test asserts, because no gate reaches this line.
+    // Each value's cursor starts at its group base (`InitializeHashforFeature_c`)
+    // and is advanced once per position carrying that value, so the writes exactly
+    // fill `2 * times[value]` slots.
     let mut pSrcPointer = 0usize;
     let mut iQpelY = 0i32;
     for _ in 0..kiHeight {
@@ -1466,8 +1280,8 @@ pub fn FillQpelLocationByFeatureValue_c(
 
 /// The three dispatch slots `CalculateFeatureOfBlock` reads, copied out of the
 /// table so the caller can hold the reference picture and the table apart (they
-/// are `Copy` fn pointers; P10.3's caller in `PreprocessSliceCoding` needs the table
-/// `&mut` at the same time as the reference list). P10.1.B5 (D-scc-3).
+/// are `Copy` fn pointers; the caller in `PreprocessSliceCoding` needs the table
+/// `&mut` at the same time as the reference list).
 #[derive(Clone, Copy)]
 pub struct FmeKernels {
     pub calc_frame: [Option<PCalculateBlockFeatureOfFrame>; 2],
@@ -1489,11 +1303,11 @@ impl FmeKernels {
 
 /// `CalculateFeatureOfBlock` — `svc_motion_estimate.cpp:843-878`.
 ///
-/// **P10.1.B5 (D-scc-3)**: `pFeatureOfBlock` is the layer's scratch
+/// `pFeatureOfBlock` is the layer's scratch
 /// (`SFeatureSearchPreparation::pFeatureOfBlock`), which the C++ reaches through
 /// the address `PerformFMEPreprocess` stored in the storage; it arrives as a slice.
 /// `storage` is a separate parameter, not reached through `pRef`, on purpose:
-/// P10.3's caller takes the box out of the reference picture (`Option::take`), runs
+/// the caller takes the box out of the reference picture (`Option::take`), runs
 /// this with the picture's planes, and puts it back — the only way the picture's
 /// plane and its own storage can be borrowed together without a split accessor.
 /// Under LTR the planes come from a different picture anyway (`pRefOri[0]`). `pRef`
@@ -1505,12 +1319,9 @@ pub fn CalculateFeatureOfBlock(
     pFeatureOfBlock: &mut [u16],
     pScreenBlockFeatureStorage: &mut SScreenBlockFeatureStorage,
 ) -> bool {
-    // **S6.B1**: the four `is_null()` arms became four `is_empty()` arms. An unbuilt
-    // storage answers `false` here exactly as a storage with null buffers did — the
-    // allocator either sized all four or none, so no arm changes which inputs are
-    // rejected. The C++'s fifth arm, `NULL == pRef->pData[0]`, has no subject: a
+    // The C++'s fifth arm, `NULL == pRef->pData[0]`, has no subject: a
     // pool picture always has its three planes (`SPicture::new` builds them), so
-    // there is nothing to test (S37).
+    // there is nothing to test.
     let SScreenBlockFeatureStorage {
         pTimesOfFeatureValue,
         pLocationOfFeature,
@@ -1543,10 +1354,6 @@ pub fn CalculateFeatureOfBlock(
     pTimesOfFeatureValue[..kiActualListSize as usize].fill(0);
 
     if let Some(calc_frame_feature) = kernels.calc_frame[iIs16x16] {
-        // **S11.6: the plane arrives as a slice from its logical origin**, which
-        // is the same address `data_ptr(0)` returned — `as_slice()[origin()..]`
-        // is that accessor's own arithmetic, with the buffer's end now known to
-        // the callee. The slot and both kernels behind it are safe fns.
         let iRefStride = pRef.stride(0);
         let plane = pRef.plane(0);
         let kpRefData = &plane.as_slice()[plane.origin()..];
@@ -1569,16 +1376,7 @@ pub fn CalculateFeatureOfBlock(
     true
 }
 
-// Live since P10.3.D4: `PreprocessSliceCoding`'s screen block
-// (`encoder_ext.cpp:2745-2749`) takes the layer's scratch and the reference's
-// storage out by `Option::take` so this can hold the picture's planes and its
-// storage at once (D-scc-14). measured live at P10.3.D7 on three screen rows, zero on the camera control: 57/57/59 — once per screen P frame whose
-// reference has no features yet.
 /// `PerformFMEPreprocess` — `svc_motion_estimate.cpp:880-893`.
-///
-/// **P10.1.B5 (D-scc-3)**: the C++ stores its caller's `pFeatureOfBlock` pointer
-/// into the storage (`:882`) and `CalculateFeatureOfBlock` reads it back — one
-/// owner, two names. The scratch stays the layer's and is passed through instead.
 pub fn PerformFMEPreprocess(
     kernels: &FmeKernels,
     pRef: &SPicture,
@@ -1601,7 +1399,6 @@ pub fn PerformFMEPreprocess(
     }
 }
 
-// Live since P10.3.D4 (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1304/4185/565, every call returning `true`).
 pub fn SetFeatureSearchIn<'a>(
     pMeFuncs: &SMeFuncs,
     sdf: &SSampleDealingFunc,
@@ -1631,13 +1428,6 @@ pub fn SetFeatureSearchIn<'a>(
     pFeatureSearchIn.iCurPixY = sMe.iCurMeBlockPixY;
     pFeatureSearchIn.iCurPixYQpel = pFeatureSearchIn.iCurPixY << 2;
 
-    // **S5.C6d.** Placed here, not at the top: every line above still runs exactly
-    // as it did, and only the point where the old code would have dereferenced a
-    // null `pRefFeatureStorage` becomes a defined `false`. That is the same answer
-    // its sibling `CalculateFeatureOfBlock` already gives when its own pointers are
-    // null, and it replaces undefined behaviour rather than defined behaviour: with
-    // `SPicture::pScreenBlockFeatureStorage` never filled (F229), a caller setting
-    // `SCREEN_CONTENT_REAL_TIME` reached this line with a null and read through it.
     let Some(pRefFeatureStorage) = pRefFeatureStorage else {
         return false;
     };
@@ -1661,7 +1451,6 @@ pub fn SetFeatureSearchIn<'a>(
     true
 }
 
-// Live since P10.3.D4 (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1304/4185/565).
 pub fn SaveFeatureSearchOut(
     sBestMv: SMVUnitXY,
     uiBestSadCost: u32,
@@ -1671,7 +1460,6 @@ pub fn SaveFeatureSearchOut(
     pFeatureSearchOut.uiBestSadCost = uiBestSadCost;
 }
 
-// Live since P10.3.D4 (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1304/4185/565).
 pub fn FeatureSearchOne(
     sFeatureSearchIn: &SFeatureSearchIn<'_>,
     iFeatureDifference: i32,
@@ -1700,10 +1488,9 @@ pub fn FeatureSearchOne(
     let iMaxQpelY = sFeatureSearchIn.iMaxQpelY;
 
     {
-        // **S6.B1**: two indexed reads where there were two pointer loads. `times` is
-        // the histogram entry for this feature value and `pQpelPosition` was the
-        // address of that value's group in the arena — the group's offset now, which
-        // the walk below adds to.
+        // `times` is the histogram entry for this feature value and
+        // `pQpelPosition` the group's offset in the arena, which the walk below
+        // adds to.
         let times = sFeatureSearchIn.pTimesOfFeature[iFeatureOfRef as usize];
         let iSearchTimes = times.min(kuiExpectedSearchTimes) as i32;
         let iSearchTimesx2 = iSearchTimes << 1;
@@ -1767,7 +1554,6 @@ pub fn FeatureSearchOne(
     }
 }
 
-// Live since P10.3.D4 (measured live at P10.3.D7 on three screen rows, zero on the camera control: 1304/4185/565).
 pub fn MotionEstimateFeatureFullSearch(
     sFeatureSearchIn: SFeatureSearchIn<'_>,
     kuiMaxSearchPoint: u32,
@@ -1799,13 +1585,8 @@ pub fn MotionEstimateFeatureFullSearch(
 /// `CountFMECostDown` — `svc_motion_estimate.cpp:1027-1041`: the sum of every
 /// coded slice's `uiSliceFMECostDown`.
 ///
-/// **Re-ported at P10.3.D2**, with `UpdateFMEGoodFrameCount` and
-/// `UpdateFMESwitch`. T6.D2 deleted all three (S18) while the screen-content
-/// dispatch that installs them was untranslated; D4 translates it.
-///
 /// `&mut` where the C++ takes `const SDqLayer*`, and nothing here is written:
-/// the slice-bank family has only exclusive accessors, because S11.35 deleted
-/// `slice_in_layer`'s shared twin for having no callers. The C++'s dead first
+/// the slice-bank family has only exclusive accessors. The C++'s dead first
 /// `pSlice` read (`:1031`) has no subject — the loop overwrites it before any
 /// use.
 fn CountFMECostDown(pCurLayer: &mut SDqLayer) -> u32 {
@@ -1818,9 +1599,8 @@ fn CountFMECostDown(pCurLayer: &mut SDqLayer) -> u32 {
             {
                 // `uint32_t +=`: the C++ wraps, so this does. `uiSliceFMECostDown`
                 // is itself a wrapping `+=`/`-=` pair in
-                // `WelsDiamondCrossFeatureSearch`, and **nothing ever resets it**
-                // (its three mentions in the whole reference are that pair and the
-                // sum here) — it accumulates for the life of the slice object.
+                // `WelsDiamondCrossFeatureSearch`, and **nothing ever resets it** —
+                // it accumulates for the life of the slice object.
                 uiCostDownSum = uiCostDownSum.wrapping_add(pSlice.uiSliceFMECostDown);
             }
         }
@@ -1845,12 +1625,6 @@ fn UpdateFMEGoodFrameCount(iAvMBNormalizedRDcostDown: u32, uiFMEGoodFrameCount: 
 
 /// `UpdateFMESwitch` — `svc_motion_estimate.cpp:1054-1058`. Called through
 /// `pfUpdateFMESwitch` after the fork joins, on the frame thread.
-///
-/// The C++ dereferences `pFeatureSearchPreparation` unconditionally and may do
-/// so safely: this body is installed only from inside
-/// `PreprocessSliceCoding`'s `if (pFeatureSearchPreparation)` (D4), so a layer
-/// reaching it without one does not exist. The port asks anyway, which costs a
-/// branch and removes a null dereference from the reachable set.
 ///
 /// `kiMbNum` is never zero on any path that installs this — the layer's
 /// macroblock grid is sized in `InitDqLayers`, before any slice is coded — so
@@ -1878,19 +1652,11 @@ pub fn UpdateFMESwitchNull(_pCurLayer: &mut SDqLayer) {}
 /// `SFeatureSearchPreparation` — `svc_enc_frame.h:59-69`. One per encoder, on the
 /// last DQ layer (`encoder_ext.cpp:1125-1135`), screen content only.
 ///
-/// **Re-ported at P10.1.B4.** T6.D2 deleted it with `RequestFeatureSearchPreparation`
-/// / `ReleaseFeatureSearchPreparation` (S18: nothing called them while `InitDqLayers`
-/// refused screen content two lines earlier); `InitDqLayers` builds it again now,
-/// and `Drop` is the release (`encoder_ext.cpp:973-977`).
-///
 /// `pRefBlockFeature` is not carried: the C++ writes it (`encoder_ext.cpp:2743`)
 /// and nothing reads it. `pFeatureOfBlock` is the per-frame scratch that every
-/// reference's `CalculateFeatureOfBlock` fills (D-scc-3) — the C++ stores its
+/// reference's `CalculateFeatureOfBlock` fills — the C++ stores its
 /// *address* into the reference's storage (`pFeatureOfBlockPointer`) and reads it
 /// back only inside that function; here it travels as `&mut [u16]` at the call.
-///
-/// `UpdateFMESwitch`, `CountFMECostDown` and `UpdateFMEGoodFrameCount`, deleted at
-/// the same time, are P10.3's, with the dispatch block that installs them.
 #[derive(Debug)]
 pub struct SFeatureSearchPreparation {
     /// Feature of every block (8x8), begin with the point — `svc_enc_frame.h:62`.
@@ -1931,13 +1697,6 @@ impl SFeatureSearchPreparation {
     }
 }
 
-// `RequestScreenBlockFeatureStorage` / `ReleaseScreenBlockFeatureStorage`
-// (`svc_motion_estimate.cpp:683-754`) stood here until T7.C6 deleted them as the
-// last `WelsMallocz`/`WelsFree` sites in `src/encoder`. The allocator is
-// `SScreenBlockFeatureStorage::for_frame` (`picture.rs`); its call site is
-// `AllocPicture` (`wels_preprocess.rs`), as `picture_handle.cpp:115` calls it, from
-// P10.1.B5; the release is `Drop`.
-
 // ============================================================================
 // Unit Tests
 // ============================================================================
@@ -1973,16 +1732,12 @@ mod tests {
     #[test]
     fn test_cost_mvd_computation() {
         let table_data = [10u16, 20, 30, 40, 50, 60, 70, 80];
-        // S5.C4b: the raw base pointer is a cursor parked at index 0 — the same
-        // two entries the raw form read, now without the `unsafe`.
         let cost = COST_MVD(MvdCostCursor::new(&table_data, 0), 2, 5);
         assert_eq!(cost, 30 + 60);
     }
 
     #[test]
     fn test_single_block_sums() {
-        // S11.6: the kernels take slices, so this instrument needs no `unsafe`
-        // and its allow retires with them.
         let buf8 = [1u8; 64];
         assert_eq!(SumOf8x8SingleBlock_c(&buf8, 8), 64);
 
@@ -2015,16 +1770,7 @@ mod tests {
         }
     }
 
-    /// **The screen-content family's first test, and its only referee (S6.B1).**
-    ///
-    /// No sweep row reaches a line of this code: `SPicture::pScreenBlockFeatureStorage`
-    /// is never filled (F229), `AllocPicture` refuses `iNeedFeatureStorage != 0`, and
-    /// `PerformFMEPreprocess` has no call site. So the byte gate proved nothing about
-    /// the S6.B1 conversion, and this is what stands in for it — the storage is
-    /// constructible by hand now, which is the point of owning its buffers.
-    ///
-    /// What it asserts is the arena's three structural invariants, which are exactly
-    /// the properties the pointer-to-index rewrite could have broken:
+    /// The arena's three structural invariants:
     ///
     /// 1. the histogram sums to the number of block positions — every block counted once;
     /// 2. each value's write cursor ends exactly `2 * times[value]` past its base —
@@ -2056,7 +1802,7 @@ mod tests {
         let bw = (W - MARGIN) as usize;
         let bh = (H - MARGIN) as usize;
         let mut storage = SScreenBlockFeatureStorage::for_frame(W, H, true, 0);
-        // D-scc-3: the layer's scratch, passed through rather than aliased.
+        // The layer's scratch, passed through rather than aliased.
         let mut feature_of_block = vec![0u16; bw * bh];
 
         assert!(CalculateFeatureOfBlock(
@@ -2171,13 +1917,6 @@ mod tests {
 
     #[test]
     fn test_fme_noop_callback() {
-        // **S6.A1**: the callback took `*mut SDqLayer` and this test passed null to
-        // say "the no-op ignores its layer". The parameter is `&SDqLayer` now, so
-        // null is unrepresentable and the test says the same thing with a real
-        // layer — that the body is empty, which is the whole claim. S11.29: the
-        // callee is a safe `fn`, so the block and its instrument allow retire.
-        // **D-scc-13**: the parameter is `&mut SDqLayer` now, so the claim is
-        // the same one with an exclusive borrow — the body writes nothing.
         let mut layer = crate::encoder::svc_encode_slice::SDqLayer::default();
         UpdateFMESwitchNull(&mut layer);
     }
@@ -2265,7 +2004,5 @@ mod tests {
 /// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
 static ME_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
-// used to live in this module disagreed with cpu_core.h and with each other --
-// WELS_CPU_NEON alone had seven distinct values across eight modules.
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSE41};

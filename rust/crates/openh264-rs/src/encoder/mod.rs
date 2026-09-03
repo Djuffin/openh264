@@ -1,8 +1,3 @@
-// **S11.5 (step 5): NOT sealed, and the reason is `forbid`'s scope.** This
-// file holds no `unsafe` itself, but `#![forbid]` in a module root applies to
-// the module's whole subtree — every `mod` it declares — so sealing here would
-// forbid `unsafe` across files that still carry audited allows. A module root
-// seals when its subtree does, which is E2's business, not a per-file one.
 #![deny(unsafe_code)]
 pub mod abi_guard;
 pub mod au_set;
@@ -18,15 +13,6 @@ pub mod paraset_strategy;
 pub mod picture;
 pub mod rec_view;
 pub mod set_mb_syn_cabac;
-// **T6.J6's exemption retired at T7.C8, on schedule.** `#![deny(unsafe_code)]` above
-// is an inner attribute on the `encoder` module, so it reaches every file below it —
-// and until this session two of them were exempted here, at the declaration rather
-// than by leaving the deny off `mod.rs`, so that the boundary was visible where a
-// reader would look for it. `wels_task_management` was the first and it no longer
-// exists (T7.B4); `slice_multi_threading` was the second and it carries its own
-// `#![deny(unsafe_code)]` now, with every one of its 26 unsafe items allowed and
-// tagged. **The declaration list below has no exemptions left**, which is what Phase 6
-// promised for this phase's close.
 pub mod slice_multi_threading;
 pub mod encoder_ext;
 pub mod svc_base_layer_md;
@@ -44,20 +30,9 @@ pub mod rc;
 pub mod wels_encoder_ext;
 pub mod wels_func_ptr_def;
 pub mod wels_preprocess;
-// `wels_task_management` stood here — `CWelsBaseTask` and its discriminant, the four
-// wrapper types, `CWelsTaskList`, `WelsTaskBarrier`, `CWelsTaskManageBase` and
-// `CWelsTaskManageOne`, and two more `Send`/`Sync` pairs. Deleted at T7.B4 with the
-// pool it drove. Its allow retired with it; `slice_multi_threading`'s is the last one
-// left in this module, and step 7 takes that.
 
 /// Whether an `OH264_*DUMP` debugging dump is switched on, cached so the hot paths
 /// that call it pay one relaxed load rather than an environment scan.
-///
-/// These dumps are the differential-bisection technique described in
-/// `rust/docs/encoder_port_status.md`: patch **both** encoders to print the same
-/// per-macroblock / per-block state, `diff` the two, and narrow. The C++ half is a
-/// throwaway patch (`git checkout codec/` afterwards); this half stays so only the
-/// C++ side has to be re-patched next time.
 ///
 /// | variable | printed at |
 /// |---|---|

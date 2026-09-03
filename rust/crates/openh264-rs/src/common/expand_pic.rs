@@ -24,13 +24,6 @@
 /// `stride` bytes or more (`AllocPicture` rounds the row count up) — with the
 /// picture's `(0, 0)` at byte `pad * stride + pad`, which is where both
 /// codecs' `AllocPicture`s put it (`pData = pBuffer + (1 + stride) * pad`).
-/// This is a free function over that geometry rather than a `PaddedPlane`
-/// method because in Phase 2 the allocation is still C-owned; the packaging
-/// onto `Picture` happens in Phase 5 (plan §2.2.1).
-///
-/// Runtime-length `copy_within`/`fill` are the right idiom here, not a
-/// per-call cost problem: this runs once per plane per reference picture, and
-/// the C++ makes the identical `memcpy`/`memset` library calls.
 ///
 /// # Panics
 /// If the geometry does not hold: `stride < pic_w + 2*pad`, a buffer shorter
@@ -80,43 +73,3 @@ pub fn expand_picture(buf: &mut [u8], stride: usize, pic_w: usize, pic_h: usize,
         buf[row + pic_w..row + pic_w + pad].fill(right);
     }
 }
-
-// `ExpandReferencingPicture` and the two `_c` kernels stood here; all three are
-// gone (T9.B2, S18).
-//
-// # What was here, and the two reasons it went
-//
-// The C++ reaches the border-expansion kernels through `SExpandPicFunc`, a
-// three-slot table (`expand_pic.h:88`) filled by `InitExpandPictureFunc`
-// (`expand_pic.cpp:351`) from the CPU flag. This port has no SIMD, so every
-// install in both codecs set the same three constants and the alignment index
-// selected between two identical functions. T4b.3b deleted the table, its
-// installer, its four `PExpandPictureFunc` typedefs and the two
-// `SWelsFuncPtrList` / `SWelsDecoderContext` members it occupied, leaving one
-// `ExpandReferencingPicture` over `ExpandPictureLuma_c` / `ExpandPictureChroma_c`
-// — three raw plane origins, because the two codecs' pictures did not own their
-// planes. (That consolidation also fixed a real divergence: of the port's three
-// copies of the C++ function, `decoder/manage_dec_ref.rs`'s had never written the
-// `kiWidthUV < 16` arm at all — chroma planes of a frame narrower than 32 pixels.
-// `phase4b_findings.md` F21 has the reachability analysis; the corpus is 176x144
-// and wider, so no gate could have caught it.)
-//
-// Then both codecs' pictures came to own their planes —
-// `decoder::picture::SPicture::expand_as_reference` (T5.AC5) and
-// `encoder::picture::SPicture::expand_as_reference` (T6.F4) — and each hands
-// [`expand_picture`] the plane's own allocation. `ExpandReferencingPicture` lost
-// its last caller there and was deleted; the two `_c` kernels and
-// `expand_shim_span` (the one place a mid-plane `pDst` was rebuilt into a whole
-// allocation) were kept "as the C-shaped subjects
-// `tests/kernels_differential_phase2.rs` runs against the reference".
-//
-// They were not run against the reference. The test's golden was
-// [`expand_picture`] — the function the shim itself calls — so the equivalence it
-// asserted was tautological, and the only live code under it was
-// `expand_shim_span`'s own arithmetic. The two properties that are about the
-// *kernel* (every padding byte written and none read; slack columns untouched)
-// moved onto [`expand_picture`] directly in the same commit, and this file is now
-// `#![deny(unsafe_code)]`.
-//
-// Session B's plane census (F104) is what made the deletion visible: nothing in
-// `src/` named either kernel.

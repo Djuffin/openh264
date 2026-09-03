@@ -40,16 +40,8 @@
     dead_code,
     unused_variables
 )]
-// **T9.C2**: the file's last raw pointer left with the two `(pPred, pRef, kiStride)`
-// shims, so the port's safety floor applies here now.
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
-
-// `PGetIntraPredFunc` and `PWelsI16x16LumaPredFunc` stood here — two names for one
-// `unsafe extern "C" fn(*mut u8, *mut u8, i32)`, deleted with the shims they
-// described (T9.C2). Nothing outside this file ever named either: the encoder has
-// its own three types, now safe and split by prediction size, and the decoder's
-// `PGetIntraPredFunc` is a different signature entirely (`decoder_context.rs:244`).
 
 // ============================================================================
 // Safe kernels
@@ -57,25 +49,23 @@
 
 // Both kernels write a **packed** 16x16 block: `pPred` advances by a literal 16 per
 // row, and `kiStride` describes the reference surface only. That is what separates
-// these two from their same-named 2-arg cousins in `decoder/get_intra_predictor.rs`
-// (converted in T3), which predict in place on a strided plane. Same Wels names,
-// different functions, and they must never be unified — hence `[u8; 256]` here where
-// the decoder side takes a `PlaneCursorMut`.
+// these two from their same-named 2-arg cousins in `decoder/get_intra_predictor.rs`,
+// which predict in place on a strided plane. Same Wels names, different functions,
+// and they must never be unified — hence `[u8; 256]` here where the decoder side
+// takes a `PlaneCursorMut`.
 //
 // The two also take *different* reference shapes rather than a common one, because
 // their reaches genuinely differ: V reads the sixteen samples of the row above and
 // nothing else, H reads one sample from each of sixteen rows in the column to the
 // left. A shared `(cursor)` parameter would make each kernel's contract claim the
-// other's reach — the union-span mistake T4 recorded (`safety_refactor_log.md`,
-// "per-kernel reach, not the union").
+// other's reach.
 
 use crate::safe::plane::{PlaneCursor, RefSamples};
 
 /// C++: `WelsI16x16LumaPredV_c`, `codec/common/src/intra_pred_common.cpp`.
 ///
 /// Copies the sixteen reconstructed samples above the macroblock down all sixteen
-/// rows. `top` is the caller's proof that the row above exists — in Phase 5 it is
-/// `refc.row(-1, 0, 16)`.
+/// rows. `top` is the caller's proof that the row above exists.
 #[inline(always)]
 pub fn i16x16_luma_pred_v(pred: &mut [u8; 256], top: &[u8; 16]) {
     for y in 0..16 {
@@ -93,7 +83,7 @@ pub fn i16x16_luma_pred_v(pred: &mut [u8; 256], top: &[u8; 16]) {
 /// is written once from an input the block does not contain, so ascending is the same
 /// sixteen writes in a different order. `fill` replaces the `0x0101010101010101 *
 /// value` broadcast — that trick was never a memory operation, only a way to spell a
-/// wide store (`prompts/phase2.md` §3.3, taxonomy T7).
+/// wide store.
 #[inline(always)]
 pub fn i16x16_luma_pred_h(pred: &mut [u8; 256], reference: &impl RefSamples) {
     for y in 0..16 {
@@ -102,24 +92,6 @@ pub fn i16x16_luma_pred_h(pred: &mut [u8; 256], reference: &impl RefSamples) {
         row.fill(v);
     }
 }
-
-// ============================================================================
-// C Reference Implementations
-// ============================================================================
-
-// **The two `(pPred, pRef, kiStride)` shims stood here — deleted in T9.C2.**
-//
-// They were this file's only unsafe: `from_raw_parts` over a caller-promised
-// reach, once per prediction mode, under a hand-written `# Safety` contract. The
-// encoder's intra-prediction tables were their only callers, and those tables now
-// hold safe `fn(&mut [u8; N], &RecCursor<'_>)` — so the adapters moved to
-// `encoder/get_intra_predictor.rs`, beside the other twenty-six, where the
-// encoder-side `RecCursor` belongs. `common` gains no dependency on `encoder`,
-// and this file reaches `#![deny(unsafe_code)]`.
-//
-// The kernels themselves are unchanged and still live above: `i16x16_luma_pred_v`
-// takes the sixteen samples above the block by value, `i16x16_luma_pred_h` reads
-// its left column through `RefSamples`.
 
 // ============================================================================
 // Unit Tests
@@ -132,10 +104,6 @@ mod tests {
     
     #[test]
     fn test_i16x16_luma_pred_v() {
-        // Was driven through the raw shim; drives the kernel directly since T9.C2,
-        // over an ordinary `PaddedPlane` — which is what the `PlaneCursor` half of
-        // `RefSamples` is for, and what keeps these kernels testable without a
-        // reconstruction picture.
         let mut plane = PaddedPlane::new(16, 16, 8, 32);
         for i in 0..16isize {
             plane.set(i, -1, (10 + i) as u8);

@@ -1,18 +1,4 @@
 #![deny(unsafe_code)]
-// Phase 5 W7. This module holds none of the three forms the lint denies — no
-// `unsafe fn`, no `unsafe` block, no unsafe trait implementation — so the lint
-// is a statement of fact rather than a goal, and it is here to keep it one: the
-// ratchet counts tokens (S16) and cannot see one of those arriving in a file
-// that had none.
-//
-// The wording above is deliberate and the ratchet is why: spelling the third
-// form as its two-word token made this comment itself count as an occurrence,
-// and the gate went red on three files whose code had not changed at all —
-// S16's floor, met from the direction of a comment written to celebrate it.
-//
-// Raw pointer **types** in a signature do not trip this lint; dereferencing one
-// does. That is why a module can carry `*mut` fields and still be deny-clean,
-// and it is the distinction the phase's exit condition 2 is written against.
 
 //! CAVLC VLC lookup tables.
 //! Translated from `codec/decoder/core/src/decoder_data_tables.cpp`.

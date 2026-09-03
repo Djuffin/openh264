@@ -2,19 +2,13 @@
 
 //! Error plumbing for the safe vocabulary types.
 //!
-//! Deliberately minimal, per plan §10 **D6**: the codec keeps returning the C++
-//! `int32_t` error codes internally until Phase 8/9, so this is a transparent
-//! newtype over exactly those codes and nothing more. No hierarchy, no `Display`,
-//! no conversion layer. Its whole job is to keep a `Result` shape at the call sites
-//! Phase 3 converts, so that "forgot to check the error" stops being possible while
-//! the *values* stay bit-identical to the C++.
+//! Deliberately minimal: the codec keeps returning the C++ `int32_t` error codes
+//! internally, so this is a transparent newtype over exactly those codes and
+//! nothing more. No hierarchy, no `Display`, no conversion layer. Its whole job is
+//! to keep a `Result` shape at the call sites, so that "forgot to check the error"
+//! stops being possible while the *values* stay bit-identical to the C++.
 //!
-//! The codes themselves are **reused, never redefined** — a value duplicated under
-//! one name is a standing defect class in this port (see `phase0_findings.md` §F2,
-//! and [`codes_agree_with_the_duplicate_definitions`] below, which pins the two
-//! existing copies together).
-//!
-//! [`codes_agree_with_the_duplicate_definitions`]: self#tests
+//! The codes themselves are **reused, never redefined**.
 
 use crate::decoder::bit_stream;
 use crate::decoder::dec_golomb;
@@ -56,9 +50,9 @@ mod tests {
     #[test]
     fn codes_agree_with_the_duplicate_definitions() {
         // `decoder/bit_stream.rs` and `decoder/dec_golomb.rs` each declare their own
-        // copy of these constants. F2 records that this port has shipped duplicated
-        // constants holding *different* values; this test is the tripwire for that
-        // happening to the codes the safe reader returns.
+        // copy of these constants. This port has shipped duplicated constants
+        // holding *different* values; this test is the tripwire for that happening
+        // to the codes the safe reader returns.
         assert_eq!(
             bit_stream::ERR_INFO_INVALID_ACCESS,
             dec_golomb::ERR_INFO_INVALID_ACCESS

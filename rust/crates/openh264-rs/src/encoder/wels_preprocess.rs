@@ -1,8 +1,7 @@
 #![deny(unsafe_code)]
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 /// `EComplexityAnalysisMode` — `codec/processing/interface/IWelsVP.h:215`.
-/// The two GOM modes are **negative**; the port had them as `1`/`2` until Phase 5.1,
-/// which sent `CComplexityAnalysis::Process` down its `default:` arm.
+/// The two GOM modes are **negative**.
 pub use crate::processing::complexity_analysis::{FRAME_SAD, GOM_SAD, GOM_VAR};
 // Copyright (c) 2011-2013, Cisco Systems
 // All rights reserved.
@@ -59,19 +58,12 @@ use crate::encoder::encoder_ext::{PADDING_LENGTH, WELS_ALIGN};
 use crate::encoder::param_svc::{MB_HEIGHT_LUMA, MB_WIDTH_LUMA};
 use crate::encoder::encoder_context::SMVUnitXY;
 
-// **The `tag!` macro stood here** and it has no use left: `CMemoryAlign` allocated
-// six things for a picture and one for the scaled slot, and since T6.F2 it allocates
-// none of them (T6.F3 took the VAA block the same way). The tags were diagnostic
-// strings for an allocator this module no longer calls.
-
 // ============================================================================
 // Constants
 // ============================================================================
 
 pub const MAX_REF_PIC_COUNT: usize = 16;
-// Single definition in `encoder_context.rs` from `wels_const.h`; this module's copy of
-// MAX_SHORT_REF_COUNT was 16 where C++ derives 4, which over-sized `SRefList` here and
-// let the `WelsPreprocess` unref loop read one past `pShortRefList`.
+// From `wels_const.h`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
 use crate::encoder::encoder_context::ctx_ltr_at;
 pub use crate::encoder::encoder_context::SRefList;
@@ -85,12 +77,9 @@ pub const INVALID_TEMPORAL_ID: u8 = 0xff;
 pub const STATIC_SCENE_MOTION_RATIO: f32 = 0.01;
 pub const g_kiPixMapSizeInBits: i32 = (std::mem::size_of::<u8>() * 8) as i32;
 
-/// `rc.h:57` says **8**, not 2. Only `SComplexityAnalysisScreenParam` uses it, and
-/// since P10.2.C5 the value is live: `CComplexityAnalysisScreen` divides the frame
-/// into GOM buckets `GOM_H_SCC` macroblock rows tall, so a wrong value here would
-/// move `iFrameComplexity` and every rate-control decision downstream of it. C7's
-/// referee measured the first P frame's `iFrameComplexity` equal to the reference's
-/// on five geometries, which is that value being right as well as the kernels.
+/// `rc.h:57`. Only `SComplexityAnalysisScreenParam` uses it:
+/// `CComplexityAnalysisScreen` divides the frame into GOM buckets `GOM_H_SCC`
+/// macroblock rows tall.
 pub use crate::encoder::rc::GOM_H_SCC;
 pub const MAX_MBS_PER_FRAME: i32 = 36864;
 
@@ -113,9 +102,7 @@ pub const WELSVP_MINOR_VERSION: i32 = 1;
 pub const WELSVP_VERSION: i32 = (WELSVP_MAJOR_VERSION << 8) + WELSVP_MINOR_VERSION;
 pub const WELSVP_INTERFACE_VERSION: i32 = 0x8000 + (WELSVP_VERSION & 0x7fff);
 
-/// `wels_const.h:152-153` — RECIEVE_SUCCESS = 1, RECIEVE_FAILED = **2**. This
-/// module's copy of RECIEVE_FAILED said 0; nothing here reads it (only
-/// RECIEVE_SUCCESS is tested), so the wrong value was dead. One definition now.
+/// `wels_const.h:152-153` — RECIEVE_SUCCESS = 1, RECIEVE_FAILED = **2**.
 pub use crate::encoder::picture::{RECIEVE_FAILED, RECIEVE_SUCCESS};
 
 /// Look-up table mapping the frame coding index within a GOP to its temporal reference index.
@@ -190,9 +177,8 @@ pub enum EPixMapBufferProperty {
 // Preprocessing & VAA Data Structures
 // ============================================================================
 
-/// **Not `#[repr(C)]` and not `Copy` since T6.F1**: the scaled input picture is the
-/// third and smallest of the encoder's three picture owners — one slot, owned in
-/// place rather than pooled, because nothing else ever names it.
+/// The scaled input picture — one slot, owned in place rather than pooled,
+/// because nothing else ever names it.
 #[derive(Debug)]
 pub struct Scaled_Picture {
     pub pScaledInputPicture: Option<Box<SPicture>>,
@@ -238,10 +224,9 @@ pub struct SRefInfoParam {
     pub pRefPicture: Option<SrcPicId>,
     pub iSrcListIdx: i32,
     pub bSceneLtrFlag: bool,
-    /// **S12.3: `*mut u8` -> a row selector.** This never addressed memory of its
-    /// own: it is a copy of `SVAAFrameInfoExt::pVaaBlockStaticIdc[i]`, and those
-    /// sixteen are equal-stride rows of one allocation
-    /// (`encoder_ext.cpp:1482-1489`), so the pointer's whole content is *which
+    /// A row selector: it is a copy of `SVAAFrameInfoExt::pVaaBlockStaticIdc[i]`,
+    /// and those sixteen are equal-stride rows of one allocation
+    /// (`encoder_ext.cpp:1482-1489`), so its whole content is *which
     /// reference*. `None` is the C++'s `NULL` — no allocation, or no row chosen.
     pub pBestBlockStaticIdc: Option<usize>,
 }
@@ -270,8 +255,7 @@ pub struct SRect {
 #[derive(Debug, Copy, Clone)]
 pub struct SPixMap {
     /// `void*` in the C++ (`IWelsVP.h`); the three planes are bytes at every writer
-    /// and reader, so the erasure is gone (Phase 6 session B). The cursor
-    /// conversion is session F's.
+    /// and reader.
     pub pPixel: [*mut u8; 3],
     pub iSizeInBits: i32,
     pub iStride: [i32; 3],
@@ -310,20 +294,7 @@ pub struct SSceneChangeResult {
     pub iMotionBlockNum: i32,
     pub iFrameComplexity: i64,
     /// The block-static array this scene-change result was computed against —
-    /// **which** of them, not where it is.
-    ///
-    /// S10.11 made this `*mut u8` -> `usize` (an exposed address) because it is a
-    /// **ferry**: filled from `SVAAFrameInfoExt::pVaaBlockStaticIdc[i]` and copied
-    /// straight out again into `SRefInfoParam::pBestBlockStaticIdc`, with nothing on
-    /// the hop reading through it. The address had to survive the round trip only
-    /// because the one site that *does* dereference the family —
-    /// `SetBlockStaticIdcToMd`'s four reads off `pVaaBestBlockStaticIdc` — still held
-    /// a pointer at the far end.
-    ///
-    /// **S12.3 removed that far end**, so the round trip has no subject: this is the
-    /// row index now, `expose_provenance`/`with_exposed_provenance_mut` are gone
-    /// from the crate with it, and the value is exactly what it always meant.
-    /// `None` is the C++'s `NULL`.
+    /// **which** of them, not where it is. `None` is the C++'s `NULL`.
     pub pStaticBlockIdc: Option<usize>,
     pub sScrollResult: SScrollDetectionParam,
 }
@@ -343,24 +314,12 @@ impl Default for SSceneChangeResult {
 #[derive(Debug)]
 pub struct SVAACalcResult {
     /// The two source plane **addresses**, as integers — the identity of the pair
-    /// this result was computed over, and nothing else.
-    ///
-    /// **S10.9: `*mut u8` -> `usize`, because that is what they are.** They were
-    /// raw plane roots, and the whole-tree read is one comparison in
-    /// `adaptive_quantization.rs`: "reuse the VAA statistics when they were
-    /// computed over exactly this pair of pictures". Nothing dereferences them —
-    /// the walk that *reads* pixels takes its own cursors. Storing an identity as
-    /// a pointer bought nothing and cost `SVAAFrameInfo` its `*mut u8` `!Sync`
-    /// reason, which is one of the three that keep `sWelsEncCtx` off the fork
-    /// seam.
-    ///
-    /// An address is plain `Copy` data — the tree's own phrase, from the two-thread
-    /// probes that carry layer addresses across a spawn the same way.
+    /// this result was computed over, and nothing else. The whole-tree read is one
+    /// comparison in `adaptive_quantization.rs`: "reuse the VAA statistics when they
+    /// were computed over exactly this pair of pictures". Nothing dereferences them.
     pub pCurY: usize,
     pub pRefY: usize,
-    /// **The six per-frame result arrays, owned since T6.F3.** They were six
-    /// `WelsMallocz` blocks `RequestMemorySvc` cut and `FreeMemorySvc` released one
-    /// at a time, reachable only through this struct; each is one entry per
+    /// The six per-frame result arrays: each is one entry per
     /// macroblock, and the three that only the background-detection path fills are
     /// **empty** rather than null when it is off (`bEnableBackgroundDetection`).
     pub pSad8x8: Vec<[i32; 4]>,
@@ -395,10 +354,6 @@ pub struct SVAACalcParam {
     pub iCalcBgd: bool,
     pub iCalcSsd: bool,
     pub iReserved: i32,
-    // `pCalcResult: *mut SVAACalcResult` was here (C++ `SVAACalcParam`): the caller
-    // stored `&pVaaInfo->sVaaCalcInfo` in the block and the plugin read it during
-    // `Process`. It is handed over at the `Process` call now — take what you reach
-    // (Phase 6 session B). Same for the three sibling blocks below.
 }
 
 impl Default for SVAACalcParam {
@@ -437,15 +392,6 @@ pub struct SMotionTextureUnit {
 #[derive(Debug, Copy, Clone)]
 pub struct SAdaptiveQuantizationParam {
     pub iAdaptiveQuantMode: i32,
-    /// **T9.X — `pMotionTextureUnit` and `pMotionTextureIndexToDeltaQp` are gone from
-    /// here.** They were `*mut`-SMotionTextureUnit and `*mut`-i8, and they were two of
-    /// `SVAAFrameInfo`'s four `!Sync` reasons (F67/F164). They are owned `Vec`s on
-    /// `SVAAFrameInfo` now and reach `CAdaptiveQuantization::Process` as slices, which
-    /// is the shape `SVAACalcResult`'s six arrays already had — "handed over at the
-    /// call rather than storing a pointer to it in the parameter block".
-    ///
-    /// This struct stays `Copy`, which is why the buffers could not simply become
-    /// `Vec` fields *here*: `Set` copies the whole block once per frame.
     pub iAverMotionTextureIndexToDeltaQp: i32,
 }
 
@@ -465,25 +411,6 @@ pub struct SComplexityAnalysisParam {
     pub iCalcBgd: bool,
     pub iMbNumInGom: i32,
     pub iFrameComplexity: i64,
-    // **T9.X — `pGomComplexity` and `pGomForegroundBlockNum` are gone from here.**
-    // They were two `*mut`-i32 and they were never this block's memory: the caller
-    // aimed them at the rate controller's `pCurrentFrameGomSad` and
-    // `pGomForegroundBlockNum` `Vec`s one line before every `Process` call
-    // (`wels_preprocess.cpp:859/:924` does the same, misnomer and all —
-    // `pGomComplexity` is pointed at the *SAD* array). They reach the plugin as
-    // slices now, which retires `SVAAFrameInfo`'s `*mut`-i32 `!Sync` reason.
-    //
-    // **S10.9: `pBackgroundMbFlag` and `uiRefMbType` followed them out.** The note
-    // that stood here said they stay — the first "a self-pointer into
-    // `SVAAFrameInfo::pVaaBackgroundMbFlag`", the second with "no writer in this
-    // port at all". The second half was stale: `SetRefMbType` *is* ported and does
-    // aim the pointer at a reference picture's array. And "a self-pointer into a
-    // field of the enclosing struct" is a reason to remove it, not to keep it —
-    // the plugin can be handed the slice.
-    //
-    // Both reach `Process` as slices now, which retires `SVAAFrameInfo`'s last two
-    // `!Sync` reasons (`*mut i8`, `*mut u32`) alongside the `*mut i32` the earlier
-    // pair took.
 }
 
 impl Default for SComplexityAnalysisParam {
@@ -497,14 +424,7 @@ impl Default for SComplexityAnalysisParam {
     }
 }
 
-/// `SComplexityAnalysisScreenParam` — `IWelsVP.h`. **P10.1.B2 (D-scc-2): the
-/// `int* pGomComplexity` member is gone.** It was a raw pointer aimed at the rate
-/// controller's `pCurrentFrameGomSad` (`wels_preprocess.cpp:924` — the field name
-/// is a misnomer, as the camera block's note says), and nothing in the port read
-/// it. The extension this block sits in lives inside a `Sync` context and is read
-/// by slice workers, which a raw pointer forbids; the camera plugin already takes
-/// its GOM array as `&mut [i32]` at the call (`processing/complexity_analysis.rs`)
-/// and the screen plugin (P10.2) does the same.
+/// `SComplexityAnalysisScreenParam` — `IWelsVP.h`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SComplexityAnalysisScreenParam {
@@ -538,29 +458,22 @@ pub struct SVAAFrameInfo {
     pub iPicStride: i32,
     pub iPicStrideUV: i32,
 
-    /// The reference and current **source** pictures, as shared three-plane views —
-    /// S9.0c, replacing six `*mut u8` plane roots.
+    /// The reference and current **source** pictures, as shared three-plane views.
     ///
     /// These are the operands of `VaaBackgroundMbDataUpdate`'s three copies, and the
-    /// copy runs *previous source -> current source* (F117: `PCopyFunc` is
+    /// copy runs *previous source -> current source* (`PCopyFunc` is
     /// `(pDst, .., pSrc, ..)`, so `pCur*` is the **destination**). It happens
     /// in-fork, per macroblock, into the picture the encoder is simultaneously
-    /// reading — which is why these are `RoPicView`s over `SharedPlane` rather than
-    /// slice cursors: the cells make the concurrent write lawful by construction,
-    /// where a `&[u8]` over the plane would claim every byte and race it.
+    /// reading.
     pub pRefView: Option<crate::encoder::rec_view::RoPicView>,
     pub pCurView: Option<crate::encoder::rec_view::RoPicView>,
 
-    /// One byte per macroblock, **owned since T6.F3** — `RequestMemorySvc`'s
-    /// seventh and last `WelsMallocz` for the VAA block.
+    /// One byte per macroblock.
     pub pVaaBackgroundMbFlag: Vec<i8>,
 
     /// `encoder_ext.cpp:1721` — `iCountMaxMbNum * sizeof(SMotionTextureUnit)`.
-    /// **T9.X: this allocation did not exist in the port at all**, and the field it
-    /// fills was a permanently-null `*mut` on `sAdaptiveQuantParam` with two
-    /// unguarded dereferences (`adaptive_quantization.rs`). See F177.
     pub pMotionTextureUnit: Vec<SMotionTextureUnit>,
-    /// `encoder_ext.cpp:1724` — `iCountMaxMbNum * sizeof(int8_t)`. Same story.
+    /// `encoder_ext.cpp:1724` — `iCountMaxMbNum * sizeof(int8_t)`.
     pub pMotionTextureIndexToDeltaQp: Vec<i8>,
     pub uiValidLongTermPicIdx: u8,
     pub uiMarkLongTermPicIdx: u8,
@@ -573,24 +486,16 @@ pub struct SVAAFrameInfo {
 impl SVAAFrameInfo {
     /// `RequestMemorySvc`'s VAA block, `encoder_ext.cpp:1712-1760`, as a constructor.
     ///
-    /// The C++ takes the struct from `WelsMallocz` and then cuts seven more blocks
-    /// out of `CMemoryAlign` for its per-frame result arrays, each sized
-    /// `iCountMaxMbNum`; here the struct is a `Box` and the seven are its own `Vec`s
-    /// (S21 — a `Vec` field in a zeroed block is UB at its first drop, so the
-    /// construction has to change before the ownership can).
+    /// The per-frame result arrays are each sized `iCountMaxMbNum`.
     ///
     /// `bEnableBackgroundDetection` decides whether the last three exist at all, as
     /// it decides in the C++: `pSumOfDiff8x8` and `pMad8x8` are allocated only under
     /// it. **Empty is the port's spelling of that null.**
-    ///
-    /// **F56**: every other field's value is the zeroed block's, which is what
-    /// `Default` already spells — and here `Default` *is* the zero image (no field of
-    /// this struct is deliberately non-zero), so it is used rather than re-spelled.
     pub fn new(iCountMaxMbNum: i32, bEnableBackgroundDetection: bool) -> Box<SVAAFrameInfo> {
         let n = iCountMaxMbNum.max(0) as usize;
         let mut p = Box::new(SVAAFrameInfo::default());
         p.pVaaBackgroundMbFlag = vec![0i8; n];
-        // `encoder_ext.cpp:1721-1726`, the two blocks this constructor never cut.
+        // `encoder_ext.cpp:1721-1726`.
         p.pMotionTextureUnit = vec![SMotionTextureUnit::default(); n];
         p.pMotionTextureIndexToDeltaQp = vec![0i8; n];
         p.sVaaCalcInfo.pSad8x8 = vec![[0i32; 4]; n];
@@ -632,17 +537,15 @@ impl Default for SVAAFrameInfo {
 /// The screen-content block-static tables — `uint8_t* pVaaBlockStaticIdc[16]`,
 /// the field `wels_preprocess.h:115` annotates `//real memory`.
 ///
-/// **S12.3: sixteen raw pointers -> one owned buffer, because that is what the
-/// C++ allocates.** `RequestMemoryVaaScreen` takes a single block of
+/// `RequestMemoryVaaScreen` takes a single block of
 /// `iNumRef * iCountMax8x8BNum` bytes and walks the sixteen slots across it at
 /// one stride (`encoder_ext.cpp:1482-1489`); `WelsFree` frees slot 0 alone and
-/// nulls the rest, which is the same statement read backwards. So the array was
-/// never sixteen allocations, and a pointer copied out of it — into
+/// nulls the rest. A pointer copied out of it — into
 /// `SSceneChangeResult`, into `SRefInfoParam`, into `pVaaBestBlockStaticIdc` —
-/// never carried anything but a **row number**.
+/// carries nothing but a **row number**.
 ///
 /// `RequestMemorySvc` fills `buf`/`stride` through [`alloc`](Self::alloc) under
-/// `SCREEN_CONTENT_REAL_TIME` (P10.1.B3, `encoder_ext.cpp:1707-1712`); for camera
+/// `SCREEN_CONTENT_REAL_TIME` (`encoder_ext.cpp:1707-1712`); for camera
 /// content the block is a plain `SVAAFrameInfo` and no store exists at all. An
 /// unallocated store answers `None` from every selector — exactly the `NULL` the
 /// C++ reads in the same state.
@@ -662,7 +565,7 @@ impl SBlockStaticIdcStore {
 
     /// The allocator's side — `RequestMemoryVaaScreen`'s one `WelsMallocz`
     /// (`encoder_ext.cpp:1478-1491`), called from `RequestMemorySvc` with
-    /// `iMaxNumRefFrame` rows of `iCountMaxMbNum << 2` bytes (P10.1.B3).
+    /// `iMaxNumRefFrame` rows of `iCountMaxMbNum << 2` bytes.
     pub fn alloc(&mut self, rows: usize, stride: usize) {
         let rows = rows.min(Self::MAX_ROWS);
         self.buf = vec![0u8; rows * stride];
@@ -684,9 +587,7 @@ impl SBlockStaticIdcStore {
     /// not academic: the sixteen rows are one allocation, so bounding this by the
     /// *buffer* rather than the row would let a caller asking for more blocks than a
     /// reference has read the next reference's — silently, and only for rows that
-    /// are not the last. The raw pointer this replaced could do exactly that. (The
-    /// first draft of this accessor did too; the test in `svc_mode_decision.rs`
-    /// caught it on its first run, which is the whole reason that test exists.)
+    /// are not the last.
     #[inline]
     pub fn row(&self, sel: Option<usize>, len: usize) -> Option<&[u8]> {
         let start = self.row_start(sel, len)?;
@@ -694,10 +595,8 @@ impl SBlockStaticIdcStore {
     }
 
     /// [`row`](Self::row) for the writer. The C++ hands `pCurBlockStaticPointer` to
-    /// the screen scene-change plugin, which fills it; since P10.2.C6 so does the
-    /// port, from both of that plugin's call sites — `DetectSceneChangeScreen`'s
-    /// per-reference loop and `UpdateBlockStatic`'s recomputation. `None` is where
-    /// the C++ writes through a null row (D-scc-8).
+    /// the screen scene-change plugin, which fills it. `None` is where
+    /// the C++ writes through a null row.
     #[inline]
     pub fn row_mut(&mut self, sel: Option<usize>, len: usize) -> Option<&mut [u8]> {
         let start = self.row_start(sel, len)?;
@@ -715,7 +614,7 @@ impl SBlockStaticIdcStore {
     }
 }
 
-/// `SVAAFrameInfoExt_t` — `wels_preprocess.h:106-116`. **Live since P10.1.B3**: the
+/// `SVAAFrameInfoExt_t` — `wels_preprocess.h:106-116`. The
 /// `Screen` arm of [`VaaBlock`], which `RequestMemorySvc` builds under
 /// `SCREEN_CONTENT_REAL_TIME`. `#[repr(C)]` with `sVaaFrameInfo` first, as the C++
 /// inheritance lays it out; do not reorder.
@@ -730,9 +629,8 @@ pub struct SVAAFrameInfoExt {
     pub iNumOfAvailableRef: i32,
 
     pub iVaaBestRefFrameNum: i32,
-    /// `//pointer` in `wels_preprocess.h:114` — and the comment is the whole story:
-    /// it aliases one row of `pVaaBlockStaticIdc` and owns nothing. **S12.3** makes
-    /// it the row number it always was; `None` is the C++'s `NULL`.
+    /// `//pointer` in `wels_preprocess.h:114` — it aliases one row of
+    /// `pVaaBlockStaticIdc` and owns nothing. `None` is the C++'s `NULL`.
     pub pVaaBestBlockStaticIdc: Option<usize>,
     /// `//real memory` in `wels_preprocess.h:115`. See [`SBlockStaticIdcStore`].
     pub pVaaBlockStaticIdc: SBlockStaticIdcStore,
@@ -757,7 +655,7 @@ impl Default for SVAAFrameInfoExt {
 /// `sWelsEncCtx::pVaa`'s block: `SVAAFrameInfo` for camera content,
 /// `SVAAFrameInfoExt` for screen content — `encoder_ext.cpp:1707-1718` allocates
 /// one or the other, and every reader downcasts with `static_cast<SVAAFrameInfoExt*>`.
-/// The two arms are what that cast was claiming (P10.1, D-scc-1).
+/// The two arms are what that cast was claiming.
 ///
 /// The enum lives *inside* the context's `Box` (`Option<Box<VaaBlock>>`), so the
 /// field stays one word — `sWelsEncCtx` is `#[repr(C)]` and `Option<Box<_>>` is
@@ -830,36 +728,16 @@ pub struct SPosOffset {
 
 
 
-// The canonical encoder context. This module previously declared its own 15-field
-// `SWelsEncCtx` plus a `pub type sWelsEncCtx = SWelsEncCtx;` alias, so the lowercase
-// name resolved to the fake struct *inside this module only* and every field access
-// read the wrong offsets when handed a real context — which is exactly what
-// `WelsEncoderEncodeExt` passes to `BuildSpatialPicList` / `AnalyzeSpatialPic` /
-// `UpdateSpatialPictures`. `SSpatialIndexMap` was likewise a byte-identical rename of
-// `encoder_context::SSpatialPicIndex`, the name C++ uses (`encoder_context.h:198`).
+// The canonical encoder context. `SSpatialPicIndex` is the name C++ uses
+// (`encoder_context.h:198`).
 pub use crate::encoder::encoder_context::{sWelsEncCtx, SSpatialPicIndex};
 pub use crate::common::wels_common_defs::EWelsSliceType;
-
-// `IWelsVP` was here — the C++ video-processing vtable (`void* pCtx` plus seven
-// `extern "C"` function pointers dispatching on an `EMethods` id, each casting a
-// `void*` parameter back to the one struct its method takes). Phase 4b dissolved
-// the port's other vtables; this was the last, and it carried `*mut c_void` at
-// both ends of every call. `CWelsPreProcess::m_vp` owns the concrete
-// `processing::SWelsVpContext` and each plugin's `Set`/`Get`/`Process` is typed
-// (Phase 6 session B).
 
 // ============================================================================
 // Helper Memory & Padding Functions
 // ============================================================================
 
 /// Zeroes out the line stride padding area `[iWidth .. iStride)` for all lines.
-///
-/// **S5.C6a**: `pData: *mut u8` became the plane it always pointed into. The caller
-/// hands `&mut plane.as_mut_slice()[plane.origin()..]`, which is byte-for-byte the
-/// `data_ptr(i)` this used to take — `data_ptr` *is* `root_ptr() + origin()` — so the
-/// addresses written are unchanged and the extent is now carried rather than trusted.
-/// The `is_null()` guard becomes `is_empty()`: a picture with no plane answered null
-/// there and answers an empty slice here, which is the same question.
 #[inline]
 pub fn ClearEndOfLinePadding(pData: &mut [u8], iStride: i32, iWidth: i32, iHeight: i32) {
     if !pData.is_empty() && iWidth < iStride {
@@ -871,24 +749,15 @@ pub fn ClearEndOfLinePadding(pData: &mut [u8], iStride: i32, iWidth: i32, iHeigh
     }
 }
 
-/// Row-by-row planar memory copy for I420 YUV buffers — **the ingest
-/// primitive, and since S11.51 nothing else**: the source pointers are the
-/// application's plane buffers, raw C-ABI data with no owner on this side of
-/// the boundary, so the claim lives on this signature and is asserted once, by
-/// the wrapper's guards.
-///
-/// Its second caller was a *pool-to-pool* copy in `DownsamplePadding`, where
-/// both sides were pictures this crate owns; that site takes two disjoint
-/// borrows out of the pool and calls [`SPicture::copy_planes_from`] instead, so
-/// the last thing reaching this function through a raw pointer is the one thing
-/// that has to.
+/// Row-by-row planar memory copy for I420 YUV buffers — the ingest
+/// primitive: the source pointers are the application's plane buffers, raw C-ABI
+/// data with no owner on this side of the boundary.
 ///
 /// # Safety
 /// Every pointer must address a live plane of at least `iWidth x iHeight`
 /// (halved for chroma) bytes at its stride, and the source and destination
 /// planes must not overlap.
 #[inline]
-// unsafe-cat: C-ABI — the application's plane buffers (ingest).
 #[allow(unsafe_code)]
 pub unsafe fn WelsMoveMemory_c(
     mut pDstY: *mut u8,
@@ -934,8 +803,6 @@ pub fn WelsUpdateSpatialIdxMap(
     pPic: Option<SrcPicId>,
     iDidx: i32,
 ) {
-    // T9.H: the `!pEncCtx.is_null()` conjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null, so it was always true. The rest is unchanged.
     if iPos >= 0 && (iPos as usize) < MAX_DEPENDENCY_LAYER {
         let idx = iPos as usize;
         pEncCtx.sSpatialIndexMap[idx].pSrc = pPic;
@@ -944,10 +811,6 @@ pub fn WelsUpdateSpatialIdxMap(
 }
 
 /// Evaluates whether the input picture requires aspect-ratio preserving scaling.
-/// **S5.C6a**: `*mut Scaled_Picture` became the `&mut` its one caller already held.
-/// `WelsInitScaledPic` is passed `&mut self.m_sScaledPicture` and hands it straight
-/// through, so the pointer was a reference that had been through a cast and back, and
-/// the `is_null()` guard could not fire.
 pub fn JudgeNeedOfScaling(
     pParam: &SWelsSvcCodingParam,
     pScaledPicture: &mut Scaled_Picture,
@@ -1004,36 +867,15 @@ pub fn JudgeNeedOfScaling(
 /// `picture_handle.cpp:51`. Allocates an `SPicture` with the padded, aligned plane
 /// layout the rest of the encoder assumes.
 ///
-/// The previous body here was hand-rolled and wrong in three ways that all mattered:
-/// it dropped the `PADDING_LENGTH` border entirely (so `pData[0] == pBuffer` and every
-/// intra predictor reading `pRef[-iLineSize]` on the top macroblock row ran off the
-/// front of the allocation), it computed `iLineSize[0]` as `WELS_ALIGN(width, 32)`
-/// instead of `WELS_ALIGN(WELS_ALIGN(width, 16) + 2 * PADDING_LENGTH, 32)` (160 rather
-/// than 224 at the harness resolution, which disagreed with the stride the
-/// `pStrideDecBlockOffset` table was built from, so 4x4 reconstructions landed in the
-/// wrong rows), and it never allocated `uiRefMbType` / `pRefMbQp` / `sMvList` /
-/// `pMbSkipSad`. It also used Rust's global allocator where the caller frees through
-/// `CMemoryAlign`.
-///
-/// **Safe since T6.F2**: the picture owns every byte it has, so there is no allocator
-/// to be valid and no free contract to honour — dropping the `Box` releases it.
-///
-/// **P10.1.B5**: the `iNeedFeatureStorage != 0` arm is `picture_handle.cpp:115`'s
-/// call of `RequestScreenBlockFeatureStorage` (`svc_motion_estimate.cpp:683-725`),
-/// which stood here as a refusal (`return None`) from T6.F2. `None` is now what the
-/// C++ returns `NULL` for — FME asked for at both block sizes.
+/// The `iNeedFeatureStorage != 0` arm is `picture_handle.cpp:115`'s
+/// call of `RequestScreenBlockFeatureStorage` (`svc_motion_estimate.cpp:683-725`).
+/// `None` is what the C++ returns `NULL` for — FME asked for at both block sizes.
 pub fn AllocPicture(
     kiWidth: i32,
     kiHeight: i32,
     bNeedMbInfo: bool,
     iNeedFeatureStorage: i32,
 ) -> Option<Box<SPicture>> {
-    // **T6.F2**: what is left of `picture_handle.cpp:51`. The struct, its four
-    // per-macroblock side arrays *and* its three planes are all `SPicture::new`'s
-    // now — the geometry, the padding, the stride alignment and the zeroing moved
-    // there with them. `CMemoryAlign` has nothing left to allocate for a picture,
-    // so the parameter is gone and `FreePicture` with it: a picture is released by
-    // dropping it.
     let mut pic = SPicture::new(kiWidth, kiHeight, bNeedMbInfo);
     if iNeedFeatureStorage != 0 {
         // picture_handle.cpp:115 -> RequestScreenBlockFeatureStorage.
@@ -1069,9 +911,6 @@ pub fn AllocPicture(
 }
 
 /// Initializes scaled intermediate picture buffers if aspect-ratio scaling is required.
-///
-/// **S5.C6a**: as [`JudgeNeedOfScaling`], which it hands its own parameter to — the
-/// single caller passes `&mut self.m_sScaledPicture`.
 pub fn WelsInitScaledPic(
     pParam: &SWelsSvcCodingParam,
     pScaledPicture: &mut Scaled_Picture,
@@ -1088,9 +927,6 @@ pub fn WelsInitScaledPic(
             return -1;
         }
 
-        // S5.C6a: the plane triple, safely. `planes_mut3` is the same three planes
-        // `planes()` handed back as `data_ptr`s, and the `[origin..]` re-slice is what
-        // that pointer arithmetic spelled.
         let pPic = (*pScaledPicture)
             .pScaledInputPicture
             .as_deref_mut()
@@ -1107,10 +943,7 @@ pub fn WelsInitScaledPic(
     0
 }
 
-/// Releases the scaled picture. **Since T6.F2 that is a drop** — the picture owns
-/// every byte it has, so `CMemoryAlign` is not involved and neither is a free walk.
-/// **S5.C6a**: as [`WelsInitScaledPic`] — both call sites pass
-/// `&mut ..m_sScaledPicture`, so the null test could not fire.
+/// Releases the scaled picture.
 pub fn FreeScaledPic(pScaledPicture: &mut Scaled_Picture) {
     pScaledPicture.pScaledInputPicture = None;
 }
@@ -1120,20 +953,8 @@ pub fn FreeScaledPic(pScaledPicture: &mut Scaled_Picture) {
 // ============================================================================
 
 pub struct CWelsPreProcess {
-    /// The video-processing plugins, owned. Was `m_pInterfaceVp: *mut IWelsVP`, a
-    /// pointer to the dissolved vtable whose `pCtx` was this object behind a `void*`.
+    /// The video-processing plugins, owned.
     pub m_vp: Box<crate::processing::SWelsVpContext>,
-    // `m_pEncCtx` stood here — **deleted at T9.H2, and the deletion is the fix**
-    // (F192). It was a raw copy of the encoder context, stashed by `CreatePreProcess`
-    // and read back by four screen-content methods. Miri calls those reads Undefined
-    // Behavior whenever a caller holds `&mut sWelsEncCtx`, because a reference
-    // function argument is strongly protected for the duration of the call and the
-    // whole context is inside it. All four take the context as a parameter now, as
-    // ten of their sibling methods already did, which left this field write-only —
-    // and a write-only raw copy of the context is not merely dead, it is the
-    // hazard's *storage*. Deleting it means no later reader can reintroduce the
-    // shape by accident. It has no C-ABI surface: `CWelsPreProcess` is this port's
-    // own object and no size pin names it.
     pub m_uiSpatialLayersInTemporal: [u8; MAX_DEPENDENCY_LAYER],
     pub m_sScaledPicture: Scaled_Picture,
     pub m_pLastSpatialPicture: [[Option<SrcPicId>; 2]; MAX_DEPENDENCY_LAYER],
@@ -1151,8 +972,7 @@ pub struct CWelsPreProcess {
 }
 
 impl Default for CWelsPreProcess {
-    /// Field-wise, because `m_vp` is a `Box` and an all-zero `Box` is not a value
-    /// (S21). Every other field's zero is what the C++ constructor's zeroing meant:
+    /// Every field's zero is what the C++ constructor's zeroing meant:
     /// null pictures, no layers, not initialised.
     fn default() -> Self {
         Self {
@@ -1253,32 +1073,13 @@ impl CWelsPreProcess {
 
     /// Factory constructor instantiating the preprocessing subsystem.
     pub fn CreatePreProcess(pEncCtx: &mut sWelsEncCtx) -> Option<Box<CWelsPreProcess>> {
-        // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-        // cannot be null and every caller now holds one. S3.B1: the `Box` is
-        // returned as itself — `None` is the null the raw return carried.
         pEncCtx.param_opt()?;
 
-        // Built whole and boxed (S21: the object owns a `Box` now, so a zeroed
-        // shell is not a valid intermediate). This used to `alloc_zeroed` and set
-        // three fields; `Default` is those zeros written out.
         Some(Box::new(CWelsPreProcess {
             m_eUsageType: pEncCtx.param().iUsageType,
             ..Default::default()
         }))
     }
-
-    // `Destroy(pPreProcess: *mut CWelsPreProcess)` stood here — the C++
-    // destructor's shape, `Box::from_raw` on a raw slot. **S11.42, deleted: no
-    // callers.** The object lives in `sWelsEncCtx::pVpp` as `Option<Box<..>>`
-    // and drops by ownership; `FreeScaledPic` runs from the owner's teardown.
-
-    // `WelsPreprocessCreate` / `WelsPreprocessDestroy` (`wels_preprocess.cpp:198`)
-    // were here: they allocated and freed the `IWelsVP` vtable and its `void*`
-    // context. The plugins are owned by `m_vp` from construction, so there is
-    // nothing left for either to do — deleted with their calls (S18, Phase 6
-    // session B). Their history: the create used to `alloc_zeroed` the vtable and
-    // stop, leaving every method `None` and the whole video-analysis stage
-    // silently producing zeros — see `crate::processing`.
 
     pub fn WelsPreprocessReset(
         &mut self,
@@ -1286,8 +1087,6 @@ impl CWelsPreProcess {
         iWidth: i32,
         iHeight: i32,
     ) -> i32 {
-        // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-        // cannot be null and every caller now holds one. The rest is unchanged.
         if pCtx.param_opt().is_none() {
             return -1;
         }
@@ -1308,7 +1107,6 @@ impl CWelsPreProcess {
     }
 
     pub fn AllocSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 {
-        // A7: the `pParam` argument is gone — see `InitFunctionPointers`.
         let pParam = pCtx.param();
         let kiDlayerCount = (*pParam).iSpatialLayerNum;
         let mut iDlayerIndex = 0;
@@ -1360,8 +1158,6 @@ impl CWelsPreProcess {
     }
 
     pub fn FreeSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) {
-        // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-        // cannot be null and every caller now holds one. The rest is unchanged.
         if pCtx.param_opt().is_none() {
             return;
         }
@@ -1379,21 +1175,19 @@ impl CWelsPreProcess {
             j += 1;
         }
         self.m_pLastSpatialPicture = [[None; 2]; MAX_DEPENDENCY_LAYER];
-        // T6.F2: the pool owns its pictures whole, so releasing them is dropping them.
+        // The pool owns its pictures whole, so releasing them is dropping them.
         self.m_pSpatialPicPool = SrcPicPool::empty();
     }
 
     pub fn BuildSpatialPicList(
         &mut self,
         pCtx: &mut sWelsEncCtx,
-        // S11.41: the application's picture struct arrives as a reference — the
-        // API layer null-checks the C pointer once; only the plane roots inside
-        // it stay raw (they are the application's buffers).
+        // The application's picture struct arrives as a reference — the API layer
+        // null-checks the C pointer once; only the plane roots inside it stay raw
+        // (they are the application's buffers).
         kpSrcPic: &SSourcePicture,
         pSpatialNum: &mut i32,
     ) -> i32 {
-        // A7, §4.6 reorder: three scalars, read where they are used — this body
-        // hands the context to `WelsPreprocessReset` between them.
         let iWidth = (kpSrcPic.iPicWidth >> 1) << 1;
         let iHeight = (kpSrcPic.iPicHeight >> 1) << 1;
         *pSpatialNum = 0;
@@ -1417,15 +1211,6 @@ impl CWelsPreProcess {
             pCtx.vaa_expect_mut().bIdrPeriodFlag = false;
         }
 
-        // The `pScaledPic` argument stood here — `addr_of_mut!(self.m_sScaledPicture)`
-        // handed to a method that takes `&mut self`. Miri rejects the callee's first
-        // read through it: a `&mut` argument is strongly protected for the call, so
-        // reaching the same object through a sibling raw pointer would remove a
-        // protected `Unique`. It is `phase6.md` §1's "cache, not carrier" — the
-        // parameter was a copy of something the holder already reaches — so it dies
-        // rather than converts. Deriving one pointer at the callee's top would not
-        // do either: the `self.` calls between the uses reborrow `self` and pop it.
-        // Found by the encoder aliasing probe, Phase 6 session A.
         let iRet = self.SingleLayerPreprocess(pCtx, kpSrcPic, pSpatialNum);
         if iRet != ENC_RETURN_SUCCESS {
             return iRet;
@@ -1440,14 +1225,9 @@ impl CWelsPreProcess {
         kpSrc: &SSourcePicture,
         pSpatialNum: &mut i32,
     ) -> i32 {
-        // A7, §4.6 reorder: the layer's geometry is four scalars, read here rather
-        // than through a borrow that would have to span every context call below.
         let mut iDependencyId = pCtx.param().iSpatialLayerNum - 1;
 
         let depIdx = iDependencyId as usize;
-        // S11.42: S29's cursor is gone — its five uses were reads, and each
-        // re-derives through `param()` at its use (the loop below already spelled
-        // the same idiom), so nothing survives anything.
         let iTargetWidth = pCtx.param().sSpatialLayers[depIdx].iVideoWidth;
         let iTargetHeight = pCtx.param().sSpatialLayers[depIdx].iVideoHeight;
         let iSrcWidth = pCtx.param().SUsedPicRect.iWidth;
@@ -1611,9 +1391,6 @@ impl CWelsPreProcess {
     }
 
     pub fn AnalyzeSpatialPic(&mut self, pCtx: &mut sWelsEncCtx, kiDidx: i32) -> i32 {
-        // A7, §4.6 reorder: every parameter field this body reads is a scalar, and
-        // this body hands the context to eight different callees, so nothing is held
-        // as a borrow across them.
         let dIdx = kiDidx as usize;
         let bNeededMbAq =
             pCtx.param().bEnableAdaptiveQuant && (pCtx.eSliceType == EWelsSliceType::P_SLICE);
@@ -1633,8 +1410,6 @@ impl CWelsPreProcess {
         let gopIdx = (kiCodingIndex & gopMask) as usize;
         let mut iRefTemporalIdx = g_kuiRefTemporalIdx[stageIdx][gopIdx] as i32;
 
-        // T9.G6: hoisted — `ctx_ltr_at` takes the context retag and its own second
-        // argument reads through the same context (shape B).
         let uiDidForLtr = pCtx.uiDependencyId as usize;
         if pCtx.uiTemporalId == 0
             && ctx_ltr_at(pCtx, uiDidForLtr).bReceivedT0LostFlag
@@ -1648,9 +1423,6 @@ impl CWelsPreProcess {
             && (pCtx.eSliceType == EWelsSliceType::I_SLICE);
 
         if kiUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-            // T9.G6's hoist, for T9.H2's reason: the callee takes the context now,
-            // so its two other arguments may not read through the same context in the
-            // same argument list.
             let bSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
             let eSliceType = pCtx.eSliceType;
             let iUsageType = kiUsageType;
@@ -1663,9 +1435,6 @@ impl CWelsPreProcess {
                 iRefTemporalIdx,
             );
 
-            // A5: the three passes take `&mut SVAAFrameInfo` now, so their old
-            // `if pVaaInfo.is_null() { return; }` prologues are these `if let`s —
-            // the same no-op on an unbuilt block, asked one level out.
             if let Some(pVaa) = pCtx.vaa_mut() {
                 self.VaaCalculation(pVaa, pCurPic, pRefPic, false, bCalculateVar, bCalculateBGD);
             }
@@ -1684,12 +1453,10 @@ impl CWelsPreProcess {
         } else {
             let pRefPic = self.GetBestRefPic(kiDidx, iRefTemporalIdx);
             let pLastPic = self.m_pLastSpatialPicture[dIdx][0];
-            // **The one picture-identity test in `src/encoder`** (T6.F1). The C++ asks
-            // it as `pLastPic->pData[0] == pRefPic->pData[0]` — two plane roots, which
-            // is why session B's grep for `SPicture*` comparisons did not see it. Two
-            // slots hold two distinct buffers, so equal roots is equal slots, and the
-            // handle comparison is the same question asked directly. F42's arm, in the
-            // encoder, is one line.
+            // The C++ asks it as `pLastPic->pData[0] == pRefPic->pData[0]` — two
+            // plane roots. Two slots hold two distinct buffers, so equal roots is
+            // equal slots, and the handle comparison is the same question asked
+            // directly.
             let bCalculateSQDiff =
                 pLastPic.is_some() && pLastPic == pRefPic && bNeededMbAq;
 
@@ -1775,9 +1542,7 @@ impl CWelsPreProcess {
     }
 
     /// `pRef != NULL && pRef->iPictureType != I_SLICE` — the analysis stages' test
-    /// for "there is a reference and it is not an intra frame", spelled once because
-    /// three call sites ask it and each would otherwise borrow the pool inline while
-    /// building an argument list for a `&mut self` method.
+    /// for "there is a reference and it is not an intra frame".
     #[inline]
     pub fn ref_is_inter(&self, id: Option<SrcPicId>) -> bool {
         match id {
@@ -1805,13 +1570,6 @@ impl CWelsPreProcess {
 
     pub fn GetBestRefPicScreen(
         &self,
-        // **T9.H2, F192.** The context is a parameter now, where this used to reach
-        // it through `self.m_pEncCtx`. Miri calls that read Undefined Behavior: a
-        // reference function argument is *strongly protected* for the duration of
-        // the call, and the caller above holds `&mut sWelsEncCtx` over the whole
-        // context — so a read through a stored raw of the same allocation may not
-        // remove it, whatever the byte ranges are. Ten sibling methods on this type
-        // already took the context this way; these four were the exceptions.
         pCtx: &mut sWelsEncCtx,
         _iUsageType: EUsageType,
         bSceneLtr: bool,
@@ -1819,9 +1577,7 @@ impl CWelsPreProcess {
         _kiDidx: i32,
         _iRefTemporalIdx: i32,
     ) -> Option<SrcPicId> {
-        // S11.3: `None` for camera content — no extension, so no candidate
-        // picture to name; `Some` under `SCREEN_CONTENT_REAL_TIME` since
-        // P10.1.B3 (D-scc-1).
+        // `None` for camera content — no extension, so no candidate picture to name.
         let pVaaExt = pCtx.vaa_ext_ref()?;
         let pBest = if bSceneLtr {
             &pVaaExt.sVaaLtrBestRefCandidate[0]
@@ -1837,8 +1593,6 @@ impl CWelsPreProcess {
         iCurTid: i8,
         kiDidx: i32,
     ) -> i32 {
-        // A7: the `pParam` argument is gone — see `InitFunctionPointers`. This body
-        // already derived the parameters from the context two lines down.
         if pCtx.param_opt().is_none() || pCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             return 0;
         }
@@ -1874,18 +1628,11 @@ impl CWelsPreProcess {
 
     /// `CWelsPreProcess::BilateralDenoising` — `wels_preprocess.cpp:620`.
     ///
-    /// **Ported in Phase 8b session C (T8b.C1).** This was an empty body: the C++
-    /// built the source pixel map and ran the denoise plugin in place, the port's
-    /// dispatch returned `RET_NOTSUPPORTED`, and *this caller never read it*, so
-    /// asking for denoise silently produced un-denoised output. That is the exact
-    /// class of lie S48 refuses, and it is why `ParamValidationExt` rejected
-    /// `bEnableDenoise` until this session.
-    ///
     /// The C++ hands `CDenoiser::Process` an `SPixMap` of three raw plane pointers
     /// and a `NULL` destination (denoising is in place). The kernels here take
     /// slices, so the `SPixMap` survives only as the geometry carrier that
     /// `Process` reads `sRect` from, and the planes are resolved through
-    /// `planes_mut3()` — safe, no pointer crosses the boundary.
+    /// `planes_mut3()`.
     pub fn BilateralDenoising(&mut self, pSrc: SrcPicRef, kiWidth: i32, kiHeight: i32) {
         let mut sSrcPixMap = SPixMap {
             sRect: SRect {
@@ -1931,24 +1678,6 @@ impl CWelsPreProcess {
     ) -> i32 {
         let mut iRet = 0;
 
-        // **S5.C6a — the two `SPixMap` locals are gone, and the compiler is what
-        // found them.** `sSrcPixMap` and `sDstPicMap` were built field by field on
-        // every call — twenty assignments — and once `Padding` stopped taking plane
-        // roots, `rustc` reported every one of them as "value assigned is never
-        // read". They were **write-only**: `sSrcPixMap`'s single reader was
-        // `sDstPicMap = sSrcPixMap`, and `sDstPicMap`'s single reader was the
-        // `Padding` call. Deleting a write-only local cannot move a byte.
-        //
-        // What they were carrying is `Padding`'s question — *which picture* — and
-        // that is now one `SrcPicRef` (`padRef` below) instead of two descriptors.
-        //
-        // **S11.51: the two up-front plane-root resolutions are gone, and S37's
-        // note with them.** It read: "resolve both pictures to their plane roots up
-        // front and work through raw cursors from here — `srcRef` and `dstRef` are
-        // frequently the same picture, which no pair of references could express."
-        // The first half was a consequence of the second, and the second is true of
-        // *this function* but not of either arm that writes.
-        //
         // **`bDstIsWritten` implies `srcRef != dstRef`**, which is what makes both
         // write arms expressible as a pair of borrows:
         //
@@ -1961,24 +1690,16 @@ impl CWelsPreProcess {
         //     *different rows* of `m_pSpatialPic`. Different rows are different
         //     pool slots.
         //
-        // `src_pair_mut` asserts the same thing at the moment of use, so the
-        // argument is enforced rather than merely written down — and a violation is
-        // a panic where the raw form was a self-overlapping `copy_nonoverlapping`,
-        // which is UB in C as well as in Rust.
+        // `src_pair_mut` asserts the same thing at the moment of use.
 
-        // **S5.C6a**: the branch's condition, named. It is what the deleted
-        // `sDstPicMap` encoded — the destination when this arm writes into it, the
-        // source when it does not — and so it is what decides which picture `Padding`
-        // must borrow at the end.
+        // The branch's condition, named: the destination when this arm writes into
+        // it, the source when it does not — and so what decides which picture
+        // `Padding` must borrow at the end.
         let bDstIsWritten = iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight || bForceCopy;
 
         if bDstIsWritten {
             if iSrcWidth != iShrinkWidth || iSrcHeight != iShrinkHeight {
-                // **`METHOD_DOWNSAMPLE`, ported in Phase 8b session C (T8b.C2).**
-                // This was `iRet = RET_NOTSUPPORTED` — and *both* callers dropped
-                // `iRet`, so a lower spatial layer was encoded from whatever the
-                // picture pool last held. Every multi-layer row in the gtest
-                // allowlist was this one line.
+                // METHOD_DOWNSAMPLE.
                 //
                 // The scratch is moved out of the plugin first: the two pictures
                 // and `m_vp` are all behind this `&mut self`, and the borrows are
@@ -2024,14 +1745,9 @@ impl CWelsPreProcess {
                 }
                 self.m_vp.sDownsample.m_pSampleBuffer = scratch;
             } else {
-                // **S11.51: the forced copy is a picture-to-picture copy.** The
-                // same `src_pair_mut` the downsample arm above uses, for the same
-                // reason and with the same guarantee — and here the source is
-                // downgraded to a shared borrow, because a copy reads it. What
-                // `WelsMoveMemory_c` did with six raw roots and two stride triples
-                // is `copy_planes_from`'s row walk over the same bytes: each plane
-                // from its own logical origin, at its own stride, luma at the full
-                // geometry and chroma at half.
+                // The forced copy is a picture-to-picture copy: `copy_planes_from`'s
+                // row walk — each plane from its own logical origin, at its own
+                // stride, luma at the full geometry and chroma at half.
                 let (kpSrcPic, pDstPic) = self.src_pair_mut(srcRef, dstRef);
                 pDstPic.copy_planes_from(kpSrcPic, iSrcWidth, iSrcHeight);
             }
@@ -2039,16 +1755,6 @@ impl CWelsPreProcess {
 
         iShrinkWidth -= iShrinkWidth & 1;
         iShrinkHeight -= iShrinkHeight & 1;
-        // **S5.C6a.** `sDstPicMap`'s three plane roots and its two strides were only
-        // ever a way to carry *one* picture's identity to this call, and which picture
-        // is what `bDstIsWritten` decides. Borrowing it here rather than describing it
-        // above is what makes a safe `Padding` possible: only one picture is live at
-        // this point, so S37's "no pair of references could express" — which is about
-        // holding source and destination at once — does not apply.
-        //
-        // `plane.stride()` is `SPicture::stride(i)`, which is what `iLineSize[i]` and
-        // so `sDstPicMap.iStride[i]` held; `[origin..]` is what `data_ptr(i)` pointed
-        // at. Same picture, same strides, same first byte.
         let padRef = if bDstIsWritten { dstRef } else { srcRef };
         let [py, pu, pv] = self.src_mut(padRef).planes_mut3();
         let (oy, ou, ov) = (py.origin(), pu.origin(), pv.origin());
@@ -2080,10 +1786,8 @@ impl CWelsPreProcess {
         let (Some(idCur), Some(idRef)) = (pCurPicture, pRefPicture) else {
             return;
         };
-        // §4.6 (S11.43): the plugin and the pool are sibling fields, split by
-        // destructure so the pass can run while both pictures stay borrowed —
-        // the plane slices replace the raw roots the pixel maps used to carry
-        // (S37's prologue resolved raw cursors here for the same reach).
+        // The plugin and the pool are sibling fields, split by destructure so the
+        // pass can run while both pictures stay borrowed.
         let CWelsPreProcess { m_vp, m_pSpatialPicPool, .. } = &mut *self;
         let (kpCur, kpRef) = (m_pSpatialPicPool.get(idCur), m_pSpatialPicPool.get(idRef));
         let (kpCurY, kpRefY) = (kpCur.plane_tail(0), kpRef.plane_tail(0));
@@ -2131,9 +1835,7 @@ impl CWelsPreProcess {
         let Some(idCur) = pCurPicture else {
             return;
         };
-        // §4.6 (S11.43): as at `VaaCalculation` — the plugin and the pool split
-        // by destructure, the six plane roots now six borrows (S37's raw-cursor
-        // prologue retired with them).
+        // As at `VaaCalculation` — the plugin and the pool split by destructure.
         let CWelsPreProcess { m_vp, m_pSpatialPicPool, .. } = &mut *self;
         let kpCur = m_pSpatialPicPool.get(idCur);
         let kpRef = pRefPicture.map(|id| m_pSpatialPicPool.get(id));
@@ -2142,9 +1844,8 @@ impl CWelsPreProcess {
             pVaaInfo.iPicHeight = kpCur.iHeightInPixel;
             pVaaInfo.iPicStride = kpCur.stride(0);
             pVaaInfo.iPicStrideUV = kpCur.stride(1);
-            // S9.0c: the six plane roots become two views, built where the
-            // pictures are reachable. Rebuilt every frame, as the layer's views are:
-            // the pool may hand the next frame a different slot.
+            // Rebuilt every frame, as the layer's views are: the pool may hand the
+            // next frame a different slot.
             pVaaInfo.pCurView =
                 Some(crate::encoder::rec_view::RoPicView::build(kpCur));
             pVaaInfo.pRefView =
@@ -2170,7 +1871,7 @@ impl CWelsPreProcess {
             sRefPixMap.sRect.iRectHeight = kpRef.iHeightInPixel;
             sRefPixMap.eFormat = VideoFormat::videoFormatI420;
 
-            // S10.12: the flag array reaches `Process` as a slice. `Set` no longer
+            // The flag array reaches `Process` as a slice. `Set` no longer
             // stashes it — see `CBackgroundDetection::Set` — but the call stays,
             // because the C++ makes it and the port mirrors the sequence.
             m_vp.sBackgroundDetection.Set(&BGDParam);
@@ -2203,8 +1904,7 @@ impl CWelsPreProcess {
         let (Some(idCur), Some(idRef)) = (pCurPicture, pRefPicture) else {
             return;
         };
-        // §4.6 (S11.43): as at `VaaCalculation` — the plugin and the pool split
-        // by destructure, the two luma planes as borrows.
+        // As at `VaaCalculation` — the plugin and the pool split by destructure.
         let CWelsPreProcess { m_vp, m_pSpatialPicPool, .. } = &mut *self;
         let (kpCur, kpRef) = (m_pSpatialPicPool.get(idCur), m_pSpatialPicPool.get(idRef));
         // The C++ stored `&pVaaInfo->sVaaCalcInfo` *inside* `pVaaInfo` here
@@ -2245,19 +1945,8 @@ impl CWelsPreProcess {
         }
     }
 
-    /// **S5.C6a**: the three `*mut u8` plane roots became the planes themselves, and
-    /// `&self` went with them — the body never touched it. `Padding` writes into
-    /// *one* picture, which is what makes the conversion possible where the rest of
-    /// `DownsamplePadding` resisted it: S37's note that source and destination "are
-    /// frequently the same picture, which no pair of references could express" is
-    /// about holding both maps at once, and this call holds neither. Its one caller
-    /// resolves which picture to pad *after* the copy or downsample is done, so a
-    /// single `&mut` is all that is ever live here.
-    ///
-    /// The `is_null()` triple becomes `is_empty()`, the same question a plane answers
-    /// (see `ClearEndOfLinePadding`), and every write is a `fill` over a slice range
-    /// rather than a `write_bytes` at an offset — the same bytes, with the extent
-    /// checked instead of assumed.
+    /// `Padding` writes into *one* picture: its one caller resolves which picture to
+    /// pad *after* the copy or downsample is done.
     pub fn Padding(
         pSrcY: &mut [u8],
         pSrcU: &mut [u8],
@@ -2301,17 +1990,7 @@ impl CWelsPreProcess {
         }
     }
 
-    /// **S5.C6a**: the list and two indices, instead of two `*mut` into it.
-    ///
-    /// Every one of the six call sites was already naming positions in *one* array —
-    /// three of them as `&mut arr[i], &mut arr[j]` (which the raw parameters then
-    /// erased), and three as `list.offset(i)` off an `as_mut_ptr()` of the same array.
-    /// Two `&mut` into one array is the thing references cannot express and the reason
-    /// this was raw; a slice plus indices expresses it exactly, and `[T]::swap` is the
-    /// body. The null tests go with the pointers — an array element has no null.
-    ///
-    /// The three `.offset()` sites gain a bounds check they did not have. The three
-    /// `&mut arr[i]` sites had one already, so nothing there changes.
+    /// Swaps two positions of one spatial picture list.
     pub fn WelsExchangeSpatialPictures(
         pPicList: &mut [Option<SrcPicId>],
         iPos1: usize,
@@ -2361,7 +2040,7 @@ impl CWelsPreProcess {
             return ENC_RETURN_INVALIDINPUT;
         }
 
-        // S37: the destination resolved once to its plane roots.
+        // The destination resolved once to its plane roots.
         let pDstPic = self.src_mut(pDstRef).planes();
 
         let mut iSrcWidth = kpSrc.iPicWidth;
@@ -2390,8 +2069,8 @@ impl CWelsPreProcess {
         let iSrcOffset1 = kpSrc.iStride[1] * kiSrcTopOffsetUV + kiSrcLeftOffsetUV;
         let iSrcOffset2 = kpSrc.iStride[2] * kiSrcTopOffsetUV + kiSrcLeftOffsetUV;
 
-        // S11.42: `wrapping_offset` — the arithmetic is safe Rust; whether the
-        // resulting pointers are valid is the copy's claim, asserted once at the
+        // `wrapping_offset` — the arithmetic is safe Rust; whether the resulting
+        // pointers are valid is the copy's claim, asserted once at the
         // `WelsMoveMemory_c` call below after the guards have run.
         let pSrcY = if !kpSrc.pData[0].is_null() {
             kpSrc.pData[0].wrapping_offset(iSrcOffset0 as isize)
@@ -2460,7 +2139,6 @@ impl CWelsPreProcess {
             return ENC_RETURN_INVALIDINPUT;
         }
 
-        // unsafe-cat: C-ABI — the ingest copy from the application's buffers.
         // The guards above have checked the null/size/stride contract the C++
         // checks; what remains — that the application's pointers address what
         // its strides promise — is the API's contract, named on the callee.
@@ -2485,8 +2163,8 @@ impl CWelsPreProcess {
         }
 
         if kiTargetWidth > iSrcWidth || kiTargetHeight > iSrcHeight {
-            // S5.C6a: the destination re-derived as planes, after the copy above has
-            // finished with its raw cursors. One picture, one borrow — see `Padding`.
+            // The destination re-derived as planes, after the copy above has
+            // finished with its raw cursors.
             let [py, pu, pv] = self.src_mut(pDstRef).planes_mut3();
             let (oy, ou, ov) = (py.origin(), pu.origin(), pv.origin());
             Self::Padding(
@@ -2511,9 +2189,6 @@ impl CWelsPreProcess {
 
     pub fn DetectSceneChange(
         &mut self,
-        // T9.H2, F192: threaded from `SingleLayerPreprocess`, which already holds it,
-        // so the screen arm below can stop reading `self.m_pEncCtx`. The video arm
-        // does not need it and does not take it.
         pCtx: &mut sWelsEncCtx,
         pCurPicture: SrcPicRef,
         pRefPicture: Option<SrcPicRef>,
@@ -2533,12 +2208,9 @@ impl CWelsPreProcess {
         let Some(pRefPicture) = pRefPicture else {
             return ESceneChangeIdc::SIMILAR_SCENE;
         };
-        // **T9.X — the views come off the pictures, not off a raw stamp.** Both
-        // pictures are read here and only read, so two *shared* borrows of the pool
-        // coexist where the old `src_mut(..).planes()` pair had to launder itself
-        // through raw to end the borrow. `src()` takes `&self` and so would borrow
-        // the plugin along with the pool; destructuring names the two fields
-        // separately, which is what lets the `&mut` on `m_vp` sit beside them.
+        // `src()` takes `&self` and so would borrow the plugin along with the pool;
+        // destructuring names the two fields separately, which is what lets the
+        // `&mut` on `m_vp` sit beside them.
         let Self {
             m_pSpatialPicPool,
             m_sScaledPicture,
@@ -2587,29 +2259,20 @@ impl CWelsPreProcess {
 
     fn DetectSceneChangeScreen(
         &mut self,
-        // T9.H2, F192 — see `GetBestRefPicScreen`.
         pCtx: &mut sWelsEncCtx,
         pCurPicture: SrcPicRef,
         _pRef: Option<SrcPicRef>,
     ) -> ESceneChangeIdc {
-        // The `pCtx.is_null()` disjunct went with the stored raw: a `&mut
-        // sWelsEncCtx` cannot be null. The rest of the guard is unchanged.
         if pCtx.vaa().is_none() {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
 
-        // A7, §4.6 reorder: four scalars out of the parameter block, none of them
-        // held across the context calls below.
-        // S11.3: `None` for camera content (P10.1.B3 made it `Some` under
-        // `SCREEN_CONTENT_REAL_TIME`, D-scc-1). This body both reads the screen
-        // candidates and writes them back, so it takes the mutable accessor;
-        // with no extension it takes the same exit `iTargetDid != 0` does two
-        // lines down, which is this screen arm's established "no usable scene
-        // analysis" answer.
+        // `None` for camera content, where no extension exists; that takes the same
+        // exit `iTargetDid != 0` does two lines down, which is this screen arm's
+        // "no usable scene analysis" answer.
         if pCtx.vaa_ext_ref().is_none() {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
-        // §4.6, reorder: the scalar comes out before the extension's `&mut`.
         let kiMvRange = pCtx.iMvRange;
         let iTargetDid = pCtx.param().iSpatialLayerNum - 1;
         if iTargetDid != 0 {
@@ -2633,8 +2296,6 @@ impl CWelsPreProcess {
             return ESceneChangeIdc::LARGE_CHANGED_SCENE;
         }
 
-        // A7: nothing of the parameter block is live here now — the two reads above
-        // were consumed into `i32`s — so the LTR state's `&mut` stands alone.
         let iClosestLtrFrameNum =
             ctx_ltr_at(&mut *pCtx, iTargetDid as usize).iLastLtrIdx[iCurTid as usize];
         if pCtx.param().bEnableLongTermReference {
@@ -2682,10 +2343,6 @@ impl CWelsPreProcess {
             * STATIC_SCENE_MOTION_RATIO;
         let iNegligibleBlocks = iNegligibleMotionBlocks as i32;
 
-        // `iSceneChangeMethodIdx = METHOD_SCENE_CHANGE_DETECTION_SCREEN` stood here as
-        // a `const` the C++ passes to the vtable. The dispatch is dissolved
-        // (`processing/mod.rs`), so the plugin is named directly at its call below.
-
         // The block-static grid, from the *aligned* source picture — `(w >> 3) *
         // (h >> 3)`, the same grid `SetBlockStaticIdcToMd` reads back with
         // `kiBlocks = (kiMbWidth << 1) * (kiMbHeight << 1)`
@@ -2695,9 +2352,6 @@ impl CWelsPreProcess {
             ((sSrcMap.sRect.iRectWidth >> 3) * (sSrcMap.sRect.iRectHeight >> 3)).max(0) as usize;
 
         for iScdIdx in 0..iAvailableRefNum {
-            // S12.3: `pVaaBlockStaticIdc[iScdIdx]` was an indexing read whose value
-            // was then exposed as an address. `select` is the same read and the same
-            // `NULL`-or-not answer, with the row number kept as a row number.
             let pCurBlockStaticPointer = pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").pVaaBlockStaticIdc.select(iScdIdx as usize);
             let mut sSceneChangeResult = SSceneChangeResult::default();
             sSceneChangeResult.eSceneChangeIdc = ESceneChangeIdc::SIMILAR_SCENE;
@@ -2714,7 +2368,7 @@ impl CWelsPreProcess {
                 self.src_id(idRefPic).iLongTermPicNum == iClosestLtrFrameNum;
 
             // **The two plugin calls, inside one tightly scoped borrow of three
-            // fields of `self` (P10.2.C6).** `self.src(..)` and `self.src_id(..)`
+            // fields of `self`.** `self.src(..)` and `self.src_id(..)`
             // are `&self` *methods*, so a luma slice produced through either borrows
             // the whole preprocessor — including `m_vp`, which the `Process` calls
             // below need mutably. Destructuring names the pool, the scaled picture
@@ -2722,9 +2376,6 @@ impl CWelsPreProcess {
             // two shared borrows of the pool sit beside one `&mut` of the plugins.
             // The scope ends before the judgement code, which wants `self` whole
             // again (`JudgeBestRef`, `SaveBestRefToLocal`, `src_id`).
-            //
-            // `pCtx` is a different owner throughout, so the extension writes below
-            // are disjoint from all of it.
             let ret = {
                 let Self { m_pSpatialPicPool, m_sScaledPicture, m_vp, .. } = self;
                 let cur_pic: &SPicture = match pCurPicture {
@@ -2779,7 +2430,7 @@ impl CWelsPreProcess {
 
                 // METHOD_SCENE_CHANGE_DETECTION_SCREEN — `wels_preprocess.cpp:1203-1207`.
                 //
-                // **D-scc-8**: the C++ hands the plugin a `uint8_t*` copied out of
+                // The C++ hands the plugin a `uint8_t*` copied out of
                 // `pVaaBlockStaticIdc[iScdIdx]`; here the *selector* rides in
                 // `sSceneChangeResult.pStaticBlockIdc` for the bookkeeping below and
                 // the row itself is resolved from the extension. A selector that
@@ -2849,16 +2500,8 @@ impl CWelsPreProcess {
             ESceneChangeIdc::SIMILAR_SCENE
         };
 
-        // `wels_preprocess.cpp:1247-1248` — **P10.2.C2, and it is a referee's input,
-        // not a diagnostic.** `scc_verdicts.sh` reads exactly this line off both
-        // encoders and diffs the two sequences, which is how the screen
-        // preprocessor is judged before the bitstreams can match: under `SCC_TIER=min`
-        // rate control is off, so the plugins' inputs are identical on both sides
-        // frame by frame and the verdicts must be too. Text, level and argument
-        // order are therefore fixed by the C++, not chosen here.
-        //
-        // §4.6: the parameter read is consumed into an `i32` before the extension's
-        // `&mut` below, and `WelsLog` takes the log context by value (S8.1).
+        // `wels_preprocess.cpp:1247-1248`. Text, level and argument order are fixed
+        // by the C++, not chosen here.
         let kiCodingIndex = pCtx.param().sDependencyLayers[0].iCodingIndex;
         crate::common::wels_trace::WelsLog(
             pCtx.sLogCtx,
@@ -2883,9 +2526,6 @@ impl CWelsPreProcess {
         iVaaFrameSceneChangeIdc
     }
 
-    /// **S5.C6b**: `*mut SPixMap` became the `&mut` both call sites already held
-    /// (`&mut sSrcMap`, `&mut sRefMap` — locals of `DetectSceneChangeScreen`), so the
-    /// null test could not fire.
     fn InitPixMap(pPicture: &PicPlanes, pPixMap: &mut SPixMap) {
         {
             (*pPixMap).pPixel[0] = pPicture.pData[0];
@@ -2900,8 +2540,6 @@ impl CWelsPreProcess {
         }
     }
 
-    /// **S5.C6b**: as [`InitPixMap`](Self::InitPixMap) — both call sites pass `&mut`
-    /// to a caller local.
     fn InitRefJudgement(&self, pRefJudgement: &mut SRefJudgement) {
         {
             (*pRefJudgement).iMinFrameComplexity = i32::MAX as i64;
@@ -2928,7 +2566,6 @@ impl CWelsPreProcess {
         }
     }
 
-    /// **S5.C6b**: as [`InitRefJudgement`](Self::InitRefJudgement).
     fn SaveBestRefToJudgement(
         &self,
         iRefPictureAvQP: i32,
@@ -2943,8 +2580,6 @@ impl CWelsPreProcess {
         }
     }
 
-    /// **S5.C6b**: two raw out-parameters into one read and one write. The `&`/`&mut`
-    /// split is what the body already did — `pRefPicInfo` is only read from.
     fn SaveBestRefToLocal(
         &self,
         pRefPicInfo: &SRefInfoParam,
@@ -2953,14 +2588,10 @@ impl CWelsPreProcess {
     ) {
         {
             *pRefSaved = *pRefPicInfo;
-            // S12.3: was `with_exposed_provenance_mut(..)`, the other half of a round
-            // trip that existed only to hand a pointer to `SetBlockStaticIdcToMd`.
-            // Both halves are gone; this is the copy the C++ writes.
             (*pRefSaved).pBestBlockStaticIdc = sSceneChangeResult.pStaticBlockIdc;
         }
     }
 
-    /// **S5.C6b**: as its siblings — both call sites pass `&mut (*pVaaExt).sVaa*[0]`.
     fn SaveBestRefToVaa(&self, sRefSaved: &SRefInfoParam, pVaaBestRef: &mut SRefInfoParam) {
         {
             *pVaaBestRef = *sRefSaved;
@@ -2969,7 +2600,6 @@ impl CWelsPreProcess {
 
     fn GetAvailableRefListLosslessScreenRefSelection(
         &self,
-        // T9.H2, F192 — see `GetBestRefPicScreen`.
         pCtx: &mut sWelsEncCtx,
         pRefPicList: &[Option<SrcPicId>],
         iCurTid: u8,
@@ -3029,8 +2659,8 @@ impl CWelsPreProcess {
         if pAvailableRefParam[0].pRefPicture.is_none() {
             let mut j = 1;
             while j < *pAvailableRefNum {
-                // S5.C6b: one `swap`-free shuffle down the slice — `pCur` is a copy
-                // rather than a second borrow, which is what the two raw cursors were.
+                // One `swap`-free shuffle down the slice — `pCur` is a copy rather
+                // than a second borrow.
                 let pCur = pAvailableRefParam[j as usize];
                 let pPrev = &mut pAvailableRefParam[(j - 1) as usize];
                 pPrev.pRefPicture = pCur.pRefPicture;
@@ -3090,12 +2720,6 @@ impl CWelsPreProcess {
     /// array feeds the complexity analyser: the first confirmed long-term reference
     /// when LTR is on and a T0 frame was lost, otherwise the first usable short-term
     /// reference at or below the current temporal id.
-    /// **S10.9: returns *which* picture, not a pointer into it.** The out-parameter
-    /// was `*mut *mut u32` and the body stored
-    /// `pic_mut(id).ref_mb_type_root()` — a raw into the reference picture's
-    /// `uiRefMbType` `Vec`, which then lived on `SComplexityAnalysisParam` and made
-    /// `SVAAFrameInfo` `!Sync`. An identity carries the same decision and lets the
-    /// caller take the slice under a borrow the compiler can see.
     pub fn SetRefMbType(
         &self,
         pCtx: &mut sWelsEncCtx,
@@ -3103,9 +2727,6 @@ impl CWelsPreProcess {
     ) -> Option<crate::encoder::picture::RecPicId> {
         let uiTid = pCtx.uiTemporalId;
         let uiDid = pCtx.uiDependencyId;
-        // §4.6, reorder: the branch condition is decided before the list borrow —
-        // it reads the parameters and the LTR state, two other fields of the same
-        // context. T9.H3's inline-borrow shape, one statement earlier.
         let bLtrRecovery = pCtx.param().bEnableLongTermReference
             && ctx_ltr_at(pCtx, uiDid as usize).bReceivedT0LostFlag
             && uiTid == 0;
@@ -3142,20 +2763,17 @@ impl CWelsPreProcess {
         kiDependencyId: i32,
         bCalculateBGD: bool,
     ) {
-        // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
-        // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
-        // remaining conditions are unchanged.
         if pCtx.param_opt().is_none() {
             return;
         }
         let Some(idCur) = pCurPicture else {
             return;
         };
-        // **The flip caught a second two-pool crossing here.** The current picture is
-        // a spatial *source* picture (`pCtx->pEncPic`) and the reference is a
-        // *reconstruction* picture (`pCtx->pRefList0[0]`, `encoder_ext.cpp:2662`) —
-        // both `SPicture*` in C++, so nothing there says the two arguments come from
-        // different owners. S37: each resolved once in its own pool, to geometry.
+        // The current picture is a spatial *source* picture (`pCtx->pEncPic`) and the
+        // reference is a *reconstruction* picture (`pCtx->pRefList0[0]`,
+        // `encoder_ext.cpp:2662`) — both `SPicture*` in C++, so nothing there says the
+        // two arguments come from different owners. Each is resolved once in its own
+        // pool, to geometry.
         let uiDidCur = pCtx.uiDependencyId as usize;
         let sCur = self.m_pSpatialPicPool.get_mut(idCur).planes();
         let sRefPic = pRefPicture.filter(|_| pCtx.ref_list(uiDidCur).is_some());
@@ -3170,11 +2788,6 @@ impl CWelsPreProcess {
 
         let pSvcParam = pCtx.param_mut();
         if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
-            // S11.3: `None` for camera content, where no extension exists;
-            // `Some` under `SCREEN_CONTENT_REAL_TIME` since P10.1.B3 (D-scc-1),
-            // so the block below is written on every screen frame. The plugin
-            // that reads it is P10.2's.
-            // §4.6, reorder: the slice type is read before the writer's `&mut`.
             let eSliceType = pCtx.eSliceType;
 
             let _iComplexityAnalysisMode = if eSliceType == EWelsSliceType::P_SLICE {
@@ -3185,15 +2798,6 @@ impl CWelsPreProcess {
                 return;
             };
 
-            // S11.3, §4.6: the rate controller's work and the values the
-            // extension needs from it come first, and its borrow ends before
-            // the extension's begins — they are two `&mut` of one context, the
-            // split S11.2c's `rc_and_current_layer_mut` makes for the layer.
-            // Ordering suffices here because nothing reads the two at once.
-            // **P10.1.B2 (D-scc-2)**: the raw root `gom_sad_ptr()` used to hand out
-            // here is gone with the `pGomComplexity` field it filled; P10.2 hands
-            // `pWelsSvcRc.pCurrentFrameGomSad` to the plugin as `&mut [i32]`, as the
-            // camera arm below does.
             let kiGomNumInFrame = {
                 let pWelsSvcRc = pCtx.rc_at_mut(kiDependencyId as usize);
                 pWelsSvcRc.pGomForegroundBlockNum.fill(0);
@@ -3217,7 +2821,7 @@ impl CWelsPreProcess {
 
             // METHOD_COMPLEXITY_ANALYSIS_SCREEN — `wels_preprocess.cpp:868-893`.
             //
-            // **D-scc-10**: the block is copied *out* of the extension (it is `Copy`),
+            // The block is copied *out* of the extension (it is `Copy`),
             // handed to the plugin by value through `Set`, and written back after
             // `Get` — because the GOM array the plugin fills is the rate controller's
             // and the two live in different fields of one context. Taking the
@@ -3226,16 +2830,11 @@ impl CWelsPreProcess {
             //
             // `Get` copies the **whole** block, so `iGomNumInFrame` comes back as the
             // plugin's bucket count and overwrites the `iGomSize` staged above. That
-            // is upstream's behaviour and it is not "preserved" here.
+            // is upstream's behaviour.
             let mut sScreenParam = *sComplexityAnalysisParam;
-            // §4.6: `SLogContext` is `Copy` and `WelsLog` takes it by value (S8.1),
-            // so it comes out before the combined accessor's `&mut`.
             let kLogCtx = pCtx.sLogCtx;
 
-            // §4.6, combined accessor: the rate controller's GOM array and the
-            // reference list, from one borrow. The source picture comes from
-            // `self.m_pSpatialPicPool` and the plugin from `self.m_vp` — two more
-            // owners, disjoint from the context and from each other.
+            // The rate controller's GOM array and the reference list, from one borrow.
             let (_, pWelsSvcRc, pRefListShared) =
                 pCtx.vaa_rc_and_ref_list_mut(kiDependencyId as usize);
 
@@ -3263,8 +2862,7 @@ impl CWelsPreProcess {
             }
 
             // The luma planes, by field on both sides. The source is a spatial source
-            // picture, the reference a reconstruction from the layer's list — the two
-            // pools this body has crossed since the flip.
+            // picture, the reference a reconstruction from the layer's list.
             let cur_y = self.m_pSpatialPicPool.get(idCur).plane(0);
             let ref_y = match (sRefPic, pRefListShared) {
                 (Some(id), Some(list)) => Some(list.pic(id).plane(0)),
@@ -3277,15 +2875,14 @@ impl CWelsPreProcess {
                 ref_stride: ref_y.map_or(1, |p| p.stride()),
             };
 
-            // **The GOM array is long enough, and this is the proof rather than a
-            // hope.** The plugin writes `ceil(iMbHeight / GOM_H_SCC)` buckets with
+            // **The GOM array is long enough.** The plugin writes
+            // `ceil(iMbHeight / GOM_H_SCC)` buckets with
             // `GOM_H_SCC = 8`, and `RcInitSequenceParameter` sets `iGomSize =
             // ceil(iNumberMbFrame / iNumberMbGom) = ceil(iMbHeight / iGomRowMode0)`
             // (`ratectl.cpp:153-165`) where `iGomRowMode0` is interpolated between
             // `GOM_ROW_MODE1_*` (1 or 2) and `GOM_ROW_MODE0_*` (2 or 4) and so never
             // exceeds 4 (`rc.h:98-107`). `4 < 8`, so `iGomSize` is always at least
-            // the plugin's bucket count and the C++ cannot write past its own array
-            // either — there is no upstream defect here to refuse. The guard stays
+            // the plugin's bucket count. The guard stays
             // because a panic mid-frame is a worse way to learn that than a log line,
             // and it costs one comparison per frame.
             let kiGomsWritten =
@@ -3318,9 +2915,6 @@ impl CWelsPreProcess {
                 .expect("checked when the block was staged")
                 .sComplexityScreenParam = sScreenParam;
         } else {
-            // §4.6, reorder: the writer's `&mut` sinks past everything that still
-            // needs the context — the slice-type reads and `SetRefMbType`'s own
-            // `&mut` — down to the first use of the rate controller's arrays.
             let eSliceType = pCtx.eSliceType;
 
             let kiRCMode = pCtx.param().iRCMode as i32;
@@ -3338,23 +2932,8 @@ impl CWelsPreProcess {
                 return;
             };
 
-            // **§4.6, reorder, and A5's one real knot.** `SetRefMbType` takes the
-            // whole context `&mut`, and its out-parameter is a single `*mut u32`
-            // *inside* the block below — so the block's own `&mut` may not span
-            // the call. The out-parameter is staged in a local instead, seeded
-            // with the field's current value so that a `SetRefMbType` which
-            // matches no reference leaves exactly what it left before (it writes
-            // only on a match). None of the block's other writes are read by
-            // `SetRefMbType`, so they move below it unchanged.
-            // **S10.9: an identity, not a pointer.** This used to read the raw
-            // `uiRefMbType` back off the analysis block, hand `SetRefMbType` a
-            // `*mut *mut u32` to overwrite, and store the result — a borrow of the
-            // reference picture's array living in a `Copy` struct. The identity is
-            // resolved to a slice below, under a borrow the compiler can see.
             let mut idRefMbType: Option<crate::encoder::picture::RecPicId> = None;
             if let Some(idRef) = sRefPic {
-                // §4.6, reorder: the picture type is read out before
-                // `SetRefMbType` claims the context mutably.
                 let iPictureType = pCtx
                     .ref_list(uiDidCur)
                     .expect("checked when `sRefPic` was filtered")
@@ -3363,16 +2942,14 @@ impl CWelsPreProcess {
                 idRefMbType = self.SetRefMbType(pCtx, iPictureType);
             }
 
-            // §4.6, combined accessor: `Process` below takes the analysis block's
-            // `sVaaCalcInfo` shared and the rate controller's two GOM arrays
-            // mutably, in one call.
+            // `Process` below takes the analysis block's `sVaaCalcInfo` shared and
+            // the rate controller's two GOM arrays mutably, in one call.
             let (pVaaInfo, pWelsSvcRc, pRefListShared) =
                 pCtx.vaa_rc_and_ref_list_mut(kiDependencyId as usize);
             let pVaaInfo = pVaaInfo.expect("the frame's video-analysis block");
-            // S10.9: the reference picture's per-macroblock type array, resolved
-            // from `SetRefMbType`'s identity. Empty where the raw was null — which
-            // is the state `ref_mb_type_root` answered null for, a picture built
-            // without `bNeedMbInfo`.
+            // The reference picture's per-macroblock type array, resolved from
+            // `SetRefMbType`'s identity. Empty for a picture built without
+            // `bNeedMbInfo`.
             let uiRefMbType: &[u32] = match (idRefMbType, pRefListShared) {
                 (Some(id), Some(list)) => &list.pic(id).uiRefMbType,
                 _ => &[],
@@ -3411,10 +2988,8 @@ impl CWelsPreProcess {
             }
 
             self.m_vp.sComplexityAnalysis.Set(sComplexityAnalysisParam);
-            // **T9.X**: the two GOM arrays are the rate controller's own `Vec`s and
-            // reach the plugin as slices — `sComplexityAnalysisParam.pGomComplexity`
-            // and `.pGomForegroundBlockNum` were `rc_gom_sad`/`rc_gom_fg_blocks`
-            // stamped one line above this. `pGomComplexity` really is aimed at
+            // The two GOM arrays are the rate controller's own `Vec`s and
+            // reach the plugin as slices. `pGomComplexity` really is aimed at
             // `pCurrentFrameGomSad`: the VP's field name is a misnomer and
             // `wels_preprocess.cpp:859/:924` does exactly the same.
             let iRet = self.m_vp.sComplexityAnalysis.Process(
@@ -3434,25 +3009,17 @@ impl CWelsPreProcess {
 
     /// Look up the source picture and long-term index for a best-reference candidate.
     ///
-    /// Matches `CWelsPreProcess::GetRefFrameInfo` (`wels_preprocess.cpp:1262`). The
-    /// port previously declared this only as a vtable entry in `ref_list_mgr_svc.rs`
-    /// with no body behind it.
-    ///
+    /// Matches `CWelsPreProcess::GetRefFrameInfo` (`wels_preprocess.cpp:1262`).
     pub fn GetRefFrameInfo(
         &mut self,
-        // T9.H2, F192 — see `GetBestRefPicScreen`. This is the one of the four whose
-        // caller is reachable-shaped: `ref_list_mgr_svc.rs`'s `WelsBuildRefListScreen`
-        // takes `&mut sWelsEncCtx` and reached this through `pCtx.pVpp`, which is the
-        // exact shape the probe reproduces.
         pCtx: &mut sWelsEncCtx,
         iRefIdx: i32,
         bCurrentFrameIsSceneLtr: bool,
         pRefOri: &mut Option<SrcPicId>,
     ) -> i32 {
         let iTargetDid = pCtx.param().iSpatialLayerNum - 1;
-        // S11.3: `None` for camera content — no extension, so this reports the
-        // "no reference chosen" result its callers already handle; `Some` under
-        // `SCREEN_CONTENT_REAL_TIME` since P10.1.B3 (D-scc-1).
+        // `None` for camera content — no extension, so this reports the
+        // "no reference chosen" result its callers already handle.
         let Some(pVaaExt) = pCtx.vaa_ext_ref() else {
             return 0;
         };
@@ -3475,13 +3042,11 @@ impl CWelsPreProcess {
     /// best block-static map against, so the map has to be recomputed against the
     /// reference that will really be used.
     ///
-    /// **The signature carries the row and the reference's pixels, because the
-    /// caller is the only one that can reach them.** In the C++ this method takes two
-    /// `SPicture*` and reads `m_pInterfaceVp`'s parameter block for the row pointer;
-    /// here the row lives in the encoder context's extension and the reference in the
-    /// context's reference list, while `self` — the preprocessor — has been *taken
-    /// out* of that context by `with_vpp`. So the caller resolves both under one
-    /// borrow and hands them over. Only the source picture is still `self`'s.
+    /// The signature carries the row and the reference's pixels because the caller is
+    /// the only one that can reach them: the row lives in the encoder context's
+    /// extension and the reference in the context's reference list, while `self` —
+    /// the preprocessor — has been *taken out* of that context by `with_vpp`. Only
+    /// the source picture is still `self`'s.
     ///
     /// `pStaticBlockIdcSel` is the selector the C++ stores in the result's
     /// `pStaticBlockIdc`. It is inert on this path — `Set` copies it in, the plugin
@@ -3514,7 +3079,7 @@ impl CWelsPreProcess {
         sSrcMap.sRect.iRectHeight = src_pic.iHeightInPixel;
         sSrcMap.eFormat = VideoFormat::videoFormatI420;
 
-        // **The C++'s `sRefMap` has no remaining consumer here and is not built.**
+        // The C++'s `sRefMap` has no remaining consumer here and is not built.
         // It contributed `pPixel[0]` and `iStride[0]` to the screen scene-change
         // detector, which are `refp` and `ref_stride` now; unlike the scroll
         // detector's, its `sRect` was never read. (`DetectSceneChangeScreen` still
@@ -3547,10 +3112,7 @@ impl CWelsPreProcess {
         iRet
     }
 
-    /// **`pShortRefList` stood in this signature and nothing read it** (S18): the
-    /// C++ passes the reference list and uses only its *count*. Deleted with the
-    /// flip rather than converted, because converting it would have meant handing
-    /// the preprocessor a handle type it has no pool for.
+    /// The C++ passes the reference list here and uses only its *count*.
     pub fn UpdateSrcList(
         &mut self,
         pCurPicture: Option<SrcPicId>,
@@ -3636,13 +3198,10 @@ impl CWelsPreProcess {
 mod tests {
     use super::*;
 
-    /// **D-scc-5, by construction.** Slice workers read the screen extension and
-    /// the feature storage through a shared context, and every writer runs outside
-    /// the fork (the preprocessor, `PreprocessSliceCoding`, the post-join FME
-    /// switch), as in the C++. After D-scc-2 the block holds no raw pointer, so
-    /// the compiler is the referee: this fails to compile if either arm stops being
-    /// `Sync` — which is exactly what the deleted `*mut i32` did (B1 did not build
-    /// until B2 removed it; `thread::scope` refused the context).
+    /// Slice workers read the screen extension and the feature storage through a
+    /// shared context, and every writer runs outside the fork (the preprocessor,
+    /// `PreprocessSliceCoding`, the post-join FME switch), as in the C++. This fails
+    /// to compile if either arm stops being `Sync`.
     #[test]
     fn vaa_block_is_sync() {
         fn assert_sync<T: Sync>() {}
@@ -3680,16 +3239,11 @@ mod tests {
         assert_eq!(EMethods::default(), EMethods::METHOD_NULL);
     }
 
-    /// The pre-processor is constructed with its plugins in place — there is no
-    /// create/destroy pair for a vtable any more (`IWelsVP` dissolved, Phase 6
-    /// session B). This used to exercise `WelsPreprocessCreate`/`Destroy`.
+    /// The pre-processor is constructed with its plugins in place.
     #[test]
     fn test_wels_preprocess_init_and_uninit() {
         let preprocess = CWelsPreProcess::default();
         assert!(!preprocess.m_bInitDone);
-        // `m_pEncCtx` is gone (F192) — there is no stored context to assert about,
-        // which is the point. What a fresh preprocessor still owes is its plugins at
-        // their defaults, asserted below.
         // The plugins are owned and start at their defaults.
         assert!(!preprocess.m_vp.sVaaCalc.m_sCalcParam.iCalcBgd);
         drop(preprocess);

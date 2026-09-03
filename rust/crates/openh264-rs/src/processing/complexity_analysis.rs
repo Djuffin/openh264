@@ -18,11 +18,10 @@
 //! `GOM_SAD`/`GOM_VAR` additionally fill `pWelsSvcRc->pCurrentFrameGomSad`, which
 //! `RcGomTargetBits` uses to split a slice's bit budget between GOMs.
 //!
-//! [`CComplexityAnalysisScreen`] (`METHOD_COMPLEXITY_ANALYSIS_SCREEN`), at the foot
-//! of this file since P10.2.C5, is the screen-content counterpart: a different
-//! measurement — the cheapest of vertical intra, horizontal intra and collocated
-//! inter, per macroblock, summed into GOM buckets — reached only from
-//! `SCREEN_CONTENT_REAL_TIME`.
+//! [`CComplexityAnalysisScreen`] (`METHOD_COMPLEXITY_ANALYSIS_SCREEN`) is the
+//! screen-content counterpart: a different measurement — the cheapest of vertical
+//! intra, horizontal intra and collocated inter, per macroblock, summed into GOM
+//! buckets — reached only from `SCREEN_CONTENT_REAL_TIME`.
 //!
 //! ## Unsigned arithmetic is load-bearing
 //!
@@ -31,10 +30,6 @@
 //! (20 macroblocks * 256 samples * 255 = 1.3e6, squared = 1.7e12). The wrap is part
 //! of the result, so every one of these is a `u32` with `wrapping_*` here.
 
-// **S11.5 (step 5): sealed.** the complexity-analysis pass holds no `unsafe` at all —
-// no product allow and no test instrument — so the `deny` it carried
-// since its conversion becomes `forbid`, which no inner `allow` can
-// reopen. This is the end state for a file that is simply done.
 #![forbid(unsafe_code)]
 
 use crate::common::intra_pred_common::{i16x16_luma_pred_h, i16x16_luma_pred_v};
@@ -76,8 +71,6 @@ fn WELS_MIN(a: i32, b: i32) -> i32 {
 /// The C++ object keeps the whole `SComplexityAnalysisParam` by value (`Set` copies
 /// it in, `Get` copies `iFrameComplexity` back out), so this does too.
 pub struct CComplexityAnalysis {
-    /// `m_pfGomSad`. Selected per call by `InitGomSadFunc`, so it is not stored as a
-    /// function pointer here — `iCalcBgd` is the whole selection.
     pub m_sComplexityAnalysisParam: SComplexityAnalysisParam,
 }
 
@@ -92,7 +85,6 @@ impl Default for CComplexityAnalysis {
 
 impl CComplexityAnalysis {
     /// `CComplexityAnalysis::Set` — copies the caller's parameter block in whole.
-    /// Typed since Phase 6 session B (the `IWelsVP` vtable's `void*` is gone).
     pub fn Set(&mut self, param: &SComplexityAnalysisParam) -> i32 {
         self.m_sComplexityAnalysisParam = *param;
         RET_SUCCESS
@@ -105,9 +97,7 @@ impl CComplexityAnalysis {
     }
 
     /// `CComplexityAnalysis::Process`. `calc` is the VAA statistics of this picture
-    /// pair, handed over at the call (the C++ stored `pCalcResult` in the parameter
-    /// block; take what you reach).
-    ///
+    /// pair, handed over at the call.
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -115,9 +105,6 @@ impl CComplexityAnalysis {
         calc: &SVAACalcResult,
         pGomComplexity: &mut [i32],
         pGomForegroundBlockNum: &mut [i32],
-        // S10.9: the two per-macroblock arrays, as slices — they were raws on
-        // `SComplexityAnalysisParam` and are the caller's storage, not this
-        // plugin's, exactly as the two GOM arrays above already were.
         pBackgroundMbFlag: &[i8],
         uiRefMbType: &[u32],
     ) -> i32 {
@@ -362,7 +349,7 @@ impl CComplexityAnalysis {
 /// total to `RcUpdateFrameComplexity`; nothing here reaches the bitstream except
 /// through the QP the rate controller then chooses.
 ///
-/// **D-scc-10: the GOM array is the rate controller's**, borrowed from
+/// **The GOM array is the rate controller's**, borrowed from
 /// `pWelsSvcRc.pCurrentFrameGomSad` at the call, exactly as the camera plugin's is.
 /// `iGomNumInFrame` is written back as *this plugin's* count of buckets, overwriting
 /// the `iGomSize` the caller staged there — that is what the C++ does, and the
@@ -451,8 +438,7 @@ impl CComplexityAnalysisScreen {
         let iStrideY = planes.cur_stride;
 
         // `ENFORCE_STACK_ALIGN_1D (uint8_t, iMemPredMb, 256, 16)` — the 16x16
-        // prediction block, at stride 16. Alignment was for the SSE2 kernels; the
-        // scalar port needs none.
+        // prediction block, at stride 16.
         let mut iMemPredMb = [0u8; 256];
 
         self.m_ComplexityAnalysisParam.iFrameComplexity = 0;
@@ -498,7 +484,7 @@ impl CComplexityAnalysisScreen {
     /// macroblock both intra costs are `i32::MAX` and the minimum is the inter cost,
     /// which is exactly what the C++ computes.
     ///
-    /// **Two upstream facts about the scroll branch, ported as they are.**
+    /// **Two upstream facts about the scroll branch.**
     ///
     /// 1. The scrolled reference is read at `pTmpRef - iScrollMvY * iStrideX +
     ///    iScrollMvX` (`:451`) — **minus** on Y where the scene-change detector
@@ -513,9 +499,7 @@ impl CComplexityAnalysisScreen {
     /// Neither is reachable from the encoder, and the reason is the caller, not the
     /// plugin: `AnalyzePictureComplexity` zeroes `sScrollResult` before every `Set`
     /// (`wels_preprocess.cpp:863-865`), so `bScrollFlag` is false on every call the
-    /// encoder makes and this whole branch is dark. It is ported literally; if
-    /// anything ever does reach it, `PlaneCursor`'s bounds check is the referee and a
-    /// panic there is this note, not a new mystery.
+    /// encoder makes and this whole branch is dark.
     fn GomComplexityAnalysisInter(
         &mut self,
         pSrc: &SPixMap,
@@ -748,9 +732,9 @@ mod screen_tests {
     }
 
     /// `Get` copies the **whole** block back, so `iGomNumInFrame` returns this
-    /// plugin's bucket count and overwrites whatever the caller staged there
-    /// (D-scc-10). `AnalyzePictureComplexity` stages `pWelsSvcRc->iGomSize`; the
-    /// number that survives is the plugin's.
+    /// plugin's bucket count and overwrites whatever the caller staged there.
+    /// `AnalyzePictureComplexity` stages `pWelsSvcRc->iGomSize`; the number that
+    /// survives is the plugin's.
     #[test]
     fn get_overwrites_the_staged_gom_count() {
         const W: usize = 320;

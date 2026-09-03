@@ -45,25 +45,6 @@
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
-// **Phase 5, T5.AC7 — the lint, with the two `PPicture` survivors allowed by
-// name (both converted at T5b.1; this module allows nothing today), and family 8's
-// blocker is gone.** Session W named what stood between this
-// module and the lint: `SVlcTable`'s fields, raw *"because the sub-tables have
-// varying lengths and the C indexes them by a computed VLC bucket"*, and it called
-// that a table-representation change rather than a parameter flip. It is — and the
-// representation it wanted is the slice, because **the number of bits read to form
-// the index is `log2` of the table it indexes**, at every one of the sixteen
-// coeff-token buckets and every total-zeros and zero-left row. That agreement is
-// what a pointer could not carry and what
-// `vlc_sub_tables_are_exactly_as_wide_as_their_index` now measures, so the bounds
-// check the slice adds is one no bitstream can reach.
-//
-// Three smaller families went with it: the bit cache carries the **window** rather
-// than a `*mut u8` into it (`SHIFT_BUFFER` re-slices, and the two look-ahead bytes
-// are checked against the reader's own window); the neighbour-nzc reads are
-// T5.AB1's `get(i).as_mut_ptr()` maneuver again; and `CheckIntra*PredMode`'s
-// out-parameters are `&mut i8` / `&[i32]`, where the scan index's offsets are all
-// backward from a position `g_kuiCache30ScanIdx` never puts below 7.
 
 use crate::safe::bits::BsCursor;
 
@@ -260,13 +241,6 @@ pub const I_SLICE: i32 = 2;
 // ============================================================================
 
 /// 32-bit big-endian bit window cache for CAVLC parsing
-///
-/// **T5.AC7: `pBuf` is the window, not a pointer into it.** The C's
-/// `uint8_t* pBuf` walks the RBSP two bytes at a time and reads two more ahead of
-/// itself; the port's copy was a `*mut u8` derived from the same slice the caller
-/// already holds. The window travels instead, and `SHIFT_BUFFER` re-slices it —
-/// which makes the two look-ahead reads bounds-checked by the window the bit
-/// reader was given, rather than by the four bytes of headroom the C assumes.
 #[derive(Debug, Copy, Clone)]
 pub struct TagReadBitsCache<'a> {
     pub uiCache32Bit: u32,
@@ -306,9 +280,6 @@ pub struct SWelsNeighAvail {
     pub iLeftCbp: u8,
     pub iDummy: [u8; 2],
 }
-// T5.W10: `pub type PWelsNeighAvail = *mut SWelsNeighAvail;` sat here and has no
-// user left — the struct is a stack local of `decode_slice.rs` threaded down, so
-// every consumer takes a borrow now. S18's shape, found at the definition.
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -333,17 +304,6 @@ pub struct SI4PredInfo {
 /// `const uint8_t (*kpCoeffTokenVlcTable[4][8])[2];` etc. Each pointer refers
 /// to a table of `[value, bit-count]` pairs of varying length.
 ///
-/// **T5.AC7: the sub-tables are slices, and the bound is the same fact as the
-/// index width.** Each field was a raw pointer because the C indexes tables of
-/// *varying length* by a computed VLC bucket — 2, 4, 8, 64 or 256 entries — and a
-/// pointer carries no length. It did not need to: the number of bits read to form
-/// the index **is** the table's `log2(len)`, at every one of the sixteen
-/// coeff-token buckets and at every total-zeros and zero-left row. Making the
-/// field a slice makes that agreement the type's, and
-/// `vlc_sub_tables_are_exactly_as_wide_as_their_index` measures it rather than
-/// arguing it — so no bitstream can reach the bounds check, and the check that
-/// cannot fire is what lets this module carry the lint.
-///
 /// `'static`, because every entry is a `static` table in `vlc_tables.rs` and this
 /// struct is built once per decoder by [`InitVlcTable`].
 #[derive(Clone, Copy)]
@@ -353,33 +313,6 @@ pub struct SVlcTable {
     pub kpZeroTable: [&'static [[u8; 2]]; 7],
     pub kpTotalZerosTable: [[&'static [[u8; 2]]; 15]; 2],
 }
-
-// T5.W4 (W6, family 8, partial): the CAVLC leaf parameters became borrows.
-//
-//   * `pBitsCache` is `&mut SReadBitsCache` at nine signatures. The type never
-//     leaves this module — it is a local of `WelsResidualBlockCavlc` and
-//     `…8x8`, built and passed down — and every call site already spelled the
-//     argument `&mut sReadBitsCache`, so the flip changed no call site at all.
-//   * `pVlcTable` is `&SVlcTable` at nine. **Shared, because nothing writes one
-//     outside `InitVlcTable` below** — grep-verified over the crate — so the three
-//     `decode_slice.rs` derivations off `(*pCtx).pVlcTable` are shared borrows now.
-//   * `kpZigzagTable` is `&[u8]`, and its span is exact rather than open. The
-//     callers pass `&g_kuiZigzagScan[max_idx..]` where they passed
-//     `.as_ptr().add(max_idx)`, and the length is provably enough: the callee
-//     indexes `0..iMaxNumCoeff` with `iMaxNumCoeff = iScanIdxEnd - max_idx + 1`,
-//     and `uiScanIdxEnd` is a **4-bit** slice-header field (`decoder_core.rs:2692`)
-//     that the port then rejects unless it reads exactly 15 (`:2696`), every other
-//     path assigning the literal 15. So `max_idx + iMaxNumCoeff - 1 <= 15 < 16`,
-//     the bound the raw form argued in prose is now the type's, and no input can
-//     reach the panic. S9's exact-span trim, at table scale.
-//
-// **What is left, and why it is not a signature problem**: nine of these functions
-// are still `unsafe fn`, and every one of them is unsafe for `SVlcTable`'s own
-// fields — `[[*const [u8; 2]; 8]; 4]` and friends, raw because the sub-tables have
-// *varying lengths* and the C indexes them by a computed VLC bucket. Converting
-// those is a table-representation change, not a parameter flip, and it is the whole
-// of what stands between this module and the lint. Named here so the next session
-// costs it rather than rediscovering it.
 
 /// Matches `InitVlcTable` in `codec/decoder/core/inc/vlc_decoder.h`.
 pub fn InitVlcTable(pVlcTable: &mut SVlcTable) {
@@ -455,12 +388,6 @@ pub use crate::decoder::decoder_core::{
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterPSubMbTypeInfo, g_ksInterBSubMbTypeInfo};
 pub use crate::decoder::dec_golomb::{g_kuiPrefix8BitsTable};
 pub use crate::decoder::decode_slice::{g_kuiCache30ScanIdx, g_kuiCache48CountScan4Idx, g_kuiDequantCoeff, g_kuiScan4, g_kuiScan8};
-
-// **T5.R5 deleted this file's `LD16`/`ST16`/`LD32`/`ST32`/`LD64`/`ST64`.** Their
-// twelve uses were the neighbour caches — four non-zero counts and four intra
-// prediction modes at a time — over `[i8; 24]` and `[i8; 8]` arrays whose elements are
-// single bytes, so each word move became the element copies it was spelling. `LD64`
-// and `ST64` had no use in this file at all.
 
 #[inline(always)]
 pub fn POP_BUFFER(pBitsCache: &mut SReadBitsCache<'_>, iCount: u32) {
@@ -672,9 +599,6 @@ pub fn WelsFillCacheNonZeroCount(
 
         if na.iTopAvail != 0 {
             iTopXy = iCurXy - dq.iMbWidth;
-            // T5.R5: the C's `ST32`/`ST16` moved four and two counts at a time; the
-            // counts are bytes in a byte array, so the same bytes in the same order
-            // are four and two element copies.
             let pTopNzc = dq.grid.nzc.get(iTopXy as usize);
             for k in 0..4 {
                 pNonZeroCount[1 + k] = pTopNzc[12 + k] as u8;
@@ -748,9 +672,6 @@ pub fn WelsFillCacheConstrain1IntraNxN(
         }
 
         if na.iTopAvail != 0 && IS_INTRANxN(na.iTopType) {
-            // T5.R5: four modes, copied as four modes. The `0x02020202`/`0xffffffff`
-            // fills below are the same byte four times, which is what the C's word
-            // store was spelling.
             let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize);
             for k in 0..4 {
                 pIntraPredMode[1 + k] = pTopMode[k];
@@ -1071,12 +992,6 @@ pub fn WelsFillCacheInter(
 }
 
 /// Matches `ParseInterInfo` in `parse_mb_syn_cavlc.cpp`.
-/// **Survivor exception (§0's option 3, ruled by the steward at `6b6dd9a3`)**:
-/// `pDec` and `pRefs` come out of one [`PicPool::cur_and_rest`], and
-/// [`PicRefs::get`] answers the current slot from `pDec`'s own pointer (**F42**) —
-/// so the two share a tag, and a `&mut` on the picture held across a reference read
-/// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
-/// revisits (retire the F42 arm, or give the planes interior mutability).
 pub fn ParseInterInfo(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -1087,12 +1002,6 @@ pub fn ParseInterInfo(
     buf: &[u8],
     pBs: &mut BsCursor,
 ) -> i32 {
-    // T5.W8: these two bindings were held across every call in the function that
-    // takes the layer, and **every one of their uses is a read of a slice-header
-    // scalar** this function never writes (grep-verified over both bodies). The layer
-    // flip made the overlap a compile error where the raw pointer had made it
-    // invisible (S25); the fix is the bracket maneuver at four scalars — copy once,
-    // use everywhere, borrow nothing.
     let bDefaultMotionPredFlag =
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultMotionPredFlag;
     let bAdaptiveMotionPredFlag =
@@ -1139,8 +1048,6 @@ pub fn ParseInterInfo(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                // F42: resolved against the picture the bracket holds, and reduced to the
-                // one flag it is read for in the same expression.
                 let pRefPic = pRefs.resolve(ppRefPic[iRefIdx as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
@@ -1192,8 +1099,6 @@ pub fn ParseInterInfo(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                // F42: resolved against the picture the bracket holds, and reduced to the
-                // one flag it is read for in the same expression.
                 let pRefPic = pRefs.resolve(ppRefPic[iRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
@@ -1252,8 +1157,6 @@ pub fn ParseInterInfo(
                             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                         }
                     }
-                    // F42: resolved against the picture the bracket holds, and reduced to the
-                    // one flag it is read for in the same expression.
                     let pRefPic = pRefs.resolve(ppRefPic[iRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                     *pCtx.bMbRefConcealed = pCtx.bRPLRError
                         || *pCtx.bMbRefConcealed
@@ -1298,10 +1201,6 @@ pub fn ParseInterInfo(
                 iRefCount[1] = 1;
             }
 
-            // T5.I1: two window borrows for the whole arm. Nothing it calls —
-            // `BsGet*`, `PredMv` — reaches either array, and the picture's
-            // `pRefIndex`/`pMv` below are a different allocation. Twelve checks
-            // across the first loop alone become two.
             let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy);
             let pNoSubMbPartSizeLessThan8x8Flag =
                 (*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy);
@@ -1355,8 +1254,6 @@ pub fn ParseInterInfo(
                                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                             }
                         }
-                        // F42: resolved against the picture the bracket holds, and reduced to the
-                        // one flag it is read for in the same expression.
                         let pRefPic = pRefs.resolve(ppRefPic[iRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                         *pCtx.bMbRefConcealed = pCtx.bRPLRError
                             || *pCtx.bMbRefConcealed
@@ -1440,12 +1337,6 @@ pub fn ParseInterInfo(
 ///
 /// `WELS_CHECK_SE_BOTH_WARNING` on the vertical mv is warning-only in C (see
 /// `dec_golomb.h`), so it has no port here — same as `ParseInterInfo` above.
-/// **Survivor exception (§0's option 3, ruled by the steward at `6b6dd9a3`)**:
-/// `pDec` and `pRefs` come out of one [`PicPool::cur_and_rest`], and
-/// [`PicRefs::get`] answers the current slot from `pDec`'s own pointer (**F42**) —
-/// so the two share a tag, and a `&mut` on the picture held across a reference read
-/// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
-/// revisits (retire the F42 arm, or give the planes interior mutability).
 pub fn ParseInterBInfo(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -1456,12 +1347,6 @@ pub fn ParseInterBInfo(
     buf: &[u8],
     pBs: &mut BsCursor,
 ) -> i32 {
-    // T5.W8: these two bindings were held across every call in the function that
-    // takes the layer, and **every one of their uses is a read of a slice-header
-    // scalar** this function never writes (grep-verified over both bodies). The layer
-    // flip made the overlap a compile error where the raw pointer had made it
-    // invisible (S25); the fix is the bracket maneuver at four scalars — copy once,
-    // use everywhere, borrow nothing.
     let bDefaultMotionPredFlag =
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultMotionPredFlag;
     let bAdaptiveMotionPredFlag =
@@ -1775,18 +1660,6 @@ pub fn ParseInterBInfo(
         let mut has_direct_called = false;
         let mut directSubMbType: crate::decoder::mv_pred::SubMbType = 0;
 
-        // T5.W8: T5.I1's loop-level window borrow for the flag **is gone**, and the
-        // layer flip is what removed it. It was a `&mut` into
-        // `grid.no_sub_mb_part_size_less_than8x8_flag` held across
-        // `PredMvBDirectSpatial`/`PredBDirectTemporal`, which take the whole layer
-        // mutably — F24/F25/F28's shape, invisible while the layer was a raw pointer
-        // and a compile error the moment it was not. The two callees write a
-        // *different* grid array (`sub_mb_type`, `mv_pred.rs:1035`/`:1130`), so no
-        // write was actually lost; the borrow was still one the type system could not
-        // justify. Re-derived per write below, which is exactly the same effect and
-        // costs nothing worth measuring: S8's fourth negative result (D-perf-5) is
-        // that bounds-check amortisation does not pay per macroblock.
-
         // uiSubMbType, partition
         for i in 0..4usize {
             let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
@@ -1848,13 +1721,6 @@ pub fn ParseInterBInfo(
                     g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType;
             }
         }
-        // T5.I1's shared window over this family, **copied rather than borrowed since
-        // T5.W8**. Its own sentence is what makes the copy exact: the parse loop is
-        // done writing, and every remaining reader below — `FillSpatialDirect8x8Mv`,
-        // `FillTemporalDirect8x8Mv`, `Update8x8RefIdx`, `PredMv` — reaches the layer
-        // but not this array. Under `&mut DqLayerState` the borrow the window took
-        // could not coexist with those calls, and four `SubMbType`s are a copy the
-        // compiler will sink anyway.
         let pSubMbType = *(*pCurDqLayer).grid.sub_mb_type.get(iMbXy);
         if bAdaptiveMotionPredFlag {
             for listIdx in LIST_0..LIST_A {
@@ -2140,9 +2006,6 @@ pub fn WelsFillCacheConstrain0IntraNxN(
         }
 
         if na.iTopAvail != 0 && IS_INTRANxN(na.iTopType) {
-            // T5.R5: four modes, copied as four modes. The `0x02020202`/`0xffffffff`
-            // fills below are the same byte four times, which is what the C's word
-            // store was spelling.
             let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize);
             for k in 0..4 {
                 pIntraPredMode[1 + k] = pTopMode[k];
@@ -2175,9 +2038,6 @@ pub fn WelsFillCacheConstrain0IntraNxN(
 // ============================================================================
 
 /// Predicts the most probable mode for an Intra 4x4 sub-block.
-/// T5.W13: safe, and the array parameter is what made it so — the body indexes
-/// `scan - 8` and `scan - 1` and does nothing else, so with the span in the type there
-/// is no operation left for the qualifier to cover.
 pub fn PredIntra4x4Mode(pIntraPredMode: &mut [i8; 48], iIdx4: i32) -> i32 {
     {
         let scan = g_kuiScan8[iIdx4 as usize] as usize;
@@ -2249,11 +2109,6 @@ pub fn CheckIntra16x16PredMode(uiSampleAvail: u8, pMode: &mut i8) -> i32 {
     }
 }
 
-/// T5.H5's family took this signature with it: `pMode` had exactly three callers,
-/// all of them `pChromaPredMode[iMbXy]`, so when that array became a grid entry the
-/// parameter's only possible source became a `&mut i8`. The body then needs no
-/// `unsafe` at all — it reads and writes one `i8` — so the function stops being an
-/// `unsafe fn`.
 pub fn CheckIntraChromaPredMode(uiSampleAvail: u8, pMode: &mut i8) -> i32 {
     {
         let iLeftAvail = (uiSampleAvail & 0x04) as i32;
@@ -2287,10 +2142,9 @@ pub fn CheckIntraNxNPredMode(
     b8x8: bool,
 ) -> i32 {
     {
-        // T5.AC7: the scan index is a position in the caller's `[i32; 30]` cache,
-        // and every offset below it is negative — `iIdx` is at least 7 for every
-        // entry of `g_kuiCache30ScanIdx`, which is what made the pointer form's
-        // backward reads in-bounds and is now the slice's own arithmetic.
+        // The scan index is a position in the caller's `[i32; 30]` cache, and every
+        // offset below it is negative — `iIdx` is at least 7 for every entry of
+        // `g_kuiCache30ScanIdx`.
         let iIdx = g_kuiCache30ScanIdx[iIndex as usize] as usize;
 
         let iLeftAvail = pSampleAvail[iIdx - 1];
@@ -2331,12 +2185,6 @@ pub fn CheckIntraNxNPredMode(
         iFinalMode as i32
     }
 }
-
-// `BsStartCavlc`/`BsEndCavlc` used to live here. They are now
-// `BsCursor::start_cavlc`/`end_cavlc` (plan §2.2.2 [P3]) — the arithmetic is
-// identical, and the mode additionally makes the stale-accumulator desync a debug
-// panic instead of a silent miscode. A frozen transliteration of the C++ pair is kept
-// in `tests/safe_bits_differential.rs` as the parity reference.
 
 // ============================================================================
 // Inverse Quantization and Transforms (IDCT)
@@ -2997,10 +2845,6 @@ mod tests {
 
     #[test]
     fn test_pred_intra_4x4_mode() {
-        // T5.W13: 48, which is the size the production caller allocates
-        // (`decode_slice.rs`'s `let mut pIntraPredMode = [0i8; 48]`) and now the size
-        // the signature states. The fixture's 64 was never anything but slack — the
-        // two indices it writes are 1 and 8.
         let mut modes = [0i8; 48];
         // Set top and left modes
         modes[9 - 8] = 3; // Top
@@ -3047,15 +2891,8 @@ mod tests {
     #[test]
     fn test_cavlc_zero_coeff_block_decoding() {
         let buf = [0u8; 16];
-        // The F10-class accommodation that used to be here is **deleted**: it existed
-        // because `SBitStringAux` was built from three `as_mut_ptr()` calls, two of
-        // which Stacked Borrows had already popped by the time the parser read through
-        // them. There are no pointers left to reborrow.
-        //
-        // The setup is now the production sequence: `init` primes the accumulator, and
-        // `start_cavlc` projects it to bit position 0 — `(4 << 3) - (16 - (-16))`. The
-        // residual path asserts it is inside a CAVLC region, which is exactly the
-        // discipline the mode exists to enforce (plan §2.2.2 [P3]).
+        // `init` primes the accumulator, and `start_cavlc` projects it to bit
+        // position 0 — `(4 << 3) - (16 - (-16))`.
         let mut bs = BsCursor::init(&buf, 128).unwrap();
         bs.start_cavlc();
         assert_eq!(bs.cavlc_bit_pos(), 0);
@@ -3071,10 +2908,6 @@ mod tests {
         InitVlcTable(&mut vlc_table);
 
         {
-            // T5.Y2: the residual parser takes the slice view, so the null context
-            // this passed is unrepresentable. The fixture is a zeroed context wired
-            // the way `Initialize` wires the real one — `bUseScalingList` false is
-            // the same arm the null pointer selected here.
             let mut ctx = crate::decoder::decoder_context::SWelsDecoderContext::new_boxed();
             let mut view = crate::decoder::decoder_context::test_slice_ctx(&mut ctx, &mut vlc_table);
             let res = WelsParseMbCavlcResidual(
@@ -3095,18 +2928,12 @@ mod tests {
         }
     }
 
-    /// **T5.AC7's instrument.** `SVlcTable`'s sub-tables carry lengths now, and the
-    /// claim that no bitstream can index past one is not an argument here — it is
-    /// this test: for every coeff-token bucket, the number of bits the parser reads
+    /// For every coeff-token bucket, the number of bits the parser reads
     /// to form the index is exactly `log2` of the table it then indexes, so the
     /// largest representable index is the last element. The same for the
     /// total-zeros rows and the zero-left rows, whose widths come from
     /// `g_kuiTotalZerosBitNumMap` / `g_kuiTotalZerosBitNumChromaMap` /
     /// `g_kuiZeroLeftBitNumMap`.
-    ///
-    /// A table that ever gained or lost a row would fail here rather than panic
-    /// inside a decode — which is the difference between a bound the type knows and
-    /// a bound the prose asserted (S9's exact-span trim, at table scale).
     #[test]
     fn vlc_sub_tables_are_exactly_as_wide_as_their_index() {
         let mut t = SVlcTable {

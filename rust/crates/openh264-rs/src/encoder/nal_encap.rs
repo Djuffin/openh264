@@ -48,10 +48,6 @@
 // ============================================================================
 
 #![deny(unsafe_code)]
-// **S12.14 sealed this file.** Its three allows guarded `unsafe {}` blocks around
-// `WelsEncodeNal`, which is a safe `pub fn` taking `&SWelsNalRaw`, `&[u8]` and
-// `&mut [u8]` — the wrappers had outlived the signature and the file's own
-// `unused_unsafe` allow hid the fact.
 #![forbid(unsafe_code)]
 
 /// Size in bytes of the Annex B 4-byte start code prefix (`0x00 0x00 0x00 0x01`).
@@ -77,22 +73,15 @@ pub use crate::common::wels_common_defs::{
 };
 pub use crate::safe::bits::BsWriter;
 
-// **S13.1 (F312).** `sNalLen`'s elements are `AtomicI32` so that the C-ABI
-// pointer `nal_len_ptr` hands the application stays valid while the encoder keeps
-// writing lengths. See the field's own note for the aliasing argument.
+// `sNalLen`'s elements are `AtomicI32` so that the C-ABI pointer `nal_len_ptr`
+// hands the application stays valid while the encoder keeps writing lengths.
 use std::sync::atomic::{AtomicI32, Ordering};
 
 /// Raw payload data descriptor for a NAL unit before encapsulation.
 ///
-/// **The payload is `iStartPos .. iStartPos + iPayloadSize` of a buffer this record
-/// does not name.** The C++ `pRawData` (`buffer + iStartPos`, stamped at load) is
-/// gone: it was redundant with the offset from the day it was written, and storing
-/// it was the encoder probe's fourth finding (session A) — the writer's fresh
-/// `&mut sBsBuffer[..]` killed the stored pointer between load and encode. Phase 3
-/// left it because one type cannot hold offsets into two owners; it can hold an
-/// offset into *no* owner, and the caller of [`WelsEncodeNal`] names the buffer —
-/// the frame's `pOut->sBsBuffer` for the frame list, the thread buffer for a
-/// slice's list. Phase 6 session B.
+/// The payload is `iStartPos .. iStartPos + iPayloadSize` of a buffer this record
+/// does not name: the caller of [`WelsEncodeNal`] names the buffer — the frame's
+/// `pOut->sBsBuffer` for the frame list, the thread buffer for a slice's list.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SWelsNalRaw {
@@ -114,17 +103,6 @@ impl Default for SWelsNalRaw {
 
 /// Top-level frame bitstream output container and NAL descriptor list manager.
 ///
-/// **T3.6 made the three allocations owned.** They were `WelsMallocz`'d pointers
-/// with their lengths recorded beside them (`uiSize`, `iCountNals`); they are
-/// `Vec`s now, and the lengths are gone because a `Vec` already knows — the
-/// T3.3 standard, which says extents are `buf.len()` and not fields. The
-/// `CMemoryAlign` entries that allocated them and the four
-/// `WelsUninitEncoderExt` entries that freed them are gone with them.
-///
-/// `Copy`/`Clone` are gone too, necessarily: this owns its buffers now, and a
-/// bitwise copy of an owner is a double free waiting to happen. Nothing copied
-/// it — the compiler confirmed that when the derive came off.
-///
 /// The `sNalList` entries carry offsets into `sBsBuffer` and no pointer: see
 /// `SWelsNalRaw` — the caller of `WelsEncodeNal` passes `&sBsBuffer[..]` beside
 /// the entry.
@@ -136,15 +114,13 @@ pub struct SWelsEncoderOutput {
     pub sNalLen: Vec<AtomicI32>,
     pub iNalIndex: i32,
     pub iLayerBsIndex: i32,
-    /// **Where the current layer's NAL lengths start in [`sNalLen`](Self::sNalLen)
-    /// — S11.47, the safe half of `SLayerBSInfo::pNalLengthInByte`.**
+    /// Where the current layer's NAL lengths start in [`sNalLen`](Self::sNalLen),
+    /// the safe half of `SLayerBSInfo::pNalLengthInByte`.
     ///
     /// The ABI struct the application walks carries a `*mut i32` per layer, each
     /// the previous layer's pointer advanced by that layer's NAL count. The
     /// storage behind every one of them is this struct's own `sNalLen`, so the
-    /// pointer is a *derived* value and the position is the real state: tracked
-    /// here, exactly as [`iLayerBsIndex`](Self::iLayerBsIndex) tracks the layer
-    /// index the same records also carry (S11.20's move, one field over). The
+    /// pointer is a *derived* value and the position is the real state. The
     /// encoder reads and writes lengths by index; the pointer is stamped from
     /// this by [`nal_len_ptr`](Self::nal_len_ptr) wherever the ABI needs it.
     pub iNalLenBase: usize,
@@ -167,30 +143,7 @@ impl Default for SWelsEncoderOutput {
 impl SWelsEncoderOutput {
     /// The frame output, constructed on the heap with its buffers sized.
     ///
-    /// This is what replaced `RequestMemorySvc`'s four `WelsMallocz` calls, and
-    /// the reason it is a constructor rather than four assignments is **S21**:
-    /// the old code wrote into zeroed memory, which is a valid `*mut u8` and is
-    /// *not* a valid `Vec`. Assigning a `Vec` into a zeroed field drops the
-    /// zeroed one first — UB at a distance, invisible to every test, which is
-    /// the incident S21 exists to prevent. There is no zeroed intermediate
-    /// state here: the struct is built whole and then boxed.
-    ///
     /// `WelsMallocz` zeroed what it returned, so the buffers start zeroed too.
-    ///
-    /// **The rest of the S21 audit, written down because "it seems to work" is
-    /// not the standard.** There is exactly one construction path — this one,
-    /// at `encoder_ext.rs`'s `RequestMemorySvc` — and the struct is reached only
-    /// through `sWelsEncCtx::pOut`, *a raw pointer*. That matters: the encoder
-    /// context is built by `mem::zeroed()` (`encoder_context.rs:516`, behind
-    /// `Box::into_raw`), and zero is a valid null `*mut SWelsEncoderOutput`
-    /// while it would **not** be a valid `Vec`. Because `pOut` is a pointer
-    /// rather than a by-value member, the wholesale zeroing never reaches these
-    /// fields, and no `MaybeUninit` shell is needed — unlike the decoder
-    /// context, which embeds its owned buffers directly and needs
-    /// `new_boxed`'s shell for exactly that reason.
-    ///
-    /// The same reasoning is what kept the S20 closure small: nothing embeds
-    /// this struct by value, so flipping its fields moved no other layout.
     pub fn new_boxed(kiBsLen: usize, kiCountNals: usize) -> Box<Self> {
         Box::new(Self {
             sBsBuffer: vec![0u8; kiBsLen],
@@ -206,20 +159,8 @@ impl SWelsEncoderOutput {
     /// The current layer's NAL-length slot **as the C-ABI pointer the application
     /// walks** — `sNalLen`'s tail from [`iNalLenBase`](Self::iNalLenBase).
     ///
-    /// Safe: a bounds-checked reslice, then the slice's own root. A base equal to
-    /// the array's length yields the one-past-the-end address, which is what the
-    /// raw `.add(count)` chain produced at the last layer and what the
-    /// application never dereferences (its `iNalCount` is zero there).
-    ///
-    /// **S13.1 (F312): the borrow is shared, and that is the whole fix.** This
-    /// pointer escapes into `SLayerBSInfo::pNalLengthInByte` and the application
-    /// reads it after `EncodeFrame` returns, while the encoder goes on writing
-    /// lengths. Taken off `&mut self`, the root was a `Unique` retag over the
-    /// whole buffer and *every* later `&mut sNalLen[i]` popped it — the read was
-    /// then a dead-tag access, which no byte gate can see and Miri's full-drive
-    /// CAVLC probe reports. Off `&self` into `AtomicI32`, the root is
-    /// `SharedReadWrite` and the writes below are its siblings, not its
-    /// invalidators.
+    /// A base equal to the array's length yields the one-past-the-end address,
+    /// which the application never dereferences (its `iNalCount` is zero there).
     #[inline]
     pub fn nal_len_ptr(&self) -> *mut i32 {
         let kiBase = self.iNalLenBase.min(self.sNalLen.len());
@@ -235,12 +176,9 @@ impl SWelsEncoderOutput {
 
     /// [`nal_len_at`](Self::nal_len_at)'s write half.
     ///
-    /// **Takes `&self`, and returns nothing** (S13.1, F312). It was
-    /// `nal_len_at_mut(&mut self) -> &mut i32`, and that `&mut` was the retag that
-    /// invalidated the application's `pNalLengthInByte`. `Relaxed` is the right
-    /// ordering: these slots are published to the application by `EncodeFrame`'s
-    /// own return, which is the synchronisation edge, and no worker reads another
-    /// worker's slot.
+    /// `Relaxed` is the right ordering: these slots are published to the
+    /// application by `EncodeFrame`'s own return, which is the synchronisation
+    /// edge, and no worker reads another worker's slot.
     #[inline]
     pub fn set_nal_len_at(&self, kiIdx: usize, kiLen: i32) {
         let kiBase = self.iNalLenBase;
@@ -257,27 +195,11 @@ impl SWelsEncoderOutput {
 
 /// Thread-local bitstream state allocated per slice.
 ///
-/// **`pBsBuffer` is gone (Phase 6 session B).** The C++ field was the thread
-/// bitstream buffer the slice's writer is positioned in, and it was a cache:
-/// both stamp sites wrote `pSliceThreading->pThreadBsBuffer[idx]` with the same
-/// `idx` `InitOneSliceInThread` stores in `SSlice.uiBufferIdx`, so the slot is
-/// already named and `thread_bs_buffer` resolves it at each use — nothing aliases
-/// the pool's allocation from inside this struct any more. What is still raw here
-/// **`pBs` is owned since T7.C4** — an `Option<Vec<u8>>` where the C++ has a
-/// `CMemoryAlign` block. `InitSliceBsBuffer` fills it when the slice writes
-/// independently and leaves it `None` when the slice shares the frame's buffer, and
-/// **`is_some()` is the one bit `slice_writer`/`slice_bs_buffer` read** — the same
-/// discriminator the raw pointer's nullness carried, which is why the conversion moves
-/// nothing else. `Option<Vec<u8>>` rather than a bare `Vec<u8>`: an empty `Vec` and an
-/// allocated one are the same thing to `is_empty()` if a caller ever asks for a
-/// zero-length buffer, and the choice this field records must not be able to collapse.
-/// The slice's own drop is what `FreeSliceBuffer`'s walk used to be.
-///
-/// `repr(C)` and `Copy` come off with the pointer: an `Option<Vec<u8>>` has no C shape
-/// and owns its storage. Nothing copied this struct by value — the compiler's answer,
-/// not an argument. `uiSize` is the *thread* buffer's length and stays beside the
-/// writer that is positioned in it; the pool's buffers are `pThreadBsBuffer`'s, owned
-/// at T7.C5.
+/// `pBs` is an `Option<Vec<u8>>` where the C++ has a `CMemoryAlign` block:
+/// `InitSliceBsBuffer` fills it when the slice writes independently and leaves it
+/// `None` when the slice shares the frame's buffer, and `is_some()` is the one bit
+/// `slice_writer`/`slice_bs_buffer` read. `uiSize` is the *thread* buffer's length
+/// and stays beside the writer that is positioned in it.
 #[derive(Debug)]
 pub struct SWelsSliceBs {
     pub pBs: Option<Vec<u8>>,
@@ -310,20 +232,7 @@ impl Default for SWelsSliceBs {
 // ============================================================================
 
 // One writer family, `vlc_encoder.rs`'s, which is the transliteration of the C++
-// `codec/common/inc/golomb_common.h`. This module used to declare its own copy of
-// the five functions below (`phase0_findings.md` F2's third row). Two divergences
-// died with it, both in this module's favour of doing *less* than the C++:
-//
-//   * `BsWriteBits` guarded `iLen == 0` explicitly where the canonical relies on
-//     `(1 << 0) - 1 == 0` masking the value to nothing. Same result, always.
-//   * `BsFlush` stored only the `4 - iLeftBits / 8` bytes it advanced over, where
-//     the canonical — and `golomb_common.h:104` — always stores a full 32-bit
-//     word and advances by the same 1..=4. F2's inventory did not list this one;
-//     it covered `BsWriteBits` only. The bytes that differ are the up-to-three
-//     past the new write position, which the next write overwrites before anything
-//     reads them, and which are past the last NAL's end when nothing follows. The
-//     sweeps are the proof: this is the C++'s own behaviour, and 341/341 both
-//     profiles hold across the change.
+// `codec/common/inc/golomb_common.h`.
 pub use crate::encoder::vlc_encoder::{
     BsFlush, BsGetBitsPos, BsRbspTrailingBits, BsWriteBits, BsWriteOneBit,
 };
@@ -333,22 +242,12 @@ pub use crate::encoder::vlc_encoder::{
 // ============================================================================
 
 /// Initializes a new raw NAL unit entry in the global encoder output context.
-///
-/// **S6.C1**: safe, and the `# Safety` clause retired with the pointer — both of its
-/// obligations are the type's now. "Must point to a valid structure" is what `&mut`
-/// means, and "must have enough capacity for `iNalIndex`" is what indexing `sNalList`
-/// checks. (F231's class, one function at a time.)
 #[inline]
 pub fn WelsLoadNal(
     pEncoderOuput: &mut SWelsEncoderOutput,
     kiType: i32,
     kiNalRefIdc: i32,
 ) {
-    // **S6.C1**: `&mut`, and no call site changed — all nine already passed
-    // `pCtx.out_mut()` or `&mut *pOut` and were relying
-    // on the coercion. The `is_null()` disjunct goes with the parameter; the
-    // `sNalList.is_empty()` one is the real guard and stays, answering for a list the
-    // allocator never sized.
     if pEncoderOuput.sNalList.is_empty() {
         return;
     }
@@ -367,28 +266,8 @@ pub fn WelsLoadNal(
 }
 
 /// Finalizes the raw NAL unit currently being written in `pEncoderOuput`.
-///
-/// **S6.C1**: safe; the `# Safety` clause retired with the pointer it described.
 #[inline]
-// **T9.X — this is not a C-ABI boundary** (the tag is gone with the unsafe; S11.44). The brief
-// calls it one of "the two `unsafe extern \"C\"` unload fns ... lawful remainder".
-// It carries no export attribute and is installed into no dispatch slot, so the
-// calling convention was a vestige of the raw translation rather than an ABI
-// crossing. **T9.X2 dropped the `extern "C"` on that evidence** — and re-ran the
-// enumeration first, because X's own count was short.
-//
-// X recorded "five callers ... `encoder_ext.rs:2254`, `:2263`, `:2318`, `:3161`,
-// `:3606`". There are **nine**, and X's list misses four of them:
-// `encoder_ext.rs:3814` and `wels_encoder_ext.rs:404`, `:442`, `:541`. The verdict
-// is unchanged — all nine are ordinary Rust calls, which is the whole question —
-// but a conclusion carried by an enumeration is only as good as the enumeration,
-// and the second file was never grepped. S64, on its own evidence. See F180.
-//
-// **S6.C1 finishes it**: the parameter is `&mut SWelsEncoderOutput`, none of the nine
-// callers changed — every one already passed a reference and was relying on the
-// coercion — and the tag and allow retire together.
 pub fn WelsUnloadNal(pEncoderOuput: &mut SWelsEncoderOutput) {
-    // **S6.C1**, as `WelsLoadNal` above.
     if pEncoderOuput.sNalList.is_empty() {
         return;
     }
@@ -404,18 +283,7 @@ pub fn WelsUnloadNal(pEncoderOuput: &mut SWelsEncoderOutput) {
 }
 
 /// Initializes a raw NAL unit entry for a thread-local slice bitstream context.
-///
-/// (S11.44: the `# Safety` clause retired with the pointer it described —
-/// `pSliceBs` is a reference.)
 #[inline]
-// **T9.X — adjudicated: the seam's, not the bitstream's (H2's, not X's);
-// the S63 tag is gone with the unsafe (S11.44).** G left
-// this tag unattributed. Every production caller is in `slice_multi_threading.rs`
-// (`:1369`, `:1379`, `:1442`, `:1732`) and the walker puts the body inside the fork:
-//     WelsLoadNalForSlice <- EncodeOneSliceInJob <- fork seed (thread::scope spawn)
-// `SWelsSliceBs` is the per-worker bitstream, so S63 applies: this route's end
-// states are interior mutability or lawful raw, and naming it belongs to the
-// session that designs the seam.
 pub extern "C" fn WelsLoadNalForSlice(
     pSliceBs: &mut SWelsSliceBs,
     kiType: i32,
@@ -435,16 +303,7 @@ pub extern "C" fn WelsLoadNalForSlice(
 }
 
 /// Finalizes the slice-thread-local raw NAL unit payload size and advances the NAL index.
-///
-/// (S11.44: the `# Safety` clause retired with the pointer it described —
-/// `pSliceBs` is a reference.)
 #[inline]
-// **T9.X — adjudicated with [`WelsLoadNalForSlice`]: the seam's (H2's);
-// the S63 tag is gone with the unsafe (S11.44).**
-//     WelsUnloadNalForSlice <- EncodeOnePartitionSizeLimited <- fork seed
-// Note the brief also lists this function's line as one of "the two `unsafe extern
-// \"C\"` unload fns ... C-ABI boundary, lawful remainder". It is neither: it is one
-// of the three MT tags the same brief asks to adjudicate, and it is fork-reachable.
 pub extern "C" fn WelsUnloadNalForSlice(pSliceBs: &mut SWelsSliceBs) {
     let pSlice = pSliceBs;
     let pIdx = &mut pSlice.iNalIndex;
@@ -462,20 +321,12 @@ pub extern "C" fn WelsUnloadNalForSlice(pSliceBs: &mut SWelsSliceBs) {
 /// or 4-byte SVC extension header, and performs emulation prevention byte insertion (`0x03`).
 ///
 /// The payload is `src[raw.iStartPos .. raw.iStartPos + raw.iPayloadSize]`: the
-/// record carries the offset and **the caller names the buffer** it is an offset
+/// record carries the offset and the caller names the buffer it is an offset
 /// into — the frame's `pOut->sBsBuffer` for the frame NAL list, the thread buffer
-/// for a slice's own list — which is what let `SWelsNalRaw` drop its `pRawData`
-/// pointer (see the type). `ext` is the SVC extension header, needed exactly when
+/// for a slice's own list. `ext` is the SVC extension header, needed exactly when
 /// the NAL type is a prefix or an extension slice; the C++ took it as `void*` and
 /// cast back to the one type here.
-///
 #[inline]
-/// **S11.17: `dst` is a slice.** It was `*mut u8` plus a separately-passed
-/// `dst_len`, which is one borrow said in two places — the classic pointer +
-/// length pair, with the null case standing for "this slice shares the frame's
-/// buffer and has no output block of its own". `Option<&mut [u8]>` says both:
-/// `None` takes the `ENC_RETURN_INVALIDINPUT` arm the null test took, and the
-/// length is carried rather than recomputed by each caller.
 pub fn WelsEncodeNal(
     raw: &SWelsNalRaw,
     src: &[u8],
@@ -504,8 +355,6 @@ pub fn WelsEncodeNal(
         return ENC_RETURN_MEMALLOCERR;
     }
 
-    // S11.17: the write cursor is an index into `dst`; `*out_len` was
-    // `pDstPointer.offset_from(pDstStart)`, which is exactly this counter.
     let mut iDstPos = 0usize;
     let payload = &src[raw.iStartPos as usize..(raw.iStartPos + raw.iPayloadSize) as usize];
     let mut iZeroCount: i32 = 0;
@@ -701,13 +550,6 @@ mod tests {
     }
 
     #[test]
-    // **T9.X — retagged from `MT`.** This is a test, and it drives a local
-    // `SWelsSliceBs::default()` on the calling thread; nothing about it is
-    // fork-reachable. (T9.X went on to say "its `unsafe` is the ordinary one of
-    // calling an `unsafe extern "C"` item from a test" — **S12.14 deleted that
-    // `unsafe`**, along with the three in this file's other tests: the callees had
-    // long since taken safe signatures and `unused_unsafe` was allowed file-wide,
-    // so nothing said so.)
     fn test_wels_load_and_unload_nal_slice() {
         let mut bs_buf = vec![0u8; 1024];
         let mut slice_bs = SWelsSliceBs::default();

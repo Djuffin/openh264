@@ -12,23 +12,6 @@
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
-// **Phase 5, T5.AC5 — the lint, allowing nothing.** The module's four raw
-// pointers were four different things and none of them was a pointer:
-//
-//   * `SetUnRef`'s `PPicture` was a **callback type** — the field that stores it
-//     is the only reason it could not be a borrow (T5.AC1).
-//   * `MMCO`'s `PRefPicMarking` was the **layer's alias into the NAL's slice
-//     header**, which the layer had already copied whole (T5.AC2).
-//   * `WelsMarkAsRef`'s `pLastDec` and its `pDec` local were **one binding
-//     unifying two arms** across `pCtx` re-entry; re-derived per use (T5.AC3).
-//   * `pCtx->pParam` / `pCtx->pLastDecPicInfo` were the **api-owned aliases**,
-//     which reach this module through `decoder_context`'s two accessors now
-//     (T5.AC4) — the enumerated exception is there, not here.
-//
-// What was left after those was the EC prefetch bracket, and it is the
-// concealment maneuver's fourth application: `pic_and_refs_mut` +
-// `PicRefs::classify`, where the overlap guard the copy needed becomes
-// `RefSlot::Current` instead of a comparison of two addresses (T5.AC5).
 
 use std::ffi::c_void;
 use crate::decoder::decoder_core::DqLayerState;
@@ -69,10 +52,7 @@ pub const dsNoParamSets: i32 = 0x10;
 pub const dsDataErrorConcealed: i32 = 0x20;
 pub const dsOutOfMemory: i32 = 0x4000;
 
-// Log levels — **re-exported, not redeclared** (D-fid-4, 2026-08-26, from F184).
-// This file used to carry its own copy; all five copies were consecutive integers
-// where `codec_app_def.h:323-331` is a bit mask, and the level reaches the caller's
-// own callback. A re-export cannot diverge from the canonical block again.
+// Log levels — the bit mask at `codec_app_def.h:323-331`.
 pub use crate::common::wels_trace::{WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING};
 
 // ============================================================================
@@ -107,25 +87,11 @@ pub use crate::decoder::pic_queue::PicId;
 // Internal Logging & Picture Helpers
 // ============================================================================
 
-// **T5.AA4: `insert_ref` is deleted, and the invariant it asserted is now the
-// type's.** It answered "what handle does this picture go into a reference list
-// as?" for a `*mut SPicture`, with a `debug_assert!` (T5.N4's, moved here at
-// T5.P′2) that the picture had a pool slot at all — the check that a list entry
-// cannot be a picture the pool does not own. The two doors into the lists take
-// `Option<PicId>` now, so a caller has nothing else to pass: the assertion is
-// discharged by the parameter type rather than at run time in one profile.
-
 #[inline(always)]
 pub fn WelsLog(_pLogCtx: &SLogContext, _iLevel: i32, _msg: &str) {
 
     // Logging stub for no-std / embedded compatibility
 }
-
-// T4b.3b: this file's `ExpandReferencingPicture` was the third of three copies of
-// `expand_pic.cpp:388`, and the one that had drifted furthest: its `kiWidthUV >= 16`
-// test had no `else`, so the chroma planes of a frame narrower than 32 pixels were
-// never expanded at all. See `phase4b_findings.md` F21. The single copy now lives in
-// `common/expand_pic.rs` with the C++'s body.
 
 // ============================================================================
 // Core Reference Management Implementation
@@ -133,24 +99,12 @@ pub fn WelsLog(_pLogCtx: &SLogContext, _iLevel: i32, _msg: &str) {
 
 /// Shifts `len` entries of one DPB list from `src` to `dst`, overlap-safe.
 ///
-/// **F13's `manage_dec_ref` site, closed here (T5.B2).** Every one of the six
-/// list shifts in this module was written
-/// `ptr::copy(list.as_ptr().add(a), list.as_mut_ptr().add(b), n)`. Rust evaluates
-/// the arguments left to right, so `as_mut_ptr()` re-borrows the array *after*
-/// `as_ptr()` handed out a tag, which pops it — and the copy then reads through
-/// the dead one. The addresses are right and every build emits what the author
-/// meant, which is why only Miri sees it, and why `gates.sh` skipped every
-/// `manage_dec_ref` test rather than read a failure it could not fix in Phase 2.
-///
-/// `copy_within` is the whole fix: one borrow, one expression.
-///
 /// The `min` is the array's own bound made explicit and is **not** an arithmetic
 /// change — on every path where the C's `memmove` stayed inside the list it
 /// trims nothing. Where it would not have (`uiShortRefCount` reaching
 /// `MAX_DPB_COUNT`, `iMaxRefIdx` likewise — both bitstream-derived and neither
 /// clamped on the way in), the C wrote one entry past the end of the list into
-/// the field behind it; this drops that entry instead. Bounding those two counts
-/// at their source is the F8/F9/F11 class and stays out of scope per §9.
+/// the field behind it; this drops that entry instead.
 #[inline]
 fn shift_dpb_entries(list: &mut [Option<PicId>], src: usize, dst: usize, len: usize) {
     let len = len
@@ -162,27 +116,6 @@ fn shift_dpb_entries(list: &mut [Option<PicId>], src: usize, dst: usize, len: us
 /// Unmarks a reconstructed picture as unused for reference and resets its identifiers.
 ///
 /// Matches `static void SetUnRef (PPicture pRef)` in `manage_dec_ref.cpp`.
-///
-/// **S25, for this whole module.** This function and the four `WelsDel*` helpers
-/// take the DPB by raw pointer and re-borrow it `&mut` on entry, and the functions
-/// that call them were handed the *same* raw pointers. A caller that binds
-/// `let ref_pic = &mut *pRefPic` and then makes one of these calls has two live
-/// `&mut` to one `SRefPic`, the inner one not derived from the outer, and reads
-/// through the outer afterwards. `SlidingWindow`, `RemainOneBufferInDpbForEC` and
-/// `MMCOProcess` were all written that way and are not any more (T5.B2): they name
-/// `(*pRefPic)` / `(*pCtx)` at each use, so no borrow outlives one expression.
-/// **The same applies to `pCtx`, which is not a separate object** — every caller
-/// passes `&mut ctx.sRefPic` as `pRefPic`, so `&mut *pCtx` and `&mut *pRefPic`
-/// overlap. Anything added here inherits the rule.
-///
-/// **T5.AC1: the picture arrives as a borrow.** The parameter was `*mut SPicture`
-/// because the field that stores this function — `SPicture::pSetUnRef` — is a
-/// callback type, and the C++ spells a callback's parameter as a pointer. Every
-/// one of the seven call sites in this module already holds the picture as an
-/// `&mut` out of `pool_pic_mut`, so the null test at the top ran on a pointer no
-/// caller could make null; the two indirect sites (`api/codec_api.rs`'s pool
-/// release and the reinstall below) each guard before they call. The test is the
-/// parameter type now, and this function is safe.
 pub extern "C" fn SetUnRef(ref_pic: &mut SPicture) {
     if ref_pic.iRefCount <= 0 {
         ref_pic.bUsedAsRef = false;
@@ -277,9 +210,6 @@ pub fn WelsDelShortFromList(
 
     for i in 0..count {
         let slot = ref_set(pCtx, bTmpRefSet).pShortRefList[LIST_0][i];
-        // The mark and the list surgery are two disjoint fields — the picture is
-        // the pool's, the list is `pRefPic`'s — so the borrow ends at the mark and
-        // the **handle** is what travels out (T5.Z1).
         let matched = match pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
             Some(pic) if pic.iFrameNum == iFrameNum => {
                 pic.bUsedAsRef = false;
@@ -329,7 +259,6 @@ pub fn WelsDelLongFromList(
 
     for i in 0..count {
         let slot = ref_set(pCtx, bTmpRefSet).pLongRefList[LIST_0][i];
-        // `WelsDelShortFromList`'s shape — the handle travels out (T5.Z1).
         let matched = match pool_pic_mut(&mut (*pCtx).pPicBuff, slot) {
             Some(pic) if pic.iLongTermFrameIdx == uiLongTermFrameIdx as i32 => {
                 pic.bUsedAsRef = false;
@@ -375,17 +304,6 @@ pub fn AddShortTermToList(
     bTmpRefSet: bool,
     slot: Option<PicId>,
 ) -> i32 {
-    // **T5.AA4: the handle travels, not the picture.** The parameter was a
-    // `*mut SPicture` the caller derived from `pCtx.pPicBuff` and passed *beside*
-    // `pCtx` — the layer bracket's shape one container over, and the phase's own
-    // rule says the answer before the compiler does: aliases become ids. Everything
-    // this function did with the picture was name its slot and write four fields,
-    // and both are reachable from the handle, one borrow at a time.
-    //
-    // The ordering note that stood here — take the slot before the borrow, because
-    // naming the picture's own slot under a live `&mut` over the same allocation
-    // pops it — is discharged by construction: there is no second path to the
-    // picture left to order against.
     let Some(_) = slot else {
         return ERR_INFO_INVALID_PTR;
     };
@@ -395,16 +313,9 @@ pub fn AddShortTermToList(
     pic.bUsedAsRef = true;
     pic.bIsLongRef = false;
     pic.iLongTermFrameIdx = -1;
-    // The comparison value out from under the borrow: the scan below resolves other
-    // slots of the same pool, and this one's own slot is exactly what it is looking
-    // for (it is the duplicate-frame-num test).
+    // The comparison value for the duplicate-frame-num scan below.
     let iPicFrameNum = pic.iFrameNum;
 
-    // **T5.Z4: the reference set is re-acquired per use, not held.** The scan below
-    // alternates between the set (a context field) and the pool (another), so a
-    // borrow of either held across the other is the shape this face removes. Each
-    // `ref_set` call ends with its expression — S25's fix, and the reason the
-    // selector is what travels in the signature.
     let short_count = ref_set(pCtx, bTmpRefSet).uiShortRefCount[LIST_0] as usize;
 
     if short_count > 0 {
@@ -437,7 +348,6 @@ pub fn AddLongTermToList(
     iLongTermFrameIdx: i32,
     uiLongTermPicNum: u32,
 ) -> i32 {
-    // The handle travels — see `AddShortTermToList` (T5.AA4).
     let Some(_) = slot else {
         return ERR_INFO_INVALID_PTR;
     };
@@ -448,10 +358,8 @@ pub fn AddLongTermToList(
     pic.bIsLongRef = true;
     pic.iLongTermFrameIdx = iLongTermFrameIdx;
     pic.uiLongTermPicNum = uiLongTermPicNum;
-    // The comparison value out from under the borrow, as in `AddShortTermToList`.
     let iPicLongTermFrameIdx = pic.iLongTermFrameIdx;
 
-    // The set is re-acquired per use — see `AddShortTermToList` (T5.Z4).
     let long_count = ref_set(pCtx, bTmpRefSet).uiLongRefCount[LIST_0] as usize;
 
     if long_count == 0 {
@@ -507,7 +415,6 @@ pub fn MarkAsLongTerm(
         let matched = pool_pic(&(*pCtx).pPicBuff, slot)
             .is_some_and(|p| p.iFrameNum == iFrameNum && !p.bIsLongRef);
         if matched {
-            // T5.AA4: the handle the scan already found, not a pointer resolved from it.
             iRet = AddLongTermToList(pCtx, bTmpRefSet, slot, iLongTermFrameIdx, uiLongTermPicNum);
             break;
         }
@@ -540,9 +447,6 @@ pub fn WrapShortRefPicNum(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    // The `sps_ref.is_none()` guard that stood here is the lookup's own `else` arm
-    // now — and it covers the out-of-range id the old `&*sps_of(…)` dereferenced
-    // (T5.Z1).
     let Some(pSps) = sps_of(
         &(*pCtx).sSpsPpsCtx,
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
@@ -553,8 +457,6 @@ pub fn WrapShortRefPicNum(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
     let iMaxPicNum = 1i32 << pSps.uiLog2MaxFrameNum;
     let iShortRefCount = (*pCtx).sRefPic.uiShortRefCount[LIST_0] as usize;
 
-    // The slice's frame number is read once, above the loop: it is the NAL's and
-    // the pictures are the pool's, so nothing here holds two borrows (T5.Z1).
     let iSliceFrameNum =
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFrameNum;
     for i in 0..iShortRefCount {
@@ -573,11 +475,6 @@ pub fn WrapShortRefPicNum(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
 ///
 /// Matches `static int32_t SlidingWindow (PWelsDecoderContext pCtx, PRefPic pRefPic)`.
 pub fn SlidingWindow(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) -> i32 {
-    // S25: no borrow of `*pCtx` or `*pRefPic` outlives one expression here. Both
-    // `WelsDelShortFromList` and `SetUnRef` re-enter through the raw pointers this
-    // function was handed, so a `let ref_pic = &mut *pRefPic` held across them is
-    // the shape the rule names — invalidated by the callee's own `&mut`, and read
-    // afterwards. See the module note above `SetUnRef`.
     let num_ref_frames = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
         .map_or(1, |sps| sps.iNumRefFrames as u8);
 
@@ -618,9 +515,8 @@ pub fn RemainOneBufferInDpbForEC(
     pCtx: &mut SWelsDecoderContext,
     bTmpRefSet: bool,
 ) -> i32 {
-    // S25, as in `SlidingWindow`: the loop below *depends* on a re-entrant call
-    // changing `uiLongRefCount`, so its condition has to read the live field and
-    // not a borrow the call invalidated.
+    // The loop below *depends* on a re-entrant call changing `uiLongRefCount`, so
+    // its condition has to read the live field.
     let num_ref_frames = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
         .map_or(1, |sps| sps.iNumRefFrames as u8);
 
@@ -666,9 +562,8 @@ pub fn RemainOneBufferInDpbForEC(
 // `clippy::absurd_extreme_comparisons`: the guard below is `manage_dec_ref.cpp:151`
 // verbatim — `uiShortRefCount[0] + uiLongRefCount[0] <= 0` on two `uint8_t`s, where
 // C's integer promotion makes the sum an `int` and the `<` half is dead there too.
-// Both trees mean `== 0`; the port keeps the C's spelling because a rewritten
-// comparison is a line that no longer diffs against the reference. (The sum cannot
-// overflow the `u8` it stays in here: both counts are bounded by `MAX_DPB_COUNT`.)
+// Both trees mean `== 0`. (The sum cannot overflow the `u8` it stays in here:
+// both counts are bounded by `MAX_DPB_COUNT`.)
 #[allow(clippy::absurd_extreme_comparisons)]
 pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i32 {
 
@@ -678,29 +573,12 @@ pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i
         let ec_mode = ec_active_idc(&(*pCtx).pParam);
 
         if ec_mode != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE {
-            // **The EC prefetch bracket** (T5.Q2). The region below writes into the
-            // slot the prefetch just took and reads the previous DPB picture out of
-            // another one, and the "are they the same slot?" guard sits in the middle
-            // of it — so both halves have to come out of one borrow, or the guard
-            // would be deciding a question the second derivation had already answered
-            // by invalidating the first.
-            // The two ids are read before the bracket opens: below it the pool is
-            // borrowed and the parameter sets cannot be reached through the same
-            // context (T5.Z1).
             let sps_id = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|s| s.iSpsId);
             let pps_id = active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps).map(|p| p.iPpsId);
             let ec_slot = match pic_pool_mut(pCtx) {
                 Some(pool) => pool.prefetch_free(),
                 None => None,
             };
-            // **T5.AC5 — the concealment bracket's fourth application** (the slice at
-            // Y, the pool at Q, the layer at AA1, `DoErrorConFrameCopy` at AB3). One
-            // borrow of the pool, split into the EC picture being built and a view of
-            // the rest; the previous DPB picture is *classified* rather than compared,
-            // so the `pic_slot(pRef) == pic_slot(prev_pic)` overlap test below is
-            // `RefSlot::Current` and its arm cannot also hold a second derivation of
-            // the same slot (F42's shape, and why the guard had to come out of one
-            // borrow).
             let eSliceType = (*pCtx).eSliceType;
             let prev = prev_dpb_id(&pCtx.pLastDecPicInfo);
             let (pRef, pRefs) = pic_and_refs_mut(&mut pCtx.pPicBuff, ec_slot);
@@ -728,12 +606,10 @@ pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i
                     || ec_mode == ERROR_CON_SLICE_MV_COPY_CROSS_IDR
                     || ec_mode == ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE;
 
-                // The three arms are the pointer form's three, unchanged: gray-fill
-                // when there is nothing to copy from, log-and-skip when the source
-                // *is* the destination (`Current` — and the dimension test the old
-                // form ran there was trivially true), copy otherwise. A `Current`
-                // slot outside the cross-IDR modes gray-fills, exactly as a null
-                // `prev_pic` did.
+                // The three arms: gray-fill when there is nothing to copy from,
+                // log-and-skip when the source *is* the destination (`Current`),
+                // copy otherwise. A `Current` slot outside the cross-IDR modes
+                // gray-fills.
                 let spans = |pic: &SPicture| {
                     [
                         (0usize, (pic.linesize(0) * pic.iHeightInPixel) as usize),
@@ -747,9 +623,6 @@ pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i
                             && pRef.iWidthInPixel == prev_pic.iWidthInPixel
                             && pRef.iHeightInPixel == prev_pic.iHeightInPixel =>
                     {
-                        // Disjoint by the classification rather than by a comparison
-                        // the compiler cannot see — which is what `copy_nonoverlapping`
-                        // needed an argument for (S25).
                         for (i, len) in spans(pRef) {
                             if pRef.plane(i).is_empty() || prev_pic.plane(i).is_empty() {
                                 continue;
@@ -813,10 +686,6 @@ pub fn MMCOProcess(
     iLongTermFrameIdx: i32,
     iMaxLongTermFrameIdx: i32,
 ) -> i32 {
-    // S25 again, and this is the widest of the three: every arm below re-enters
-    // through `pRefPic` (and `MMCO_RESET` through `pCtx`), `MMCO_SET_MAX_LONG`'s
-    // loop *terminates* on a count those calls decrement, and the surviving arms
-    // read the context after them.
     let mut iRet = ERR_NONE;
 
     match uiMmcoType {
@@ -913,13 +782,6 @@ pub fn MMCO(
     bTmpRefSet: bool,
     marking: &SRefPicMarking,
 ) -> i32 {
-    // T5.AC2: the marking arrives as a borrow of the layer's own copy, and the
-    // layer arrives shared beside it — this function only reads it, and the two
-    // borrows have to coexist at the one call site (`WelsMarkAsRef`). The null
-    // test the C++ needs is discharged by the parameter type.
-
-    // A scalar, not a borrow — the MMCO loop below re-enters through `pCtx` on
-    // every command (T5.Z1).
     let ps = &(*pCtx).sSpsPpsCtx;
     let uiLog2MaxFrameNum = pCurDqLayer
         .and_then(|layer| sps_of(ps, layer.sLayerInfo.sps_ref))
@@ -1135,13 +997,10 @@ pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
         return ERR_INFO_INVALID_PTR;
     };
 
-    // T5.AC2: the reordering syntax is the layer's own copy, taken at the base-
-    // quality slice; the null test the pointer needed is the `Option`.
     let Some(reorder_syn) = (*pCurDqLayer).sRefPicListReordering.as_ref() else {
         return ERR_INFO_INVALID_PTR;
     };
 
-    // The guard and the lookup are one test now — see `WrapShortRefPicNum` (T5.Z1).
     let Some(pSps) = sps_of(
         &(*pCtx).sSpsPpsCtx,
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
@@ -1233,7 +1092,7 @@ pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
                     return ERR_INFO_REFERENCE_PIC_LOST;
                 }
                 let i_idx = found_i as usize;
-                let pPic = (*pCtx).sRefPic.pRefList[listIdx][i_idx];  // a handle: moved, never dereferenced
+                let pPic = (*pCtx).sRefPic.pRefList[listIdx][i_idx];
 
                 // Both arms shift the same span by one; only the length differs
                 // (`manage_dec_ref.cpp` spells the memmove out twice).
@@ -1269,13 +1128,10 @@ pub fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&
         return ERR_INFO_INVALID_PTR;
     };
 
-    // T5.AC2: the reordering syntax is the layer's own copy, taken at the base-
-    // quality slice; the null test the pointer needed is the `Option`.
     let Some(reorder_syn) = (*pCurDqLayer).sRefPicListReordering.as_ref() else {
         return ERR_INFO_INVALID_PTR;
     };
 
-    // The guard and the lookup are one test now — see `WrapShortRefPicNum` (T5.Z1).
     let Some(pSps) = sps_of(
         &(*pCtx).sSpsPpsCtx,
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
@@ -1393,18 +1249,11 @@ pub fn WelsMarkAsRef(
     pCurDqLayer: Option<&mut DqLayerState>,
     mut pLastDec: Option<&mut SPicture>,
 ) -> i32 {
-    // **T5.AC3: the picture is re-derived at each use, never held.** It was a
-    // `*mut SPicture` because the two arms had to unify on one binding and the
-    // body below re-enters `pCtx` between every pair of stamps (T5.Z1) — a
-    // borrow out of `pCtx.pPicBuff` dies at the next call that takes the context,
-    // which is session Y's verdict. `dec!()` is that same derivation written at
-    // each use instead of once: the thread arm re-borrows the caller's picture,
-    // the pool arm re-resolves the handle, and neither result outlives its own
-    // statement. No expression below holds one across a call.
+    // `dec!()` is the current picture: the thread arm re-borrows the caller's
+    // picture, the pool arm re-resolves the handle.
     //
-    // `pLastDec` is F36's threading arm and both callers pass `None`; it stays
-    // (the non-goal is explicit about the arm), and it is what `isThreadCtx`
-    // reads — one `is_some()` instead of the old null test.
+    // `pLastDec` is the threading arm and both callers pass `None`; it is what
+    // `isThreadCtx` reads.
     macro_rules! dec {
         () => {
             match pLastDec {
@@ -1419,18 +1268,12 @@ pub fn WelsMarkAsRef(
         return ERR_INFO_INVALID_PTR;
     }
 
-    // **T5.Z4: the pick is a `bool` now, not a borrow.** T5.W11c made it a borrow of
-    // one field or the other, which the arms unified on their own; with the context a
-    // `&mut` that borrow is a context field held across every call below that takes
-    // the context. The selector travels and `ref_set` re-acquires per use (S25).
     let bTmpRefSet = isThreadCtx;
 
     let Some(pCurDqLayer) = pCurDqLayer else {
         return ERR_INFO_INVALID_PTR;
     };
-    // Shared from here down: nothing in this function writes the layer, and the
-    // marking below is a borrow *of* it that has to coexist with the `MMCO` call
-    // that also takes it (T5.AC2).
+    // Shared from here down: nothing in this function writes the layer.
     let pCurDqLayer = &*pCurDqLayer;
     let Some(pRefPicMarking) = pCurDqLayer.sRefPicMarking.as_ref() else {
         return ERR_INFO_INVALID_PTR;
@@ -1444,9 +1287,6 @@ pub fn WelsMarkAsRef(
         pDec.uiQualityId = uiQualityId;
         pDec.uiTemporalId = uiTemporalId;
     }
-    // The ids are read as values above the picture's borrow: `pDec` is the pool's
-    // and the parameter sets are the context's, and the two travel together at
-    // every one of these stamps (T5.Z1).
     if let Some(iSpsId) = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|s| s.iSpsId) {
         if let Some(pDec) = dec!() {
             pDec.iSpsId = iSpsId;
@@ -1461,8 +1301,6 @@ pub fn WelsMarkAsRef(
     let mut bIsIDRAU = false;
     if let Some(au) = cur_au(&mut pCtx.access_unit) {
         for j in au.uiStartPos..=au.uiEndPos {
-            // T5.O4: the list owns its nodes, so `get` is the whole guard — the null
-            // test this replaces could only ever fail past the end of the list.
             if let Some(nal) = au.node(j as usize) {
                 if nal.sNalHeaderExt.sNalUnitHeader.eNalUnitType == NAL_UNIT_CODED_SLICE_IDR
                     || nal.sNalHeaderExt.bIdrFlag
@@ -1567,24 +1405,6 @@ mod tests {
         }
     }
 
-    // T5.B2: these three tests each took `&mut picN as *mut _` a second time, in
-    // the assertion, *after* the list already held a pointer to the same picture.
-    // The second `&mut` is a Unique retag that pops the tag the list is holding,
-    // so the next call reading `(*cur).iFrameNum` reads through a dead one — the
-    // list is right, the test is what makes it UB. Miri could not say so while
-    // `gates.sh` skipped this module for F13's production site (now closed
-    // above), which is F18's shape a second time: **a skipped test is not a
-    // passing test, and the backlog behind a skip is not only in the code the
-    // skip was written for.** Each picture's address is taken once, before the
-    // list is given it, and the assertions compare that value.
-
-    /// **T5.P′2 gave these three a pool, and that is the point of the conversion.**
-    /// They used to put stack `SPicture`s straight into the list and compare the
-    /// pointers back out. A list entry is a `PicId` now, and a picture outside the
-    /// pool has none — so a fixture without a pool would store `None`, which is the
-    /// C's null slot, and the test would be asserting that the DPB lost its entries.
-    /// `PicPool::over` stamps each picture with its slot (T5.N2), exactly as
-    /// `CreatePicBuff` does on the live path, and the assertions compare slots.
     #[test]
     fn test_add_short_term_to_list_and_delete() {
         let mut pic1 = SPicture::default();
@@ -1594,10 +1414,6 @@ mod tests {
 
 
         {
-            // T5.Q2: the pool owns the pictures, so the fixture hands them over and
-            // resolves them back per call — which is the production shape, and it
-            // retires the `addr_of_mut!` pair this test needed while the pool held
-            // raw pointers into the stack frame.
             let pool = crate::decoder::pic_queue::PicPool::over(vec![
                 Some(Box::new(pic1)),
                 Some(Box::new(pic2)),
@@ -1663,18 +1479,6 @@ mod tests {
             ctx.pPicBuff = Some(pool);
             let pCtx = &mut *ctx;
 
-            // T5.W11b: the borrow is re-derived at each use, never held across
-            // `WelsResetRefPic`. **Miri convicted the previous shape** and it was
-            // this session's own doing: with `pRefPic` a raw pointer both
-            // derivations were `addr_of_mut!` and neither retagged, so a fixture
-            // could hold one across a call that made another. T5.W11 turned the
-            // callee's parameter into `&mut SRefPic` and the derivations into field
-            // borrows — correct, and it makes the second derivation *invalidate* the
-            // first, which is S29's sentence arriving as a test failure rather than
-            // as a review comment. The production path is unaffected:
-            // `WelsResetRefPic` holds one borrow of `sRefPic` and the calls inside it
-            // (`pool_pic_mut`, `SetUnRef`) reach `pPicBuff` and a picture, disjoint
-            // fields, which is why the `exit` battery is where this surfaced (S22).
             AddShortTermToList(pCtx, false, s);
             assert_eq!((*pCtx).sRefPic.uiShortRefCount[LIST_0], 1);
             WelsResetRefPic(pCtx);

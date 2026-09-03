@@ -8,20 +8,6 @@
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
-// Phase 5 W7. This module holds none of the three forms the lint denies — no
-// `unsafe fn`, no `unsafe` block, no unsafe trait implementation — so the lint
-// is a statement of fact rather than a goal, and it is here to keep it one: the
-// ratchet counts tokens (S16) and cannot see one of those arriving in a file
-// that had none.
-//
-// The wording above is deliberate and the ratchet is why: spelling the third
-// form as its two-word token made this comment itself count as an occurrence,
-// and the gate went red on three files whose code had not changed at all —
-// S16's floor, met from the direction of a comment written to celebrate it.
-//
-// Raw pointer **types** in a signature do not trip this lint; dereferencing one
-// does. That is why a module can carry `*mut` fields and still be deny-clean,
-// and it is the distinction the phase's exit condition 2 is written against.
 
 //! H.264 / AVC and SVC Slice Header and Control Architecture.
 //!
@@ -275,11 +261,9 @@ pub struct TagSliceHeaders {
     pub iSliceBetaOffset: i32,
     pub iSliceGroupChangeCycle: i32,
 
-    /// The active parameter sets as ids, not aliases (T5.R6). These were
-    /// `void*`-typed pointers into the context's two SPS buffers and its PPS buffer —
-    /// the C's own spelling — and the pair `(id, subset)` is what they carried;
-    /// `sps_of`/`pps_of` rebuild the address at each use. `None` is the null they held
-    /// before `ParseSliceHeaderSyntaxs` filled them.
+    /// The active parameter sets as ids, not aliases; `sps_of`/`pps_of` rebuild the
+    /// address at each use. `None` is the null they hold before
+    /// `ParseSliceHeaderSyntaxs` fills them.
     pub sps_ref: Option<SpsRef>,
     pub pps_id: Option<i32>,
     pub iSpsId: i32,
@@ -355,7 +339,7 @@ impl Default for TagSliceHeaders {
 #[derive(Debug, Copy, Clone)]
 pub struct TagSliceHeaderExt {
     pub sSliceHeader: SSliceHeader,
-    /// The subset SPS id, not an alias (T5.R6); `subset_sps_of` resolves it.
+    /// The subset SPS id, not an alias; `subset_sps_of` resolves it.
     pub subset_sps_id: Option<i32>,
 
     pub uiDisableInterLayerDeblockingFilterIdc: u32,

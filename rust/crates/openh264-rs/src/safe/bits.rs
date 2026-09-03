@@ -1,30 +1,20 @@
 #![forbid(unsafe_code)]
 
-//! Detached bit cursors — the safe replacement for taxonomy class **T3**
-//! (plan §1.2, contract §2.2.2).
+//! Detached bit cursors.
 //!
 //! [`BsCursor`] reads and [`BsWriter`] writes; neither holds a buffer. They are
-//! *positions*, passed the bytes on every call, which is what makes them `Copy` —
-//! and that in turn is what replaces the encoder's `pBsStackBufPtr` stash/pop
-//! (`svc_set_mb_syn_cavlc.rs:1057-1076`) with `let saved = writer;`, and what makes
-//! `ExpandBsBuffer`'s pointer-rebasing block (`decoder_core.rs:1816-1842`) deletable
-//! rather than portable: an offset survives a reallocation by definition.
+//! *positions*, passed the bytes on every call, which is what makes them `Copy`.
 //!
 //! # Scope
 //!
 //! * **RBSP only.** Emulation-prevention bytes (EBSP, the `0x03` insertion) are
 //!   `nalu.rs`'s business and stay there — by the time a cursor sees bytes, they are
 //!   raw payload. `RBSP2EBSP` is not a cursor operation.
-//! * **No CABAC.** The arithmetic engine keeps its own cursor triple and is Phase
-//!   3.2's job; the CAVLC↔CABAC handoff (`cabac_decoder.rs:712-717`) additionally
-//!   *writes* `uiCurBits`/`iLeftBits`, so it will need an explicit method here when
-//!   that conversion happens. Nothing speculative is offered for it now.
+//! * **No CABAC.** The arithmetic engine keeps its own cursor triple.
 //! * **CAVLC mode, yes.** `SBitStringAux::iIndex` — the absolute bit position the
 //!   CAVLC residual path reads while the accumulator is deliberately stale — is
 //!   mirrored here as [`BsCursor::start_cavlc`]/[`BsCursor::end_cavlc`] and the
-//!   [`cavlc_bit_pos`](BsCursor::cavlc_bit_pos) accessor pair. Phase 1 recorded
-//!   `iIndex` as having no consumer; T3.1b's inventory found that wrong (plan
-//!   §2.2.2 **[P3]**).
+//!   [`cavlc_bit_pos`](BsCursor::cavlc_bit_pos) accessor pair.
 
 use crate::safe::err::ErrInfo;
 
@@ -47,9 +37,7 @@ use crate::safe::err::ErrInfo;
 ///
 /// `len` is state, not a property of the slice passed in: the C++ end pointer marks
 /// the end of the *RBSP*, while the allocation legitimately continues past it — see
-/// the slop discussion on [`BsCursor::get_bits`]. This is a deliberate deviation from
-/// the plan's three-field sketch (§2.2.2); without it, error-code parity at the end
-/// of a NAL is not expressible.
+/// the slop discussion on [`BsCursor::get_bits`].
 #[derive(Clone, Copy, Debug, Default, Eq)]
 pub struct BsCursor {
     pos: usize,
@@ -71,10 +59,7 @@ pub struct BsCursor {
 /// Written by hand rather than derived because `in_cavlc` exists only under
 /// `cfg(debug_assertions)`: a derived `PartialEq` would compare it in debug builds and
 /// not in release, so two cursors could be equal in one profile and unequal in the
-/// other. The parity tests compare cursor states across both profiles (S16's
-/// dual-profile discipline), and that skew is exactly what it exists to prevent — the
-/// same reasoning that keeps the pool's debug generation counter out of handle
-/// equality (plan §D1).
+/// other.
 impl PartialEq for BsCursor {
     fn eq(&self, other: &Self) -> bool {
         self.pos == other.pos
@@ -104,9 +89,7 @@ fn ubits(cur_bits: u32, n: i32) -> u32 {
 ///
 /// Mirrors `GetLeadingZeroBits` (`dec_golomb.rs:205` /
 /// `codec/decoder/core/inc/dec_golomb.h`). The C++ walks `g_kuiLeadingZeroTable` in
-/// four byte-wide steps; `leading_zeros()` is the same function of the same input,
-/// which `leading_zero_bits_matches_the_table` in the differential test proves
-/// exhaustively over the interesting range.
+/// four byte-wide steps; `leading_zeros()` is the same function of the same input.
 #[inline]
 fn leading_zero_bits(cur_bits: u32) -> i32 {
     if cur_bits == 0 {
@@ -288,8 +271,6 @@ impl BsCursor {
     /// does, identically, in the C++. It is not a defect either side: no decoder call
     /// site asks for more (the `BsGetBits` widths in `src/decoder/` are 1, 2, 3, 4, 5,
     /// 8 and 16), and `get_ue` splits its own long prefixes for exactly this reason.
-    /// `bit_reads_over_16_reproduce_the_stale_low_bits` in the differential test pins
-    /// the quirk to the old implementation rather than papering over it.
     ///
     /// # The slop predicate
     ///
@@ -305,9 +286,7 @@ impl BsCursor {
     /// `get`, so a `buf` without slack returns [`ErrInfo::READ_OVERFLOW`] where the
     /// C++ would have read whatever followed the allocation. **Pass `buf` with at
     /// least 3 bytes of slack past `size_bits` and the two are identical for every
-    /// input** — with fewer, this cursor is strictly the safer of the two. Wiring the
-    /// guard bytes into the decoder's real buffers is Phase 3's decision (plan P6);
-    /// `phase1_findings.md` §F4 records the measurement behind this paragraph.
+    /// input** — with fewer, this cursor is strictly the safer of the two.
     pub fn get_bits(&mut self, buf: &[u8], n: i32) -> Result<u32, ErrInfo> {
         self.debug_assert_out_of_cavlc("get_bits");
         let value = ubits(self.cur_bits, n);
@@ -387,7 +366,7 @@ impl BsCursor {
     }
 
     // -----------------------------------------------------------------------
-    // CAVLC mode — plan §2.2.2 [P3]
+    // CAVLC mode
     // -----------------------------------------------------------------------
 
     /// Panics in debug builds if the cursor is inside a CAVLC region.
@@ -455,12 +434,9 @@ impl BsCursor {
     /// readable allocation, not the RBSP plus a constant**. `cavlc_bit_pos` is advanced
     /// by the residual decoder by whatever each symbol consumed, so on a truncated
     /// stream it runs past the RBSP end by an amount bounded by nothing but how many
-    /// symbols the parser accepts — the raw pair was measured reaching `len + 5` and
-    /// beyond, and was in bounds only because the decoder's raw-data buffer is 4 MiB.
-    /// `phase3_findings.md` §F16 records this; the decoder's `BsReader::avail` is where
-    /// the extent comes from. An out-of-range index here is a pre-existing overrun
-    /// surfacing, per plan §2.2.2 — it is not silenced with a `get()` fallback, because
-    /// the raw pair had no such fallback and error-code parity is the gate.
+    /// symbols the parser accepts. The decoder's `BsReader::avail` is where the extent
+    /// comes from. An out-of-range index here is a pre-existing overrun surfacing — it
+    /// is not silenced with a `get()` fallback.
     ///
     /// Round-tripping restores the *reading position*, not the field values: the
     /// re-prime can leave the accumulator holding more valid bits than it did before
@@ -498,10 +474,10 @@ impl BsCursor {
     }
 
     // -----------------------------------------------------------------------
-    // The CAVLC↔CABAC handoff. T3.2 owns the engine; these two are the reader's
-    // side of the boundary, and they exist as *named operations* rather than as
-    // `set_cur_bits`/`set_left_bits` setters because every one of these writes is
-    // only coherent as part of a whole handoff.
+    // The CAVLC↔CABAC handoff. These two are the reader's side of the boundary,
+    // and they exist as *named operations* rather than as `set_cur_bits`/
+    // `set_left_bits` setters because every one of these writes is only coherent
+    // as part of a whole handoff.
     // -----------------------------------------------------------------------
 
     /// Marks the accumulator spent because the CABAC engine has taken over the
@@ -526,10 +502,6 @@ impl BsCursor {
     /// zeroed. That last one is why this is not simply [`set_pos`](Self::set_pos) —
     /// the C++ clears `iIndex` defensively here, *outside* any CAVLC region, so it is
     /// part of the handoff rather than a mode operation and does not assert.
-    ///
-    /// T3.2 converts the engine itself, at which point this is the `usize` assignment
-    /// the phase brief describes and gains its round-trip test against a known bit
-    /// offset.
     #[inline]
     pub fn restore_from_cabac(&mut self, pos: usize) {
         self.pos = pos;
@@ -544,11 +516,9 @@ impl BsCursor {
 
     /// The raw `cavlc_bit_pos` field, with no mode assertion.
     ///
-    /// State inspection for the parity tests, in the same family as
-    /// [`cur_bits`](Self::cur_bits) and [`left_bits`](Self::left_bits) — the differential
-    /// tests compare all six C-mirrored fields *after* `end_cavlc` has cleared the mode,
-    /// where the value is dead but must still match the C++ byte for byte. Production
-    /// code wants [`cavlc_bit_pos`](Self::cavlc_bit_pos), which asserts.
+    /// State inspection, in the same family as [`cur_bits`](Self::cur_bits) and
+    /// [`left_bits`](Self::left_bits). Production code wants
+    /// [`cavlc_bit_pos`](Self::cavlc_bit_pos), which asserts.
     #[inline]
     pub fn cavlc_bit_pos_state(&self) -> isize {
         self.cavlc_bit_pos
@@ -568,23 +538,19 @@ impl BsCursor {
 /// `codec/common/inc/bit_stream.h`), `svc_set_mb_syn_cavlc.rs:157`,
 /// `nal_encap.rs:169`, and `svc_encode_slice.rs:509`, the last of which additionally
 /// null-checks, pre-masks the value to `iLen` bits, and wraps where the canonical
-/// adds. They agree on in-contract inputs, which is why the encoder is byte-identical
-/// to the C++ across the sweep; they disagree on guards, masking and overflow. See
-/// `phase0_findings.md` §F2.
+/// adds. They agree on in-contract inputs; they disagree on guards, masking and
+/// overflow.
 ///
-/// `BsWriter` implements the **canonical** semantics and is differential-tested
-/// against the canonical copy only. Which guard semantics survive the dedupe is
-/// Phase 3.2's decision to make explicitly — it is deliberately *not* made here, and
-/// no masking or `iLen <= 0` guard has been smuggled in.
+/// `BsWriter` implements the **canonical** semantics: no masking and no
+/// `iLen <= 0` guard.
 ///
 /// # Bounds
 ///
-/// The canonical writer has no end-of-buffer check: sizing is the caller's contract
-/// (plan §2.2.2). This keeps the canonical *output* semantics and gets its bounds
-/// from slice indexing, so an out-of-space write panics. That is a pre-existing
-/// sizing bug made loud, not new behaviour on any in-contract path — and note the
-/// contract includes 4 bytes of headroom at the current position, because both the
-/// accumulator flush and [`flush`](Self::flush) always store a full 32-bit word.
+/// The canonical writer has no end-of-buffer check: sizing is the caller's contract.
+/// This keeps the canonical *output* semantics and gets its bounds from slice
+/// indexing, so an out-of-space write panics. The contract includes 4 bytes of
+/// headroom at the current position, because both the accumulator flush and
+/// [`flush`](Self::flush) always store a full 32-bit word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BsWriter {
     pos: usize,
@@ -643,14 +609,6 @@ impl BsWriter {
     /// bytes through its own cursor and hands the position back
     /// (`WelsWriteSliceEndSyn`). Both cursors are offsets into the same buffer,
     /// so that hand-back is an assignment.
-    ///
-    /// This replaces `set_pos`, which moved the byte position of an existing
-    /// writer and had to `debug_assert!(left_bits == 32)` because doing that with
-    /// bits pending would silently drop them. A constructor cannot have pending
-    /// bits, so the invariant the assert was checking is now structural — and on
-    /// this path it was always a fact rather than a hope: `BsAlign` flushes the
-    /// slice header before CABAC starts, and the coder never touches the
-    /// accumulator.
     #[inline]
     pub fn at(pos: usize) -> Self {
         Self {
@@ -675,8 +633,8 @@ impl BsWriter {
     /// # Contract
     /// `n` in `1..=32`, and `value` must have no bits set above bit `n-1`: the
     /// canonical writer masks neither, and ORs the value straight into the
-    /// accumulator. Passing more is how the four copies diverge (§F2), so this one
-    /// neither masks nor asserts — it reproduces the canonical result exactly.
+    /// accumulator. Passing more is how the four copies diverge, so this one neither
+    /// masks nor asserts — it reproduces the canonical result exactly.
     ///
     /// # Panics
     /// If fewer than 4 bytes remain at the current word position.
@@ -733,8 +691,7 @@ impl BsWriter {
     /// Mirrors `BsWriteSE` (`encoder/vlc_encoder.rs:472`). One out-of-contract input
     /// differs: at `i32::MIN` the canonical writer negates and overflows, which panics
     /// in a debug build; `unsigned_abs` cannot, so this one encodes the wrapped value
-    /// the release build would have produced. Same class as `phase1_findings.md` §F5 —
-    /// no syntax element comes anywhere near that magnitude.
+    /// the release build would have produced.
     #[inline]
     pub fn write_se(&mut self, buf: &mut [u8], value: i32) {
         if value == 0 {
@@ -929,8 +886,7 @@ mod tests {
 
     #[test]
     fn a_buffer_without_slack_errors_instead_of_reading_past_it() {
-        // Same payload, no slack: this is where BsCursor is *safer* than the C++,
-        // and the finding F4 case.
+        // Same payload, no slack: this is where BsCursor is *safer* than the C++.
         let buf = [0xFFu8, 0xFF];
         let mut c = BsCursor::init(&buf, 16);
         assert_eq!(c, Err(ErrInfo::READ_OVERFLOW), "the 4-byte prime needs slack");
@@ -992,12 +948,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // CAVLC mode (plan §2.2.2 [P3])
+    // CAVLC mode
     // -----------------------------------------------------------------------
 
-    /// Randomised round counts are cut hard under Miri, which runs ~100x slower and is
-    /// part of every `gates.sh full` run via `--lib`. The *shapes* tested are unchanged
-    /// — every bit phase, every width — only the sampling shrinks.
+    /// Randomised round counts are cut hard under Miri, which runs ~100x slower. The
+    /// *shapes* tested are unchanged — every bit phase, every width — only the
+    /// sampling shrinks.
     fn scale_unit(n: usize) -> usize {
         if cfg!(miri) {
             (n / 25).max(2)
@@ -1116,10 +1072,10 @@ mod tests {
 
     #[test]
     fn the_mode_flag_is_not_part_of_equality() {
-        // S16's dual-profile discipline: equality must mean the same thing in debug and
-        // release, so the `cfg`-gated flag is excluded and the six C-mirrored fields are
-        // compared by hand. Two cursors differing *only* by mode are equal — in release
-        // there is no flag to differ by, and debug must agree.
+        // Equality must mean the same thing in debug and release, so the `cfg`-gated
+        // flag is excluded and the six C-mirrored fields are compared by hand. Two
+        // cursors differing *only* by mode are equal — in release there is no flag to
+        // differ by, and debug must agree.
         let buf = with_slack(&[0xAA, 0xBB, 0xCC, 0xDD]);
         let plain = BsCursor::init(&buf, 32).unwrap();
         let mut in_mode = plain;
@@ -1179,8 +1135,7 @@ mod tests {
     #[test]
     fn the_bit_position_survives_end_cavlc_for_the_parity_tests() {
         // `end_cavlc` clears the mode but leaves `cavlc_bit_pos` set, exactly as the C++
-        // leaves `iIndex` set. The state accessor reads it without asserting, which is
-        // how the differential tests compare all six fields after the mode closes.
+        // leaves `iIndex` set. The state accessor reads it without asserting.
         let buf = with_slack(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
         let mut c = BsCursor::init(&buf, 48).unwrap();
         c.start_cavlc();

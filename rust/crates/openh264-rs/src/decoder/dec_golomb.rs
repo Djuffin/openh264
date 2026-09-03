@@ -1,13 +1,4 @@
 #![deny(unsafe_code)]
-// Phase 5 W7/W6 (T5.V3). The module holds none of the three forms the lint denies.
-// Getting here took one signature and five deletions: `BsGetTrailingBits` was the
-// file's only `unsafe fn` and its raw parameter documented a caller defect that T3.3
-// had already fixed, and the five `unsafe` blocks were **vestigial** — every call
-// inside them (`DecInitBits`, `BsGetUe`, `BsGetSe`, `BsGetTe0`) had become a safe fn
-// under it, and `unused_unsafe` was allowed file-wide, so nothing said so.
-//
-// That `allow` is gone too: a module that denies unsafe cannot have a stale one, and
-// the lint is the instrument that keeps the deletions from growing back.
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -241,8 +232,8 @@ pub fn BsGetSe(buf: &[u8], pBs: &mut BsCursor, pCode: &mut i32) -> i32 {
 /// Matches `int32_t BsGetTe0 (PBitStringAux pBs, int32_t iRange, uint32_t* pCode)` in `dec_golomb.h`.
 #[inline(always)]
 pub fn BsGetTe0(buf: &[u8], pBs: &mut BsCursor, iRange: i32, pCode: &mut u32) -> i32 {
-    // `iRange == 1` consumes nothing: the raw version returned before touching `pBs`,
-    // and two call sites rely on being allowed to pass a range of 1 with a spent reader.
+    // `iRange == 1` consumes nothing: two call sites rely on being allowed to pass a
+    // range of 1 with a spent reader.
     if iRange == 1 {
         *pCode = 0;
         return ERR_NONE;
@@ -260,16 +251,6 @@ pub fn BsGetTe0(buf: &[u8], pBs: &mut BsCursor, iRange: i32, pCode: &mut u32) ->
 ///
 /// Matches `int32_t BsGetTrailingBits (uint8_t* pBuf)` in `dec_golomb.h`. The body is
 /// [`crate::safe::bits::trailing_bits`].
-///
-/// **The pointer is gone and the reason it was there is gone with it** (T5.V3). The
-/// signature kept `*const u8` to document a *caller* defect — `nalu.rs:675` and `:762`
-/// indexed one byte before this buffer when the NAL stripped to nothing
-/// ([`phase3_findings.md`](../../../docs/phase3_findings.md) §F15) — and T3.3 fixed
-/// those callers, after which nothing in production called this at all. What kept it
-/// alive is `tests/safe_bits_differential.rs`, where it is the table-driven *old* side
-/// of the differential against [`crate::safe::bits::trailing_bits`]; both call sites
-/// already spelled the argument `&byte`, so the reference form is the same text at
-/// every one of them.
 #[inline(always)]
 pub fn BsGetTrailingBits(pBuf: &u8) -> i32 {
     crate::safe::bits::trailing_bits(*pBuf)
@@ -328,8 +309,8 @@ mod tests {
     use super::*;
     use crate::decoder::bit_stream::{BsReader, DecInitBits, RawDataBuffer, READER_SLOP};
 
-    /// The reader family reads `READER_SLOP` bytes past the RBSP (F4); since T3.1a
-    /// that is its written contract, so the tests supply it.
+    /// The reader family reads `READER_SLOP` bytes past the RBSP, so the tests
+    /// supply it.
     fn with_slop(payload: &[u8]) -> Vec<u8> {
         let mut v = payload.to_vec();
         v.extend_from_slice(&[0u8; READER_SLOP]);

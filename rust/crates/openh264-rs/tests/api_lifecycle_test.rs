@@ -74,15 +74,10 @@ fn test_decoder_create_and_destroy_lifecycle() {
 
         // 6. DecodeParser
         //
-        // **`dsInvalidArgument`, and it used to say `dsErrorFree`** (T8b.B2). This
-        // decoder was initialised without `bParseOnly`, and the reference refuses
+        // This decoder was initialised without `bParseOnly`, and the reference refuses
         // that call outright — `welsDecoderExt.cpp:1189-1193` logs "bParseOnly should
         // be true for this API calling!", ors `dsInvalidArgument` into the context's
-        // error code and returns it. Measured against `libopenh264.dylib` rather than
-        // read: the same call on the same non-parse-only decoder answers `0x1000`.
-        // The old expectation was the stub's, which answered `dsErrorFree` to
-        // everything; the port's refusal is what the reference does, so the row moves
-        // with the port.
+        // error code and returns it.
         let mut parser_info = SParserBsInfo::default();
         let parse_state = ISVCDecoder::DecodeParser(p_decoder, std::ptr::null(), 0, &mut parser_info);
         assert_eq!(parse_state, DECODING_STATE::dsInvalidArgument);
@@ -112,17 +107,10 @@ fn test_decoder_create_and_destroy_lifecycle() {
         );
         assert_eq!(i64::from(set_opt_ret), CM_RESULT_SUCCESS as i64);
 
-        // **T8b.A3 — this asserted `cmResultSuccess` and was pinning a defect.**
         // `DECODER_OPTION_TRACE_LEVEL` is settable and **not gettable**: the two
         // switches in `welsDecoderExt.cpp` are not the same set, and `GetOption`
         // (`:584-695`) has no `TRACE_LEVEL` arm, so it falls out to `:696`'s
-        // `return cmInitParaError`. The port used to have `_ => {}` there and
-        // reported success for twelve ids, this one included; the test wrote down
-        // what the port did rather than what the reference does.
-        //
-        // Measured against the reference rather than argued from the source:
-        // `Initialize -> 0`, `SetOption(TRACE_LEVEL) -> 0`,
-        // `GetOption(TRACE_LEVEL) -> 1` (`cmInitParaError`) on `libopenh264.dylib`.
+        // `return cmInitParaError`.
         let get_opt_ret = ISVCDecoder::GetOption(
             p_decoder,
             DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
@@ -179,10 +167,7 @@ fn test_encoder_create_and_destroy_lifecycle() {
         src_pic.iColorFormat = 23;
         let mut bs_info = SFrameBSInfo::default();
         // This source picture is 160x120 against a 320x240 encoder and leaves `pData`
-        // null, which upstream rejects. Verified by running the identical call sequence
-        // against libopenh264.a: EncodeFrame returns 5 (cmUnsupportedData). This
-        // previously asserted CM_RESULT_SUCCESS, which passed only because
-        // WelsEncoderEncodeExtRust was a sketch that validated nothing.
+        // null, which upstream rejects.
         let enc_frame_ret = ISVCEncoder::EncodeFrame(p_encoder, &src_pic, &mut bs_info);
         assert_eq!(enc_frame_ret, CM_UNSUPPORTED_DATA);
 
@@ -205,7 +190,6 @@ fn test_encoder_create_and_destroy_lifecycle() {
 
         // ENCODER_OPTION_TRACE_LEVEL is set-only: `CWelsH264SVCEncoder::GetOption`
         // has no case for it and falls to `default: return cmInitParaError`.
-        // Measured against libopenh264.a, not derived from reading.
         let get_opt_ret = ISVCEncoder::GetOption(
             p_encoder,
             ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
@@ -231,14 +215,14 @@ fn test_encoder_create_and_destroy_lifecycle() {
 }
 
 // ============================================================================
-// F37's re-init probe
+// Re-init probe
 // ============================================================================
 
 /// One decode pass over `units`, stopping after `limit` access units.
 ///
 /// Returns `(frames emitted, frames the decoder says are still buffered)`. The
-/// second number is the one F37 is about: it is `sReoderingStatus.iNumOfPicts`,
-/// read back through the public `DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER`.
+/// second number is `sReoderingStatus.iNumOfPicts`, read back through the public
+/// `DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER`.
 unsafe fn decode_pass(
     p_decoder: *mut ISVCDecoder,
     units: &[&[u8]],
@@ -270,34 +254,23 @@ unsafe fn decode_pass(
     }
 }
 
-/// **F37 — a re-initialised decoder must not inherit the previous session's
-/// reordering slots.**
+/// A re-initialised decoder must not inherit the previous session's reordering
+/// slots.
 ///
 /// `CWelsDecoderImpl`'s reordering pair (`sPictInfoList`, `sReoderingStatus`) is
 /// api-owned state that outlives the decoder *context*: `Uninitialize` frees the
 /// context and its picture pool, and a second `Initialize` builds new ones — but
 /// the slot list is not the context's to clear. C++ clears it from the one place
 /// that knows the pool is going away, at the head of `DestroyPicBuff`
-/// (`decoder.cpp:260`), and the port did not until Phase 5 session O (T5.O1). A
-/// surviving non-sentinel `iPOC` makes a stale slot look occupied, and its
-/// `iPicBuffIdx` then indexes the **new** pool with the **old** pool's index.
+/// (`decoder.cpp:260`). A surviving non-sentinel `iPOC` makes a stale slot look
+/// occupied, and its `iPicBuffIdx` then indexes the **new** pool with the **old**
+/// pool's index.
 ///
-/// **The transition is what no other test in this tree performs.** Every decode
-/// gate — conformance, corpus, the sweeps, the loopback — creates a decoder,
-/// decodes, destroys. This one interrupts a B-slice stream *while pictures are
-/// still buffered*, which is the only state the defect can be observed from, then
-/// re-initialises and decodes the same stream whole.
-///
-/// The assertion is `remaining == 0` immediately after the second `Initialize`,
-/// plus the second pass matching a decoder that never saw the first. Measured red
-/// at T8.A4 against a revert of T5.O1 — the reset deleted from `DestroyPicBuff`,
-/// nothing else changed:
-///
-/// ```text
-/// assertion `left == right` failed: the re-initialised decoder inherited 1
-/// buffered picture(s) from the previous session — F37: DestroyPicBuff did not
-/// reset the reordering buffers
-/// ```
+/// This one interrupts a B-slice stream *while pictures are still buffered*,
+/// which is the only state the defect can be observed from, then re-initialises
+/// and decodes the same stream whole. The assertion is `remaining == 0`
+/// immediately after the second `Initialize`, plus the second pass matching a
+/// decoder that never saw the first.
 #[test]
 fn test_decoder_reinit_does_not_inherit_reordering_slots() {
     let mut repo_root = std::path::PathBuf::from("../../../");
@@ -379,8 +352,8 @@ fn test_decoder_reinit_does_not_inherit_reordering_slots() {
     }
 }
 
-/// **T8.B9** — the safe cores are part of the crate's public surface, not an
-/// internal detail of the shells. If this stops compiling the carve has regressed.
+/// The safe cores are part of the crate's public surface, not an internal detail
+/// of the shells.
 #[test]
 fn test_safe_core_types_are_exported() {
     let _d: openh264_rs::api::Decoder = openh264_rs::api::Decoder::new();

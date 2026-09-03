@@ -1,17 +1,4 @@
 #![deny(unsafe_code)]
-// Phase 5 W7/W6 (T5.V3). Two removals got this module here, and neither was a
-// conversion:
-//
-//   * `RBSP2EBSP` was a **raw duplicate of the safe helper beside it**
-//     (`rbsp_to_ebsp`, same file, same semantics), with no production caller and one
-//     test — Phase 2's straggler-sweep shape (S18), found where the sweep looks: at
-//     the definitions, not at the call sites. Deleted; the test calls the helper and
-//     now also checks its byte count.
-//   * `slice_bit_reader` moved to `decoder_context.rs`, which is what it always was:
-//     a context accessor reaching through `pCtx` to a NAL field, sitting in the
-//     module that holds the cursor types and their arithmetic.
-//
-// Raw pointer *types* do not trip this lint and one remains in prose (S16's floor).
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -38,17 +25,9 @@ pub const ERR_INFO_INVALID_PTR: i32 = ERR_INFO_COMMON_BASE + 2;
 pub const ERR_INFO_INVALID_PARAM: i32 = ERR_INFO_COMMON_BASE + 3;
 pub const ERR_INFO_READ_OVERFLOW: i32 = ERR_INFO_COMMON_BASE + 10;
 
-// The `SBitStringAux` / `TagBitStringAux` / `PBitStringAux` re-export lived here,
-// with a note predicting when the type would die. It died at T3.4 — one seam
-// earlier than that note guessed for the embedded fields, because converting the
-// writer family forced the struct fields in the same commit rather than leaving
-// them to Phase 6. `BsReader` + `BsCursor` are the read side; `BsWriter` is the
-// write side; there is no third thing.
-
 use crate::safe::bits::BsCursor;
 
-/// The reader's slop, in bytes past the logical end of the RBSP
-/// ([`phase1_findings.md`](../../../docs/phase1_findings.md) §F4).
+/// The reader's slop, in bytes past the logical end of the RBSP.
 ///
 /// `dump_bits_aux` permits the read cursor to sit **one** byte past `pEndBuf` and then
 /// loads **two** bytes there, so the largest index the family can touch is `len + 2`.
@@ -58,42 +37,21 @@ use crate::safe::bits::BsCursor;
 /// the family can make, at any position, for any operation.
 pub const READER_SLOP: usize = 3;
 
-/// **`READER_SLOP` is not the readable extent** — found by T3.0's goldens at T3.1b,
-/// recorded as `phase3_findings.md` §F16.
-///
-/// The derivation above covers `dump_bits_aux` only. `BsEndCavlc` primes **four** bytes
-/// at `iIndex >> 3`, where `iIndex` is advanced by the residual decoder by however many
-/// bits it consumed — and on a truncated stream that runs past the RBSP by an amount
-/// bounded by nothing but how many symbols the parser accepts before erroring. The raw
-/// reader was observed reaching `len + 5` and beyond on six conformance streams'
-/// truncations; it was "safe" only because `sRawData` is a multi-MiB allocation and
-/// those bytes were inside it.
-///
-/// So the readable extent is a property of the *allocation*, not a constant offset
-/// from the RBSP length. Since T3.3 the allocation is [`RawDataBuffer`]'s `Vec` and
-/// every window is derived from it at call time ([`RawDataBuffer::window_from`]);
-/// there is no stored extent left to hold, or to go stale.
-
-/// The decoder's raw-bitstream accumulation buffer — T3.3's replacement for
+/// The decoder's raw-bitstream accumulation buffer — replacement for
 /// `SDataBuffer { pHead, pEnd, pStartPos, pCurPos }`.
 ///
 /// Owns the bytes `WelsDecodeBs` accumulates (EPB-stripped NAL payloads) and the
 /// write position. Everything else is **derived at call time**: the readable extent
 /// behind any offset is `buf.len() - start`, computed by
 /// [`window_from`](Self::window_from) against the buffer as it is *now*. Nothing
-/// stores a length the buffer can outgrow, which is what makes F16's class of defect
-/// (a stored extent surviving a growth) unrepresentable rather than guarded against.
+/// stores a length the buffer can outgrow.
 ///
 /// The backing store is kept at its full allocated size and zero-filled —
-/// `WelsMalloczHelper`'s semantics, preserved deliberately: the C allocation was
-/// zeroed, and the reader's slop past the last NAL read those bytes (F4/F16). The
-/// slop bytes behind every NAL except the last are the next NAL's real stream bytes
-/// by construction; behind the last they are the same in-bounds zeroed/stale tail the
-/// raw code read. `buf.len()` is initialized bytes — **never** spare `Vec` capacity.
-///
-/// `pStartPos` is not carried: in this port it was written at init and rebase and
-/// read by nothing (the upstream parse-only rewind that consumes it was never
-/// ported), so the struct stores one offset, not two.
+/// `WelsMalloczHelper`'s semantics: the C allocation was zeroed, and the reader's
+/// slop past the last NAL read those bytes. The slop bytes behind every NAL except
+/// the last are the next NAL's real stream bytes by construction; behind the last
+/// they are the same in-bounds zeroed/stale tail the raw code read. `buf.len()` is
+/// initialized bytes — **never** spare `Vec` capacity.
 #[derive(Debug, Default)]
 pub struct RawDataBuffer {
     buf: Vec<u8>,
@@ -155,10 +113,7 @@ impl RawDataBuffer {
     /// Grows the buffer, keeping its contents and zero-filling the new tail.
     ///
     /// This is `ExpandBsBuffer`'s growth policy, verbatim: the new size is
-    /// `max(src_len * MAX_BUFFERED_NUM, len << 1)`. What is *not* here is the rest of
-    /// that function — the pointer-rebasing block died with the pointers, because
-    /// offsets survive a reallocation by definition (plan §2.2.2, P5), and there is no
-    /// stored extent left to go stale (F16's second instance).
+    /// `max(src_len * MAX_BUFFERED_NUM, len << 1)`.
     ///
     /// Failure maps to the C path (`ERR_INFO_OUT_OF_MEMORY`) rather than aborting.
     pub fn grow(&mut self, src_len: usize) -> Result<(), ()> {
@@ -215,8 +170,7 @@ impl RawDataBuffer {
     /// Zeroes the four reserved bytes at `at` — `pDstNal[iDstIdx .. iDstIdx+4] = 0`,
     /// which `WelsDecodeBs` writes before **every** `ParseNalHeader` call
     /// (`decoder.cpp:874` and `:875`). They are the guard bytes a refill is allowed to
-    /// load past an RBSP end (F4/P6) *and* the bytes a zero-length NAL's header is read
-    /// out of, which is what made their absence observable (F46, T5.T3).
+    /// load past an RBSP end *and* the bytes a zero-length NAL's header is read out of.
     ///
     /// Short-buffer safety: the caller has already ensured `remaining() >= len + 4`
     /// before appending, so `at + 4 <= len()` holds; the clamp keeps a violated
@@ -229,8 +183,8 @@ impl RawDataBuffer {
         }
     }
 
-    /// **Parse-only's raw append** (Phase 8b session B, T8b.B2) — `sSavedData`'s
-    /// half of `WelsDecodeBs`'s two-buffer copy, and the one thing
+    /// **Parse-only's raw append** — `sSavedData`'s half of `WelsDecodeBs`'s
+    /// two-buffer copy, and the one thing
     /// [`append_ebsp_stripped`](Self::append_ebsp_stripped) must *not* do.
     ///
     /// `sRawData` holds the **RBSP**: emulation-prevention bytes are gone, which is
@@ -238,12 +192,9 @@ impl RawDataBuffer {
     /// output. Parse-only hands its caller a bitstream to feed to another decoder, so
     /// it must hand back the **EBSP** — the escaped bytes as they arrived. Upstream
     /// keeps the second copy in `pSavedData` for exactly this
-    /// (`decoder.cpp:773-778`, `au_parser.cpp:340`/`:375`), and it is the reason
-    /// `sSavedData` exists in this port at all: until now it was allocated, grown
-    /// alongside `sRawData`, and never written.
+    /// (`decoder.cpp:773-778`, `au_parser.cpp:340`/`:375`).
     ///
-    /// Returns the start offset of the appended bytes — `pNalPos` as an offset, which
-    /// is what T3.3 deleted the pointer in favour of.
+    /// Returns the start offset of the appended bytes — `pNalPos` as an offset.
     pub fn append_raw(&mut self, bytes: &[u8]) -> usize {
         let start = self.cur;
         self.buf[start..start + bytes.len()].copy_from_slice(bytes);
@@ -257,8 +208,7 @@ impl RawDataBuffer {
     ///
     /// Answers whether `need` bytes now fit: `false` means the buffer is smaller than
     /// one NAL and the caller must refuse rather than write. Upstream has no such
-    /// answer — it wraps and writes anyway — so this is the one place the two differ,
-    /// and it differs by not corrupting memory.
+    /// answer — it wraps and writes anyway — so this is the one place the two differ.
     pub fn wrap_for(&mut self, need: usize) -> bool {
         if self.cur + need > self.buf.len() {
             self.cur = 0;
@@ -274,8 +224,8 @@ impl RawDataBuffer {
 
     /// The readable window behind offset `start`: everything from `start` to the end
     /// of the allocation — was `readable_from`'s `pEnd - p`, now derived from the
-    /// owner at call time (the F16 rule). `start <= len` holds for every offset the
-    /// decoder mints ([`append_ebsp_stripped`] returns positions inside the buffer,
+    /// owner at call time. `start <= len` holds for every offset the decoder mints
+    /// ([`append_ebsp_stripped`] returns positions inside the buffer,
     /// and growth never shrinks it); the clamp routes a broken invariant to an empty
     /// window — every read then fails with `ERR_INFO_READ_OVERFLOW` — rather than
     /// introducing a panic where the raw code read allocation bytes.
@@ -291,17 +241,16 @@ impl RawDataBuffer {
     }
 
     /// The **RBSP window** for a reader: the first [`BsCursor::len`] bytes of its
-    /// readable window. This is what the CABAC engine reads through (T3.2): `len` is
-    /// the logical end of the RBSP — the C++ `pBuffEnd` the engine's end ladder
-    /// measures against — so `win.len()` *is* the ladder's selector and the engine
-    /// computes no extent of its own. See the read-extent audit in
-    /// `cabac_decoder.rs`'s module docs.
+    /// readable window. This is what the CABAC engine reads through: `len` is the
+    /// logical end of the RBSP — the C++ `pBuffEnd` the engine's end ladder measures
+    /// against — so `win.len()` *is* the ladder's selector and the engine computes no
+    /// extent of its own.
     ///
     /// `window.len() >= cursor.len()` holds structurally — `WelsDecodeBs` refuses to
     /// append a payload without four bytes to spare, EPB stripping only shrinks it,
     /// and growth only widens the window — so the `min` is dead; the `debug_assert`
     /// keeps that checkable, and the clamp keeps a violated contract on the error
-    /// path instead of adding a new panic (F4/F16's shape).
+    /// path instead of adding a new panic.
     #[inline(always)]
     pub fn rbsp_window(&self, reader: &BsReader) -> &[u8] {
         let win = self.window_from(reader.start);
@@ -323,16 +272,10 @@ impl RawDataBuffer {
 /// A NAL's read state: where its bytes start in the owning [`RawDataBuffer`], plus
 /// the detached [`BsCursor`].
 ///
-/// T3.1b's bridge (`{base, avail, cursor}` and the `from_raw_parts` that reconstructed
-/// a slice from it) died at T3.3 with `SDataBuffer`: `start` is a position — an offset
-/// into the owner, which survives the owner's growth by definition — and every window
-/// is derived from the owner at call time. Plan §2.1.3's split is unchanged: consumers
-/// take `(buf: &[u8], cursor: &mut BsCursor)`, produced by [`split`](Self::split).
-///
-/// **The NAL unit owns it, and nothing mirrors it** (T5.M3). `DqLayerState` used to
-/// carry a `pBitStringAux: *mut BsReader` pointing at
-/// `pNalCur->sNalData.sVclNal.sSliceBitsRead`; that field is gone and
-/// [`slice_bit_reader`] is the one route.
+/// `start` is a position — an offset into the owner, which survives the owner's
+/// growth by definition — and every window is derived from the owner at call time.
+/// Consumers take `(buf: &[u8], cursor: &mut BsCursor)`, produced by
+/// [`split`](Self::split).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BsReader {
     /// Offset of this NAL's payload in the owning [`RawDataBuffer`].
@@ -343,8 +286,8 @@ pub struct BsReader {
 
 impl BsReader {
     /// Splits into the two halves the consumers take: the bytes, and the position.
-    /// The window is derived from `raw` now, not from stored state — safe, and
-    /// exactly as wide as the raw reader's was (`pEnd - p`).
+    /// The window is derived from `raw`, not from stored state, and is exactly as
+    /// wide as the raw reader's was (`pEnd - p`).
     #[inline(always)]
     pub fn split<'a>(&'a mut self, raw: &'a RawDataBuffer) -> (&'a [u8], &'a mut BsCursor) {
         (raw.window_from(self.start), &mut self.cursor)
@@ -355,9 +298,7 @@ impl BsReader {
 ///
 /// Matches `int32_t InitReadBits (PBitStringAux pBitString, intX_t iEndOffset)` in
 /// `bit_stream.cpp`; the body is [`BsCursor::init_read_bits`], which does the same
-/// comparison in offset arithmetic. That deletes the `pEndBuf.offset(-iEndOffset)`
-/// computation of `phase1_findings.md` §F7 — a pointer before the allocation, UB by
-/// the arithmetic alone — rather than preserving it.
+/// comparison in offset arithmetic.
 pub fn InitReadBits(buf: &[u8], cursor: &mut BsCursor, iEndOffset: isize) -> i32 {
     match cursor.init_read_bits(buf, iEndOffset) {
         Ok(()) => ERR_NONE,
@@ -370,9 +311,8 @@ pub fn InitReadBits(buf: &[u8], cursor: &mut BsCursor, iEndOffset: isize) -> i32
 /// Matches `int32_t DecInitBits (PBitStringAux pBitString, const uint8_t* kpBuf, const int32_t kiSize)`
 /// in `bit_stream.cpp`. The body is [`BsCursor::init`] over the window derived from
 /// the owning buffer at `start` — was `readable_from`'s `pEnd - p`, now
-/// [`RawDataBuffer::window_from`]. The old null-pointer guard has no offset
-/// equivalent (there is no pointer); the `(kiSize + 7) >> 3 <= 0` case returns
-/// [`ERR_INFO_INVALID_ACCESS`] from `init` exactly as the pre-check did.
+/// [`RawDataBuffer::window_from`]. The `(kiSize + 7) >> 3 <= 0` case returns
+/// [`ERR_INFO_INVALID_ACCESS`] from `init`.
 pub fn DecInitBits(pReader: &mut BsReader, raw: &RawDataBuffer, start: usize, kiSize: i32) -> i32 {
     match BsCursor::init(raw.window_from(start), kiSize) {
         Ok(cursor) => {
@@ -415,10 +355,10 @@ pub fn rbsp_to_ebsp(src: &[u8], dst: &mut [u8]) -> usize {
 mod tests {
     use super::*;
     
-    /// The reader reads `READER_SLOP` bytes past the RBSP it is handed — it always
-    /// did (F4), and the decoder's raw buffer always has the slack (`WelsDecodeBs`
-    /// sizes every payload with four bytes to spare). These tests supply it rather
-    /// than relying on the reader not reaching that far.
+    /// The reader reads `READER_SLOP` bytes past the RBSP it is handed, and the
+    /// decoder's raw buffer always has the slack (`WelsDecodeBs` sizes every payload
+    /// with four bytes to spare). These tests supply it rather than relying on the
+    /// reader not reaching that far.
     fn with_slop(payload: &[u8]) -> Vec<u8> {
         let mut v = payload.to_vec();
         v.extend_from_slice(&[0u8; READER_SLOP]);
@@ -447,9 +387,9 @@ mod tests {
 
     #[test]
     fn test_dec_init_bits_empty_window() {
-        // The nearest offset analogue of the old null-pointer rejection: a window
-        // with no bytes fails `init`'s 4-byte prime with READ_OVERFLOW rather than
-        // reading anything, and a non-positive size keeps INVALID_ACCESS parity.
+        // A window with no bytes fails `init`'s 4-byte prime with READ_OVERFLOW
+        // rather than reading anything, and a non-positive size keeps
+        // INVALID_ACCESS parity.
         let raw = RawDataBuffer::default();
         let mut bs = BsReader::default();
         assert_eq!(DecInitBits(&mut bs, &raw, 0, 32), ERR_INFO_READ_OVERFLOW);
@@ -470,14 +410,12 @@ mod tests {
         assert_eq!(raw.cur(), 0);
     }
 
-    /// P5's test, asked for by the plan since rev 1: grow the buffer mid-AU and
-    /// assert parse continuity. A reader over an early NAL is mid-read when a later
-    /// NAL forces growth; because the reader stores an offset and every window is
-    /// derived from the owner at call time, the values it decodes after the growth
-    /// are identical to a control run with no growth — the latent-bug class that
-    /// pointer rebasing fixed silently (and F16's stale-`avail` broke loudly) is
-    /// pinned here. Growth genuinely reallocates: the initial size is small and the
-    /// appended NAL is bigger than the whole buffer.
+    /// Grows the buffer mid-AU and asserts parse continuity. A reader over an early
+    /// NAL is mid-read when a later NAL forces growth; because the reader stores an
+    /// offset and every window is derived from the owner at call time, the values it
+    /// decodes after the growth are identical to a control run with no growth.
+    /// Growth genuinely reallocates: the initial size is small and the appended NAL
+    /// is bigger than the whole buffer.
     #[test]
     fn p5_reader_survives_growth_mid_au() {
         // A payload of ascending bytes: ue(v) reads below give known values.

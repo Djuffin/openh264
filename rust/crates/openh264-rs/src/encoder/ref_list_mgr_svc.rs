@@ -22,8 +22,7 @@ use crate::*;
 
 pub const STR_ROOM: i32 = 1;
 // `MAX_SHORT_REF_COUNT`, `MAX_TEMPORAL_LEVEL` and `MAX_GOP_SIZE` are defined once in
-// `encoder_context.rs` from `wels_const.h`. This module previously had its own copies
-// with MAX_SHORT_REF_COUNT = 16 (C++: 4) and MAX_TEMPORAL_LEVEL = 8 (C++: 4).
+// `encoder_context.rs` from `wels_const.h`.
 pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
 use crate::encoder::encoder_context::ctx_ltr_at;
 pub const MAX_REF_PIC_COUNT: usize = 16;
@@ -91,9 +90,6 @@ use crate::encoder::svc_encode_slice::{current_layer_expect, current_layer_expec
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::encoder_context::SLTRState;
-// T4b.3b: `ExpandReferencingPicture` was one of three copies of one C++ function
-// in this port. `common/expand_pic.rs` now holds the single one, and the
-// `SExpandPicFunc` table it used to be handed is deleted.
 pub use crate::encoder::encoder_context::SLogContext;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
 pub use crate::encoder::wels_preprocess::CWelsPreProcess;
@@ -199,11 +195,6 @@ pub struct SLTRMarkingFeedback {
 // ============================================================================
 
 /// Reset LTR marking, recovery, and feedback state to defaults.
-///
-/// **T9.X — `&mut`, and safe.** The parameter was `*mut`-SLTRState with a null
-/// guard; all three callers derive it from `ctx_ltr_at`, which — since T9.H3
-/// returns the real `&mut SLTRState` — hands them the argument directly. The
-/// body only writes fields, so nothing here needs `unsafe`.
 pub fn ResetLtrState(pLtr: &mut SLTRState) {
     pLtr.bReceivedT0LostFlag = false;
     pLtr.iLastRecoverFrameNum = 0;
@@ -226,12 +217,7 @@ pub fn ResetLtrState(pLtr: &mut SLTRState) {
 
 /// Reset active reference picture lists for current spatial layer.
 pub fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
-    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one, so the guard is not
-    // merely dead — it is inexpressible. Nothing replaces it.
     let uiDid = pCtx.uiDependencyId as usize;
-    // §4.6, reorder: every raw root and scalar first, the reference-shaped
-    // borrow last — the order this file's own T9.H3 note asks for.
     let ltrRefNum = if pCtx.param_opt().is_some() {
         pCtx.param().iLTRRefNum as usize
     } else {
@@ -271,27 +257,15 @@ pub fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
 }
 
 /// Remove a long-term reference entry by index from pLongRefList.
-///
-/// **Narrowed to the list it edits — T9.G3, S54.** It took `*mut`-sWelsEncCtx and
-/// used it for exactly one thing: `pCtx.ref_list_mut((*pCtx).uiDependencyId)`.
-/// Every one of its five callers already holds that same pointer, derived with the
-/// same `uiDid` (`uiDependencyId` is written in one place in the encoder,
-/// `encoder_ext.rs:3356`, and never inside this file), and every one has already
-/// null-guarded it. So the context parameter carried no information the caller did
-/// not have, and carrying it made this call a **whole-context retag in the middle
-/// of five loops that hold cursors across it** — 8 of the 131 live hazards
-/// (`phase9_ctx_join.py`), and, after the flip, five borrow-checker errors instead.
-/// Taking the list retags the list.
 pub fn DeleteLTRFromLongList(pRefList: &mut SRefList, iIdx: i32) {
     let count = pRefList.uiLongRefCount as i32;
-    // **T9.X — F86's class, guarded where upstream's invariant is implicit.**
     // Upstream (`ref_list_mgr_svc.cpp:82`) walks to `uiLongRefCount - 1` and indexes
     // `pLongRefList[k + 1]` unchecked; the array is `[_; 1 + MAX_REF_PIC_COUNT]` and
     // nothing in either tree *enforces* `uiLongRefCount <= 1 + MAX_REF_PIC_COUNT` —
     // it is an emergent property of the marking schedule, not a checked bound. Where
     // that invariant holds, `kLast` is never the binding term and this loop is
     // byte-for-byte the C++ one. Where it fails, upstream reads past the array and
-    // this stops at its end instead of panicking. See F172.
+    // this stops at its end instead of panicking.
     let kLast = pRefList.pLongRefList.len() as i32 - 1;
     let kUpper = (count - 1).min(kLast);
     let mut k = iIdx;
@@ -308,12 +282,10 @@ pub fn DeleteLTRFromLongList(pRefList: &mut SRefList, iIdx: i32) {
 }
 
 /// Remove a short-term reference entry by index from pShortRefList.
-///
-/// Narrowed with [`DeleteLTRFromLongList`] and for the same reason — T9.G3.
 pub fn DeleteSTRFromShortList(pRefList: &mut SRefList, iIdx: i32) {
     let count = pRefList.uiShortRefCount as i32;
     // The same guard as [`DeleteLTRFromLongList`], for the same reason and against
-    // the same C++ shape (`ref_list_mgr_svc.cpp:93`) — T9.X, F172.
+    // the same C++ shape (`ref_list_mgr_svc.cpp:93`).
     let kLast = pRefList.pShortRefList.len() as i32 - 1;
     let kUpper = (count - 1).min(kLast);
     let mut k = iIdx;
@@ -331,13 +303,9 @@ pub fn DeleteSTRFromShortList(pRefList: &mut SRefList, iIdx: i32) {
 
 /// Unreferences non-scene LTR frames when current frame is marked as Scene LTR.
 pub fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.param_opt().is_none() {
         return;
     }
-    // §4.6, reorder: every raw root and scalar first, the reference-shaped
-    // borrow last — the order this file's own T9.H3 note asks for.
     let numRef = pCtx.param().iNumRefFrame;
     let uiTemporalId = pCtx.uiTemporalId;
     let bCurFrameMarkedAsSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
@@ -401,8 +369,6 @@ pub fn CompareFrameNum(iFrameNumA: i32, iFrameNumB: i32, iMaxFrameNumPlus1: i32)
 
 /// Purges unacknowledged or invalid LTR frames based on decoder feedback.
 pub fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     let Some(sps) = ctx_sps_ref(pCtx) else {
         return;
     };
@@ -410,14 +376,6 @@ pub fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    // **S10.5a — T9.H3's ordering rule is gone, and its going is the conversion.**
-    // That comment described the order this body had to keep so a raw
-    // `addr_of_mut!` cursor would survive the later whole-context reborrow: "every
-    // raw root first, the `&mut`-shaped LTR borrow last". It was a hand-maintained
-    // rule standing in for a guarantee, and F239 is what happens when such a rule
-    // is broken silently. `ltr_family_mut` projects the parameter slot, the list
-    // and the LTR state from **one** borrow, so there is no order to keep and the
-    // compiler enforces the disjointness the comment used to assert.
     let iMaxFrameNumPlus1 = 1 << sps.uiLog2MaxFrameNum;
     let ltr_family = pCtx.ltr_family_mut(uiDid);
     let pParamInternal = ltr_family.param_layer;
@@ -466,15 +424,10 @@ pub fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
 
 /// Handles asynchronous decoder confirmation or failure feedback for LTR marking.
 pub fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.param_opt().is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    // S10.5a: one borrow for all four — the parameter slot, the VAA the loop
-    // stamps, the list and the LTR state. See `DeleteInvalidLTR` for why T9.H3's
-    // ordering rule went with the raw root it protected.
     let ltr_family = pCtx.ltr_family_mut(uiDid);
     let pParamInternal = ltr_family.param_layer;
     let mut pVaa = ltr_family.vaa;
@@ -550,8 +503,6 @@ pub fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
 
 /// Executes promotion and movement of frames from short-term to long-term lists.
 pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.param_opt().is_none() {
         return;
     }
@@ -559,10 +510,6 @@ pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
         return;
     };
     let uiDid = pCtx.uiDependencyId as usize;
-    // S10.5a: the scalars are still read out first, because they are *reads* of
-    // fields this body does not otherwise borrow — that part of T9.H3 was never
-    // about raw roots. What is gone is the ordering rule protecting a raw cursor
-    // across a reborrow; `ltr_family_mut` projects all five fields at once.
     let gopSize = pCtx.param().uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
@@ -639,9 +586,6 @@ pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     if (pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 && pLtr.bLTRMarkingFlag)
         || ((pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32) && bMoveLtrFromShortToLong)
     {
-        // The flag lives in a different field of the context from the two
-        // borrows above; its root is derived before them (F71's spelling) so the
-        // write does not need a second claim on `pCtx`.
         let tid = uiTemporalId;
         if uiDid < MAX_DEPENDENCY_LAYER && tid < MAX_TEMPORAL_LEVEL {
             (*bRefOfCurTidIsLtr)[uiDid][tid] = true;
@@ -670,16 +614,10 @@ pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
 
 /// Executes promotion of screen content references to long-term reference slots.
 pub fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
-    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one, so the guard is not
-    // merely dead — it is inexpressible. Nothing replaces it.
     let Some(idDec) = pCtx.pDecPic else {
         return;
     };
     let uiDid = pCtx.uiDependencyId as usize;
-    // §4.6, reorder: the index is read out, the VAA stamp happens through its own
-    // raw, and the list is re-borrowed after it — the accessor is a field
-    // projection, so re-deriving costs nothing and holds nothing.
     let Some(iLtrIdx) = pCtx.ref_list(uiDid).map(|l| l.pic(idDec).iLongTermPicNum) else {
         return;
     };
@@ -701,13 +639,10 @@ pub fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
 
 /// Pre-allocates destination frame buffer pointer pDecPic for upcoming reconstruction.
 pub fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.param_opt().is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    // §4.6, reorder: the parameter read goes above the reference-shaped borrow.
     let kiNumRef = pCtx.param().iNumRefFrame;
     let Some(pRefList) = pCtx.ref_list_mut((uiDid) as usize) else {
         return;
@@ -725,23 +660,8 @@ pub fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
     }
 
     if (*pRefList).pNextBuffer.is_none() && (*pRefList).uiShortRefCount > 0 {
-        // **T9.X — this is F86's actual open site**, not the shift the finding names.
-        // The abort F86 recorded (`the len is 5 but the index is 5`, then
-        // `panic in a function that cannot unwind -> abort`) was raised *here*, at
-        // what was `ref_list_mgr_svc.rs:684` when the finding was written: with
-        // `uiShortRefCount == 6`, `lastIdx == 5` on a `[_; 1 + MAX_SHORT_REF_COUNT]`
-        // = `[_; 5]`. The C++ counterpart is `ref_list_mgr_svc.cpp:343`
-        // (`pShortRefList[pRefList->uiShortRefCount - 1]`), an unchecked *read* — not
-        // the `pShortRefList[iRefIdx + 1]` write at `cpp:387-391` the finding cites,
-        // which is `WelsUpdateRefList`'s insert shift and has been bound-guarded in
-        // this port since the raw translation. See F172.
-        //
-        // Measured this session: across all 583 sweep rows (`st mt def sl ltr ps dl
-        // bg`) `uiShortRefCount` never exceeds 2 against a panic threshold of 6, and
-        // this branch is never taken at all — the free-buffer loop above always finds
-        // one. F86's own trigger was `ForceCodingIDR` being a stub, which T8b.A4
-        // fixed. So the guard below is not covering a reachable panic; it makes the
-        // unenforced invariant explicit at the one site that historically broke it.
+        // The C++ counterpart is `ref_list_mgr_svc.cpp:343`
+        // (`pShortRefList[pRefList->uiShortRefCount - 1]`), an unchecked *read*.
         let lastIdx = (((*pRefList).uiShortRefCount - 1) as usize)
             .min((*pRefList).pShortRefList.len() - 1);
         (*pRefList).pNextBuffer = (*pRefList).pShortRefList[lastIdx];
@@ -755,8 +675,6 @@ pub fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
 
 /// Updates reference picture list after current frame reconstruction.
 pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if current_layer_ref(pCtx).is_none() || pCtx.param_opt().is_none() {
         return false;
     }
@@ -765,21 +683,6 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
         return false;
     }
 
-    // **T9.H3 — the held cursor is gone.** T9.G7's note stood here: this body held
-    // the LTR state raw across `LTRMarkProcess` / `DeleteInvalidLTR` /
-    // `HandleLTRMarkFeedback`, each of which re-derives its own `&mut` to the same
-    // `SLTRState`. Nothing is held across those calls any more — each branch
-    // re-borrows `ctx_ltr_at` *after* its calls return, so "the writes see the
-    // state those calls left" is now said in borrows instead of a comment.
-    // **S11.24 — the record cursor is three scalars.** The `addr_of_mut!` above
-    // this line existed because a `&` to the dependency layer cannot span the
-    // `LTRMarkProcess` / `DeleteInvalidLTR` / `HandleLTRMarkFeedback` calls below,
-    // each of which takes the whole context. But nothing here *writes* the record
-    // — the six uses read `iHighestTemporalId`, `iFrameNum` and `iPOC` — and those
-    // three calls write only `bEncCurFrmAsIdrFlag` on it. So the values are read
-    // out now and the borrow ends on this line, which is what the raw was
-    // simulating. Reading them later through the pointer would have observed the
-    // same bytes; the difference is that the compiler can now see why.
     let (kiHighestTid, kiFrameNum, kiPOC) = {
         let pParamD = &pCtx.param().sDependencyLayers[uiDid];
         (pParamD.iHighestTemporalId, pParamD.iFrameNum, pParamD.iPOC)
@@ -788,38 +691,18 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
     let kuiDid = pCtx.uiDependencyId;
     let keSliceType = pCtx.eSliceType;
 
-    // **A3 — the list borrow is scoped, for the same reason the LTR one was.**
-    // The tail calls `LTRMarkProcess` / `DeleteInvalidLTR` /
-    // `HandleLTRMarkFeedback`, each of which takes the whole context, and a live
-    // `&mut SRefList` cannot span them. So the list is bound inside the block that
-    // uses it and re-derived after the calls — the same sentence T9.H3 wrote about
-    // the LTR state, one field over. Re-deriving is a field projection and an
-    // index; it holds nothing.
     if let Some(idDec) = pCtx.pDecPic {
         let Some(pRefList) = pCtx.ref_list_mut(uiDid) else {
             return false;
         };
-        // The reconstruction picture, resolved once — S37: everything below either
-        // reads its geometry or writes its own fields, and the borrow ends before the
-        // reference-list shifts that would touch the pool again.
+        // The reconstruction picture, resolved once.
         let pDecPic: &mut SPicture = pRefList.pic_mut(idDec);
         if kiHighestTid == 0 || (kuiTid as i32) < kiHighestTid as i32 {
-            // T4b.3b: the `pFuncList` null guard went with the table it guarded.
-            // The C++ (`ref_list_mgr_svc.cpp:375`) dereferences `pCtx->pFuncList`
-            // here unconditionally, so dropping it is the closer reading.
-            // T6.F4: the picture owns its planes, so the expansion is a method on it
-            // and `ExpandReferencingPicture`'s three raw origins are gone from the
-            // encoder entirely.
+            // `ref_list_mgr_svc.cpp:375`.
             pDecPic.expand_as_reference();
         }
 
         if crate::encoder::dump_enabled(&REC_DUMP, "OH264_RECDUMP") {
-            // **S11.24 — the last raw op in this body, and it was the diagnostic.**
-            // The walk read `sDec.pData[pl].offset(y * iLineSize[pl] + i)`; a
-            // `PaddedPlane`'s `row(y, 0, w)` starts at `origin + y*stride`, and
-            // `data_ptr(pl)` *is* `root_ptr() + origin`, so the two resolve to the
-            // same byte for every `(pl, y, i)` this loop visits. The plane
-            // descriptor existed only to feed this checksum, so it goes with it.
             let (kiW, kiH) = (pDecPic.iWidthInPixel, pDecPic.iHeightInPixel);
             for pl in 0..3usize {
                 let w = if pl != 0 { kiW >> 1 } else { kiW };
@@ -865,7 +748,6 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
                 pLtr.uiLtrMarkInterval += 1;
             }
 
-            // Re-derived after the three calls above, exactly as the LTR borrow is.
             let Some(pRefList) = pCtx.ref_list_mut(uiDid) else {
                 return false;
             };
@@ -912,22 +794,12 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
     // C++ dispatches virtually here (ref_list_mgr_svc.cpp:1041/1057/1073 —
     // PrefetchNextBuffer / UpdateSrcPicList /
     // UpdateSrcPicListLosslessScreenRefSelectionWithLtr).
-    //
-    // **T4b.2b, and this guard needed an argument rather than a substitution.** The
-    // old `if !pReferenceStrategy.is_null()` asked whether a strategy was installed;
-    // the enum has no uninstalled state, so the guard is gone. That is equivalent
-    // because *this function is only reached through the strategy*:
-    // `RefStrategyKind::UpdateRefList` is its one caller, so by the time the body
-    // runs the kind has already been read. The guard was re-checking a thing its
-    // caller had just dereferenced.
     pCtx.eRefStrategy.EndofUpdateRefList(pCtx);
     true
 }
 
 /// Checks whether candidate frame number is already occupied in LTR list.
 pub fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.param_opt().is_none() {
         return false;
     }
@@ -935,10 +807,6 @@ pub fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
         return false;
     };
     let uiDid = pCtx.uiDependencyId as usize;
-    // S10.5a: the scalars still come out before the list's `&mut`, because they
-    // are reads of fields this body also borrows later — that half of T9.H3 was
-    // never about raw roots, and it stays. The raw SPS deref it also covered is
-    // gone: `ctx_sps_ref` is the shared twin, and this body reads one field.
     let gopSize = pCtx.param().uiGopSize;
     let iGoPFrameNumInterval = if (gopSize >> 1) > 1 {
         (gopSize >> 1) as i32
@@ -946,8 +814,6 @@ pub fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
         1
     };
     let iMaxFrameNumPlus1 = 1 << sps.uiLog2MaxFrameNum;
-    // A7, §4.6 reorder: the only field read out of the layer's parameter block is
-    // `iFrameNum`, a scalar, so the borrow does not have to span the list's `&mut`.
     let kiParamFrameNum = pCtx.param().sDependencyLayers[uiDid].iFrameNum;
     let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
     let Some(pRefList) = pRefList else {
@@ -980,14 +846,6 @@ pub fn WelsMarkMMCORefInfoWithBase(
     kBaseMarking: SRefPicMarking,
     kiCountSliceNum: i32,
 ) {
-    // **The base arrives by value, and it is not a style preference** (T9.E2b,
-    // the S29/S54 lineage). Both callers read `ppSliceList[0]`'s marking, and
-    // iteration 0 of this loop writes the very bytes that marking lives in: a
-    // reference parameter — `&` or `&mut` — is protected for the whole call
-    // (F114b), so the write through `slice_in_layer(pCurDq, 0)` would pop it
-    // mid-loop. The value cannot be invalidated by a retag, and the copy is
-    // byte-identical to the C++'s `memcpy` from the live field: the first
-    // store is `base = base`.
     for iSliceIdx in 0..kiCountSliceNum {
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx);
         if let Some(pSlice) = pSlice {
@@ -1004,12 +862,6 @@ pub fn WelsMarkMMCORefInfo(
     pCurDq: &mut SDqLayer,
     kiCountSliceNum: i32,
 ) {
-    // **T9.H3 — narrowed (S54).** The context parameter is gone: the body read
-    // exactly two `ctx_param` scalars through it, and its single caller
-    // (`WelsMarkPic`) passes them by value now. The LTR state arrives as a
-    // shared borrow — the body only reads it — which the caller's own `&mut`
-    // re-borrows for the call, so no second route to the context exists inside
-    // and T9.X's protector argument is not needed at all.
     if kiCountSliceNum <= 0 {
         return;
     }
@@ -1050,43 +902,21 @@ pub fn WelsMarkMMCORefInfo(
         }
     }
 
-    // S11.2c: the marking is copied out before the call, which ends the base
-    // slice's borrow — the callee needs the layer `&mut` again to reach the
-    // other slices, and the argument was always a by-value copy.
     let kBaseMarking = *pRefPicMark;
     WelsMarkMMCORefInfoWithBase(pCurDq, kBaseMarking, kiCountSliceNum);
 }
 
 /// Evaluates LTR marking criteria and populates slice header MMCO commands.
 pub fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if current_layer_ref(pCtx).is_none() || pCtx.param_opt().is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    // **T9.H3 — the held cursor is gone.** T9.G7's note stood here: the body held
-    // the LTR state raw across `CheckCurMarkFrameNumUsed`, which re-derives its
-    // own borrow of the same `SLTRState`. Roots and scalars come first now; the
-    // marking decision reads the state through one short borrow that ends before
-    // that whole-context call, and the writes re-borrow after it, with the C++
-    // condition's short-circuit order preserved exactly — the check runs iff both
-    // cheap conjuncts held, and it only reads. The tail call reaches the context
-    // no second time (`WelsMarkMMCORefInfo` is narrowed to the two scalars it
-    // read, S54).
-    // A7, §4.6 reorder: the three parameter fields this body reads are scalars, so
-    // they come out here rather than as a borrow held across `ctx_ltr_at`'s `&mut`.
     let kbEnableLtr = pCtx.param().bEnableLongTermReference;
     let kiLtrMarkPeriod = pCtx.param().iLtrMarkPeriod;
     let kuiGopSize = pCtx.param().uiGopSize;
     let kuiTid = pCtx.uiTemporalId;
     let kiCountSliceNum = current_layer_expect(pCtx).iMaxSliceNum;
-    // **S11.11: the hoist is reversed, and the reason inverted with it.** T9.G6
-    // derived this *before* the LTR block because the raw form's argument read
-    // through the context and the derivation had to precede the `&mut`s below.
-    // A `&mut SDqLayer` is the opposite: it must be taken *after* them, since
-    // it and `ctx_ltr_at`'s borrow are both of the context. The derivation moves
-    // to its one use, at the call.
     if kbEnableLtr && ctx_ltr_at(pCtx, uiDid).bLTRMarkEnable && kuiTid == 0 {
         let pLtr = &*ctx_ltr_at(pCtx, uiDid);
         let bMarkCandidate = !pLtr.bReceivedT0LostFlag
@@ -1106,8 +936,6 @@ pub fn WelsMarkPic(pCtx: &mut sWelsEncCtx) {
         }
     }
 
-    // The LTR record is `Copy`-read out first so the layer's `&mut` and it are
-    // not both live borrows of the context at the call.
     let kLtr = *ctx_ltr_at(pCtx, uiDid);
     WelsMarkMMCORefInfo(
         kuiGopSize,
@@ -1123,12 +951,6 @@ pub fn FilterLTRRecoveryRequest(
     pCtx: &mut sWelsEncCtx,
     pLTRRecoverRequest: &mut SLTRRecoverRequest,
 ) -> i32 {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one.
-    // **T9.X**: the request pointer follows it, and the null guard goes with it —
-    // upstream (`ref_list_mgr_svc.cpp:517`) has no such guard, dereferencing both
-    // `pCtx->pSvcParam` and `pLTRRecoverRequest->iLayerId` unconditionally. The
-    // guard was the port's own addition, not a behaviour the reference has.
     if pCtx.param_opt().is_none() {
         return 0;
     }
@@ -1143,23 +965,9 @@ pub fn FilterLTRRecoveryRequest(
             return 0;
         }
 
-        // T9.H3 — the derivation order, inverted from T9.G4: scalar and the
-        // permanently-raw root first, the LTR borrow last (see `DeleteInvalidLTR`).
-        // S11.7: the scalar comes off the shared twin; `ctx_sps_ref` answers
-        // `None` where the raw answered null, and the C++ dereferences here
-        // unconditionally — so an absent SPS keeps the raw form's shape by
-        // contributing the same `1 << 0` this expression would have read from a
-        // zeroed record.
+        // The C++ dereferences here unconditionally; an absent SPS contributes the
+        // same `1 << 0` this expression would have read from a zeroed record.
         let iMaxFrameNumPlus1 = 1 << ctx_sps_ref(pCtx).map_or(0, |s| s.uiLog2MaxFrameNum);
-        // **S11.24 — the record cursor splits into a read and a write.** The
-        // `addr_of_mut!` here was one binding doing two jobs across the `pLtr`
-        // borrow: it carried `uiIdrPicId` into the condition and took the IDR
-        // write in the first arm. Those separate cleanly — the read is a scalar
-        // hoisted above the borrow (exactly what `FilterLTRMarkingFeedback` below
-        // already does with this same field), and the write is a one-statement
-        // borrow on a path where `pLtr` is dead, so the two never coexist. This is
-        // the shape, not a special case: the raw was standing in for a borrow
-        // whose *width* was wrong, never for one the checker could not have.
         let kuiIdrPicId = pCtx.param().sDependencyLayers[iLayerId as usize].uiIdrPicId;
         let pLtr = ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
 
@@ -1196,8 +1004,6 @@ pub fn FilterLTRMarkingFeedback(
     pCtx: &mut sWelsEncCtx,
     pLTRMarkingFeedback: &mut SLTRMarkingFeedback,
 ) {
-    // T9.H / T9.X — as [`FilterLTRRecoveryRequest`]: upstream
-    // (`ref_list_mgr_svc.cpp:563`) guards neither pointer.
     if pCtx.param_opt().is_none() {
         return;
     }
@@ -1205,8 +1011,6 @@ pub fn FilterLTRMarkingFeedback(
     if iLayerId < 0 || iLayerId >= pCtx.param().iSpatialLayerNum {
         return;
     }
-    // A7, §4.6 reorder: the two parameter reads are scalars and come out before
-    // the LTR state's `&mut`. T9.H3 asked for the same order; the flip enforces it.
     let kbEnableLtr = pCtx.param().bEnableLongTermReference;
     let kuiIdrPicId = pCtx.param().sDependencyLayers[iLayerId as usize].uiIdrPicId;
     let pLtr = ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
@@ -1227,8 +1031,6 @@ pub fn WelsBuildRefList(
     kiPOC: i32,
     iBestLtrRefIdx: i32,
 ) -> bool {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.param_opt().is_none() || current_layer_ref(pCtx).is_none() {
         return false;
     }
@@ -1236,18 +1038,8 @@ pub fn WelsBuildRefList(
     if pCtx.ref_list(uiDid).is_none() {
         return false;
     }
-    // **A3: the list is re-derived at each read, not held.** This body writes
-    // `iNumRef0`, `pRefList0` and the layer's `pRefOri` between its reads of the
-    // list, and calls `WelsResetRefList` / `ResetLtrState` on the other arm — a
-    // live borrow of one field cannot span writes to the others. The accessor is
-    // a bounds check and a field projection, and this runs once per frame.
-    // T9.H3: the held LTR binding is gone — the state is touched twice in this
-    // body (one read in the branch condition, one write on recovery), and each
-    // touch borrows inline for its own expression.
     let kiNumRef = pCtx.param().iNumRefFrame;
     let kuiTid = pCtx.uiTemporalId;
-    // S11.24: one read of one field, so the cursor is that field's value. See
-    // `WelsUpdateRefList` for why the whole family reduces this way.
     let kiFrameNum = pCtx.param().sDependencyLayers[uiDid].iFrameNum;
 
     pCtx.iNumRef0 = 0;
@@ -1307,39 +1099,18 @@ pub fn WelsBuildRefList(
 
 /// Invokes VPP UpdateBlockIdcForScreen to update static block map.
 pub fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.vaa().is_none() || pCtx.pVpp.is_none() {
         return;
     }
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
     //
-    // **§4.6, reorder, and A5 had to**: `vaa_ext` derives from `&self`, so the
-    // pointer it answers is a child of a shared retag of the context and dies at
-    // the next `ref_list_mut` in the loop below. The old raw accessor read the
-    // `Box`'s slot as a value and so carried the block's own provenance, which
-    // survived that (F71/F211). Both fields wanted here are `Copy` — an `i32`
-    // and a raw `*mut u8` — so they are read out before the loop and the
-    // derivation never spans the `&mut`.
-    // S11.3: `None` for camera content, where no extension exists and the walk
-    // below has nothing to consider; `Some` under `SCREEN_CONTENT_REAL_TIME`
-    // since P10.1.B3 (D-scc-1).
+    // `None` for camera content, where no extension exists and the walk
+    // below has nothing to consider; `Some` under `SCREEN_CONTENT_REAL_TIME`.
     let Some(pVaaExt) = pCtx.vaa_ext_ref() else {
         return;
     };
     let iVaaBestRefFrameNum = pVaaExt.iVaaBestRefFrameNum;
     let pVaaBestBlockStaticIdc = pVaaExt.pVaaBestBlockStaticIdc;
-    // §4.6, reorder: the roots and scalars first, then the list per iteration,
-    // held only across the two reads that need it. **S3.B1**: the vpp is *taken*
-    // for the loop — the box moves out of the context, so the per-iteration
-    // `ref_list_mut` borrow and the vpp uses are borrows of two different owners,
-    // which is the fact the old raw-copy spelling was expressing.
-    //
-    // **S11.24: it is now taken in fact.** This comment described `with_vpp`'s
-    // shape while the line below it read the slot raw — the disjointness was
-    // real but argued, and the loop's `ref_list_mut` is exactly the whole-context
-    // reborrow that made a `&mut` off the context unusable here. Moving the box
-    // out says it to the compiler instead.
     let uiDid = pCtx.uiDependencyId as usize;
     let idEnc = pCtx.pEncPic;
     let kiNumRef0 = pCtx.iNumRef0 as usize;
@@ -1355,19 +1126,12 @@ pub fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
             // **The block-static grid is the *source* picture's**, `(w >> 3) *
             // (h >> 3)` of its aligned size — the same grid `SetBlockStaticIdcToMd`
             // reads back with `kiBlocks = (kiMbWidth << 1) * (kiMbHeight << 1)`, and
-            // the same one `DetectSceneChangeScreen` wrote. Read from the
-            // preprocessor's pool, which `with_vpp` has made a separate owner, before
-            // the context borrow below begins.
+            // the same one `DetectSceneChangeScreen` wrote.
             let kiBlocksInFrame = {
                 let src_pic = pVpp.m_pSpatialPicPool.get(idSrc);
                 ((src_pic.iWidthInPixel >> 3) * (src_pic.iHeightInPixel >> 3)).max(0) as usize
             };
 
-            // §4.6's combined accessor, and this site is why it exists: the row the
-            // plugin fills lives in the extension and the reconstruction it is
-            // measured against lives in the reference list, and both must be live at
-            // the call. Two pools again, too — the reference is a reconstruction
-            // picture, the source a spatial source picture.
             let (pVaaExtMut, pRefList) = pCtx.vaa_ext_and_ref_list_mut(uiDid);
             let (Some(pVaaExtMut), Some(pRefList)) = (pVaaExtMut, pRefList) else {
                 continue;
@@ -1402,8 +1166,7 @@ pub fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
 
 /// Serializes slice header reference picture reordering syntax and marking flags.
 /// The context values `WelsUpdateSliceHeaderSyntax` reads, resolved once by its
-/// caller — S11.12. Every field was a read through `&mut sWelsEncCtx` inside the
-/// slice loop; none of them can change while that loop runs, because the loop
+/// caller. None of them can change while that loop runs, because the loop
 /// writes only slice headers.
 pub struct SliceHeaderSyntaxIn {
     pub iNumRef0: i32,
@@ -1416,33 +1179,13 @@ pub struct SliceHeaderSyntaxIn {
     pub iLongTermPicNum: [Option<u16>; MAX_REFERENCE_REORDER_COUNT_NUM],
 }
 
-/// **S11.12: the context parameter is gone entirely.**
-///
-/// It was `&mut sWelsEncCtx` beside a `&mut SDqLayer` *that lives inside that
-/// context* — the shape F71's slot read existed to keep apart, and the last
-/// reason `current_layer`'s raw survived at a call site. Every one of this
-/// body's sixteen context uses was a **read**, and all of them are either
-/// loop-invariant or indexed by the reordering slot, so the caller computes
-/// them and passes the answers. Nothing here needs the context at all now, and
-/// the caller holds only a `&mut SDqLayer` — no whole-vs-field conflict, and
-/// no raw.
 pub fn WelsUpdateSliceHeaderSyntax(
     kSyn: &SliceHeaderSyntaxIn,
     iAbsDiffPicNumMinus1: i32,
     pCurDq: &mut SDqLayer,
     uiFrameType: i32,
 ) {
-    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one, so the guard is not
-    // merely dead — it is inexpressible. Nothing replaces it.
-    // T9.E2i (the close's Miri verdict, F114b's shape): the count is read
-    // through the parameter — `current_layer_expect(pCtx).iMaxSliceNum` was a
-    // second, independent path to the same object this function's `&mut`
-    // already protects, and the read popped the protector.
     let kiCountSliceNum = pCurDq.iMaxSliceNum;
-    // T9.H3's rule, generalised: the loop writes only slice headers, so every
-    // context value it reads is fixed for the whole loop and is resolved once,
-    // by the caller, into `kSyn`.
     let bLtrMarkingFlag = kSyn.bLtrMarkingFlag;
 
     for iIdx in 0..kiCountSliceNum {
@@ -1481,11 +1224,8 @@ pub fn WelsUpdateSliceHeaderSyntax(
             pRefPicMark.bNoOutputOfPriorPicsFlag = false;
             pRefPicMark.bLongTermRefFlag = kSyn.bEnableLongTermReference;
         } else {
-            // Live since P10.1, when `InitializeExt` began accepting screen
-            // content: this arm drops `bLtrMarkingFlag` from the slice header's
-            // adaptive-marking decision. Measured at P10.3.D7 — 57 entries on
-            // `scc_text_320x192_k3` (its 57 non-IDR frames), zero on the camera
-            // control.
+            // This arm drops `bLtrMarkingFlag` from the slice header's
+            // adaptive-marking decision.
             if kSyn.bScreenContent {
                 pRefPicMark.bAdaptiveRefPicMarkingModeFlag = kSyn.bEnableLongTermReference;
             } else {
@@ -1497,9 +1237,6 @@ pub fn WelsUpdateSliceHeaderSyntax(
 
 /// Updates reference picture syntax and picture number delta in slice headers.
 pub fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32) {
-    // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
-    // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
-    // remaining conditions are unchanged.
     if pCtx.param_opt().is_none() || current_layer_ref(pCtx).is_none() {
         return;
     }
@@ -1512,7 +1249,6 @@ pub fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32)
         if let Some(id) = pCtx.pRefList0[0] {
             iAbsDiffPicNumMinus1 = pParamD.iFrameNum - (*pRefList).pic(id).iFrameNum - 1;
             if iAbsDiffPicNumMinus1 < 0 {
-                // S11.7: the guard is the `Option`, which is the same test.
                 if let Some(kpSps) = ctx_sps_ref(pCtx) {
                     iAbsDiffPicNumMinus1 += 1 << kpSps.uiLog2MaxFrameNum;
                 }
@@ -1521,11 +1257,6 @@ pub fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32)
     }
 
     if current_layer_ref(pCtx).is_some() {
-        // The null arm of the callee's old guard, hoisted with the reborrow.
-        // **S11.12: the seam is gone.** The callee's context reads are resolved
-        // here, while the context is unborrowed, and only then is the layer
-        // taken `&mut`. Whole-vs-field never arises because the two are not
-        // live at the same time.
         let uiDidSh = pCtx.uiDependencyId as usize;
         let kSyn = {
             let kpRefList = pCtx.ref_list(uiDidSh);
@@ -1569,10 +1300,7 @@ pub fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32)
 }
 
 /// Synchronizes reconstructed picture metadata back to the source input picture.
-/// **The one place the two pools meet by name** — `pOrigPic` is a spatial source
-/// picture, `pReconPic` a reconstruction picture. Two owners, so two references can
-/// be live at once, and the two handle types are what keep the arguments the right
-/// way round (session B's settlement, and the reason there are two).
+/// `pOrigPic` is a spatial source picture, `pReconPic` a reconstruction picture.
 pub fn UpdateOriginalPicInfo(pOrigPic: &mut SPicture, pReconPic: &SPicture) {
     pOrigPic.iPictureType = pReconPic.iPictureType;
     pOrigPic.iFramePoc = pReconPic.iFramePoc;
@@ -1592,11 +1320,6 @@ fn UpdateOriginalPicInfoFromCtx(pCtx: &mut sWelsEncCtx) {
     let (Some(idEnc), Some(idDec)) = (pCtx.pEncPic, pCtx.pDecPic) else {
         return;
     };
-    // S10.5a: two owners, said to the compiler instead of to Miri. The comment
-    // that stood here described taking the preprocess box out through
-    // `ctx_vpp_raw` so borrowck would grant the list borrow beside it; that is a
-    // slot read standing in for a disjointness `vpp_and_ref_list_mut` states
-    // directly, `pVpp` and `ppRefPicListExt` being two fields of one struct.
     let uiDid = pCtx.uiDependencyId as usize;
     let (pVpp, pRefList) = pCtx.vpp_and_ref_list_mut(uiDid);
     let (Some(pVpp), Some(pRefList)) = (pVpp, pRefList) else {
@@ -1608,17 +1331,10 @@ fn UpdateOriginalPicInfoFromCtx(pCtx: &mut sWelsEncCtx) {
 }
 
 pub fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWelsEncCtx) {
-    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one, so the guard is not
-    // merely dead — it is inexpressible. Nothing replaces it.
     let iDIdx = pCtx.uiDependencyId as i32;
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
     if pCtx.pVpp.is_some() && pCtx.vaa().is_some() {
-        // S10.5a: the scalars still come out first — they are reads of fields the
-        // combined borrow below also claims. What is gone is the "take the vpp
-        // through the slot so borrowck grants both" step: `vpp_and_ref_list_mut`
-        // projects the two fields from one borrow and says the same thing safely.
         let idEnc = pCtx.pEncPic;
         let uiMarkLongTermPicIdx = pCtx.vaa_expect().uiMarkLongTermPicIdx as i32;
         let (pVpp, pRefList) = pCtx.vpp_and_ref_list_mut(iDIdx as usize);
@@ -1635,17 +1351,11 @@ pub fn UpdateSrcPicListLosslessScreenRefSelectionWithLtr(pCtx: &mut sWelsEncCtx)
 }
 
 pub fn UpdateSrcPicList(pCtx: &mut sWelsEncCtx) {
-    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one, so the guard is not
-    // merely dead — it is inexpressible. Nothing replaces it.
     let iDIdx = pCtx.uiDependencyId as i32;
     UpdateOriginalPicInfoFromCtx(pCtx);
     PrefetchNextBuffer(pCtx);
     if pCtx.pVpp.is_some() {
         let idEnc = pCtx.pEncPic;
-        // S10.5a: `ctx_vpp_raw` was here so the `&mut` receiver and the shared
-        // list borrow would be "siblings off two allocations". They are two
-        // *fields*, which is a stronger statement and one the compiler can check.
         let (pVpp, pRefList) = pCtx.vpp_and_ref_list_mut(iDIdx as usize);
         let shortCount = pRefList
             .expect("the dependency layer's reference list")
@@ -1656,8 +1366,6 @@ pub fn UpdateSrcPicList(pCtx: &mut sWelsEncCtx) {
 
 /// Screen content specialized reference picture list update.
 pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if current_layer_ref(pCtx).is_none() || pCtx.param_opt().is_none() {
         return false;
     }
@@ -1665,16 +1373,6 @@ pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
     if pCtx.ref_list(uiDid).map_or(true, |l| l.pRef.is_empty()) {
         return false;
     }
-    // **T9.H3 — the held cursor is gone.** T9.G7's note stood here: the body held
-    // the LTR state raw across `LTRMarkProcessScreen`, which re-derives its own
-    // `&mut` to the *same* `SLTRState`. Nothing is held across those calls any
-    // more — each branch re-borrows `ctx_ltr_at` *after* its calls return, and the
-    // two reads in the `pDecPic` block borrow inline for one expression each. The
-    // borrow checker referees every coexistence; this function is dead code today
-    // (F192: screen-content mode is rejected at init), so the compiler is the
-    // *only* referee and the reshape moves derivations, never logic.
-    // S11.24: read-only, so the cursor is its three values — the same reduction
-    // `WelsUpdateRefList` documents, in the screen-path twin of that body.
     let (kiHighestTid, kiFrameNum, kiPOC) = {
         let pParamD = &pCtx.param().sDependencyLayers[uiDid];
         (pParamD.iHighestTemporalId, pParamD.iFrameNum, pParamD.iPOC)
@@ -1682,9 +1380,6 @@ pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
     let kuiTid = pCtx.uiTemporalId;
 
     if let Some(idDec) = pCtx.pDecPic {
-        // A3: as in `WelsUpdateRefList`, the list borrow is scoped to this block
-        // and the context scalars it needs are read out first, because the tail
-        // calls `DeleteNonSceneLTR` / `LTRMarkProcessScreen`.
         let uiTemporalId = pCtx.uiTemporalId;
         let uiDependencyId = pCtx.uiDependencyId;
         let bIsSceneLTR = ctx_ltr_at(pCtx, uiDid).bLTRMarkingFlag
@@ -1694,17 +1389,11 @@ pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
         let Some(pRefList) = pCtx.ref_list_mut(uiDid) else {
             return false;
         };
-        // The reconstruction picture, resolved once — S37: everything below either
-        // reads its geometry or writes its own fields, and the borrow ends before the
-        // reference-list shifts that would touch the pool again.
+        // The reconstruction picture, resolved once.
         let pDecPic: &mut SPicture = (*pRefList).pic_mut(idDec);
         let sDec = pDecPic.planes();
         if kiHighestTid == 0 || (kuiTid as i32) < kiHighestTid as i32 {
-            // T4b.3b: as above — `ref_list_mgr_svc.cpp:779`, the second of the
-            // encoder's two identical expand sites.
-            // T6.F4: the picture owns its planes, so the expansion is a method on it
-            // and `ExpandReferencingPicture`'s three raw origins are gone from the
-            // encoder entirely.
+            // `ref_list_mgr_svc.cpp:779`.
             pDecPic.expand_as_reference();
         }
 
@@ -1735,8 +1424,6 @@ pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
         }
     }
 
-    // Same dispatch and the same guard argument as `WelsUpdateRefList` above: this
-    // body is reached only through `RefStrategyKind::UpdateRefList`.
     pCtx.eRefStrategy.EndofUpdateRefList(pCtx);
     true
 }
@@ -1747,26 +1434,17 @@ pub fn WelsBuildRefListScreen(
     iPOC: i32,
     iBestLtrRefIdx: i32,
 ) -> bool {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.param_opt().is_none() || pCtx.vaa().is_none() || current_layer_ref(pCtx).is_none() {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    // A7, §4.6 reorder: this body writes `iNumRef0` and the layer's `pRefOri`, so
-    // the parameter borrow may not be held across them — both fields it wants are
-    // scalars.
     let iNumRef = pCtx.param().iNumRefFrame;
     let iLTRRefNum = pCtx.param().iLTRRefNum;
     // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
     //
-    // §4.6, reorder: the count is `Copy` and is read out here, because the loop
-    // below calls `GetRefFrameInfo`, which reaches the same block again — and
-    // `vaa_ext`'s answer is a child of a shared retag now, not the slot read that
-    // outlived every later derivation (F71/F211).
-    // S11.3: `None` for camera content, where zero available screen references
+    // `None` for camera content, where zero available screen references
     // is the value every camera preset computes here; the extension's own count
-    // under `SCREEN_CONTENT_REAL_TIME` since P10.1.B3 (D-scc-1).
+    // under `SCREEN_CONTENT_REAL_TIME`.
     let iNumOfAvailableRef = pCtx.vaa_ext_ref().map_or(0, |ext| ext.iNumOfAvailableRef);
     pCtx.iNumRef0 = 0;
 
@@ -1777,30 +1455,14 @@ pub fn WelsBuildRefListScreen(
         let mut pRefOri: Option<SrcPicId> = None;
 
         for idx in 0..iNumOfAvailableRef {
-            // **T9.H2, F192 — this is the site the finding is about.** It called
-            // `GetRefFrameInfo` while holding `pCtx: &mut sWelsEncCtx`, and the callee
-            // read the context back out of `CWelsPreProcess::m_pEncCtx`: a read through
-            // a stored raw of an allocation whose `&mut` is *strongly protected* for the
-            // duration of this call, which Miri refuses. The context is an argument now,
-            // so there is no second route and nothing to refuse.
-            //
-            // The scene-LTR flag is read out before the borrow (T9.G6's shape);
-            // the object itself is *taken* (S3.B1), so the `&mut self` receiver
-            // and the `&mut pCtx` argument are two owners for the call.
             let bSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
             if pCtx.pVpp.is_some() {
-                // S11.24: taken in fact — see `UpdateBlockStatic`. This is the
-                // site whose own doc comment (`GetRefFrameInfo`) names the shape:
-                // `&mut self` *is* this context's `pVpp`, and the call wants a
-                // `&mut` to the context beside it.
                 iLtrRefIdx = crate::encoder::encoder_context::with_vpp(pCtx, |pVpp, pCtx| {
                     pVpp.GetRefFrameInfo(pCtx, idx, bSceneLtr, &mut pRefOri)
                 });
             }
             let refOri = pRefOri.map(PicRef::Src);
             if iLtrRefIdx >= 0 && iLtrRefIdx <= iLTRRefNum {
-                // A3: the list is re-derived per read, not held — this loop
-                // writes `iNumRef0`, `pRefList0` and the layer's `pRefOri`.
                 let Some(idRefPic) = pCtx.ref_list(uiDid).expect("the dependency layer's reference list").pLongRefList[iLtrRefIdx as usize] else {
                     continue;
                 };
@@ -1816,13 +1478,7 @@ pub fn WelsBuildRefListScreen(
                     current_layer_expect_mut(pCtx).pRefOri[num0] = refOri;
                     pCtx.pRefList0[num0] = Some(idRefPic);
                     pCtx.iNumRef0 += 1;
-                    // `ref_list_mgr_svc.cpp:829-834` — **P10.2.C2.** These five lines
-                    // are `scc_verdicts.sh`'s second observable on the LTR rows: they
-                    // say which reference the verdict actually selected, which a
-                    // matching verdict sequence alone does not. Text, level and
-                    // argument order come from the C++ and are the referee's input.
-                    // §4.6: every value is read out before the log call, so no borrow
-                    // spans it.
+                    // `ref_list_mgr_svc.cpp:829-834`.
                     let (kiRefFrameNum, kuiRefTid, kbRefIsSceneLtr) = {
                         let pRefPic = pCtx
                             .ref_list(uiDid)
@@ -1907,7 +1563,6 @@ pub fn WelsBuildRefListScreen(
             ),
         );
         for j in 0..iNumRef {
-            // A3: the list is re-derived per read, as everywhere else in this body.
             let pARefPicture = pCtx
                 .ref_list(uiDid)
                 .expect("the dependency layer's reference list")
@@ -1964,12 +1619,6 @@ pub fn WelsMarkMMCORefInfoScreen(
     pCurDq: &mut SDqLayer,
     kiCountSliceNum: i32,
 ) {
-    // **T9.H3 — narrowed (S54).** The context parameter is gone: the body read
-    // exactly two `ctx_param` scalars through it, and its single caller
-    // (`WelsMarkPicScreen`) passes them by value now. The LTR state arrives as a
-    // shared borrow — the body only reads it — which the caller's own `&mut`
-    // re-borrows for the call, so no second route to the context exists inside
-    // and T9.X's protector argument is not needed at all.
     if kiCountSliceNum <= 0 {
         return;
     }
@@ -1992,32 +1641,15 @@ pub fn WelsMarkMMCORefInfoScreen(
         pRefPicMark.uiMmcoCount += 1;
     }
 
-    // S11.2c: the marking is copied out before the call, which ends the base
-    // slice's borrow — the callee needs the layer `&mut` again to reach the
-    // other slices, and the argument was always a by-value copy.
     let kBaseMarking = *pRefPicMark;
     WelsMarkMMCORefInfoWithBase(pCurDq, kBaseMarking, kiCountSliceNum);
 }
 
 pub fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if pCtx.param_opt().is_none() || current_layer_ref(pCtx).is_none() {
         return;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    // **T9.H3 — roots and scalars first, the LTR reference last (T9.G4 inverted).**
-    // T9.G7's held-raw note stood here. Every whole-context derivation this body
-    // needs — the param root, the ref list, the SPS root, the current layer for
-    // the MMCO call, and the two context scalars — is taken *before* the LTR
-    // state is borrowed, so one `&mut SLTRState` spans the body with only raw
-    // derefs and locals beside it, and the tail call reaches the context no
-    // second time (`WelsMarkMMCORefInfoScreen` is narrowed to the two scalars it
-    // read). Dead code today (F192: screen-content mode is rejected at init) —
-    // the borrow checker is the only referee, and the reshape moves derivations,
-    // never logic.
-    // A7, §4.6 reorder: the parameter block is read into scalars here — the borrow
-    // may not span `ref_list_and_ltr_mut` below.
     let gopSize = pCtx.param().uiGopSize;
     let kbEnableLtr = pCtx.param().bEnableLongTermReference;
     let iNumRef = pCtx.param().iNumRefFrame;
@@ -2031,25 +1663,17 @@ pub fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
     }
 
     let iLongRefNum = iNumRef - STR_ROOM;
-    // §4.6: one scalar out of the list, read before the LTR borrow is taken.
     let bIsRefListNotFull = (pCtx
         .ref_list(uiDid)
         .expect("the dependency layer's reference list")
         .uiLongRefCount as i32)
         < iLongRefNum;
-    // S11.24: the SPS root was raw so it would outlive the `ref_list_and_ltr_mut`
-    // borrow taken eight lines down. Its one use is a shift width, so the scalar
-    // comes out here and nothing spans that borrow. `None` contributes the same
-    // `1 << 0` a zeroed record would have, as in `FilterLTRRecoveryRequest`.
+    // `None` contributes the same `1 << 0` a zeroed record would have, as in
+    // `FilterLTRRecoveryRequest`.
     let kuiLog2MaxFrameNum = ctx_sps_ref(pCtx).map_or(0, |s| s.uiLog2MaxFrameNum);
     let kuiTid = pCtx.uiTemporalId;
     let kbSceneLtr = pCtx.bCurFrameMarkedAsSceneLtr;
     let iSliceNum = current_layer_expect(pCtx).iMaxSliceNum;
-    // **S11.11**: the T9.G6 hoist is reversed here as in `WelsMarkPic` — a
-    // `&mut SDqLayer` must be taken *after* the context's other borrows, not
-    // before them, so it moves to its one use at the call below.
-    // A3: the list and the LTR state are read and written in the same branches
-    // here, so they come out of one borrow — §4.6's combined accessor.
     let (pRefList, pLtr) = pCtx.ref_list_and_ltr_mut(uiDid);
     let Some(pRefList) = pRefList else {
         return;
@@ -2132,9 +1756,6 @@ pub fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
         }
     }
 
-    // S11.11: the LTR record is `Copy`-read out so it and the layer's `&mut`
-    // are not both live borrows of the context at the call — `WelsMarkPic`'s
-    // shape, and the callee only reads it.
     let kLtr = *pLtr;
     WelsMarkMMCORefInfoScreen(
         iNumRef,
@@ -2150,29 +1771,18 @@ pub fn WelsMarkPicScreen(pCtx: &mut sWelsEncCtx) {
 pub fn DoNothing(_pCtx: &mut sWelsEncCtx) {}
 
 // ============================================================================
-// Reference strategy — T4b.2b
+// Reference strategy
 // ============================================================================
 
 /// Which reference-list strategy an encoder runs.
 ///
 /// C++ declares three classes deriving from `IWelsReferenceStrategy`
 /// (`ref_list_mgr_svc.h`): `CWelsReference_TemporalLayer`, `CWelsReference_Screen`
-/// and `CWelsReference_LosslessWithLtr`. **None of them declares a data member**
-/// beyond the `m_pEncoderCtx` back-pointer the first one introduces, so the port
-/// already had them as one object struct with three static vtables. What actually
-/// varied was the vtable, and this enum is that vtable — three variants, seven
-/// methods, five of which `match`.
-///
-/// **The back-pointer is gone with the object.** Every call site already holds `pCtx`
-/// and used to reach the strategy *through* it, only for the strategy to hand `pCtx`
-/// straight back from `m_pEncoderCtx`. The methods take it as a parameter instead;
-/// `Init` existed only to store it and `Destroy` only to free the box, so both die
-/// rather than convert. This is T8's stored-context-back-pointer shape, deleted.
+/// and `CWelsReference_LosslessWithLtr`.
 ///
 /// `TemporalLayer = 0` and `#[derive(Default)]` on it: `sWelsEncCtx` is
 /// `mem::zeroed()`-constructed (`encoder_context.rs:514`), so the all-zero pattern has
-/// to be a declared variant. It is, and it is also the variant
-/// `CreateReferenceStrategy`'s `_ =>` arm picked (S21).
+/// to be a declared variant.
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum RefStrategyKind {
@@ -2186,17 +1796,7 @@ pub enum RefStrategyKind {
 }
 
 impl RefStrategyKind {
-    /// `IWelsReferenceStrategy::CreateReferenceStrategy` — the whole factory, which
-    /// was only ever a two-level `match` picking one of three vtables.
-    ///
-    /// **S23**: the selectors are `iUsageType` and `bEnableLongTermReference`, and
-    /// neither can change behind this choice. `WelsEncoderParamAdjust` *rejects* a
-    /// changed `iUsageType` outright (`wels_encoder_ext.rs:697`,
-    /// `ENC_RETURN_UNSUPPORTED_PARA`), and `bEnableLongTermReference` is one of the
-    /// fields in its `bNeedReset` predicate, so changing it forces the full
-    /// uninit/init that re-runs this selection. There is no lag to preserve and the
-    /// field needs no `eInstalled…` name — unlike `SWelsRcFunc`'s `eInstalledMode`,
-    /// which is the same question answered the other way (T4b.1b).
+    /// `IWelsReferenceStrategy::CreateReferenceStrategy`.
     #[inline]
     pub fn Select(keUsageType: EUsageType, kbLtrEnabled: bool) -> Self {
         match keUsageType {
@@ -2252,12 +1852,6 @@ impl RefStrategyKind {
 
     /// `EndofUpdateRefList` — `ref_list_mgr_svc.cpp:1041` / `:1057` / `:1073`. The one
     /// method where all three variants differ.
-    ///
-    /// **S10.5a: the `# Safety` clause is gone with the `unsafe`.** All three arms
-    /// went safe in this checkpoint, so the obligation this stated — "`pCtx` must be
-    /// a live encoder context" — is now the `&mut sWelsEncCtx`'s, which is where it
-    /// always belonged. The cascade is what found this: the declaration carried no
-    /// raw pointer and its body's last unsafe call went with `UpdateSrcPicList`.
     #[inline]
     pub fn EndofUpdateRefList(self, pCtx: &mut sWelsEncCtx) {
         match self {
@@ -2289,18 +1883,12 @@ mod tests {
 
     #[test]
     fn test_ref_list_mgr_noop_callback() {
-        // T9.H11: the context argument is `&mut` now, so the null goes — see
-        // `rc.rs`'s `test_rc_intentional_noop_callbacks` for the reasoning. A
-        // `&mut sWelsEncCtx` cannot be null, so the type enforces more than the
-        // old `null_mut()` argument asserted.
         let mut ctx = Box::new(sWelsEncCtx::default());
         DoNothing(&mut ctx);
     }
 
-    /// The whole of `CreateReferenceStrategy`, which used to be a two-level `match`
-    /// picking one of three static vtables. LTR only discriminates for screen
-    /// content — a camera-content encoder gets `TemporalLayer` either way, which is
-    /// the arm the old factory's `_ =>` covered.
+    /// LTR only discriminates for screen content — a camera-content encoder gets
+    /// `TemporalLayer` either way.
     #[test]
     fn ref_strategy_selection_matches_the_factory() {
         use EUsageType::*;
@@ -2322,10 +1910,8 @@ mod tests {
     }
 
     /// `sWelsEncCtx` is `mem::zeroed()`-constructed, so the zero discriminant has to
-    /// be the variant the old factory's `_ =>` arm produced. S21, as an assertion
-    /// rather than a sentence.
+    /// be the variant the old factory's `_ =>` arm produced.
     #[test]
-    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn ref_strategy_zero_is_the_default_arm() {
         assert_eq!(RefStrategyKind::default(), RefStrategyKind::TemporalLayer);

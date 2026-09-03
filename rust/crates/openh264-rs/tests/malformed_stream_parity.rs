@@ -1,24 +1,10 @@
-//! Malformed-stream error-code parity — Phase 3's **T3.0** gate.
+//! Malformed-stream error-code parity.
 //!
-//! Written against the **unconverted** bitstream layer (raw `SBitStringAux` reader,
-//! raw `SDataBuffer`, `nalu.rs` payload pointers) so that it pins today's behaviour
-//! on the input class the conformance gates never reach: truncated NALs, emulation-
-//! prevention edges, degenerate NALs and corrupt NAL headers. Every seam of Phase 3
-//! rewrites code this test drives, and the golden tables below are the referee for
+//! Pins today's behaviour on the input class the conformance gates never reach:
+//! truncated NALs, emulation-prevention edges, degenerate NALs and corrupt NAL
+//! headers.
 //!
-//! * the **P6 guard-byte decision** (`phase1_findings.md` §F4 — the refill predicate
-//!   lets the cursor sit one byte past the RBSP end and then loads two bytes, so
-//!   off-by-one truncations at a refill boundary are exactly what must not shift),
-//! * the **CABAC end-of-slice byte ladder** (`cabac_decoder.rs:732-784`, seam T3.2),
-//! * and the **`nalu.rs` range conversion** (seam T3.3), whose
-//!   `BsGetTrailingBits(pNal + len - 1)` sites underflowed on a zero-length payload
-//!   — **F15**, which this test found on its first run and T3.3 fixed; the rows it
-//!   withheld until then now carry real outcomes.
-//!
-//! Fuzzing was removed from Phase 3 by direction (2026-08-10) and the plan's exit
-//! gate edited to match, so this file is the phase's **only** malformed-input
-//! instrument. It is therefore not to be weakened. The golden tables are regenerated
-//! only by a deliberate act:
+//! The golden tables are regenerated only by a deliberate act:
 //!
 //! ```text
 //! UPDATE_MALFORMED_GOLDEN=1 cargo test --test malformed_stream_parity
@@ -31,9 +17,8 @@
 //!
 //! The exact `DecodeFrame2` return (`DECODING_STATE`, not "nonzero"), the
 //! `iBufferStatus` outcome of every call, the `NUM_OF_FRAMES_REMAINING_IN_BUFFER`
-//! answer at end of stream, the **decoded-frame count** (S13: frame counts before
-//! hashes), the dimensions of the first emitted frame, and one SHA-1 over every
-//! emitted plane in emission order.
+//! answer at end of stream, the **decoded-frame count**, the dimensions of the first
+//! emitted frame, and one SHA-1 over every emitted plane in emission order.
 //!
 //! # Why the corpus runs in a child process
 //!
@@ -113,11 +98,8 @@ const BASE_STREAMS: &[&str] = &[
     "BA_MW_D.264",
     "BA_MW_D_IDR_LOST.264",
     "BA_MW_D_P_LOST.264",
-    // **F77 (T8.C1).** The only stream in `res/` that changes resolution mid-stream
-    // (352x288 -> 640x480 -> 352x288), and the reason it is here: until T8.C1 the port
-    // aborted the process on it through an `extern "C"` thunk, because the pool built
-    // for the opening sequence was never rebuilt at the new size. It was in **no** gate
-    // — not the conformance 60, not this corpus, not the sweeps — so nothing said so.
+    // The only stream in `res/` that changes resolution mid-stream
+    // (352x288 -> 640x480 -> 352x288).
     "Error_I_P.264",
 ];
 
@@ -129,8 +111,7 @@ const BASE_STREAMS: &[&str] = &[
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Feed {
     /// Split into Annex-B units and fed one NAL per `DecodeFrame2` call — the flow
-    /// `decoder_conformance_test.rs` uses, and therefore the flow whose error codes
-    /// the gate set already constrains.
+    /// `decoder_conformance_test.rs` uses.
     AnnexB,
     /// One `DecodeFrame2` call with the exact bytes, start-code detection included.
     Raw,
@@ -570,13 +551,6 @@ fn rle<T: PartialEq + Copy, F: Fn(T) -> String>(values: &[T], show: F) -> String
 
 /// What a corpus entry produced. `Aborted` is a run whose process died,
 /// reconstructed by the parent from the worker's exit status.
-///
-/// A third variant, `Withheld`, existed from T3.0 until T3.3: entries that drove
-/// **F15** were not run at all, because that input had no profile-independent
-/// behaviour to record (debug aborted; release read out of bounds). T3.3 fixed the
-/// sites, both profiles now agree, and the 105 `WITHHELD` rows filled in with real
-/// outcomes — the seam's evidence, and the reason the variant is gone rather than
-/// merely unused.
 enum Outcome {
     Ran(Run, String),
     Aborted(String),
@@ -614,14 +588,8 @@ const COLUMN_HEADER: &str =
     "# columns: variant | bytes | calls | drain | frames | dims | planes_sha1 | ret_rle | bufstatus_rle";
 
 /// Emitted into every table so a reader knows these rows have an external
-/// referee and how to re-run it.
-///
-/// The note says how to check, not what the check returned. A generated file
-/// cannot carry a measurement it did not take (S33), and an agreement tally
-/// baked in here would go stale silently the next time anything moves; the
-/// measured per-table numbers live in the session log, dated and attributed to
-/// a commit. What is durable — and what was missing until Phase 5 session U —
-/// is that the referee reaches *every* row rather than the `trunc.*` ones only.
+/// referee and how to re-run it. The note says how to check, not what the check
+/// returned.
 const REFEREE_NOTE: &str = "# referee: tools/ecref (the C++ decoder). Re-run every row of every table with\n\
      #   MALFORMED_DUMP_DIR=/tmp/corpus rust/tools/ecref/compare_all.sh\n\
      # which dumps this corpus and replays it through `ecref --stdin`. Rows are the\n\
@@ -757,10 +725,6 @@ fn table(base: &str, data: &[u8], offsets: &[usize], cases: &[Case], test_name: 
 
 /// Rows whose plane hash is **expected** to differ from the C++ decoder's, with the
 /// reason, emitted into the table's header so regeneration cannot lose it.
-///
-/// This is the one place in the suite where "the port and the C++ disagree" is a
-/// recorded position rather than a defect, so it says exactly what was measured and
-/// how to re-measure it. Everything else in every table is the C++'s answer.
 fn expected_divergent_note(base: &str) -> Vec<&'static str> {
     if !base.ends_with("CABA2_SVA_B.264") {
         return Vec::new();
@@ -799,21 +763,13 @@ fn expected_divergent_note(base: &str) -> Vec<&'static str> {
 
 /// Set to a directory to write the corpus's bytes instead of decoding it.
 ///
-/// `tools/ecref` answers "what does the C++ decoder do on these bytes", and for
-/// most of this corpus that question used to be unaskable. A `trunc.*` entry is
-/// `stream[..n]`, so `ecref <stream> <n>` names it exactly; the `tail.*`,
-/// `hdr*.*` and degenerate entries are **built here** — a prefix plus a
-/// synthetic suffix, a prefix with one header byte overwritten, parameter sets
-/// lifted out of one stream and re-sequenced — and no `(file, length)` pair
-/// names any of them. 389 of the corpus's 2707 rows were pinned against the
-/// port's own previous output for exactly that reason, which is the blindness
-/// F43–F46 lived behind (session T's hand-off §4).
-///
-/// So the harness hands the bytes over: one file per entry plus a manifest
-/// carrying the feed mode, and `tools/ecref/compare.sh` replays every row
-/// through `ecref --stdin`. The dump is the whole corpus, not the 389 — a
-/// `trunc.*` row now has two independent routes to the same C++ answer, and
-/// `compare.sh` checks they agree, which is what keeps the dump honest.
+/// A `trunc.*` entry is `stream[..n]`, so `ecref <stream> <n>` names it exactly;
+/// the `tail.*`, `hdr*.*` and degenerate entries are **built here** — a prefix
+/// plus a synthetic suffix, a prefix with one header byte overwritten, parameter
+/// sets lifted out of one stream and re-sequenced — and no `(file, length)` pair
+/// names any of them. The harness hands the bytes over: one file per entry plus a
+/// manifest carrying the feed mode, and `tools/ecref/compare.sh` replays every row
+/// through `ecref --stdin`.
 const ENV_DUMP_DIR: &str = "MALFORMED_DUMP_DIR";
 
 /// Writes `<dir>/<stem>/<variant>.bin` per entry plus `<dir>/<stem>.manifest`
@@ -992,12 +948,9 @@ stream_case!(malformed_qcif_2p_i_allipcm, "QCIF_2P_I_allIPCM.264");
 stream_case!(malformed_ba_mw_d, "BA_MW_D.264");
 stream_case!(malformed_ba_mw_d_idr_lost, "BA_MW_D_IDR_LOST.264");
 stream_case!(malformed_ba_mw_d_p_lost, "BA_MW_D_P_LOST.264");
-// Phase 8 session C, F77. The resolution-change stream — see BASE_STREAMS.
+// The resolution-change stream — see BASE_STREAMS.
 stream_case!(malformed_error_i_p, "Error_I_P.264");
-// Phase 5 session S. Every stream above is 176x144 or wider, and this corpus
-// "inherits the conformance streams' SPS dimensions" (F21's note) — so the narrow
-// class F21 exists for had no malformed coverage at all, and F34 is what one blind
-// spot in that class already cost. `narrow_16x16.264` is 711 bytes and one
+// Every stream above is 176x144 or wider. `narrow_16x16.264` is 711 bytes and one
 // macroblock per frame: the cheapest stream in the tree, and the only one whose
 // truncations reach the concealment paths with no neighbour to lean on.
 stream_case!(malformed_narrow_16x16, "narrow_16x16.264");

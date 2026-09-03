@@ -1,69 +1,14 @@
-//! Differential tests: `safe::bits` against the implementations the codec used
-//! before Phase 3 (plan §2.2.2, taxonomy T3).
+//! Differential tests: `safe::bits` against the implementations the codec used.
 //!
 //! This file lives outside `src/`, so unlike everything under `src/safe/` it may use
 //! `unsafe` — it has to, because the reference implementations are raw-pointer code.
 //! Every `unsafe` block here drives the old side of a comparison.
 //!
-//! Running this under Miri additionally checks those old implementations for UB; see
-//! `rust/docs/phase1_findings.md`.
-//!
-//! # The reader half retired at T3.1b (plan §2, differential retirement)
-//!
-//! T3.1a moved the reader's *bodies* onto [`BsCursor`] behind unchanged raw
-//! signatures, and this file's reader tests were retired *in place* then: they stopped
-//! comparing two implementations and began proving the shim was faithful.
-//! **T3.1b deleted the shim**, so there is no longer a second implementation for them
-//! to compare against, and tests that compare a thing to itself are worse than no
-//! tests — they read as coverage. They are deleted here, in the commit that deletes
-//! what they tested, and their burden passes to:
-//!
-//! * `tests/malformed_stream_parity.rs` (T3.0) — 2316 golden rows recorded against the
-//!   *raw* reader, covering error-code parity at every truncation and slop boundary,
-//!   still holding byte for byte;
-//! * the 53 conformance hashes and the frame counts beside them;
-//! * `src/safe/bits.rs`'s own unit tests, which keep the properties (the slop
-//!   predicate, the 16-bit ceiling, the Exp-Golomb spec examples).
-//!
-//! That handover is why T3.0 was built before the conversion rather than after it.
-//!
 //! * **`GetLeadingZeroBits` and `BsGetTrailingBits`** — the table-driven originals are
 //!   still in `dec_golomb.rs` and still used, so these compare real alternatives.
-//! * **The CAVLC mode** (plan §2.2.2 [P3]) — against a *frozen transliteration* of
+//! * **The CAVLC mode** — against a *frozen transliteration* of
 //!   `BsStartCavlc`/`BsEndCavlc`, kept below because it is the only executable
 //!   statement of what parity means for that pair now that the port's copy is gone.
-//! # The writer half retired at T3.4 (plan §2, differential retirement)
-//!
-//! T3.4 face 2 moved `vlc_encoder.rs`'s writer family onto [`BsWriter`] and deleted
-//! the raw bodies, so the same rule that retired the reader half applies: with one
-//! implementation left there is nothing to compare, and a test that compares a thing
-//! to itself reads as coverage it does not provide. `writer_op_sequences_are_byte_
-//! identical`, `writer_matches_at_the_accumulator_boundary`,
-//! `writer_snapshot_and_rollback_matches_the_cursor_stash`, `rbsp_trailing_bits_
-//! matches` and `writer_and_the_32_bit_word` are deleted here, in the commit that
-//! deletes what they tested. Their burden passes to:
-//!
-//! * the **encoder sweeps**, 341 configurations in both build profiles, which are
-//!   byte-exactness against the C++ encoder itself — a stronger referee for the
-//!   writer than any in-tree comparison, and the one F2 named;
-//! * `src/safe/bits.rs`'s own unit tests, which keep the properties: the
-//!   accumulator boundary, the whole-word flush, the snapshot/rollback round trip,
-//!   `te(v)`, `align`'s one-bit padding, and the out-of-space panic;
-//! * `written_streams_read_back_through_the_old_reader` below, which still closes
-//!   the writer-to-reader loop.
-//!
-//! **F5 closed with them** (`phase1_findings.md`). The finding was that the
-//! canonical writer's `uiCurBits << iLeftBits` panics in a debug build when
-//! `iLeftBits == 32`, and its own "who fixes it" line named this commit: *"Phase
-//! 3.2, in the commit that collapses the four writer copies (F2) — the fix is the
-//! same one `BsWriter` already carries."* Nothing was repaired; the expression was
-//! deleted along with the body holding it, and the replacement already folded the
-//! shift away. The path was unreachable (no `BsWriteBits` width in `src/encoder/`
-//! reaches 32), which is why the sweeps cannot tell the difference and why this is
-//! a deletion rather than a behaviour change.
-//!
-//! # What is still a genuine two-implementation comparison
-//!
 //! * **`BsSizeUE`/`BsSizeSE`** — the table-driven originals survive in
 //!   `vlc_encoder.rs` because the mode-decision cost functions want a code length
 //!   without writing anything, so `exp_golomb_sizes_match_the_table_driven_versions`
@@ -81,10 +26,9 @@ use openh264_rs::decoder::dec_golomb::{
 use openh264_rs::encoder::vlc_encoder::{BsSizeSE, BsSizeUE};
 use openh264_rs::safe::bits::{size_se, size_ue, trailing_bits, BsCursor, BsWriter};
 
-/// Sample sizes are cut hard under Miri, which runs ~100x slower and would otherwise
-/// turn a phase-exit gate into an hour. The *shapes* tested are identical — every
-/// bit phase, every boundary, every operation kind — only the randomised round counts
-/// shrink, and the full-size run happens on every `cargo test`.
+/// Sample sizes are cut hard under Miri, which runs ~100x slower. The *shapes* tested
+/// are identical — every bit phase, every boundary, every operation kind — only the
+/// randomised round counts shrink, and the full-size run happens on every `cargo test`.
 fn scale(n: usize) -> usize {
     if cfg!(miri) {
         (n / 25).max(2)
@@ -93,7 +37,7 @@ fn scale(n: usize) -> usize {
     }
 }
 
-/// The RBSP plus the slack the C++ reader relies on. See `phase1_findings.md` §F4:
+/// The RBSP plus the slack the C++ reader relies on.
 /// `dump_bits_aux` may sit one byte past the logical end and read two bytes there, and
 /// `BsEndCavlc` primes four bytes at an arbitrary byte offset, so the *allocation* must
 /// extend past the declared RBSP for the old code to be in bounds at all. Eight bytes,
@@ -133,15 +77,13 @@ fn trailing_bits_matches_for_every_byte() {
 }
 
 // ===========================================================================
-// CAVLC mode vs. a frozen BsStartCavlc/BsEndCavlc  (plan §2.2.2 [P3])
+// CAVLC mode vs. a frozen BsStartCavlc/BsEndCavlc
 // ===========================================================================
 
 /// The reader state the C++ pair operated on, as a plain struct.
 ///
-/// This is deliberately **not** `SBitStringAux`: the port's copy of that struct is on
-/// its way out (T3.3/T3.4), and pinning this comparison to it would make the reference
-/// implementation drift with the refactor it is supposed to be judging. The five fields
-/// below are the ones `BsStartCavlc`/`BsEndCavlc` read or write, expressed as offsets.
+/// The five fields below are the ones `BsStartCavlc`/`BsEndCavlc` read or write,
+/// expressed as offsets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RawBs {
     pos: usize,
@@ -153,18 +95,16 @@ struct RawBs {
 }
 
 /// A frozen transliteration of `BsStartCavlc`
-/// (`codec/decoder/core/src/parse_mb_syn_cavlc.cpp`; the port's copy lived at
-/// `parse_mb_syn_cavlc.rs:2229` until T3.1b deleted it).
+/// (`codec/decoder/core/src/parse_mb_syn_cavlc.cpp`).
 ///
-/// **Do not "fix" this to match the safe side** — it is the reference, and its whole
-/// value is that it was written from the C++ and then left alone (S6).
+/// **Do not "fix" this to match the safe side** — it is the reference.
 fn raw_bs_start_cavlc(bs: &mut RawBs) {
     bs.index = ((bs.pos as isize) << 3) - (16 - bs.left_bits as isize);
 }
 
 /// A frozen transliteration of `BsEndCavlc`, same provenance as
 /// [`raw_bs_start_cavlc`]. The 4-byte load is the C++'s unconditional one; the caller
-/// supplies the slack that makes it legal (F4).
+/// supplies the slack that makes it legal.
 fn raw_bs_end_cavlc(bs: &mut RawBs, buf: &[u8]) {
     bs.pos = (bs.index >> 3) as usize;
     let b0 = buf[bs.pos] as u32;
@@ -248,10 +188,9 @@ fn cavlc_mode_matches_the_raw_pair_from_prng_cursor_states() {
             // most; 0 is legal (the `uiTotalCoeff == 0` early return).
             //
             // Bounded so the close point's 4-byte prime stays inside the allocation.
-            // Past that the *raw* pair reads out of bounds — F4's pre-existing
-            // condition, which this test must not manufacture: the safe side would
-            // panic on the slice index (correctly, per plan §2.2.2) and the comparison
-            // would be against UB rather than against behaviour.
+            // Past that the *raw* pair reads out of bounds, which this test must not
+            // manufacture: the safe side would panic on the slice index and the
+            // comparison would be against UB rather than against behaviour.
             let bit_pos = (c.pos() as isize) * 8 - (16 - c.left_bits() as isize);
             let headroom_bits = ((buf.len() - 4) as isize * 8) - bit_pos;
             if headroom_bits < 0 {
@@ -272,9 +211,9 @@ fn cavlc_mode_matches_the_raw_pair_from_prng_cursor_states() {
 #[test]
 fn cavlc_mode_matches_at_every_bit_phase() {
     // Exhaustive over the axis the arithmetic actually turns on — `idx & 7` — rather
-    // than sampled (S10: sweep the selector, don't randomise it). Every starting phase
-    // crossed with every `iUsedBits` phase, so both the `>> 3` reseat and the
-    // `-16 + (idx & 7)` bias are exercised at all 64 combinations.
+    // than sampled. Every starting phase crossed with every `iUsedBits` phase, so
+    // both the `>> 3` reseat and the `-16 + (idx & 7)` bias are exercised at all 64
+    // combinations.
     let payload: Vec<u8> = (0..64u8).map(|i| i.wrapping_mul(37).wrapping_add(11)).collect();
     let buf = rbsp_with_slack(&payload);
     let size_bits = payload.len() as i32 * 8;
@@ -312,11 +251,10 @@ fn cavlc_mode_matches_at_every_bit_phase() {
 #[test]
 fn cavlc_mode_matches_where_the_prime_leans_on_the_slop() {
     // `BsEndCavlc` loads 4 bytes at `iIndex >> 3` with no bounds test of its own — the
-    // same `READER_SLOP` regime as every other prime in the family (F4, plan §2.2.2
-    // [P3]). Here the mode closes at and past the *declared* RBSP end, so the load
-    // reaches into the slack.
+    // same `READER_SLOP` regime as every other prime in the family. Here the mode
+    // closes at and past the *declared* RBSP end, so the load reaches into the slack.
     //
-    // S12/F10 sizing: the raw side gets the real slack (`rbsp_with_slack`'s 8 bytes),
+    // Sizing: the raw side gets the real slack (`rbsp_with_slack`'s 8 bytes),
     // because a raw implementation's footprint exceeds its read footprint and an
     // exactly-sized buffer would make Miri flag the reference rather than the port. The
     // safe side is handed the same slice, and `end_cavlc` indexes it — so a buffer short
@@ -344,8 +282,8 @@ fn cavlc_mode_matches_where_the_prime_leans_on_the_slop() {
                 let mut raw = raw_of(&c);
                 let idx_bytes = (c.pos() as isize) - 2 + (used >> 3);
                 // Only exercise closes whose 4-byte prime is inside the allocation: past
-                // that the raw pair reads out of bounds, which is F4's pre-existing
-                // condition and not something this test should manufacture.
+                // that the raw pair reads out of bounds, which is not something this
+                // test should manufacture.
                 if idx_bytes < 0 || idx_bytes as usize + 4 > buf.len() {
                     continue;
                 }
@@ -360,10 +298,6 @@ fn cavlc_mode_matches_where_the_prime_leans_on_the_slop() {
         }
     }
 }
-
-// ===========================================================================
-// What survives of the writer half  (see the module header)
-// ===========================================================================
 
 /// One operation of a randomised write sequence, sized for the writer's contract:
 /// `1 <= n <= 32` and no bits set above bit `n-1`.
@@ -428,7 +362,7 @@ fn written_streams_read_back_through_the_old_reader() {
         }
         let bits = w.bits_pos();
         w.rbsp_trailing_bits(&mut out);
-        // The reader's 4-byte prime and 3-byte slop must be inside the buffer (F4);
+        // The reader's 4-byte prime and 3-byte slop must be inside the buffer;
         // `out` is generously sized above, so this only asserts the contract holds.
         assert!(out.len() >= ((bits as usize + 1 + 7) >> 3) + 3);
 

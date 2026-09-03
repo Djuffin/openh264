@@ -88,7 +88,7 @@ pub const INTER_VARIANCE_SAD_THRESHOLD: i32 = 20;
 pub const LEFT_MB_POS: u32 = 0x01;
 pub const TOP_MB_POS: u32 = 0x02;
 // `wels_common_basis.h:125-126`: TOPRIGHT is C (0x04) and TOPLEFT is D (0x08).
-// These two were swapped here. Both are live: FillNeighborCacheIntra below tests
+// Both are live: FillNeighborCacheIntra below tests
 // `uiNeighborAvail & TOPLEFT_MB_POS` to set uiNeighborIntra bit 0x04, which indexes
 // g_kiIntra16AvaliMode / g_kiNeighborIntraToI4x4, and FillNeighborCacheInter* test
 // them for the top-left/top-right MV and ref-index caches.
@@ -114,19 +114,12 @@ pub use crate::encoder::encoder_ext::MB_BLOCK8x8_NUM;
 pub use crate::encoder::svc_encode_slice::MB_COEFF_LIST_SIZE;
 pub const MB_BLOCK4x4_NUM: usize = 16;
 pub const MB_LUMA_CHROMA_BLOCK4x4_NUM: usize = 24;
-/// `INTRA_4x4_MODE_NUM` — `wels_const.h:48`. **8**, not 16; this is the per-macroblock
-/// stride of `sWelsEncCtx::pIntra4x4PredModeBlocks`, so the wrong value made
-/// `pIntra4x4PredMode.offset(-INTRA_4x4_MODE_NUM)` at md.rs:563 step back two
-/// macroblocks instead of one.
+/// `INTRA_4x4_MODE_NUM` — `wels_const.h:48`, the per-macroblock stride of
+/// `sWelsEncCtx::pIntra4x4PredModeBlocks`.
 pub const INTRA_4x4_MODE_NUM: usize = 8;
 pub const MB_WIDTH_LUMA: i32 = 16;
 
-// `wels_common_defs.h:275-283`. This block was transcribed as a dense 0x01..0x80
-// ladder starting at MB_TYPE_SKIP; every one of the eight was wrong. The live
-// consequence was in FillNeighborCacheIntra/Inter below, which test
-// `uiMbType & MB_TYPE_INTRA4x4` (0x40 here, 0x01 in C++) to decide whether a
-// neighbour contributes its I4x4 prediction modes, and `== MB_TYPE_SKIP`
-// (0x01 here, 0x100 in C++) for the inter neighbour caches.
+// `wels_common_defs.h:275-283`.
 pub const MB_TYPE_INTRA4x4: u32 = 0x00000001;
 pub const MB_TYPE_INTRA16x16: u32 = 0x00000002;
 pub const MB_TYPE_INTRA8x8: u32 = 0x00000004;
@@ -186,23 +179,13 @@ pub struct SWelsMD_sMe<'a> {
     pub sMe8x8: [SWelsME<'a>; 4],
     pub sMe16x8: [SWelsME<'a>; 2],
     pub sMe8x16: [SWelsME<'a>; 2],
-    // **D-dead-2 / F122 — `sMe4x4`, `sMe8x4` and `sMe4x8` deleted.** Thirty-two
-    // `SWelsME` between them (16 + 8 + 8 at 96 bytes each = 3072), and their only
-    // readers and writers in the whole port were `WelsMdInterMbRefinement`'s
-    // `SUB_MB_TYPE_4x4`/`_8x4`/`_4x8` arms, which this commit deletes: nothing ever
-    // produced those partitions (upstream's sub-8x8 search is `#if 0`,
-    // `svc_mode_decision.cpp:634-661`). `SWelsMD` 4000 -> 928 bytes; the
-    // `assert_size!` in `abi_guard.rs` is re-pinned with this reason.
 }
 
 #[repr(C)]
 pub struct SWelsMD<'a> {
     pub iLambda: i32,
-    /// **S5.C4b**: was `*mut u16`. `WelsInitInterMDStruc` re-parks it per macroblock
-    /// on the current luma QP's row, and `InitMe` copies it into each search block.
-    /// The `'a` reaches no context field: every `SWelsMD` in the tree is a local of
-    /// `WelsISliceMdEnc`/`WelsMdInterMbLoop`, and the table it borrows is written
-    /// once at init, before any slice worker exists.
+    /// `WelsInitInterMDStruc` re-parks it per macroblock on the current luma QP's
+    /// row, and `InitMe` copies it into each search block.
     pub pMvdCost: MvdCostCursor<'a>,
     pub iCostLuma: i32,
     pub iCostChroma: i32,
@@ -262,53 +245,20 @@ pub type PWelsLumaHalfpelMcFunc = unsafe extern "C" fn(
 /// equal-shaped blocks, the cost-table slot type of `SSampleDealingFunc::pfSampleSad`
 /// and `pfSampleSatd`.
 ///
-/// **Safe since T9.B25 (session B3, step 3):** the two operands are plane cursors
-/// anchored at sample `(0, 0)` of each block — the source macroblock, a reference
-/// block displaced by a candidate vector, or a prediction buffer in the arena — and
-/// each kernel (`common/sad_common.rs::sample_sad::<W, H>`, `encoder/sample.rs::
-/// satd_WxH`) reads `W` x `H` samples from both and nothing else. The block shape is
-/// the slot's index (`BLOCK_16x16` ..), exactly as it was for the raw kernels.
+/// The two operands are plane cursors anchored at sample `(0, 0)` of each block —
+/// the source macroblock, a reference block displaced by a candidate vector, or a
+/// prediction buffer in the arena — and each kernel
+/// (`common/sad_common.rs::sample_sad::<W, H>`, `encoder/sample.rs::satd_WxH`) reads
+/// `W` x `H` samples from both and nothing else. The block shape is the slot's index
+/// (`BLOCK_16x16` ..).
 pub type PSampleSadSatdCostFunc = fn(&RecCursor<'_>, &RecCursor<'_>) -> i32;
-
-// `PSampleSadSatdCostFuncRaw` stood here — T9.B25's transitional raw slot
-// shape, kept while the plane campaign converted the cost readers one
-// function at a time. Session F converted the last of them (the ME family in
-// T9.F1b, the chroma-check and SCD readers in T9.F2a), so the alias, the
-// `*Raw` arrays, the dead `md_cost_raw`/`me_cost_raw` accessors and the
-// fourteen raw SAD shims are deleted exactly as this comment always promised,
-// and `SSampleDealingFunc` is back to 176 bytes.
 
 /// The four fractional-pixel refinement planes, as **offsets** into the one buffer
 /// they all point into.
-///
-/// **T6.E3.** This used to be five `*mut u8`, and reading `InitMeRefinePointer`
-/// showed what they were: four fixed offsets into `SMbCache.sBufferInterPredMe` —
-/// 0, 640, 1280 and 1920, each plus the partition's `iStride` — and a fifth,
-/// `pHalfPixHV`, that the builder never wrote at all. So the record was carrying
-/// five addresses to say one number.
-///
-/// Two things fell out of writing it as offsets:
-///
-/// - **`pHalfPixHV` is an alias, not a plane.** Its only writers are the four arms
-///   of `MeRefineFracPixel`'s half-pixel `match`, each setting it to *whichever of
-///   H or V that arm reuses* for the diagonal filter. As an offset that is one
-///   assignment of `half_pix_h()` or `half_pix_v()`, and the aliasing is stated
-///   rather than implied by two pointers holding the same address.
-/// - **`pQuarPixBest`/`pQuarPixTmp` ping-pong.** `MeRefineQuarPixel` runs four
-///   candidate positions and `mem::swap`s the pair whenever the candidate wins, so
-///   the two names are one selector over `{1280, 1920}`. `bQuarPixSwapped` is that
-///   selector, and `swap_quar()` is the `mem::swap`. Same recipe as session C's
-///   half-selectors over `SMbCache`'s prediction buffers.
-///
-/// The buffer root is **not** stored here. Readers combine an offset with the
-/// `*mut u8` base that the caller derives once from the cache
-/// (`md::buffer_inter_pred_me`) and passes down — one cursor with the whole
-/// buffer's provenance, S28's rule, and no second live path into `SMbCache`.
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub struct SMeRefinePointer {
-    /// The partition's offset within each 640-byte plane. `InitMeRefinePointer`'s
-    /// third argument, and the only thing that call still has to say.
+    /// The partition's offset within each 640-byte plane.
     pub iStride: usize,
     /// Offset of the plane the diagonal (H+V) filter writes into and reads back —
     /// always equal to `half_pix_h()` or `half_pix_v()`, chosen per half-pixel arm.
@@ -318,14 +268,9 @@ pub struct SMeRefinePointer {
     /// The fixed-shape copy that moves the winning prediction into the macroblock's
     /// inter-prediction buffer, chosen by partition shape.
     ///
-    /// **Safe since T9.B29.** This is *not* `SWelsFuncPtrList`'s `pfCopy*` table —
-    /// it is a per-partition selection out of it, made in `WelsMdInterMbRefinement`
-    /// and consumed once at the end of `MeRefineFracPixel`. That table's own 17
-    /// reconstruction sites are session C's; this field's seven assignments name the
-    /// safe kernels (`common/copy_mb.rs`) directly, which is byte-identical for the
-    /// same reason the cost sites are (F118): `WelsInitEncodingFuncs`
-    /// (`encode_mb_aux.rs:846`) is the only writer of `pfCopy*` and installs the
-    /// shims onto exactly these kernels unconditionally.
+    /// This is *not* `SWelsFuncPtrList`'s `pfCopy*` table — it is a per-partition
+    /// selection out of it, made in `WelsMdInterMbRefinement` and consumed once at
+    /// the end of `MeRefineFracPixel`.
     pub pfCopyBlockByMode: Option<fn(&RecCursor<'_>, &mut PlaneCursorMut<'_>)>,
 }
 
@@ -372,15 +317,12 @@ pub struct SQuarRefineParams {
     pub iBestQuarPix: i32,
 }
 
-/// One of the two surfaces a quarter-pixel candidate averages — **T9.B29**, in place
-/// of the raw `*mut u8` the record used to carry.
+/// One of the two surfaces a quarter-pixel candidate averages.
 ///
-/// There are exactly two, and the raw form could not tell them apart: a plane of the
-/// half-pixel scratch inside `SMbCache::sBufferInterPredMe` (always at
-/// `ME_REFINE_BUF_STRIDE`), or the reference block the integer search settled on,
-/// displaced by whole samples (always at the reference picture's stride). The pair of
-/// strides `iStrideA`/`iStrideB` carried exactly this distinction and is deleted with
-/// the pointers: each arm now says which surface it means.
+/// There are exactly two: a plane of the half-pixel scratch inside
+/// `SMbCache::sBufferInterPredMe` (always at `ME_REFINE_BUF_STRIDE`), or the
+/// reference block the integer search settled on, displaced by whole samples
+/// (always at the reference picture's stride).
 #[derive(Copy, Clone, Debug)]
 pub enum MeQuarSource {
     /// Byte offset into `SMbCache::sBufferInterPredMe`, stride `ME_REFINE_BUF_STRIDE`.
@@ -398,14 +340,10 @@ impl Default for MeQuarSource {
 /// One quarter-pixel candidate: average the two surfaces into
 /// `sBufferInterPredMe[dst..][..span]`.
 ///
-/// Written as a free function rather than inline in [`MeRefineQuarPixel`] because the
-/// destination and a `Buf` source are two disjoint regions of **one** field, and a
-/// `&mut` to the whole field plus a `&` to part of it does not borrow-check; taking
-/// `split_at_mut` at the one place that needs it keeps the disjointness a fact the
-/// compiler checks rather than a comment. `Buf` sources are always the half-pixel
-/// planes (offsets 0 and 640 plus the partition stride) and the destination is always
-/// a quarter-pixel plane (1280 or 1920 plus it), so `dst` is above every `Buf` source
-/// this is ever called with — asserted, not assumed.
+/// `Buf` sources are always the half-pixel planes (offsets 0 and 640 plus the
+/// partition stride) and the destination is always a quarter-pixel plane (1280 or
+/// 1920 plus it), so `dst` is above every `Buf` source this is ever called with —
+/// asserted, not assumed.
 #[inline(always)]
 fn quar_candidate(
     pMbCache: &mut SMbCache,
@@ -425,10 +363,6 @@ fn quar_candidate(
     };
     assert!(a_off + span <= dst, "quarter-pixel destination overlaps its source");
     let (lo, hi) = pMbCache.sBufferInterPredMe.split_at_mut(dst);
-    // S10.2: these two stay `PlaneCursor`. They are read-only views of two
-    // *disjoint* ranges of one scratch buffer, and `pixel_avg` is generic over its
-    // two operands independently — so there is no reason to take the `&mut` that
-    // `over_owned` needs, and two of those on one buffer would not compile anyway.
     let cA = PlaneCursor::new(&lo[a_off..][..span], 0, stride);
     let mut cDst = PlaneCursorMut::new(&mut hi[..span], 0, stride);
     match *b {
@@ -454,10 +388,7 @@ pub struct SMB {
     pub uiNeighborAvail: u8,
     pub uiCbp: u8,
     /// `SMVUnitXY* sMv` in the C++, pointed at a slot of the context-wide
-    /// `pMvUnitBlock4x4` bank. **T6.C1** made it the storage: the `SMB` list is
-    /// `WelsMallocz`'d, so an all-integer inline array starts at MV (0,0) exactly
-    /// as the zeroed bank did (S21), and every macroblock owns its own row —
-    /// which is what the two parity banks were buying.
+    /// `pMvUnitBlock4x4` bank; here every macroblock owns its own row.
     pub sMv: [SMVUnitXY; MB_BLOCK4x4_NUM],
     /// `int8_t* pRefIndex` — one entry per 8x8 partition.
     pub iRefIndex: [i8; MB_BLOCK8x8_NUM],
@@ -524,44 +455,29 @@ pub struct SMbCache {
     pub iIntraPredMode: [i8; 48],
     pub iSadCost: [i32; 4],
     pub sMbMvp: [SMVUnitXY; MB_BLOCK4x4_NUM],
-    // **T6.C3**: the eight buffers `AllocMbCacheAligned` malloc'd per slice are
-    // inline here, and the four aliases into two of them are the three half-selectors
-    // below. Every one is scratch the slice always owned; the C++ allocated exactly
-    // these sizes and `SSlice` grows by their sum. Reach them through the accessors
-    // (`mem_pred_luma` and friends) rather than by taking a pointer at a site: those
-    // derive from the array root, which is what S28 costs when it is got wrong.
     pub sCoeffLevel: [i16; MB_COEFF_LIST_SIZE],
     pub sSkipMb: [u8; 384],
     /// `2 * 256` in the C++, and **the `+ 16` is this port's** — a soundness
-    /// accommodation, not a size the codec uses (F14, `phase2_findings.md`).
+    /// accommodation, not a size the codec uses.
     ///
     /// The two 256-byte halves are the I16x16 prediction ping-pong. `WelsMdI16x16`
     /// scores a candidate in the upper half with `WelsSampleSad16x16_c`, whose last
     /// 8x8 sub-block starts at +392 and reads through byte 511 — *exactly* in bounds.
     /// But the raw kernel is a C transliteration that bumps its row pointer after the
     /// final row (`sad_common.rs:158`), computing `base + 520` and never
-    /// dereferencing it. Forming that pointer is UB in Rust and in C alike; nothing
-    /// observable ever came of it, which is why it survived the port.
+    /// dereferencing it. Forming that pointer is UB in Rust and in C alike.
     ///
-    /// This is S12's rule met in production rather than in a test: a raw kernel's
-    /// pointer footprint is one stride larger than its read footprint. The `+ 16` is
-    /// one luma row at the ping-pong's stride of 16 — the smallest thing that makes
-    /// the arithmetic legal. It cannot change any encoded byte: the extra bytes are
-    /// never read, never written, and never addressed except by the one-past bump
-    /// this exists to keep in bounds.
-    ///
-    /// It goes away on its own if `common/sad_common.rs` re-lands from its park: the
-    /// safe kernels take exact spans and stop at the last row. Until then, deleting
-    /// this `+ 16` restores the UB and Miri's `--lib` gate catches it in
-    /// `svc_mode_decision::tests::test_wels_md_i16x16_cost`.
+    /// The `+ 16` is one luma row at the ping-pong's stride of 16 — the smallest
+    /// thing that makes the arithmetic legal. It cannot change any encoded byte: the
+    /// extra bytes are never read, never written, and never addressed except by the
+    /// one-past bump this exists to keep in bounds.
     pub sMemPredMb: [u8; 2 * 256 + 16],
     pub sMemPredBlk4: [u8; 2 * 16],
     pub sBufferInterPredMe: [u8; 4 * 640],
     pub bPrevIntra4x4PredModeFlag: [bool; MB_BLOCK4x4_NUM],
     pub iRemIntra4x4PredModeFlag: [i8; MB_BLOCK4x4_NUM],
     /// Which 256-byte half of [`SMbCache::sMemPredMb`] currently holds the luma
-    /// prediction; chroma is the other one. `pMemPredLuma`/`pMemPredChroma` were two
-    /// pointers carrying this one bit, swapped as a pair by `WelsMdI16x16`.
+    /// prediction (`pMemPredLuma`); chroma is the other one.
     pub uiMemPredLumaHalf: u8,
     /// Which 128-byte half *of the chroma half* holds the winning chroma prediction
     /// (`pBestPredIntraChroma`). Composed with `uiMemPredLumaHalf`, because the chroma
@@ -572,13 +488,6 @@ pub struct SMbCache {
     pub uiBestPredI4x4Blk4Half: u8,
     pub iSadCostSkip: [i32; 4],
     pub bMbTypeSkip: [bool; 4],
-    // **`pEncSad` stood here, and it was the last alias into a picture (T6.F0).**
-    // It cached `pDecPic->pMbSkipSad + kiMbXY` so that four neighbour reads could be
-    // spelled `.offset(-1)`, `.offset(-iMbWidth)` and friends. The array is the
-    // picture's own `Vec` now, so the cursor is gone and the four reads index the
-    // **root** at `iMbXY + <neighbour offset>` (S28) — the same arithmetic, under the
-    // same availability guards, with the array reached through the parameter the fill
-    // functions gained instead of through a stale copy in this arena.
     pub sDct: SDCTCoeff,
     pub uiNeighborIntra: u8,
     pub uiLumaI16x16Mode: u8,
@@ -622,41 +531,6 @@ impl Default for SMbCache {
     }
 }
 
-// The scratch arena's half-selectors — **T9.D4**, and what replaced the ten
-// accessors that used to stand here.
-//
-// Each of the eight buffers of [`SMbCache`] is an inline array, and a raw cursor into
-// one must be derived from the array **root** with [`std::ptr::addr_of_mut!`]:
-//
-//     let pRes = std::ptr::addr_of_mut!((*pMbCache).sCoeffLevel).cast::<i16>();
-//
-// Taking it through a slice (`sMemPredMb[256..].as_mut_ptr()`) narrows the tag to
-// that slice, and the first read the kernel makes outside it is UB no byte-level gate
-// can see — **S28**, nine sites in Phase 6 session B and a tenth in session C's face 1.
-//
-// **And it must be `addr_of_mut!`, not `&mut …field.as_mut_ptr()` — S29, and T9.D4 is
-// where that stopped being a style rule.** The obvious tidy-up for the sites below is
-// a helper taking the field, `f(pMemPredMb: &mut [u8; N], …) -> *mut u8`. It is wrong
-// here for a reason the arena makes concrete: `sMemPredMb` holds *three* live cursors
-// at once (`pDstLuma`, `pDstCb`, `pDstCr` in `WelsMdInterMbRefinement`), and each
-// `&mut` to that field is a fresh Unique retag over the same bytes, so taking the
-// second **invalidates the first**. `addr_of_mut!` produces a raw sibling instead, and
-// raw siblings coexist. That is the whole reason these derivations look the way they do.
-//
-// **What a `&mut SMbCache` parameter does and does not cost.** Stacked Borrows is
-// per-byte, so a field read or write *through* `pMbCache` touches only that field's
-// bytes and leaves cursors into other fields alone — which is why the four
-// half-selectors below can read their flag while the arrays are under cursors.
-// **Entering a function that takes `&mut SMbCache` is different**: it retags every
-// byte of the arena and kills every outstanding cursor, which is F66's rule and the
-// reason `WelsEncRecUV` takes an *offset* into `sCoeffLevel` rather than a pointer
-// into it (T9.D4).
-//
-// The four functions here are the only part of the old accessors that was not pure
-// projection: the ping-pong halves, whose selection is a flag on the same struct. They
-// take the flag by value, so the caller reads the flag first and derives the cursor
-// second, and neither step can narrow the other.
-
 /// `pMbCache->pMemPredLuma` — the `sMemPredMb` offset of the half holding the luma
 /// prediction.
 #[inline]
@@ -682,29 +556,16 @@ pub const fn best_pred_i4x4_blk4_off(uiBestPredI4x4Blk4Half: u8) -> usize {
     16 * uiBestPredI4x4Blk4Half as usize
 }
 
-/// **T6.F0**: `kpMbSkipSad` is the reconstruction picture's whole `pMbSkipSad` array,
-/// not a cursor into it. `SMbCache::pEncSad` used to carry the cursor; the four
-/// neighbour reads index `pCurMb->iMbXY + <offset>` against the root instead (S28).
-/// The slot drops `extern "C"` to take the slice — the precedent is `PUpdateMbMvFunc`
-/// and `PSetNoneZeroCountZeroFunc`, both plain `fn` over references since session C.
+/// `kpMbSkipSad` is the reconstruction picture's whole `pMbSkipSad` array, not a
+/// cursor into it; the four neighbour reads index `pCurMb->iMbXY + <offset>` against
+/// the root.
 ///
-/// **T9.C3**: and it is the seam's array rather than a `&[i32]`, because those
-/// four reads are of *neighbouring* macroblocks — under multi-threading, of
-/// macroblocks that may belong to another worker's slice. They are guarded by
-/// the same slice-scoped `uiNeighborAvail` that F107 §2 measured, so the reads
-/// never actually cross; `SharedMbArray` is the type that lets Miri's data-race
-/// detector be the referee for that claim instead of taking it on trust.
-/// **S4.C4**: `pVaaBgMbFlag` was a `*mut i8` **pre-offset to the current
-/// macroblock**, which the two implementations then walked backwards off
-/// (`.offset(-1)`, `.offset(-iMbWidth)`, and the two diagonals). It is the whole
-/// array now, indexed by `iMbXY + <neighbour offset>` — exactly what T6.F0 did to
-/// the skip-SAD array beside it, whose comment at the call site already describes
-/// this shape. The callee has `iMbXY` in hand, so nothing needed threading through.
+/// Those four reads are of *neighbouring* macroblocks — under multi-threading, of
+/// macroblocks that may belong to another worker's slice. They are guarded by the
+/// same slice-scoped `uiNeighborAvail`, so the reads never actually cross.
 ///
-/// **Shared, not `&mut`.** The array lives on the one `SVAAFrameInfo` every worker
-/// shares; F132's round 8 caught `Vec::as_mut_ptr`'s autoref here as a per-macroblock
-/// retag-write and the fixed-slice probe stopped on it. A `&[i8]` is the reader path
-/// that replaced it.
+/// `pVaaBgMbFlag` is the whole array too, indexed by `iMbXY + <neighbour offset>`.
+/// It lives on the one `SVAAFrameInfo` every worker shares.
 pub type PFillInterNeighborCacheFunc = fn(
     pMbCache: &mut SMbCache,
     mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -712,20 +573,17 @@ pub type PFillInterNeighborCacheFunc = fn(
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 );
 pub type PGetVarianceFromIntraVaaFunc = extern "C" fn(cEnc: &RecCursor<'_>) -> i32;
-// S11.28: the four SADs arrive as the `[i32; 4]` they are stored as
-// (`SVAACalcResult::pSad8x8` is `Vec<[i32; 4]>`, one entry per macroblock) —
-// the pointer form was the C++'s `int32_t*` into the same rows. `extern "C"`
-// came off with it: nothing in this table crosses the C ABI (T4b.1).
+// The four SADs arrive as the `[i32; 4]` they are stored as
+// (`SVAACalcResult::pSad8x8` is `Vec<[i32; 4]>`, one entry per macroblock).
 pub type PGetMbSignFromInterVaaFunc = fn(kpSad8x8: &[i32; 4]) -> u8;
-/// **T6.C1**: the slot took `SMVUnitXY*` because the C++ hands it
-/// `pCurMb->sMv`, a pointer into the context-wide MV bank. The bank is an inline
-/// row of `SMB` now, and the kernel writes all sixteen entries, so it takes the row.
+/// The C++ hands this `pCurMb->sMv`, a pointer into the context-wide MV bank. The
+/// bank is an inline row of `SMB` here, and the kernel writes all sixteen entries,
+/// so it takes the row.
 pub type PUpdateMbMvFunc = fn(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv: SMVUnitXY);
 
-// SMcFunc is a common-layer type (codec/common/inc/mc.h:46); common/mc.rs already
-// had it with correctly typed pointers where this copy used *mut c_void.
+// SMcFunc is a common-layer type (codec/common/inc/mc.h:46).
 pub use crate::common::mc::SMcFunc;
-// Phase 4a: MC and the half-pel filters are called directly, not via `sMcFuncs`.
+// MC and the half-pel filters are called directly, not via `sMcFuncs`.
 use crate::encoder::svc_encode_slice::{layer_enc_view, layer_ref_pic, layer_ref_view, current_layer_ref};
 use crate::encoder::picture::{RecPicId};
 use crate::common::mc::{mc_hor_ver02, mc_hor_ver20, mc_hor_ver22, pixel_avg};
@@ -742,18 +600,12 @@ pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 /// Which sibling cost array a selector in [`SSampleDealingFunc`] names.
 ///
-/// Phase 4a, §2.2.5 tier 2: config dispatch becomes an `enum` + `match`. The
-/// C++ (`wels_func_ptr_def.h`) stores a `PSampleSadSatdCostFunc*` and points it
-/// at one of the two arrays in the same struct; the port copied that literally,
-/// which is F13's fourth site. The selection is made once per layer from
-/// encoder config and never varies per macroblock, so a tag carries every bit
-/// of information the pointer did — and unlike the pointer, taking `&mut` on
-/// the enclosing struct cannot invalidate it.
+/// The selection is made once per layer from encoder config and never varies per
+/// macroblock.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum CostFamily {
-    /// No cost function selected — the old null pointer. The C++ leaves the
-    /// slot unset outside the configurations that use it, where reading it was
-    /// already a null deref.
+    /// No cost function selected. The C++ leaves the slot unset outside the
+    /// configurations that use it.
     #[default]
     Unset,
     /// `pfSampleSad` — sum of absolute differences.
@@ -766,36 +618,15 @@ pub enum CostFamily {
 #[derive(Copy, Clone)]
 pub struct SSampleDealingFunc {
     // wels_func_ptr_def.h:163 — these are [MAX_BLOCK_TYPE], and MAX_BLOCK_TYPE is
-    // BLOCK_SIZE_ALL = 7 (wels_func_ptr_def.h:161, wels_const.h:147). They were [_; 8].
-    //
-    // **Safe since T9.B25**: the three tables hold the safe kernels and take plane
-    // cursors (see `PSampleSadSatdCostFunc`). The `*Raw` triple below is the shape
-    // they had until then, kept alive only while the plane-family campaign converts
-    // the last raw readers — see the alias's doc for the rule and the deletion point.
+    // BLOCK_SIZE_ALL = 7 (wels_func_ptr_def.h:161, wels_const.h:147).
     pub pfSampleSad: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
     pub pfSampleSatd: [Option<PSampleSadSatdCostFunc>; BLOCK_SIZE_ALL],
     pub pfSample4Sad: [Option<PSample4SadCostFunc>; BLOCK_SIZE_ALL],
-    // T9.B25's transitional raw triple (`pfSampleSadRaw`/`pfSampleSatdRaw`/
-    // `pfSample4SadRaw`) stood here; deleted in session F with its last
-    // readers, per its own charter.
-    // The five `pfIntra*Combined3*Satd`/`Sad` slots and the three
-    // `pfIntra*Combined3` they were copied into were here, all eight
-    // `*mut c_void`. The C++ leaves them NULL on every target this port builds
-    // for and the port never assigned them, so `assert_no_combined3` guarded
-    // three reads and the scalar branch was the only live one — S18: deleted
-    // with the guard and its call sites (Phase 6 session B).
-    /// Which of the two sibling cost arrays mode decision reads. **Was
-    /// `*mut Option<PSampleSadSatdCostFunc>` pointing into this same struct**,
-    /// which is F13's fourth site: `SetFastCodingFunc` stored
-    /// `pfSampleSad.as_mut_ptr()` here, so every later `&mut SWelsFuncPtrList`
-    /// — and the encoder takes one constantly — reborrowed the whole struct and
-    /// popped that interior pointer's tag, making the next read UB under
-    /// Stacked Borrows. A tag has nothing to invalidate. Read it through
+    /// Which of the two sibling cost arrays mode decision reads. Read it through
     /// [`SSampleDealingFunc::md_cost`].
     pub pfMdCost: CostFamily,
-    /// As [`Self::pfMdCost`], for motion estimation. `CostFamily::Unset` is the
-    /// old null: the C++ leaves this unset outside the ME-capable
-    /// configurations, and the port reproduced that with a null pointer.
+    /// As [`Self::pfMdCost`], for motion estimation. The C++ leaves this unset
+    /// outside the ME-capable configurations.
     pub pfMeCost: CostFamily,
 }
 
@@ -813,11 +644,6 @@ impl Default for SSampleDealingFunc {
 
 impl SSampleDealingFunc {
     /// The mode-decision cost function for `block`, or `None` if unselected.
-    ///
-    /// Replaces `(*sdf.pfMdCost.add(block)).unwrap()`. The old expression read
-    /// through a pointer into this struct's own `pfSampleSad`/`pfSampleSatd`
-    /// array, which any intervening `&mut SWelsFuncPtrList` had already
-    /// invalidated (F13). Same selection, same array, no interior pointer.
     #[inline(always)]
     pub fn md_cost(&self, block: usize) -> Option<PSampleSadSatdCostFunc> {
         match self.pfMdCost {
@@ -829,10 +655,7 @@ impl SSampleDealingFunc {
 
     /// The motion-estimation cost function for `block`, or `None` if unselected.
     ///
-    /// As [`Self::md_cost`]. `CostFamily::Unset` is the old null pointer, which
-    /// the encoder installs outside the ME-capable configurations; a caller
-    /// that reached it used to null-deref and now unwraps a `None`, which is
-    /// the same bug reported at the same place with a legible message.
+    /// As [`Self::md_cost`].
     #[inline(always)]
     pub fn me_cost(&self, block: usize) -> Option<PSampleSadSatdCostFunc> {
         match self.pfMeCost {
@@ -841,16 +664,7 @@ impl SSampleDealingFunc {
             CostFamily::Unset => None,
         }
     }
-
-    // `md_cost_raw`/`me_cost_raw` stood here — the transitional accessors over
-    // the raw triple. At deletion (session F) they had **zero callers anywhere
-    // in the tree**: every runtime-selected cost site went through the safe
-    // `md_cost`/`me_cost` from the moment B2-B3 flipped it, so the raw pair
-    // was dead the day it was written.
 }
-
-
-
 
 // Mathematical Helper Functions & Macros
 #[inline(always)]
@@ -886,7 +700,6 @@ pub fn BsSizeSE(kiValue: i32) -> u32 {
     }
 }
 
-/// **S5.C4b**: safe — `svc_motion_estimate::COST_MVD`'s `i32` twin, converted with it.
 #[inline(always)]
 pub fn COST_MVD(pMvdCost: MvdCostCursor<'_>, iMvdX: i32, iMvdY: i32) -> i32 {
     let x = pMvdCost.at(iMvdX) as i32;
@@ -934,9 +747,8 @@ pub fn FillNeighborCacheIntra(
     if (uiNeighborAvail & LEFT_MB_POS) != 0 {
         // C++ reaches the left macroblock's rows by stepping back one stride in the
         // flat context arrays (`pNonZeroCount - MB_LUMA_CHROMA_BLOCK4x4_NUM`,
-        // `pIntra4x4PredMode - INTRA_4x4_MODE_NUM`). T6.C1: the arrays are inline, so
-        // the same values come from the left macroblock's own struct -- which is the
-        // one `pCurMb - 1` names, exactly as the branch below already assumed.
+        // `pIntra4x4PredMode - INTRA_4x4_MODE_NUM`). The arrays are inline, so
+        // the same values come from the left macroblock's own struct.
         let pLeftMb = mbs.left();
         (*pMbCache).iNonZeroCoeffCount[8] = pLeftMb.iNonZeroCount[3];
         (*pMbCache).iNonZeroCoeffCount[16] = pLeftMb.iNonZeroCount[7];
@@ -1292,8 +1104,7 @@ pub fn UpdateMbMv_c(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv: SMVUnitX
 }
 
 pub fn MdInterAnalysisVaaInfo_c(kpSad8x8: &[i32; 4]) -> u8 {
-    // S11.28: the macroblock's four 8x8 SADs, by value off the bounded row —
-    // the `*mut i32` walked the same four entries.
+    // The macroblock's four 8x8 SADs, by value off the bounded row.
     let iSadBlock = *kpSad8x8;
     let mut iAverageSadBlock = [0i32; 4];
 
@@ -1337,11 +1148,6 @@ pub fn MdInterAnalysisVaaInfo_c(kpSad8x8: &[i32; 4]) -> u8 {
 }
 
 pub extern "C" fn AnalysisVaaInfoIntra_c(cEnc: &RecCursor<'_>) -> i32 {
-    // **S10.5: the source cursor, not a plane root and a stride.** This walked
-    // `pEncData[0]` — one of the two raw plane-root arrays on `SDqLayer` — with
-    // four `offset` chains per 4x4 block and a per-row-group rebase. The block
-    // sums are the same sixteen 4x4 means over the same sixteen rows; the stride
-    // travels inside the cursor, which is where `mb_cursor_ro` already puts it.
     let mut uiAvgBlock = [0u16; 16];
     let mut blk_idx = 0usize;
     for j in (0..16isize).step_by(4) {
@@ -1382,37 +1188,29 @@ pub extern "C" fn InitIntraAnalysisVaaInfo(
 }
 
 pub fn MdIntraAnalysisVaaInfo(pEncCtx: &sWelsEncCtx, cEncMb: &RecCursor<'_>) -> bool {
-    // S10.5: the layer lookup went with the stride — the cursor carries it.
     let pfGetVariance = pEncCtx.func_list().pfGetVarianceFromIntraVaa;
     let kiVariance = pfGetVariance(cEncMb);
     kiVariance >= INTRA_VARIANCE_SAD_THRESHOLD
 }
 
-/// Aim the refinement record at one partition. The `pMbCache` argument is gone with
-/// the pointers: there is nothing left to read from the cache here, only a number to
-/// record.
+/// Aim the refinement record at one partition.
 ///
 /// **The quarter-pixel selector reset is not cosmetic.** Every `MeRefineFracPixel`
-/// call is preceded by one of these, and the old body re-established
+/// call is preceded by one of these, and the body re-establishes
 /// `pQuarPixBest = 1280`, `pQuarPixTmp = 1920` unconditionally — so a partition that
-/// left the pair swapped did not leak that state into the next one. `Default` is the
-/// unswapped assignment and this restores it.
+/// left the pair swapped does not leak that state into the next one.
 pub fn InitMeRefinePointer(pMeRefine: &mut SMeRefinePointer, iStride: i32) {
     pMeRefine.iStride = iStride as usize;
     pMeRefine.iHalfPixHV = 0;
     pMeRefine.bQuarPixSwapped = false;
 }
 
-/// **T9.B29**: the four candidate averages and their costs run over cursors.
+/// The four candidate averages and their costs.
 ///
-/// `pBufMe` is gone: `sBufferInterPredMe` is borrowed here, one candidate at a time,
-/// through the `pMbCache` the caller passes. `cEnc` is the source block — the same
-/// sample `SWelsME::pEncMb` names, resolved from the picture at the search block's
-/// own coordinates (`iCurMeBlockPixX/Y`), which is the identity T9.B29 measured
-/// across three streams before relying on it. The candidate sources arrive as
-/// `MeQuarSource`, each either a `sBufferInterPredMe` offset or a displacement of the
-/// reference block — the two things `SQuarRefineParams::pSrcA`/`pSrcB` held as raw
-/// addresses.
+/// `cEnc` is the source block — the same sample `SWelsME::pEncMb` names, resolved
+/// from the picture at the search block's own coordinates (`iCurMeBlockPixX/Y`). The
+/// candidate sources arrive as `MeQuarSource`, each either a `sBufferInterPredMe`
+/// offset or a displacement of the reference block.
 #[inline(always)]
 pub fn MeRefineQuarPixel(
     pFunc: &SWelsFuncPtrList,
@@ -1531,29 +1329,15 @@ pub fn MeRefineQuarPixel(
     }
 }
 
-/// **T9.B29 — the fractional refinement takes cursors.**
+/// The source and reference blocks are resolved from the pictures the layer names,
+/// at the search block's own coordinates — `(iCurMeBlockPixX, iCurMeBlockPixY)` for
+/// the source and that plus the whole-sample part of `sMv` for the reference.
 ///
-/// Three raw operands are gone. `pEncData`/`pRef` were `SWelsME::pEncMb`/`pRefMb`;
-/// both are now resolved from the pictures the layer names, at the search block's own
-/// coordinates — `(iCurMeBlockPixX, iCurMeBlockPixY)` for the source and that plus the
-/// whole-sample part of `sMv` for the reference. **That identity is a measurement, not
-/// an assumption**: a probe comparing all three fields against the coordinates ran
-/// over three streams (320x192 CAVLC, 160x96 gop4, 320x192 sm=1 t=4) and reported
-/// 3271 / 438 / 5924 agreements with zero disagreements at the point this function
-/// reads them. It is what lets session E delete the three fields.
+/// The half- and quarter-pixel scratch is `SMbCache`'s own `sBufferInterPredMe`,
+/// borrowed per use through the `pMbCache` parameter.
 ///
-/// `pBufMe` is gone too: the half- and quarter-pixel scratch is `SMbCache`'s own
-/// `sBufferInterPredMe`, borrowed per use through the `pMbCache` parameter — one
-/// `&mut` at a time, never a raw held across a borrow (F114a).
-///
-/// `pMemPredInterMb`, the destination of the final copy, is a `usize` **offset** into
-/// `sMemPredMb` rather than a pointer, and that is not tidying: passing a raw derived
-/// from the arena *beside* a `&mut SMbCache` is F66's shape B — arguments evaluate
-/// left to right, so the reference's whole-arena retag pops the raw before the callee
-/// writes through it. `q1c.py --type SMbCache --kind ref` reported all seven call
-/// sites the moment the parameter went in; the fix removes the pointer (S54: the
-/// information it carried is caller state, and an index no retag can invalidate says
-/// it).
+/// `kiMemPredInterOff`, the destination of the final copy, is a `usize` offset into
+/// `sMemPredMb`.
 pub extern "C" fn MeRefineFracPixel(
     pEncCtx: &sWelsEncCtx,
     kiMemPredInterOff: usize,
@@ -1852,11 +1636,7 @@ pub extern "C" fn MeRefineFracPixel(
         pBestPredInter = BestPred::Ref;
     }
 
-    // The final copy. `pMemPredInterMb` is still raw — it is a region of `sMemPredMb`
-    // the *caller* owns, and it retires with the reconstruction-side copy work — so
-    // the destination is materialised here, at the call, from a pointer the caller
-    // derived and nothing above borrowed (F114a: `sBufferInterPredMe` and
-    // `sMemPredMb` are different fields).
+    // The final copy.
     let pfCopyBlockByMode = pMeRefine.pfCopyBlockByMode.unwrap();
     let kiDstSpan = (kiH - 1) * MB_WIDTH_LUMA as usize + kiW;
     match pBestPredInter {
@@ -1884,26 +1664,7 @@ pub extern "C" fn MeRefineFracPixel(
     }
 }
 
-// `InitBlkStrideWithRef` stood here — `void InitBlkStrideWithRef (int32_t* pBlkStride,
-// const int32_t kiStrideRef)`, filling a sixteen-entry table of 4x4 block offsets from
-// a reference stride. **S18, deleted in S4.C4**: whole-tree grep at deletion
-// (`src/`, `tests/`, `benches/`, `examples/`, `rust/tools/`) found the definition and
-// its own four body lines and nothing else — never called, and the table it filled was
-// never read. The C++ calls it from `WelsInitMeFunc`; this port's motion search reads
-// its block offsets from `g_kuiSmb4AddrIn256`/the stride tables instead, so the
-// indirection never had a consumer here. One `port-raw` tag retires with it.
-
-
 pub fn MvdCostInit(pMvdCostInter: &mut [u16], kiMvdSz: i32) {
-    // S4.C4: the table arrives as the slice its one caller already holds.
-    //
-    // **S11.15: the two walking cursors are indices.** They ran 52 x kiMvdSz
-    // interleaved writes from both ends of each row, and F227 recorded the trap
-    // they had to avoid — two `as_mut_ptr()` calls are two `Unique` retags, the
-    // second popping the first, so both cursors had to be siblings of one root.
-    // As indices that hazard does not exist to avoid: there is no tag to pop,
-    // the two positions are plain integers into one `&mut [u16]`, and every
-    // write is bounds-checked. Same rows, same order, same values.
     let kiSz = kiMvdSz >> 1;
     debug_assert!(
         (52 * kiMvdSz as usize) <= pMvdCostInter.len(),
@@ -2026,7 +1787,5 @@ pub fn PredictSadSkip(
     }
 }
 
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
-// used to live in this module disagreed with cpu_core.h and with each other --
-// WELS_CPU_NEON alone had seven distinct values across eight modules.
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_SSE2, WELS_CPU_SSE41, WELS_CPU_SSSE3};

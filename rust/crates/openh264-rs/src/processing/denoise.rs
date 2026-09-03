@@ -7,13 +7,8 @@
 //! the source picture, **in place**, before any downsampling or padding — so every
 //! spatial layer of the frame is built from the denoised samples.
 //!
-//! **This plugin needs no kernel-selection decision (F99).**
 //! `CDenoiser::InitDenoiseFunc` (`denoise.cpp:55`) has exactly one non-scalar arm
-//! and it is `#if defined(X86_ASM)`; there is no NEON denoise anywhere in the tree,
-//! and `nm` on the reference archive confirms it exports only
-//! `BilateralLumaFilter8_c`, `WaverageChromaFilter8_c` and `Gauss3x3Filter`. On this
-//! host the reference runs the same scalar filters this module does. Contrast
-//! `downsample.rs`, where the aarch64 table *does* diverge from the scalar one.
+//! and it is `#if defined(X86_ASM)`; there is no NEON denoise anywhere in the tree.
 //!
 //! Every filter here is sequential in a way that matters: the row above the one
 //! being filtered has already been overwritten by the previous iteration, and
@@ -196,8 +191,7 @@ fn WaverageDenoiseChroma(plane: &mut [u8], iWidth: usize, iHeight: usize, stride
 /// `CDenoiser` — `denoise.h:80`. One field, and it is a constant in practice: the
 /// constructor sets `m_uiType = DENOISE_ALL_COMPONENT` and nothing ever calls `Set`
 /// on this plugin, so all three components are always filtered. Kept as a field
-/// anyway because `Process`'s three arms read it and dropping it would erase the
-/// only thing the C++ struct carries.
+/// anyway because `Process`'s three arms read it.
 pub struct CDenoiser {
     pub m_uiType: u16,
 }
@@ -214,10 +208,8 @@ impl Default for CDenoiser {
 /// The three planes of the picture being denoised, as slices from their logical
 /// origins, with the strides that go with them.
 ///
-/// The C++ hands `CDenoiser::Process` an `SPixMap` of raw plane pointers; the
-/// kernels here are pure arithmetic over slices and take no pointer at all
-/// (charter: the processing kernels are 100% safe). `CWelsPreProcess` builds this
-/// from `SPicture::plane_mut(i)`, which *is* the padded allocation.
+/// `CWelsPreProcess` builds this from `SPicture::plane_mut(i)`, which *is* the
+/// padded allocation.
 pub struct DenoisePlanes<'a> {
     pub y: &'a mut [u8],
     pub u: &'a mut [u8],
@@ -229,11 +221,7 @@ impl CDenoiser {
     /// `CDenoiser::Process` — `denoise.cpp:66`. The plugin method, kept so this
     /// object has the same surface as its four siblings in `SWelsVpContext`.
     ///
-    /// [`Denoise`] is the body. The split exists because the caller holds the
-    /// picture and the plugin through the same `&mut CWelsPreProcess`, and those two
-    /// borrows do not overlap in fact — only in what a method call can express. The
-    /// caller reads `m_uiType` (a `u16`, `Copy`) and then calls [`Denoise`] with the
-    /// picture in hand.
+    /// [`Denoise`] is the body.
     pub fn Process(&mut self, pSrc: &SPixMap, planes: &mut DenoisePlanes<'_>) -> i32 {
         Denoise(self.m_uiType, pSrc, planes)
     }
