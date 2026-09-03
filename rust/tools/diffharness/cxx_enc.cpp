@@ -49,7 +49,17 @@ static void InstallTraceCapture (ISVCEncoder* pEnc) {
   pEnc->SetOption (ENCODER_OPTION_TRACE_CALLBACK, &pfCb);
   void* pTraceCtx = (void*) g_pTraceLog;
   pEnc->SetOption (ENCODER_OPTION_TRACE_CALLBACK_CONTEXT, &pTraceCtx);
+  // P10.2.C1: the level is a knob so that a referee can ask for the DEBUG lines
+  // the screen preprocessor prints (`iVaaFrameSceneChangeIdc`,
+  // `WelsBuildRefListScreen()`) without moving the default. The levels are a bit
+  // mask (`codec_app_def.h:323-331`) and the sink delivers every message whose
+  // level is <= the configured one, so 8 (DEBUG) also delivers ERROR/WARNING/INFO.
+  // Unset — which is every existing caller, `log_referee.sh` included — keeps INFO.
   int iLevel = WELS_LOG_INFO;
+  const char* kpLevel = getenv ("OH264_TRACE_LEVEL");
+  if (kpLevel != NULL && *kpLevel != '\0') {
+    iLevel = atoi (kpLevel);
+  }
   pEnc->SetOption (ENCODER_OPTION_TRACE_LEVEL, &iLevel);
 }
 

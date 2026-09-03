@@ -66,7 +66,17 @@ unsafe fn install_trace_capture(pEnc: *mut ISVCEncoder) -> Option<Box<TraceSinkC
         // divergence the level check exists to catch. It said 3 until D-fid-4
         // (2026-08-26) — the sixth copy of F184's defect, outside the `src tests`
         // scope every enumeration of it had used.
-        let mut level: u32 = 4;
+        //
+        // **P10.2.C1: the default stays the literal; the override is parsed.**
+        // `OH264_TRACE_LEVEL`, when set, replaces it — that is how
+        // `scc_verdicts.sh` asks both drivers for `WELS_LOG_DEBUG` (8) without
+        // moving what every other caller sees. An unparseable value falls back to
+        // the literal rather than guessing.
+        let mut level: u32 = std::env::var("OH264_TRACE_LEVEL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .unwrap_or(4);
         ISVCEncoder::SetOption(
             pEnc,
             ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
