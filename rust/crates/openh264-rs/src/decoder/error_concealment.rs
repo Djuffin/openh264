@@ -64,8 +64,6 @@ pub const dsRefLost: i32 = 0x02;
 pub const dsBitstreamError: i32 = 0x04;
 pub const dsDataErrorConcealed: i32 = 0x20;
 
-// CPU Feature Flags
-
 // Reference picture list index
 pub const LIST_0: usize = 0;
 pub const LIST_1: usize = 1;
@@ -154,8 +152,6 @@ use crate::decoder::decoder_context::ec_active_idc;
 pub use crate::decoder::pic_queue::{PicId, RefSlot};
 pub use crate::decoder::picture::{same_picture, pic_slot};
 pub use crate::safe::plane::PaddedPlane;
-
-
 
 pub use crate::decoder::parameter_sets::{SSps, SPosOffset as SFrameCrop};
 pub use crate::decoder::decoder_core::{DqLayerState, SLayerInfo, MbDims};

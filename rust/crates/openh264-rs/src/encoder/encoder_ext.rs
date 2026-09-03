@@ -135,9 +135,8 @@ pub fn WelsGetEncBlockStrideOffset(pBlock: &mut [i32; 24], kiStrideY: i32, kiStr
 /// Counts the layers and the worst-case NAL units a frame can need, which sizes
 /// `pOut->sNalList` and `pOut->sNalLen`.
 ///
-/// # Safety
-/// `ppCtx` must point to a live context whose `pFuncList->pParametersetStrategy` is
-/// already set.
+/// Returns 0 on success and 1 if the frame would need more layers, NALs or slices
+/// than the limits allow, or if `pFuncList.pParametersetStrategy` is not installed.
 pub fn AcquireLayersNals(
     ctx: &mut sWelsEncCtx,
     pCountLayers: &mut i32,
@@ -214,8 +213,9 @@ pub fn AcquireLayersNals(
 
 /// `AllocStrideTables` — encoder_ext.cpp:1224.
 ///
-/// # Safety
-/// `ppCtx` must point to a live context with `pMemAlign` and `pSvcParam` set.
+/// # Panics
+/// Panics if the context's coding parameters have not been built yet: every
+/// dimension the tables are sized from is read through `ctx.param()`.
 pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 {
     // The C++ local `sMbSizeMap` is an array of a small anonymous struct.
     #[derive(Clone, Copy, Default)]
@@ -877,9 +877,10 @@ pub fn InitDqLayers(
 /// Sizes and allocates everything the encoder needs for a frame, then calls
 /// [`InitDqLayers`] and [`InitMbListD`].
 ///
-/// # Safety
-/// `ppCtx` must point to a live context with `pMemAlign`, `pSvcParam` and
-/// `pFuncList->pParametersetStrategy` set.
+/// # Panics
+/// Panics if the context's coding parameters have not been built, or if
+/// `pFuncList.pParametersetStrategy` has not been installed by
+/// `InitFunctionPointers` — the paraset buffer sizes are read through it.
 pub fn RequestMemorySvc(
     ctx: &mut sWelsEncCtx,
     pExistingParasetList: Option<&SExistingParasetList>,
@@ -1147,9 +1148,6 @@ pub fn RequestMemorySvc(
 ///
 /// Resolves the per-layer slice arguments, then derives `iMultipleThreadIdc` and the
 /// maximum slice count from them.
-///
-/// # Safety
-/// `pCodingParam` and `pMaxSliceCount` must be non-null.
 pub fn InitSliceSettings(
     pLogCtx: SLogContext,
     pCodingParam: &mut SWelsSvcCodingParam,
@@ -1216,9 +1214,6 @@ pub fn InitSliceSettings(
 ///
 /// The `X86_ASM` cache-line detection is not compiled on this target, so
 /// `iCacheLineSize` is 16 as in the `#else` branch.
-///
-/// # Safety
-/// All three out-pointers must be writable and `pCodingParam` initialised.
 pub fn GetMultipleThreadIdc(
     pLogCtx: SLogContext,
     pCodingParam: &mut SWelsSvcCodingParam,
@@ -1262,9 +1257,9 @@ pub fn GetMultipleThreadIdc(
 ///
 /// `MEMORY_MONITOR` and the `WelsLog` calls have no counterpart here.
 ///
-/// # Safety
-/// `ppCtx` and `pCodingParam` must be non-null; the context returned in `*ppCtx` is
-/// owned by the caller and must be released with [`WelsUninitEncoderExt`].
+/// The context handed back in `*ppCtx` is owned by the caller and is released with
+/// [`WelsUninitEncoderExt`], which unwinds the preprocessor's spatial pictures and
+/// the DQ layers before the box is dropped.
 pub fn WelsInitEncoderExt(
     ppCtx: &mut Option<Box<sWelsEncCtx>>,
     pCodingParam: &mut SWelsSvcCodingParam,
@@ -1358,9 +1353,6 @@ pub fn WelsInitEncoderExt(
 pub const STATISTICS_LOG_INTERVAL_MS: i32 = 5000;
 
 /// `FreeSliceInLayer` — encoder_ext.cpp:942.
-///
-/// # Safety
-/// `pDq` must be non-null.
 pub fn FreeSliceInLayer(pDq: &mut SDqLayer) {
     for iIdx in 0..MAX_THREADS_NUM {
         crate::encoder::svc_encode_slice::FreeSliceBuffer(pDq, iIdx);
@@ -1369,8 +1361,9 @@ pub fn FreeSliceInLayer(pDq: &mut SDqLayer) {
 
 /// `FreeDqLayer` — encoder_ext.cpp:951.
 ///
-/// # Safety
-/// `pDq` must have come from `InitDqLayers` and must not be used afterwards.
+/// Releases every slice bank of the layer, uninitialises its slice segment context
+/// and zeroes `iMaxSliceNum`, so the layer has to be rebuilt by `InitDqLayers`
+/// before it can be used again.
 pub fn FreeDqLayer(p: &mut SDqLayer) {
     FreeSliceInLayer(&mut *p);
 
@@ -1542,9 +1535,11 @@ mod tests {
 /// `WelsUninitEncoderExt` — encoder_ext.cpp:2246, with `FreeMemorySvc`
 /// (encoder_ext.cpp:1804) folded in.
 ///
-/// # Safety
-/// `ppCtx` must point to a context from [`WelsInitEncoderExt`], or be null/point to
-/// null.
+/// `None` is accepted and does nothing.
+///
+/// # Panics
+/// Panics if the context's coding parameters were never built: the teardown log
+/// reads `iMultipleThreadIdc` from them before anything is released.
 pub fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
     let Some(mut ctxBox) = pEncContext else {
         return;
@@ -2470,10 +2465,10 @@ pub fn WriteSavcParaset(
 /// a rotation, and `Update` on those kinds is the inherited `CWelsParametersetIdConstant`
 /// body that memsets the whole offset block (see `ParasetIdKind`'s note on `Update`).
 ///
-/// # Safety
-/// `pCtx` must be a live encoder context with its parameter-set arrays allocated to
-/// the counts `GetNeededSpsNum`/`GetNeededPpsNum` asked `RequestMemorySvc` for, and
-/// `ppLayerBsInfo` must name a slot with room for `2 * kiSpatialNum` more layers.
+/// # Panics
+/// Panics if `pOut.sNalLen` is shorter than the parameter-set counts
+/// `GetNeededSpsNum`/`GetNeededPpsNum` asked `RequestMemorySvc` for, or if
+/// `pFbi.sLayerInfo` has no room for `2 * kiSpatialNum` more layers past `*iLbi`.
 pub fn WriteSavcParaset_Listing(
     pCtx: &mut sWelsEncCtx,
     kiSpatialNum: i32,
@@ -2684,8 +2679,8 @@ pub fn PicPartitionNumDecision(pCtx: &mut sWelsEncCtx) -> i32 {
 
 /// `DynslcUpdateMbNeighbourInfoListForAllSlices` — encoder_ext.cpp:2397.
 ///
-/// # Safety
-/// `pCurDq` must be live with `sMbDataP` allocated.
+/// # Panics
+/// Panics if `sMbDataP` holds fewer macroblocks than `sSliceEncCtx.iMbNumInFrame`.
 pub fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer) {
     let SDqLayer { sMbDataP, sSliceEncCtx, .. } = pCurDq;
     let kiMbWidth = sSliceEncCtx.iMbWidth as i32;
@@ -2733,9 +2728,6 @@ pub fn WelsInitCurrentQBLayerMltslc(pCtx: &mut sWelsEncCtx) {
 /// `pOverallMbMap` with the partition index. Note the trailing loop clears the
 /// *whole* of the four partition arrays out to `MAX_THREADS_NUM`, not just the
 /// entries beyond `iPartitionNum` that this call wrote.
-///
-/// # Safety
-/// `pCurDq` must be live with `sSliceEncCtx.pOverallMbMap` allocated.
 pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum: i32) {
     let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
     let kiMbNumInFrame = pSliceCtx.iMbNumInFrame;
@@ -2805,8 +2797,8 @@ pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum:
 /// bitstream depends on it. It is transcribed anyway because `uiFrmByte`'s
 /// arithmetic is unsigned and the shift is data-dependent.
 ///
-/// # Safety
-/// `pCtx` must be a context built by [`WelsInitEncoderExt`].
+/// # Panics
+/// Panics if the frame's current DQ layer has not been stamped.
 pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
     /// `#define byte_complexIMBat26 (60)`, local to this function in the C++.
     const byte_complexIMBat26: u32 = 60;
@@ -2854,8 +2846,8 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
 
 /// `DynSliceRealloc` — encoder_ext.cpp:4525.
 ///
-/// # Safety
-/// `pCtx` must be a context built by [`WelsInitEncoderExt`].
+/// # Panics
+/// Panics if the frame's current DQ layer has not been stamped.
 pub fn DynSliceRealloc(
     pCtx: &mut sWelsEncCtx,
     pFbi: &mut SFrameBSInfo,
@@ -2888,9 +2880,8 @@ pub fn DynSliceRealloc(
 /// slice counter. `iSliceIdx` steps by `iActiveThreadsNum`, so slice indices are
 /// **not** contiguous when more than one partition is in play.
 ///
-/// # Safety
-/// `pCtx` must be a context built by [`WelsInitEncoderExt`]; `pLayerBsInfo` must
-/// have `pNalLengthInByte` installed.
+/// # Panics
+/// Panics if the frame's current DQ layer has not been stamped.
 pub fn WelsCodeOnePicPartition(
     pCtx: &mut sWelsEncCtx,
     pFbi: &mut SFrameBSInfo,
@@ -3064,8 +3055,9 @@ pub fn WelsCodeOnePicPartition(
 /// The `ENC_RETURN_UNSUPPORTED_PARA` returns that remain in this function are the
 /// layer-count bounds (`iLayerNum >= MAX_LAYER_NUM_OF_FRAME`), not feature refusals.
 ///
-/// # Safety
-/// `pCtx` must be a context built by [`WelsInitEncoderExt`].
+/// # Panics
+/// Panics if the context's coding parameters and output block have not been built
+/// by [`WelsInitEncoderExt`].
 pub fn WelsEncoderEncodeExt(
     pCtx: &mut sWelsEncCtx,
     pFbi: &mut SFrameBSInfo,

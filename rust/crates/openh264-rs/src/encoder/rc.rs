@@ -447,22 +447,6 @@ pub struct SRCSlicing {
     pub iGomTargetBits: i32,
 }
 
-// Slice header subset for rate control
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /// `SWelsRcFunc` — `rc.h:132`.
 ///
 /// **`eInstalledMode` is deliberately *not* `pSvcParam->iRCMode`, and the two can

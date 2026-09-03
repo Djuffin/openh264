@@ -296,9 +296,9 @@ pub extern "C" fn WelsMdInterDecidedPskip(
 
 /// `svc_base_layer_md.cpp:1997`.
 ///
-/// # Safety
-/// All pointers must be valid and `pfFirstIntraMode`, `pfSetScrollingMv` and
-/// `pfInterFineMd` assigned — `PreprocessSliceCoding` does this for a P slice.
+/// # Panics
+/// If `pfFirstIntraMode`, `pfSetScrollingMv` or `pfInterFineMd` is unassigned —
+/// `PreprocessSliceCoding` assigns all three for a P slice.
 pub extern "C" fn WelsMdInterSecondaryModesEnc<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
@@ -345,10 +345,11 @@ pub extern "C" fn WelsMdInterSecondaryModesEnc<'a>(
 /// `pfIntraFineMd`, reconstructs the luma if I16x16 survived, then decides and
 /// reconstructs chroma.
 ///
-/// # Safety
-/// All four pointers must be valid, `pEncCtx->pFuncList->pfIntraFineMd` must be
-/// assigned (`PreprocessSliceCoding` does this), and `WelsMdIntraInit` must have run
-/// for this macroblock.
+/// `WelsMdIntraInit` must have run for this macroblock.
+///
+/// # Panics
+/// If `pEncCtx->pFuncList->pfIntraFineMd` is unassigned — `PreprocessSliceCoding`
+/// assigns it.
 pub extern "C" fn WelsMdIntraSecondaryModesEnc(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -385,9 +386,6 @@ pub extern "C" fn WelsMdIntraSecondaryModesEnc(
 /// to the reconstructed frame buffer and clearing non-zero coefficient counts.
 ///
 /// Translated from `WelsRecPskip` in `codec/encoder/core/src/svc_encode_mb.cpp:315`.
-///
-/// # Safety
-/// All pointers in `pCurLayer`, `pFuncList`, `pCurMb`, and `pMbCache` must be valid.
 pub extern "C" fn WelsRecPskip(
     pCurLayer: &SDqLayer,
     _pFuncList: &SWelsFuncPtrList,
@@ -437,9 +435,6 @@ fn VaaBackgroundMbDataUpdate(
 ///
 /// Translated from `WelsMdBackgroundMbEnc` in
 /// `codec/encoder/core/src/svc_base_layer_md.cpp:1352`.
-///
-/// # Safety
-/// All pointers must be valid and non-null.
 pub extern "C" fn WelsMdBackgroundMbEnc(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,

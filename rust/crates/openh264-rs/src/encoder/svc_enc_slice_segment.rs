@@ -59,9 +59,9 @@ fn GomSizeForMbWidth(kiMbWidth: i32) -> i32 {
 /// C++ aliases `uiSliceMbNum` (a `uint32_t[]`) through an `int32_t*`, so the
 /// assignments and the `iNumMbLeft <= 0` test are signed; that is reproduced here.
 ///
-/// # Safety
-/// `pSliceArg` must be non-null, and `uiSliceNum` must be non-zero and no greater than
-/// `uiSliceMbNum`'s length.
+/// # Panics
+/// Panics if `uiSliceNum` is zero (division by zero), or greater than
+/// `uiSliceMbNum`'s length (out-of-bounds slice index).
 pub fn CheckFixedSliceNumMultiSliceSetting(
     kiMbNumInFrame: i32,
     pSliceArg: &mut SSliceArgument,
@@ -90,9 +90,8 @@ pub fn CheckFixedSliceNumMultiSliceSetting(
 ///
 /// Slice parameter check for `SM_ROWMB_SLICE`: one macroblock row per slice.
 ///
-/// # Safety
-/// `pSliceArg` must be non-null and `uiSliceNum` no greater than `uiSliceMbNum`'s
-/// length.
+/// # Panics
+/// Panics if `uiSliceNum` is greater than `uiSliceMbNum`'s length.
 pub fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: &mut SSliceArgument) -> bool {
     let kuiSliceNum = (*pSliceArg).uiSliceNum;
     let mut uiSliceIdx: u32 = 0;
@@ -190,9 +189,9 @@ pub fn GomValidCheckSliceNum(kiMbWidth: i32, kiMbHeight: i32, pSliceNum: &mut u3
 /// Assigns GOM-aligned macroblock counts to every slice but the last, which takes the
 /// remainder.
 ///
-/// # Safety
-/// `pSliceArg` must be non-null with a non-zero `uiSliceNum` no greater than
-/// `uiSliceMbNum`'s length.
+/// # Panics
+/// Panics if `uiSliceNum` is zero (division by zero), or greater than
+/// `uiSliceMbNum`'s length (out-of-bounds slice index).
 pub fn GomValidCheckSliceMbNum(
     kiMbWidth: i32,
     kiMbHeight: i32,
@@ -356,8 +355,8 @@ fn new_mb_map(kiCountMbNum: i32) -> Vec<AtomicU16> {
 /// multiple slice type in the future". `InitSliceSegment` returns that value directly,
 /// so multi-slice `InitSlicePEncCtx` reports failure while still having filled the map.
 ///
-/// # Safety
-/// `pCurDq` must be non-null with `sSliceEncCtx.pOverallMbMap` allocated.
+/// # Panics
+/// Panics if `sSliceEncCtx.pOverallMbMap` holds fewer than `iMbNumInFrame` entries.
 pub fn AssignMbMapMultipleSlices(
     pCurDq: &mut SDqLayer,
     kpSliceArgument: &SSliceArgument,

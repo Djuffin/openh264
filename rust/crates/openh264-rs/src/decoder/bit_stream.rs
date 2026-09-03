@@ -225,10 +225,10 @@ impl RawDataBuffer {
     /// The readable window behind offset `start`: everything from `start` to the end
     /// of the allocation — was `readable_from`'s `pEnd - p`, now derived from the
     /// owner at call time. `start <= len` holds for every offset the decoder mints
-    /// ([`append_ebsp_stripped`] returns positions inside the buffer,
-    /// and growth never shrinks it); the clamp routes a broken invariant to an empty
-    /// window — every read then fails with `ERR_INFO_READ_OVERFLOW` — rather than
-    /// introducing a panic where the raw code read allocation bytes.
+    /// ([`append_ebsp_stripped`](Self::append_ebsp_stripped) returns positions inside
+    /// the buffer, and growth never shrinks it); the clamp routes a broken invariant
+    /// to an empty window — every read then fails with `ERR_INFO_READ_OVERFLOW` —
+    /// rather than introducing a panic where the raw code read allocation bytes.
     #[inline(always)]
     pub fn window_from(&self, start: usize) -> &[u8] {
         debug_assert!(

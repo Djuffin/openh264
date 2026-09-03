@@ -677,15 +677,13 @@ pub fn layer_ref_pic<'a>(
 /// borrow is the **context's**, not the layer's, and elision would retie it to
 /// `pCtx` only by accident of argument order.
 ///
+/// As with [`layer_ref_pic`], a caller must not hold the result across a call
+/// that resolves another handle in the same pool.
+///
 /// # Panics
 /// If the layer has no reference picture bound — before the first inter frame,
 /// or on a layer not yet stamped for a frame. The callers that *do* ask keep
 /// [`layer_ref_pic`].
-///
-/// # Safety
-/// As [`layer_ref_pic`]: the layer must be stamped for the frame in progress,
-/// and the caller must not hold the result across a call that resolves another
-/// handle in the same pool.
 #[inline]
 pub fn layer_ref_pic_expect<'a>(
     pCtx: &'a sWelsEncCtx,
@@ -698,8 +696,8 @@ pub fn layer_ref_pic_expect<'a>(
 /// pointer lives on `SPicture` and this is the one place it is re-derived. `None`
 /// where no reference is bound, or there is no list.
 ///
-/// # Safety
-/// The layer must be stamped for the frame in progress.
+/// The storage is the one the layer's stamped reference list names, so it is the
+/// current frame's only while the layer is stamped for the frame in progress.
 #[inline]
 pub fn layer_ref_feature_storage<'a>(
     pCtx: &'a sWelsEncCtx,
@@ -712,11 +710,9 @@ pub fn layer_ref_feature_storage<'a>(
 /// go through `&self`. Two workers may hold it at the same time;
 /// [`crate::encoder::rec_view`] carries the argument for why it is sound.
 ///
-/// `None` means no frame has started, or the picture is unbound.
-///
-/// # Safety
-/// `pLayer` must be stamped by `WelsInitCurrentLayer`, and the frame it stamped
-/// must still be the frame in progress.
+/// `None` means no frame has started, or the picture is unbound. The view is the
+/// one `WelsInitCurrentLayer` stamped, so it is the current frame's only while the
+/// frame it stamped is still the frame in progress.
 #[inline]
 pub fn layer_rec_view<'a>(
     pLayer: &'a SDqLayer,
@@ -727,13 +723,12 @@ pub fn layer_rec_view<'a>(
 /// [`layer_rec_view`] for the readers that **do not ask** — every consumer
 /// inside a frame, where `WelsInitCurrentLayer` has already stamped the view.
 ///
+/// As with [`layer_rec_view`], the frame that stamp named must still be the frame
+/// in progress for the view to be this frame's.
+///
 /// # Panics
 /// If no frame has started, or the picture is unbound. The callers that *do* ask
 /// keep [`layer_rec_view`].
-///
-/// # Safety
-/// As [`layer_rec_view`]: the layer must be stamped by `WelsInitCurrentLayer`,
-/// and the frame it stamped must still be the frame in progress.
 #[inline]
 pub fn layer_rec_view_expect<'a>(
     pLayer: &'a SDqLayer,
@@ -755,8 +750,8 @@ pub fn layer_rec_view_expect<'a>(
 /// build is three plane headers — twelve words, no allocation — against a pool
 /// resolution the caller was already paying for.
 ///
-/// # Safety
-/// As [`layer_ref_pic`]: the layer must be stamped for the frame in progress.
+/// Resolved through [`layer_ref_pic`], so the planes are the frame in progress's
+/// only while the layer is stamped for that frame.
 #[inline]
 pub fn layer_ref_view(
     pCtx: &sWelsEncCtx,
@@ -772,11 +767,11 @@ pub fn layer_ref_view(
 /// No `'a`: [`layer_ref_view`] returns a value, not a borrow — `RoPicView` is
 /// three plane headers built on the spot.
 ///
+/// As with [`layer_ref_view`], the planes are the frame in progress's only while
+/// the layer is stamped for that frame.
+///
 /// # Panics
 /// If the layer has no reference picture bound.
-///
-/// # Safety
-/// As [`layer_ref_pic`]: the layer must be stamped for the frame in progress.
 #[inline]
 pub fn layer_ref_view_expect(
     pCtx: &sWelsEncCtx,

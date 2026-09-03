@@ -1081,8 +1081,8 @@ pub fn CheckMatchedSubsetSps(pSubsetSps1: &SSubsetSps, pSubsetSps2: &SSubsetSps)
 /// `iPpsId` and the deblocking-filter *idc* fields differ between an existing entry
 /// and the probe by construction, so comparing everything would never match.
 ///
-/// # Safety
-/// `pPpsArray` must hold at least `iPpsNumInUse` entries.
+/// # Panics
+/// Panics if `pPpsArray` holds fewer than `iPpsNumInUse` entries.
 pub fn FindExistingPps(
     pSps: Option<&SWelsSPS>,
     pSubsetSps: Option<&SSubsetSps>,

@@ -295,7 +295,7 @@ pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
     }
 }
 
-/// [`WelsIDctT4RecOnMb`]'s seam flavour: the 16x16 luma inter reconstruction, four
+/// `WelsIDctT4RecOnMb`'s seam flavour: the 16x16 luma inter reconstruction, four
 /// 8x8 quadrants of [`idct_four_t4_rec_in_place_view`].
 ///
 /// In-place only, because that is the only way its one caller ever used it —
@@ -383,10 +383,11 @@ pub fn dequant_ihadamard_2x2_dc(dct: &mut [i16; 4], mf: u16) {
     dct[3] = (((del_u - del_d) * m) >> 1) as i16;
 }
 
-/// `decode_mb_aux.cpp:251`. Installs the scalar dequantisation and IDCT tables.
+/// `decode_mb_aux.cpp:251`. Installs the scalar dequantisation kernels.
 ///
-/// # Safety
-/// `pFuncList` must be a valid, writable `SWelsFuncPtrList`.
+/// The C++'s three `pfIDct*` slots are not carried by `SWelsFuncPtrList` (see
+/// `abi_guard.rs`), so nothing is installed for them: the port calls those kernels
+/// by name.
 pub fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
     let fl = &mut *pFuncList;
 

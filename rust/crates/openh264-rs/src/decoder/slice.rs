@@ -80,8 +80,6 @@ pub enum EListIndex {
     LIST_A = 2,
 }
 
-/// Forward declaration type aliases for Parameter Sets.
-
 /// Single reference picture list reordering command syntax element.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
@@ -154,7 +152,6 @@ pub struct TagPredWeightTabSyntax {
 pub type SPredWeightTabSyn = TagPredWeightTabSyntax;
 pub type SPredWeightTable = SPredWeightTabSyn;
 pub type SPredList = SPredWeightList;
-
 
 impl Default for TagPredWeightTabSyntax {
     fn default() -> Self {

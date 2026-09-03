@@ -130,8 +130,6 @@ pub const MB_TYPE_8x8: u32 = 0x00000040;
 pub const MB_TYPE_8x8_REF0: u32 = 0x00000080;
 pub const MB_TYPE_SKIP: u32 = 0x00000100;
 
-// CPU feature flags
-
 // Global Lookup Tables
 pub const g_kiQpCostTable: [i32; 52] = [
     1, 1, 1, 1, 1, 1, 1, 1,
@@ -169,8 +167,6 @@ pub const G_KUI_GOLOMB_UE_LENGTH: [u32; 256] = [
 // Data Structures
 
 pub use crate::encoder::svc_motion_estimate::SadPredISatdUnit;
-
-
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]

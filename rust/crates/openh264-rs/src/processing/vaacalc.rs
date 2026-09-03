@@ -31,13 +31,13 @@ pub struct CVAACalculation {
 
 // The five `VAACalc*` kernels are one whole-picture walk that differs only in which
 // per-block statistics it reports, and the C++ writes that walk out five times. Here
-// it is written once: [`walk_picture`] over [`block_stats`], with three const flags
+// it is written once: `walk_picture` over `half_mb_stats`, with three const flags
 // selecting the accumulators. The flags are compile-time so the unused arithmetic is
 // not emitted at all.
 
 /// The per-8x8-block statistics the five `VAACalc*` kernels choose between.
 ///
-/// Which fields are live is a compile-time decision — see [`block_stats`] — so a
+/// Which fields are live is a compile-time decision — see [`accumulate`] — so a
 /// kernel that does not report `sqsum` never emits the multiply that would produce
 /// it. Fields its flags exclude stay zero.
 #[derive(Clone, Copy, Default)]
@@ -379,8 +379,8 @@ pub fn vaa_calc_sad_ssd_bgd(
 }
 
 /// The two luma planes [`CVAACalculation::Process`] reads, from each picture's
-/// logical origin — the family's [`ScdPlanes`] shape
-/// (`crate::processing::scene_change_detection::ScdPlanes`).
+/// logical origin — the family's
+/// [`ScdPlanes`](crate::processing::scene_change_detection::ScdPlanes) shape.
 pub struct VaaCalcPlanes<'a> {
     pub cur: &'a [u8],
     pub refp: &'a [u8],

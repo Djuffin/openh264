@@ -1114,7 +1114,6 @@ impl TraceUserCtx {
 
     /// Invoke the caller's sink — the one C-ABI call this handle exists for.
     ///
-    /// # Safety of the call itself
     /// `pfLog` and the handle were installed together by the application through
     /// `SetOption`; neither can carry a lifetime across `codec_api.h`, so their
     /// validity is the caller's contract exactly as it is in the reference.
@@ -1790,7 +1789,7 @@ pub(crate) const PROBE_DECODE_FRAME2: u32 = 1;
 #[cfg(test)]
 pub(crate) const PROBE_ENCODE_FRAME: u32 = 2;
 
-/// Panics if this thread armed [`PANIC_PROBE`] for `$which`. Expands to nothing
+/// Panics if this thread armed `PANIC_PROBE` for `$which`. Expands to nothing
 /// outside `cfg(test)`.
 macro_rules! panic_probe {
     ($which:expr) => {

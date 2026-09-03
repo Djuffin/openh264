@@ -912,8 +912,6 @@ paraset_id!(SpsId, u8);
 paraset_id!(PpsId, u16);
 paraset_id!(SubsetSpsId, u8);
 
-/// Frame crop offset syntax element in SPS
-
 /// Sequence Parameter Set (SPS) syntax structure
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

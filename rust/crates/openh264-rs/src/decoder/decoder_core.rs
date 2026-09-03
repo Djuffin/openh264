@@ -1814,8 +1814,6 @@ pub fn WelsCPUFeatureDetect(pCpuCores: &mut i32) -> u32 {
     0
 }
 
-/// Initializes CPU feature detection and decoder function tables.
-/// Matches `int32_t WelsOpenDecoder (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp:52`.
 /// Fill data fields in default for decoder context.
 /// Matches `void WelsDecoderDefaults (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp`.
 pub fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, pLogCtx: Option<&SLogContext>) {
@@ -1921,13 +1919,6 @@ pub fn ResetReorderingPictureBuffers(
     pPictReoderingStatus.bHasBSlice = false;
 }
 
-/// Matches `int32_t DecoderConfigParam (PWelsDecoderContext pCtx, const SDecodingParam* kpParam)`
-/// in `decoder.cpp:649`.
-///
-/// `InitErrorCon` is the C++'s next statement: the mode
-/// just copied selects which kernels `sCopyFunc` holds, and it also clears
-/// `bFreezeOutput`, which `WelsDecoderDefaults` sets **true**.
-///
 /// `void CWelsDecoder::OutputStatisticsLog (SDecoderStatistics&)` —
 /// `welsDecoderExt.cpp:947`.
 ///

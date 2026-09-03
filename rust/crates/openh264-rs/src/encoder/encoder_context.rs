@@ -1,9 +1,10 @@
 #![deny(unsafe_code)]
+//! OpenH264 Video Encoder Core Context and State Machine
+//!
+//! Translated from `codec/encoder/core/inc/encoder_context.h` and
+//! `codec/encoder/core/src/encoder.cpp`.
+
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
-/// OpenH264 Video Encoder Core Context and State Machine
-///
-/// Translated from `codec/encoder/core/inc/encoder_context.h` and
-/// `codec/encoder/core/src/encoder.cpp`.
 
 use std::ffi::c_char;
 use crate::api::codec_api::ECOMPLEXITY_MODE::*;
@@ -1219,7 +1220,8 @@ pub struct sWelsEncCtx {
     /// 52 QP rows of `iMvdCostTableStride` entries each. Root:
     /// [`sWelsEncCtx::mvd_cost_table`]; the **origin** every consumer actually wants
     /// (the zero-MVD entry, `iMvdCostTableSize` into the table, so that a negative MVD
-    /// is a negative offset) is [`sWelsEncCtx::mvd_cost_origin`].
+    /// is a negative offset) is
+    /// [`MvdCostCursor::origin`](crate::safe::mvd_cost::MvdCostCursor::origin).
     pub pMvdCostTable: Vec<u16>,
     pub iMvdCostTableSize: i32,
     pub iMvdCostTableStride: i32,
@@ -1237,7 +1239,8 @@ pub struct sWelsEncCtx {
     /// "single-threaded encoder".
     pub pSliceThreading: Option<Box<SSliceThreading>>,
     /// `IWelsReferenceStrategy*` in C++ (`encoder_context.h`) — the strategy's
-    /// *identity*. See [`RefStrategyKind`].
+    /// *identity*. See
+    /// [`RefStrategyKind`](crate::encoder::ref_list_mgr_svc::RefStrategyKind).
     pub eRefStrategy: crate::encoder::ref_list_mgr_svc::RefStrategyKind,
     /// The source picture being encoded — a slot of `pVpp`'s spatial pool.
     pub pEncPic: Option<SrcPicId>,
@@ -1291,7 +1294,8 @@ pub struct sWelsEncCtx {
     /// word; [`vaa_ext_ref`](sWelsEncCtx::vaa_ext_ref) is the `Screen` arm.
     pub pVaa: Option<Box<VaaBlock>>,
     /// The preprocess object, `Box`-built by
-    /// [`CWelsPreProcess::CreatePreProcess`] and dropped by the teardown; `None`
+    /// [`CWelsPreProcess::CreatePreProcess`](crate::encoder::wels_preprocess::CWelsPreProcess::CreatePreProcess)
+    /// and dropped by the teardown; `None`
     /// before init and after `FreeMemorySvc`. The methods
     /// that take both `&mut self` (the vpp) and `&mut sWelsEncCtx` are called
     /// through the `Option::take` dance — the box moves out for the call and back
@@ -1613,9 +1617,6 @@ pub fn InitPic(
 }
 
 /// Wires background detection function pointers into the encoder function table.
-///
-/// # Safety
-/// `pFuncList` must be non-null and point to a valid `SWelsFuncPtrList`.
 pub fn WelsInitBGDFunc(
     pFuncList: &mut SWelsFuncPtrList,
     kbEnableBackgroundDetection: bool,
@@ -1790,8 +1791,7 @@ pub fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
 
 /// Reinitializes bitstream buffer write offsets and NAL indices.
 ///
-/// # Safety
-/// `pEncCtx` must be non-null and contain a valid `pOut`.
+/// A no-op when `pOut` is `None`.
 pub fn InitBitStream(pEncCtx: &mut sWelsEncCtx) {
     let Some(pOut) = pEncCtx.pOut.as_deref_mut() else {
         return;
