@@ -1,22 +1,13 @@
-//! **The reset-arm reachability sweep, as a standing test** (Phase 8 session C, T8.C2).
-//!
-//! Session B wrote this as a throwaway probe to answer one question — *are the two
-//! transcribed reset arms (`dsOutOfMemory`, `dsRefListNullPtrs`) reachable from any
-//! stream this project owns?* — and it answered `no` and then **aborted on the ninth
-//! stream**, which is how F77 was found. A probe that finds a process-aborting defect
-//! on its first run is not a throwaway. It lives here now.
+//! **The reset-arm reachability sweep.**
 //!
 //! It is the widest decode this project runs: every `res/*.264` under every base
 //! concealment mode under both bitstream declarations, in one pass. The conformance
 //! 60 pin *output* on a curated set; the malformed corpus pins *codes* on damaged
 //! prefixes of eleven streams plus `Error_I_P`; this pins **which error classes the
-//! whole asset tree can produce at all**, which is the question neither of the other
-//! two can be asked.
+//! whole asset tree can produce at all**.
 //!
 //! **Release only** (`cfg(not(debug_assertions))`), deliberately: it is one pass over
 //! ~250 whole-stream decodes and the debug suite already carries the conformance 60.
-//! `gates.sh` runs `cargo test --release` at `commit` level, so it runs at every
-//! commit — once.
 #![cfg(not(debug_assertions))]
 
 use openh264_rs::api::codec_api::*;
@@ -41,17 +32,15 @@ const BS_TYPES: [VIDEO_BITSTREAM_TYPE; 2] = [
 /// The union of every `DECODING_STATE` bit the sweep produces.
 ///
 /// `0x02 dsRefLost | 0x04 dsBitstreamError | 0x10 dsNoParamSets | 0x20
-/// dsDataErrorConcealed`. Session B measured the same value over the same sweep
-/// before `Error_I_P.264` could be decoded at all (T8.B3); T8.C1 added that stream's
-/// five frames and the union did not move.
+/// dsDataErrorConcealed`.
 ///
 /// **This is pinned in both directions on purpose.** A bit appearing means a decode
 /// path became reachable that was not; a bit disappearing means one stopped being
-/// reachable. Either is a fact about the port that should have to be written down.
+/// reachable.
 const EXPECTED_UNION: i32 = 0x36;
 
-/// The two arms this sweep exists to keep honest: transcribed from the reference,
-/// reachable from **no** stream in `res/`, and said so at their sites.
+/// The two arms this sweep exists to keep honest: reachable from **no** stream in
+/// `res/`.
 const UNREACHED: [(i32, &str); 2] = [
     (0x4000, "dsOutOfMemory"),
     (0x0040, "dsRefListNullPtrs"),
@@ -119,7 +108,7 @@ fn every_res_stream_under_every_concealment_mode_reaches_a_known_set_of_states()
     // independent — one decoder object per (stream, mode, declaration), created and
     // destroyed inside the thread that uses it, and no `*mut ISVCDecoder` ever crosses
     // a thread — so the work parallelises exactly. Nothing here relies on `Decoder`
-    // being `Send`, which it is not (T8.B9's measured verdict).
+    // being `Send`, which it is not.
     let nthreads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(files.len().max(1));
     let (union_bits, offenders, decodes) = std::thread::scope(|scope| {
         let mut handles = Vec::new();
@@ -136,9 +125,7 @@ fn every_res_stream_under_every_concealment_mode_reaches_a_known_set_of_states()
                         for &bs in &BS_TYPES {
                             // The decode itself is the abort test: an `extern "C"`
                             // thunk that panics kills this process and no assertion
-                            // below ever runs. That is exactly what happened at
-                            // `51a0956a`, and what P13's guard now prevents even for a
-                            // defect nobody has found yet.
+                            // below ever runs.
                             let bits = unsafe { sweep_one(&data, ec, bs) };
                             decodes += 1;
                             union_bits |= bits;

@@ -36,22 +36,6 @@
 //! vector and reference index cache propagation.
 
 #![deny(unsafe_code)]
-// **Phase 5, T5.AB1 — `PPicture`'s first module, and the survivor named at its
-// items (face 0).** The module carried the lint with **three exceptions, allowed
-// by name**, and every one of them held `PicRefs` beside the picture being decoded.
-// **T5b.1 closed all three** — the arm stopped being an address and became an
-// identity (`PicRefs::resolve`) — so this module allows nothing today, and T5b.9
-// deleted the last dead `PPicture` re-export it carried.
-//
-// The twelve signatures that carry the picture *without* a reference view take a
-// borrow — `Option<&SPicture>` where they read, `Option<&mut SPicture>` where they
-// write, `&mut SPicture` for the one whose C++ dereferences unconditionally — and
-// the writes into them became indexing, because `MbArray::get_mut` already hands
-// back the macroblock's own `[T; 16]` and the raw base was that array all along.
-//
-// The three that keep `PPicture` are the phase's **second enumerated survivor**
-// (steward, at `6b6dd9a3`; `phase5_session_ab.md` §0), and the reason is written at
-// each item.
 
 #![allow(
     non_snake_case,
@@ -201,8 +185,6 @@ pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState};
 
 pub use crate::decoder::decoder_context::{SRefPic};
 use crate::decoder::decoder_context::{SliceCtx, active_pps, active_sps, pps_of, sps_of};
-// The real decoder context and SPS, not local stand-ins: these are reached through
-// raw pointers from decode_slice, so the layouts must be the genuine ones.
 pub use crate::decoder::decoder_context::{
     SWelsDecoderContext, PicRefs, ref_id,
 };
@@ -215,28 +197,15 @@ pub use crate::decoder::decode_slice::{g_kuiCache30ScanIdx, g_kuiScan4};
 // Block Fill/Copy Primitives, in the grid's own units
 // ============================================================================
 
-// **T5.R5 deleted this file's `LD32`/`ST32`/`LD16`/`ST16`/`LD64`/`ST64` and the two
-// byte-pointer block helpers `SetRectBlock`/`CopyRectBlock4Cols`.** They were the C's
-// packed-word idiom transliterated — read/write two `int16_t` as one `int32_t`, fill a
-// rectangle through a byte pointer with a width dispatch — and every one of their 207
-// uses in this file has become an assignment of the value the C was moving: an
-// `[i16; 2]` motion vector, an `i8` reference index, a `[[i16; 2]; 16]` block. F35's
-// alignment precondition is gone with them rather than satisfied, and S6's
-// never-widen rule now holds by construction: nothing here is wider than what it
-// moves. What survives is the *arithmetic* two of those uses depended on, spelled
-// where it can be read:
-
 /// Fills the 2x2 4x4-block square whose top-left is `origin` with one reference index,
-/// **including the C's sign-extension quirk** (T5.R5).
+/// **including the C's sign-extension quirk**.
 ///
 /// `SetRectBlock`'s 1-byte path broadcasts through `val * 0x0101` in `uint32_t` and
 /// truncates to 16 bits, and every caller here passes a sign-extended `int8_t`: for
 /// `val = -1` the product is `0xFFFFFEFF`, so the pair written is `{-1, -2}`, not
-/// `{-1, -1}`. The arithmetic is kept exactly (S6) — repairing it here would disagree
-/// with the reference decoder — and it is spelled once, where it can be read, instead
-/// of hiding inside a byte-pointer helper's width dispatch. The two
-/// `(uint8_t)REF_NOT_IN_LIST` sites are *not* this: C casts to unsigned itself there,
-/// so those are plain fills.
+/// `{-1, -1}`. The arithmetic is kept exactly — repairing it here would disagree
+/// with the reference decoder. The two `(uint8_t)REF_NOT_IN_LIST` sites are *not*
+/// this: C casts to unsigned itself there, so those are plain fills.
 #[inline(always)]
 pub fn set_rect_ref(block: &mut [i8; 16], origin: usize, val: i8) {
     let broadcast = (val as i32 as u32).wrapping_mul(0x0101);
@@ -248,13 +217,6 @@ pub fn set_rect_ref(block: &mut [i8; 16], origin: usize, val: i8) {
 }
 
 /// Fills the 2x2 4x4-block square whose top-left is `origin` with one motion vector.
-///
-/// **T5.R5: `SetRectBlock`'s only surviving decoder shape, typed.** The C macro took a
-/// byte pointer, a byte stride and an element size, and every caller here passed
-/// `(2, 2, 16, LD32(mv), 4)` — a 2x2 block of 4-byte elements over a 16-byte row —
-/// which in the grid's own units is this. The MV is copied as an `[i16; 2]`, so no
-/// operation is wider than the value it moves (S6) and F35's alignment precondition
-/// is gone rather than satisfied by accident.
 #[inline(always)]
 pub fn set_rect_mv(block: &mut [[i16; 2]; 16], origin: usize, val: [i16; 2]) {
     block[origin] = val;
@@ -292,34 +254,12 @@ pub fn WELS_MIN_POSITIVE(a: i8, b: i8) -> i8 {
     }
 }
 
-// **T5.X4: `SetRectBlock` and `CopyRectBlock4Cols` are deleted, not converted.**
-// T5.R5's note above says every one of their 207 uses became an assignment of the
-// value the C was moving — and it was right: the two definitions had **zero
-// callers anywhere in the crate** from that commit onwards. They stood here as
-// 82 raw-pointer casts (65 `*mut u32` among them) and a width dispatch that
-// nothing dispatched to. S18's straggler class, deleted where it was found. F35's
-// record is `phase5_findings.md`'s; the alignment precondition it named went with
-// the last use, not with this deletion.
-
 // ============================================================================
 // Macroblock Type Accessor
 // ============================================================================
 
 /// The macroblock-type array this layer reads, **whole** — the picture's when there
 /// is a picture, the layer's grid otherwise.
-///
-/// T5.X4: this handed back `mb_grid_ptr(.., 0)`, the array's base as a raw pointer,
-/// because every caller indexes it at *neighbour* addresses (left, top, top-left,
-/// top-right) and a narrowing slice would be UB at the first one (S28). Handing back
-/// the array itself says the same thing with no pointer written and no reach to get
-/// wrong: `MbArray::get` bounds-checks against the allocation, which is exactly the
-/// reach the raw base had. Shared, because all seven read sites read — the two that
-/// write go through [`SetMbType`] below, one expression each, as they already did.
-///
-/// T5.AB1: the picture arrives as `Option<&SPicture>`, and the null test the raw
-/// parameter carried is the `Option`. Two *shared* borrows of one picture are legal
-/// however they alias, which is what makes this side of the family convertible
-/// while the three `PicRefs` items below are not (§0's option 3).
 #[inline(always)]
 pub fn GetMbType<'a>(pCurDqLayer: &'a DqLayerState, pDec: Option<&'a SPicture>) -> &'a MbArray<u32> {
     match pDec {
@@ -637,21 +577,6 @@ pub fn GetColocatedMb(
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
     };
 
-    // **T5.N5's `debug_assert!` stood here and is deleted, because F42 disproved it.**
-    // It said "the colocated picture is never the picture being decoded", on the
-    // argument that `PrefetchPic` hands out only unreferenced slots while list 1 holds
-    // references. A malformed stream breaks that: `pRefList[i]` is filled from a
-    // `ref_idx` the bitstream chooses, so it can name the picture being decoded, which
-    // is exactly what F42 found and what `PicRefs::get` answers by resolving that slot
-    // through the mutable half's own pointer. Keeping the assert would abort in debug
-    // on the input class the flip deliberately kept decodable.
-    //
-    // What replaces it is a type, not a check (S25's question answered by the
-    // signature): the current picture arrives as `PPicture` and the colocated one as
-    // `*const SPicture`, both resolved by the caller's bracket, and this function
-    // reaches no container at all. Whether the two alias is decided once, in
-    // `PicRefs::get`, where one tag covers both.
-
     let mut coloc_mbType = *colocPic.pMbType.get(iMbXy);
     if coloc_mbType == MB_TYPE_SKIP {
         coloc_mbType |= MB_TYPE_16x16 | MB_TYPE_P0L0 | MB_TYPE_P1L0;
@@ -674,9 +599,6 @@ pub fn GetColocatedMb(
         *mbType |= MB_TYPE_8x8 | MB_TYPE_L0 | MB_TYPE_L1;
     }
 
-    // `SetRectBlock(p, 4, 4, 4, v, 1)` is a 4x4 block of 1-byte elements over a
-    // 4-byte row — the whole 16-entry array, filled with `v` broadcast through
-    // `v * 0x01010101`. In the array's own units it is this (T5.R5).
     if IS_INTRA(coloc_mbType) {
         (*pCurDqLayer).iColocIntra.fill(1);
         return ERR_NONE;
@@ -699,10 +621,6 @@ pub fn GetColocatedMb(
         };
     } else {
         if !bDirect8x8InferenceFlag {
-            // Each `CopyRectBlock4Cols` here is four rows of a full row's width — the
-            // whole 16-entry array — so in the arrays' own units both are one copy,
-            // and the MV one moves `[i16; 2]` values rather than 16 bytes at a time
-            // (F35's alignment precondition, deleted rather than met).
             (*pCurDqLayer).iColocMv[LIST_0] = *colocPic.pMv[LIST_0].get(iMbXy);
             (*pCurDqLayer).iColocRefIndex[LIST_0] = *colocPic.pRefIndex[LIST_0].get(iMbXy);
             if IS_TYPE_L1(coloc_mbType) {
@@ -744,12 +662,6 @@ pub fn GetColocatedMb(
 }
 
 /// Derives motion predictors and reference indices for B-slice spatial direct mode.
-/// **T5b.2 — F42 costs a parameter here and nothing else.** Everything this reads
-/// through a reference is a POC, a flag or the colocated macroblock's motion, so the
-/// current picture is just another *shared* source: [`PicRefs::resolve`] answers the
-/// `Current` arm with the caller's own borrow, and two shared borrows of one picture
-/// coexist. What forced the raw alias was `PicRefs::get`, which had to hand back an
-/// address.
 pub fn PredMvBDirectSpatial(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -824,14 +736,6 @@ pub fn PredMvBDirectSpatial(
     let mut iMvC = [[0i16; 2]; 2];
     let mut iMvD = [[0i16; 2]; 2];
 
-
-    // **T5b.2 deleted a dead arm here, and named it rather than keeping it.** Each of
-    // the four neighbour reads had a `pDec.is_null()` fallback onto
-    // `pCurDqLayer.grid.mv` / `.ref_index` — a *different* pair of arrays, so it was
-    // not a spelling of the same read. With the picture a borrow the arm is
-    // unreachable: `WelsDecodeSlice` and `WelsDecodeAndConstructSlice` establish
-    // `Some` at their brackets, above every caller of this function. S18's
-    // deleted-dead disposition.
     for listIdx in 0..2 {
         if bLeftAvail && IS_INTER(iLeftType) {
             iMvA[listIdx] = (*pDec.pMv[listIdx].get(iLeftXy as usize))[3];
@@ -909,7 +813,7 @@ pub fn PredMvBDirectSpatial(
     }
     SetMbType(pCurDqLayer, Some(&mut *pDec), iMbXy, mbType);
 
-    let pMvd = [0i16; 2]; // T5.W12: the callee reads two; the other two were never read
+    let pMvd = [0i16; 2];
     let bIsLongRef = pRefs
         .resolve(pCtx.ref_id(LIST_1, 0), Some(&*pDec))
         .is_some_and(|p| p.bIsLongRef);
@@ -978,12 +882,6 @@ pub fn PredMvBDirectSpatial(
 }
 
 /// Derives motion predictors for B-slice temporal direct mode using POC distance scaling.
-/// **T5b.2 — F42 costs a parameter here and nothing else.** Everything this reads
-/// through a reference is a POC, a flag or the colocated macroblock's motion, so the
-/// current picture is just another *shared* source: [`PicRefs::resolve`] answers the
-/// `Current` arm with the caller's own borrow, and two shared borrows of one picture
-/// coexist. What forced the raw alias was `PicRefs::get`, which had to hand back an
-/// address.
 pub fn PredBDirectTemporal(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -1007,13 +905,7 @@ pub fn PredBDirectTemporal(
     }
 
     SetMbType(pCurDqLayer, Some(&mut *pDec), iMbXy, mbType);
-    // T5.W6: the two `&mut` bindings that stood here were held across sixteen calls
-    // that take the layer, and **both of their uses are reads** — a ref count copied
-    // out on the next line, and one `iMvScale` entry read at `:1160`. As raw pointers
-    // the overlap was invisible; as borrows the compiler names it, which is S25's law
-    // arriving on schedule. The fix is S25's too: no borrow outlives one expression,
-    // so the count is copied here and the scale is re-read at its use.
-    let pMvd = [0i16; 2]; // T5.W12: the callee reads two; the other two were never read
+    let pMvd = [0i16; 2];
     let ref0Count = std::cmp::min(
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[LIST_0],
         pCtx.sRefPic.uiRefCount[LIST_0] as i32,
@@ -1031,10 +923,6 @@ pub fn PredBDirectTemporal(
             UpdateP16x16RefIdx(pCurDqLayer, Some(&mut *pDec), LIST_0 as i32, ref_idx[LIST_0]);
         } else {
             ref_idx[LIST_0] = 0;
-            // T5.X4: the selection is which *list*, and the value read out of it is
-            // one `[i16; 2]`. It stood here as a `*mut i16` re-pointed in the `else`
-            // arm; the copy is taken after the selection instead, which is the same
-            // two loads and no pointer.
             let colocRefIndexL0 = (*pCurDqLayer).iColocRefIndex[LIST_0][0];
             let colocList = if colocRefIndexL0 >= 0 {
                 ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, Some(&*pDec), colocRefIndexL0, ref0Count);
@@ -1110,12 +998,6 @@ pub fn PredBDirectTemporal(
 }
 
 /// Maps collocated reference picture list 0 index into the current picture's List 0 reference list.
-/// **T5b.2 — F42 costs a parameter here and nothing else.** Everything this reads
-/// through a reference is a POC, a flag or the colocated macroblock's motion, so the
-/// current picture is just another *shared* source: [`PicRefs::resolve`] answers the
-/// `Current` arm with the caller's own borrow, and two shared borrows of one picture
-/// coexist. What forced the raw alias was `PicRefs::get`, which had to hand back an
-/// address.
 pub fn MapColToList0(
     pCtx: &mut SliceCtx<'_>,
     pRefs: PicRefs<'_>,
@@ -1130,7 +1012,7 @@ pub fn MapColToList0(
     if let Some(pic1) = pic1.filter(|_| (colocRefIndexL0 as usize) < 17) {
         // The one resolution in the decode path whose handle comes out of another
         // *picture* rather than out of the context: the colocated picture's own
-        // list-0 entry. `pRefs` resolves it exactly as `pool_pic` did.
+        // list-0 entry.
         let ref_pic = pRefs.resolve(pic1.pRefPic[LIST_0][colocRefIndexL0 as usize], pDec);
         if let Some(ref_pic) = ref_pic {
             let iFramePoc = ref_pic.iFramePoc;
@@ -1386,10 +1268,7 @@ pub fn Update8x8RefIdx(
 ) {
     let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
     let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
-    // **No `pDec` guard, and this is the direction F22 runs the other way** (T5.M4):
-    // `mv_pred.cpp:1175` dereferences unconditionally and the CABAC copy was the
-    // faithful one; the guard here was the port's addition. T5.D1 proved `pDec`
-    // cannot be null on this path in either tree.
+    // No `pDec` guard: `mv_pred.cpp:1175` dereferences unconditionally.
     let pDecRef = pDec.pRefIndex[listIdx].get_mut(iMbXy);
     pDecRef[iScan4Idx] = iRef;
     pDecRef[iScan4Idx + 1] = iRef;
@@ -1402,11 +1281,6 @@ pub fn Update8x8RefIdx(
 // ============================================================================
 
 pub use crate::decoder::parse_mb_syn_cabac::UpdateP8x8RefIdxCabac;
-
-// T5.M4 (F22): `UpdateP8x8RefIdxCabac` was re-translated here. The C++ declares it
-// once, in `parse_mb_syn_cabac.cpp:141`, and `mv_pred.cpp` is the *caller* (`:595`,
-// `:596`, `:674`, `:677`, `:687`) — so the import below is the correspondence, and
-// this copy's two added guards (`pDec`, then the ref-index list) went with it.
 
 #[inline(always)]
 pub fn UpdateP8x8DirectCabac(pCurDqLayer: &mut DqLayerState, iPartIdx: i32) {
@@ -1461,8 +1335,6 @@ pub fn FillSpatialDirect8x8Mv(
     iPartW: i8,
     subMbType: SubMbType,
     bIsLongRef: bool,
-    // T5.X4: two `[i16; 2]` and two `i8`, one per list — indexed at `LIST_0`/`LIST_1`
-    // and never written, which is what the two raw out-params were carrying.
     pMvDirect: &[[i16; 2]; 2],
     iRef: &[i8; 2],
     mut pMotionVector: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
@@ -1582,8 +1454,6 @@ pub fn FillSpatialDirect8x8Mv(
                 ((*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] == 0 ||
                  ((*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] < 0 && (*pCurDqLayer).iColocRefIndex[LIST_1][iColocIdx] == 0));
 
-            // T5.X4: the same list selection as `FillTemporalDirect8x8Mv`'s, spelled
-            // as the index it always was rather than as a pointer into the field.
             let colocList = if 0 == (*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] {
                 LIST_0
             } else {
@@ -1708,10 +1578,6 @@ pub fn FillTemporalDirect8x8Mv(
     iPartW: i8,
     subMbType: SubMbType,
     iRef: &[i8; 2],
-    // T5.X4: `mvColoc` was `(*pCurDqLayer).iColocMv[l].as_mut_ptr()` at every one of
-    // its four call sites — a raw alias of a field this function already reaches
-    // through `pCurDqLayer`, whose only variable was **which list**. So the list is
-    // what crosses now, and the array is read where it lives.
     colocList: usize,
     mut pMotionVector: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
     mut pMvdCache: Option<&mut [[[i16; 2]; 30]; LIST_A]>,

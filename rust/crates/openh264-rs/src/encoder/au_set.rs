@@ -3,19 +3,9 @@
 //! construction, the parameter-set writers, and the reference-frame limitation
 //! checks.
 //!
-//! **Sealed at S11.25**, and the last thing holding it open was documentation.
-//! S11.18 gave `WelsInitSps`/`WelsInitSubsetSps` reference parameters (F187's
-//! refusal had expired), which left the file's four remaining allows covering
-//! test blocks whose comment still read *"the callee is still `unsafe fn`"*.
-//! `unused_unsafe` had been reporting all four ever since; the warning was
-//! invisible under `lib.rs`'s crate-wide `allow` (E2's target). `forbid` here
-//! is what makes that class of drift a compile error rather than a warning
-//! nobody reads.
-//!
-//! Complete, with one documented deviation: `WelsWriteSpsSyntax` returns an error for
-//! `uiPocType == 1` where C++ has `assert(0)` behind a `// TODO: implement`. The
-//! encoder only ever sets POC type 2 (`WelsInitSps`), so the branch is unreachable in
-//! practice.
+//! `WelsWriteSpsSyntax` returns an error for `uiPocType == 1` where C++ has
+//! `assert(0)` behind a `// TODO: implement`. The encoder only ever sets POC type 2
+//! (`WelsInitSps`), so the branch is unreachable in practice.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 #![deny(unsafe_code)]
@@ -43,8 +33,6 @@ use crate::encoder::wels_encoder_ext::{
     MAX_REFERENCE_PICTURE_COUNT_NUM_SCREEN, MIN_REF_PIC_COUNT, LEVEL_NUMBER,
 };
 use crate::encoder::param_svc::UNSPECIFIED_BIT_RATE;
-// T9.X2 (F181): the two reference-limitation helpers below log through the context
-// they are handed, which is what makes that parameter live rather than dead.
 use crate::common::wels_trace::{WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING, WelsLog};
 
 /// `CpbBrNalFactor` — codec/common/inc/wels_common_defs.h:61.
@@ -59,9 +47,6 @@ pub const CpbBrNalFactor: i32 = 1200;
 /// The arithmetic is `uint32_t` throughout, as in C++: `iMbWidth`/`iMbHeight` are
 /// `int16_t` widened to `uint32_t` before multiplying, and the products are allowed to
 /// wrap. `uiPicInMBs * fFrameRate` promotes to `float` and truncates back.
-///
-/// **Safe since T6.G3**: both parameters were `*const` to single objects with one
-/// caller each, which is R1's shape exactly.
 pub fn WelsCheckLevelLimitation(
     kpSps: &SWelsSPS,
     kpLevelLimit: &SLevelLimits,
@@ -103,9 +88,6 @@ pub fn WelsCheckLevelLimitation(
 ///
 /// Returns the first level in `g_ksLevelLimits` that can carry the picture, or
 /// `LEVEL_5_1` if none can. Note the fallback is 5_1, not the table's last entry 5_2.
-///
-/// # Safety
-/// `kpSps` must reference an initialised value.
 pub fn WelsGetLevelIdc(kpSps: &SWelsSPS, fFrameRate: f32, iTargetBitRate: i32) -> ELevelIdc {
     for iOrder in 0..LEVEL_NUMBER {
         if WelsCheckLevelLimitation(kpSps, &g_ksLevelLimits[iOrder], fFrameRate, iTargetBitRate)
@@ -170,20 +152,6 @@ fn level_idc_from_raw(uiLevelIdc: u8) -> ELevelIdc {
 ///
 /// Declared in au_set.h, defined in encoder_ext.cpp; kept here with the rest of
 /// the parameter-set helpers.
-///
-/// **T9.X2 — the log context was not dead, the six `WelsLog` calls were missing.**
-/// The parameter stood here as `_pLogCtx` and X2's brief read that underscore as
-/// evidence of a dead parameter, to be deleted under S54. The reference disagrees:
-/// `encoder_ext.cpp:74-127` logs **six** times through it — one ERROR on an invalid
-/// bitrate, two INFO and one WARNING while it rewrites `iMaxSpatialBitrate` against
-/// the level table, and an INFO/ERROR pair on the max-vs-target comparison. Every
-/// one of those describes a parameter this function silently *changes*, so dropping
-/// them cost the caller the only account of why its settings moved. They are
-/// restored below and the parameter is live.
-///
-/// This is F177's rule reaching a parameter rather than a field: an unused name is
-/// evidence about *this* tree only, and the reference is where you find out whether
-/// it was ever supposed to be used. See F181.
 pub fn WelsBitRateVerification(
     pLogCtx: SLogContext,
     pLayerParam: &mut SSpatialLayerConfig,
@@ -262,10 +230,6 @@ pub fn WelsBitRateVerification(
     }
 
     // deal with iSpatialBitrate and iMaxSpatialBitrate setting
-    //
-    // The reference splits this into an `==` arm that only logs and a `<` arm that
-    // logs and fails; the port had collapsed them to the failing comparison alone,
-    // which is the same program and one message short of the same encoder.
     if pLayerParam.iMaxSpatialBitrate != UNSPECIFIED_BIT_RATE {
         if pLayerParam.iMaxSpatialBitrate == pLayerParam.iSpatialBitrate {
             WelsLog(
@@ -298,12 +262,6 @@ pub fn WelsBitRateVerification(
 /// Reconciles `iLTRRefNum` / `iNumRefFrame` / `iMaxNumRefFrame` against the GOP
 /// size and LTR settings. With `bStrictCheck` an under-sized `iNumRefFrame` is an
 /// error; otherwise it is corrected in place.
-///
-/// **T9.X2 — two `WelsLog` calls restored, and the parameter with them** (see
-/// [`WelsBitRateVerification`] for the general point). `au_set.cpp:88-133` warns
-/// when it resets `iLTRRefNum` and again when it resets `iNumRefFrame`; both
-/// describe a silent rewrite of a caller's setting, and the second fires on the
-/// strict path too — the reference logs *before* it decides whether to fail.
 pub fn WelsCheckNumRefSetting(
     pLogCtx: SLogContext,
     pParam: &mut SWelsSvcCodingParam,
@@ -441,20 +399,6 @@ pub fn WelsCheckRefFrameLimitationLevelIdcFirst(
 
 /// `WelsWriteVUI` — au_set.cpp:197.
 ///
-/// **T9.X2 — `pBsWriter` is a `&mut BsWriter` in all five writers here.** It was
-/// raw with a null check and an immediate `&mut *` at the top of every body, and
-/// every production call site already formed the reference and let it coerce:
-/// `&mut (*pOut).sBsWrite`, beside `&mut (*pOut).sBsBuffer[..]` as a separate
-/// argument. Two disjoint fields of one `SWelsEncoderOutput`, which is not an
-/// aliasing question at all — the raw was a vestige of the translation, and the
-/// null check was unreachable.
-///
-/// `WelsWriteSVCPrefixNal` (`nal_encap.rs`) keeps its raw and is NOT part of this:
-/// its multi-threaded caller passes `addr_of_mut!((*pSliceBs).sBsWrite)` over
-/// fork-shared slice state, deliberately, and a `&mut` there is the seam's
-/// question rather than this one's.
-///
-/// # Safety
 /// `pBsWriter` must have room for the VUI.
 pub fn WelsWriteVUI(
     buf: &mut [u8],
@@ -664,10 +608,6 @@ pub fn WelsWriteSubsetSpsSyntax(
 /// `DISABLE_FMO_FEATURE` is defined unconditionally at `as264_common.h:53`, so the
 /// slice-group branch at au_set.cpp:418-454 is not compiled and
 /// `num_slice_groups_minus1` is the literal 0 at au_set.cpp:417.
-///
-/// # Safety
-/// `pPps` and `pBsWriter` must be non-null. The strategy is borrowed by reference,
-/// so unlike C++ there is no null case to consider here.
 pub fn WelsWritePpsSyntax(
     buf: &mut [u8],
     pPps: &SWelsPPS,
@@ -745,17 +685,6 @@ pub fn WelsGetPaddingOffset(
 /// `WelsInitSps` — au_set.cpp:492.
 ///
 /// `kuiIntraPeriod` and `bEnableRc` are accepted and unused, exactly as in C++.
-///
-/// **S11.18: the layer parameters are references, and F187's refusal expired.**
-///
-/// F187 (S29) refused this flip for a measured reason: `InitDqLayers` bound a
-/// raw into the same spatial layer, that binding *spanned* `GenerateNewSps`,
-/// and a `&mut` retag in here would pop it before the later read. The binding
-/// was read exactly once, ~85 lines below its derivation; S11.18 derives it at
-/// that use instead, so nothing spans the call and the retag has nothing to
-/// invalidate. The deferral's premise, re-verified rather than inherited — and
-/// this time it is gone, where S10.5b checked the same premise and found it
-/// still live.
 pub fn WelsInitSps(
     pSps: &mut SWelsSPS,
     pLayerParam: &mut SSpatialLayerConfig,
@@ -770,7 +699,7 @@ pub fn WelsInitSps(
 ) -> i32 {
     // C++ `memset (pSps, 0, sizeof (SWelsSPS))`. Deliberately not `SWelsSPS::default()`,
     // which seeds uiProfileIdc = PRO_BASELINE and the VUI *_UNDEF values rather than 0
-    // — `SWelsSPS::ZERO` is that memset as a value (T6.G3).
+    // — `SWelsSPS::ZERO` is that memset as a value.
     *pSps = SWelsSPS::ZERO;
     pSps.uiSpsId = kuiSpsId;
     pSps.iMbWidth = ((pLayerParam.iVideoWidth + 15) >> 4) as i16;
@@ -863,11 +792,7 @@ pub fn WelsInitSps(
 }
 
 /// `WelsInitSubsetSps` — au_set.cpp:566.
-///
-/// # Safety
-/// All three pointers must be non-null and point to writable values.
 #[allow(clippy::too_many_arguments)]
-// S11.18: the layer parameters are references — see `WelsInitSps`.
 pub fn WelsInitSubsetSps(
     pSubsetSps: &mut SSubsetSps,
     pLayerParam: &mut SSpatialLayerConfig,
@@ -879,9 +804,6 @@ pub fn WelsInitSubsetSps(
     bEnableRc: bool,
     kiDlayerCount: i32,
 ) -> i32 {
-    // The memset comes first now and the borrow after it, which is the same order
-    // of effects: the C++ takes `pSps` before the memset and the memset then zeroes
-    // the very bytes it points at.
     *pSubsetSps = SSubsetSps::ZERO;
 
     WelsInitSps(
@@ -913,12 +835,6 @@ pub fn WelsInitSubsetSps(
 ///
 /// The `#if !defined(DISABLE_FMO_FEATURE)` slice-group block at au_set.cpp:614-636 is
 /// not compiled — see `as264_common.h:53`.
-///
-/// **T6.G3: the two "at least one of these is null" parameters are `Option`s.** The
-/// C++ takes both as pointers and picks between them on `kbUsingSubsetSps`, checking
-/// the chosen one for null; that is three runtime states standing in for two, and the
-/// port's own `debug_assert!`s were the record of which. The signature says it now,
-/// and the selection is one expression that cannot pick something absent.
 pub fn WelsInitPps(
     pPps: &mut SWelsPPS,
     pSps: Option<&SWelsSPS>,
@@ -933,10 +849,6 @@ pub fn WelsInitPps(
     } else {
         pSps
     };
-    // The C++'s two guards collapse to one: it rejected "neither pointer given"
-    // up front and `debug_assert!`ed the selected arm separately. `None` on the
-    // selected arm is the same rejection either way, and the caller cannot now
-    // supply the wrong arm's set and have it silently used.
     let Some(pUsedSps) = pUsedSps else {
         return 1;
     };
@@ -1010,9 +922,7 @@ mod tests {
         assert!(!sps.bConstraintSet3Flag);
     }
 
-    /// Byte-exact against the C++ `WelsWriteSpsNal` for the same SPS. This is the
-    /// check that would have caught the missing VUI: the ad-hoc writer this replaced
-    /// stopped after `vui_parameters_present_flag = 0` and emitted 8 bytes.
+    /// Byte-exact against the C++ `WelsWriteSpsNal` for the same SPS.
     #[test]
     fn write_sps_nal_is_byte_exact_with_cxx() {
         let (mut lp, mut li) = gate_layer();
@@ -1021,11 +931,6 @@ mod tests {
         let mut bs = BsWriter::new();
         let delta = [0i32; 32];
 
-        // The `as_mut_ptr() as *const u8` accommodation that used to stand here is
-        // gone with `InitBits` (F13's third site): the buffer is a `&mut [u8]` the
-        // test already owns, so there is no provenance to launder and nothing to
-        // explain. Deleting it is a named deliverable of Phase 3 — see the module
-        // header of `tests/safe_bits_differential.rs`.
         WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
         WelsWriteSpsNal(&mut buf, &mut sps, &mut bs, &delta);
         let written = bs.pos();
@@ -1071,8 +976,6 @@ mod tests {
         let mut buf = [0u8; 256];
         let mut bs = BsWriter::new();
 
-        // Second of the two F13 accommodations deleted at T3.4 — see the sibling
-        // test above.
         WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
         WelsInitPps(&mut pps, Some(&sps), None, 0, true, false, false);
 
@@ -1091,7 +994,6 @@ mod tests {
     /// `WelsInitPps` rejects the combination C++ rejects: no SPS of either kind.
     #[test]
     fn init_pps_rejects_missing_sps() {
-        // S5.E2b: `WelsInitPps` is a safe `fn` now, so the wrapper goes with it.
         let mut pps = SWelsPPS::default();
         assert_eq!(
             WelsInitPps(&mut pps, None, None, 0, true, false, false),

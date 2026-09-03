@@ -1,19 +1,4 @@
 //! Motion compensation — luma quarter-pel, chroma eighth-pel, and the copy paths.
-//!
-//! **`#![deny(unsafe_code)]` as of T9.B4 (D-cov-1).** The module was the last of
-//! `common/`'s ten to carry raw entry points: 28 strangler shims (plan §4 R7) wrapping
-//! the safe cursor kernels for callers that still held pointers. Twenty-six had no
-//! `src/` caller left — the last four lost theirs at T9.B29 — and are deleted here with
-//! their span and dispatch tests. **Two shims survive — `McLuma_c` and `McChroma_c` —
-//! and they need `shim_wh`, so the module carries three tagged allows, not two.** B4's
-//! brief said "exactly the two dormant-tagged allows" and missed the machinery; F130
-//! records it. All three retire together in Phase 10, when `SvcMdSCDMbEnc` — their only
-//! caller, unreachable without `iUsageType == SCREEN_CONTENT_REAL_TIME` (F125) —
-//! converts behind a screen-content referee.
-// **S9.1: `deny` becomes `forbid`.** The three raw shims this module still
-// carried (`shim_wh`, `McLuma_c`, `McChroma_c`) are deleted — their only callers,
-// `WelsMdBackgroundMbEnc`'s motion compensation, build cursors directly now — so
-// the exemption the `deny` left room for is gone and the stronger form holds.
 #![forbid(unsafe_code)]
 #![allow(
     non_snake_case,
@@ -27,34 +12,7 @@
 
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples};
 
-
 // Function pointer signatures matching mc.h.
-//
-// **D-cov-1 (T9.B4): the three `SMcFunc` slot types are the safe kernels' signatures
-// now, not the raw ones.** They were `unsafe extern "C" fn(*const u8, i32, *mut u8,
-// i32, ...)` because `InitMcFunc` installed the strangler shims; the shims are gone
-// (26 of them, no `src/` caller since T9.B29), so the slots hold `mc_luma`,
-// `mc_chroma`, `mc_hor_ver20`/`_02`/`_22` and `pixel_avg` directly, on cursors.
-//
-// **The six slots are plain `fn` now, not `Option<fn>`** — the checkpoint the note
-// below `InitMcFunc` deferred. They were optional because `WelsMallocz`'s all-zero
-// image was the C++'s uninstalled table, and the port kept the null as a `None`;
-// but `InitMcFunc` runs unconditionally at codec-open time on both sides
-// (`WelsOpenDecoder` -> `WelsInitDecoderFuncs`, the encoder's
-// `InitFunctionPointers`) before any frame is touched, so no reader could ever
-// observe the absent state. `Default` installs the kernels instead, and the
-// question the type was asking stops being asked. Six `fn` at 8 bytes is the same
-// 48 the six `Option<fn>` occupied by null-pointer optimisation, so
-// `abi_guard.rs`'s `assert_size!(SMcFunc, 48)` holds unchanged — checked, not
-// assumed.
-//
-// **What reads these slots: nothing in `src/`.** The port de-virtualized both codecs'
-// motion compensation in Phase 4a — `BaseMC` names the kernels directly
-// (`decode_slice.rs:1081`) — so the only reader left is `encoder_context.rs`'s
-// construction assertion, which now states that the table *is* installed rather
-// than that it is not. The table is kept, filled and pinned because it is upstream's
-// (`codec/common/inc/mc.h:46`) and the ABI guard's, not because anything dispatches
-// through it.
 pub type PWelsMcFunc =
     fn(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, mv_x: i16, mv_y: i16, width: usize, height: usize);
 
@@ -63,15 +21,6 @@ pub type PWelsLumaHalfpelMcFunc =
 
 pub type PWelsSampleAveragingFunc =
     fn(dst: &mut PlaneCursorMut<'_>, a: &PlaneCursor<'_>, b: &PlaneCursor<'_>, width: usize, height: usize);
-
-// **D-cov-1 (T9.B4): `PMcChromaWidthExtFunc`, `PWelsSampleWidthAveragingFunc` and
-// `PWelsMcWidthHeightFunc` deleted.** Three `unsafe extern "C" fn` type aliases with
-// zero references anywhere in the crate — not a slot type, not a parameter, not
-// re-exported. They are `mc.h`'s width-specialised dispatch shapes, which this port
-// never dispatched through: the width-specialised kernels became `mc_copy_width_eq*`
-// and are reached by direct call. Their only remaining effect was to keep three
-// `unsafe` spellings in a module that is otherwise safe, which is what this commit is
-// about.
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -87,20 +36,10 @@ pub struct TagMcFunc {
 pub type SMcFunc = TagMcFunc;
 
 impl Default for TagMcFunc {
-    /// **The installed table is the only value this type has**, which is what
-    /// dropping the `Option`s means in practice.
-    ///
-    /// There used to be two values: the all-`None` image `sWelsEncCtx::new()` built
-    /// and the one [`InitMcFunc`] wrote over it at codec-open time. Nothing ever
-    /// dispatched through these slots — Phase 4a de-virtualized both codecs' motion
-    /// compensation — so the uninstalled image was never *called* through, only
-    /// asserted about; and a `fn` has no null to stand for it. `Default` therefore
-    /// installs, and [`InitMcFunc`] re-installs the same six.
-    ///
     /// The kernels are wrapped in non-capturing closures rather than named
-    /// directly for the reason [`InitMcFunc`] records: they are generic over the
-    /// cursor type, so a bare path does not coerce to a slot type that is
-    /// higher-ranked over the cursor's lifetime, and a non-capturing closure does.
+    /// directly: they are generic over the cursor type, so a bare path does not
+    /// coerce to a slot type that is higher-ranked over the cursor's lifetime,
+    /// and a non-capturing closure does.
     fn default() -> Self {
         Self {
             pfLumaHalfpelHor: |s, d, w, h| mc_hor_ver20(s, d, w, h),
@@ -219,41 +158,30 @@ pub fn WelsClip1(iX: i32) -> u8 {
 }
 
 // ============================================================================
-// Safe kernels (plan §Phase 2, recipe R2)
+// Kernels
 // ============================================================================
 //
-// These are the implementations; the `Mc*_c` / `PixelAvg_c` functions below are
-// strangler shims (R7) that build cursors from the raw pointers and call in here,
-// so no call site and no dispatch-table installer changes in this phase.
-//
-// **This is the first family whose kernels read one plane and write another**, so
-// unlike the intra-prediction families they take a `PlaneCursor` (the reference
-// picture, or an encoder search buffer) *and* a `PlaneCursorMut` (the destination)
-// rather than one cursor over a single surface. The two are different allocations
-// at every real call site.
+// These kernels read one plane and write another: they take a `PlaneCursor` (the
+// reference picture, or an encoder search buffer) *and* a `PlaneCursorMut` (the
+// destination) rather than one cursor over a single surface. The two are different
+// allocations at every real call site.
 //
 // The reads reach outside the block by design — the 6-tap Wiener filter of H.264
 // half-pel interpolation needs two samples before and three after each output
-// sample, in whichever direction it runs. Where intra prediction's legality came
-// from `PADDING_LENGTH` alone, **an MC read is legal because the caller clamped the
-// motion vector first**; each shim's `# Safety` block states that clamp, and
-// `luma_reach`/`src_span` below are the only places the resulting span is computed.
+// sample, in whichever direction it runs. An MC read is legal because the caller
+// clamped the motion vector first.
 //
-// Arithmetic parity (plan §Phase 2, R-e): every intermediate below keeps the width
-// the old port used. The 6-tap sums were checked against both the old Rust and
-// `codec/common/src/mc.cpp` — with byte inputs they are bounded by `510 * 20 =
-// 10200` in `filter_input_8bit` and by `21420 + 25500 + 428400 = 475320` in
+// Every intermediate below keeps the width `codec/common/src/mc.cpp` uses: with
+// byte inputs the 6-tap sums are bounded by `510 * 20 = 10200` in
+// `filter_input_8bit` and by `21420 + 25500 + 428400 = 475320` in
 // `hor_filter_input_16bit`, so nothing here can overflow its `i32`, and the `as
-// i16` narrowing in `mc_hor_ver22` is likewise inside range. No F-finding.
+// i16` narrowing in `mc_hor_ver22` is likewise inside range.
 
 /// The 6-tap Wiener filter over six samples — the C++ `FilterInput8bitWithStride_c`
 /// with its `kiOffset` walk already done by the caller, so `p[i]` is that kernel's
 /// `pSrc[(i - 2) * kiOffset]`.
 ///
 /// C++: `FilterInput8bitWithStride_c`, `codec/common/src/mc.cpp`.
-///
-/// The expression is the old port's term for term, including the `u32` accumulation
-/// and the shift-and-add spellings of `*5` and `*20`.
 #[inline(always)]
 pub fn filter_input_8bit(p: &[u8; 6]) -> i32 {
     let kuiPix05 = (p[0] as u32) + (p[5] as u32);
@@ -278,13 +206,11 @@ pub fn hor_filter_input_16bit(p: &[i16; 6]) -> i32 {
 
 /// `WIDTH` bytes of each of `height` rows, source to destination.
 ///
-/// **The width is a const parameter and not an argument, and that is a measured
-/// decision rather than a stylistic one.** With a runtime length, `copy_from_slice`
-/// lowers to a `_platform_memmove` *call* per row; with the width const, the whole
-/// row is one pair of wide loads and stores — which is what the C++ `LD64`/`ST64A8`
-/// pairs were hand-written to get. This path carries the zero-MV block, the
-/// commonest luma case there is, and the difference measured **10.8x** on
-/// `McLuma_c(0, 0)` for a 16x16 block (`docs/perf_baseline.md` §Phase 2 T4).
+/// The width is a const parameter and not an argument: with a runtime length,
+/// `copy_from_slice` lowers to a `_platform_memmove` *call* per row; with the width
+/// const, the whole row is one pair of wide loads and stores — which is what the C++
+/// `LD64`/`ST64A8` pairs were hand-written to get. This path carries the zero-MV
+/// block, the commonest luma case there is.
 ///
 /// The bounds check lands once per row either way.
 #[inline(always)]
@@ -395,10 +321,9 @@ pub fn mc_hor_ver20<S: RefSamples + Copy>(
 ) {
     for dy in 0..height as isize {
         // One row window per output row, six-sample sliding windows inside it: the
-        // bounds check lands per row, the filter arithmetic per sample. S10.2: the
-        // row is read into a reused stack buffer rather than borrowed, because a
-        // shared cell view cannot lend one — the walk and the check placement are
-        // unchanged.
+        // bounds check lands per row, the filter arithmetic per sample. The row is
+        // read into a reused stack buffer rather than borrowed, because a shared
+        // cell view cannot lend one.
         let row = src.row_view(dy, -2, width + 5);
         let out = dst.row_mut(dy, 0, width);
         for (o, w) in out.iter_mut().zip(row.windows(6)) {
@@ -417,7 +342,7 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    // Two shapes carry this loop, and both were measured rather than assumed.
+    // Two shapes carry this loop.
     //
     // *A zipped column walk, not indexing.* Indexing seven same-length slices by `j`
     // leaves LLVM to prove seven bounds facts per output *sample*, and it does not.
@@ -427,11 +352,6 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
     // six `center + dy * stride` multiplies per row where the C++ advanced one
     // pointer by one add; rotating the window and fetching only the new bottom row
     // costs one.
-    //
-    // **S10.2 keeps both shapes exactly.** The rows are `S::Row<'_>` now rather
-    // than `&[u8]` — a borrow for the plane cursors, an owned `RowBuf` only for
-    // the shared cell view that cannot lend one (F264) — and both are cheap to
-    // move, so the five-row rotation below is the same tuple assignment it was.
     let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
         src.row_view(-2, 0, width),
         src.row_view(-1, 0, width),
@@ -463,9 +383,8 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
 /// Reads `x` in `-2 .. width + 3`, `y` in `-2 .. height + 3`.
 ///
 /// `iTmp` is `[i16; 17 + 5]` as in the C++, and `width` above 17 indexes past it —
-/// a panic here, exactly as in the old port, which used a Rust array too. The
-/// encoder's half-pel refinement is what needs the 17: it filters `iWidth + 1`
-/// columns (`encoder/md.rs:1289`).
+/// a panic here. The encoder's half-pel refinement is what needs the 17: it filters
+/// `iWidth + 1` columns (`encoder/md.rs:1289`).
 #[inline(always)]
 pub fn mc_hor_ver22<S: RefSamples + Copy>(
     src: &S,
@@ -775,21 +694,8 @@ pub fn mc_hor_ver33<S: RefSamples + Copy>(
 
 /// C++: `McLuma_c` — quarter-pel dispatch on the low two bits of each MV component.
 ///
-/// This `match` replaces the module-internal `pWelsMcFunc_c: [[fn; 4]; 4]` table of
-/// raw-pointer function pointers. It is the one dispatch table Phase 2 may touch
-/// (plan §Phase 2, §3.2) — it never left this module, so folding it changes no
-/// caller and no typedef, and the arms are in the table's `[iMvX & 3][iMvY & 3]`
-/// order so the two can be read against each other.
+/// The arms are in `[iMvX & 3][iMvY & 3]` order.
 #[inline(always)]
-// **S9.1: `shim_wh`, `McLuma_c` and `McChroma_c` are deleted, and this file seals.**
-//
-// They were raw-pointer adapters that rebuilt exact-reach spans and called the safe
-// `mc_luma`/`mc_chroma` below. Their three call sites — `WelsMdBackgroundMbEnc`'s
-// motion compensation — build the cursors directly now, on the pattern the same
-// function already used for its other MC block, so the adapters had no callers left.
-//
-// The path is byte-refereed: F126 planted a one-sample fault immediately after this
-// very `McLuma_c` and failed 32 of the `bg` preset's 48 rows.
 pub fn mc_luma<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -872,18 +778,16 @@ pub fn mc_chroma<S: RefSamples + Copy>(
 }
 
 // ============================================================================
-// The same-picture arm — F42's motion compensation, in one borrow
+// The same-picture arm — motion compensation in one borrow
 // ============================================================================
 //
 // **What this family is for.** A malformed stream can put the picture being decoded
-// into its own reference list (`decoder/pic_queue.rs`, finding F42), and the C++
-// resolves that entry and motion-compensates from the picture it is writing. Every
-// kernel above takes two cursors because the two pictures are two allocations at
-// every *well-formed* call site; here they are one, so there is no second cursor to
-// build and a `(&[u8], &mut [u8])` pair over the one buffer would be an aliasing
-// violation rather than a spelling choice. `decoder/pic_queue.rs`'s
-// `PicRefs::classify` is what tells the two apart, and these are what its
-// `RefSlot::Current` arm runs.
+// into its own reference list (`decoder/pic_queue.rs`), and the C++ resolves that
+// entry and motion-compensates from the picture it is writing. Every kernel above
+// takes two cursors because the two pictures are two allocations at every
+// *well-formed* call site; here they are one, so there is no second cursor to
+// build. `decoder/pic_queue.rs`'s `PicRefs::classify` is what tells the two apart,
+// and these are what its `RefSlot::Current` arm runs.
 //
 // **The shape.** One `PlaneCursorMut` anchored at the destination block, plus the
 // source anchor `(sx, sy)` *relative to that same anchor* — legal because one plane
@@ -1128,20 +1032,15 @@ pub fn mc_chroma_same(
 }
 
 // ============================================================================
-// Strangler shims (plan §4 R7) — the raw-pointer entry points `SMcFunc` still
-// holds. Each builds the cursor pair its kernel needs and calls the safe
-// implementation above.
+// Read reaches and spans
 // ============================================================================
 //
-// # Why an MC read outside the block is legal
-//
-// Every shim below reaches past the block it is given: the 6-tap filter needs
-// two samples before and three after each output sample. Intra prediction could
-// justify its one-sample reach from `PADDING_LENGTH` alone. **MC cannot** — the
-// source pointer has already been displaced by a motion vector, so the reach is
-// legal only because the caller clamped that vector first. The decoder's clamp
-// is `BaseMC` (`decoder/decode_slice.rs:1069-1091`), quoted here because it is
-// the entire safety argument and it is *exactly* calibrated to this reach:
+// A kernel reaches past the block it is given: the 6-tap filter needs two samples
+// before and three after each output sample. The source has already been displaced
+// by a motion vector, so the reach is legal only because the caller clamped that
+// vector first. The decoder's clamp is `BaseMC`
+// (`decoder/decode_slice.rs:1069-1091`), and it is *exactly* calibrated to this
+// reach:
 //
 // ```text
 // const PADDING_LENGTH: i32 = 32;
@@ -1160,13 +1059,10 @@ pub fn mc_chroma_same(
 // margin: `19 == 16 + 3`. Chroma is the same argument at half scale against the
 // 16-sample chroma border.
 //
-// The encoder's callers are a different family of buffers and their own
-// argument: ME refinement filters out of the reference picture into
-// `pBufferInterPredMe` scratch (`encoder/md.rs:1043-1046`), and the search
-// window is bounded before the call rather than by a clamp inside it.
-//
-// **Phase 5 converts callers against these contracts**, so they say what the
-// caller must guarantee rather than what this code happens to do.
+// The encoder's callers are a different family of buffers: ME refinement filters
+// out of the reference picture into `pBufferInterPredMe` scratch
+// (`encoder/md.rs:1043-1046`), and the search window is bounded before the call
+// rather than by a clamp inside it.
 
 /// The samples a kernel reads around `pSrc`'s `(0, 0)`: `x` in
 /// `-left .. width + right`, `y` in `-top .. height + bottom`.
@@ -1189,12 +1085,10 @@ const R_CEN: Reach = Reach { left: 2, top: 2, right: 3, bottom: 3 };
 /// Bilinear chroma: one sample right and one row below, for the `(1 - a)` terms.
 const R_CHROMA: Reach = Reach { left: 0, top: 0, right: 1, bottom: 1 };
 
-/// Per-kernel read reach, in `[iMvX & 3][iMvY & 3]` order — the same indexing the
-/// deleted `pWelsMcFunc_c` table used, so the two read against each other.
+/// Per-kernel read reach, in `[iMvX & 3][iMvY & 3]` order.
 ///
 /// It is not one reach for all sixteen: `McHorVer10_c` reads no row outside its
-/// block and `McHorVer13_c` reads five, and a shim that claimed the union would be
-/// asserting validity for rows its caller never promised.
+/// block and `McHorVer13_c` reads five.
 ///
 /// **`static`, not `const`, and that is worth 8% of decode time.** A `const` is
 /// substituted at each use, so `LUMA_REACH[x][y]` with runtime indices makes the
@@ -1212,7 +1106,7 @@ static LUMA_REACH: [[Reach; 4]; 4] = [
 /// `pSrc - top*stride - left`.
 ///
 /// This and [`block_span`] are the only places in the module where a span is
-/// computed; every shim gets its numbers from here.
+/// computed.
 #[inline]
 fn src_span(stride: usize, width: usize, height: usize, r: Reach) -> (usize, usize) {
     let center = r.top * stride + r.left;
@@ -1228,32 +1122,8 @@ fn block_span(stride: usize, width: usize, height: usize) -> usize {
     (height - 1) * stride + width
 }
 
-
-// The fifteen quarter-pel entry points. Written out one by one rather than generated
-// from a macro on purpose: a macro folds fifteen `unsafe extern "C" fn` definitions
-// into one line of source, which makes the unsafe ratchet report a 13-definition drop
-// that did not happen (plan §7.1) — and it would hide each kernel's own reach behind a
-// table lookup in the one place a reader is looking for it.
-
-
-
+/// C++: `InitMcFunc`, `codec/common/src/mc.cpp` — both codecs call it at open time.
 pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, _uiCpuFlag: u32) {
-    // **These six slots are installed and never called** (whole-tree grep: the only
-    // mentions outside this file are one doc comment and one construction
-    // assertion), which is F255's "installed, asserted, never called" shape. They
-    // are not deleted here because `abi_guard.rs` pins `assert_size!(SMcFunc, 48)`
-    // and the struct's layout is part of the port's fidelity surface.
-    //
-    // **The six assignments moved into `Default`** when the slots stopped being
-    // `Option`s — the checkpoint the paragraph above this used to defer. A `fn` has
-    // no null, so a table cannot be constructed uninstalled and there is nothing
-    // for this function to be the *first* writer of; `Default` carries the kernel
-    // list (and S10.2's note on why each is a non-capturing closure rather than a
-    // named generic `fn`). This stays because it is upstream's (`mc.cpp`'s
-    // `InitMcFunc`), because both codecs call it at open time, and because the
-    // CPU-flag invariance it carries is a real property that
-    // `init_mc_func_ignores_the_cpu_flag` still checks. Assigning the default keeps
-    // the kernel list in one place rather than two that can drift apart.
     *pMcFuncs = SMcFunc::default();
 }
 
@@ -1287,7 +1157,7 @@ mod tests {
 
     /// **The same-picture arm equals the two-cursor arm wherever both are defined.**
     ///
-    /// F42's kernels exist because a source that *is* the destination cannot be
+    /// These kernels exist because a source that *is* the destination cannot be
     /// spelled as a cursor pair; that makes the two forms incomparable exactly on the
     /// overlapping case and comparable everywhere else. This drives every one of the
     /// sixteen quarter-pel arms at every block shape with the two windows disjoint
@@ -1441,42 +1311,24 @@ mod tests {
         assert_eq!(buf, want);
     }
 
-    /// Plan §5's de-virtualization mitigation, half one: `InitMcFunc` is a
-    /// **constant function of its CPU-flag argument**.
+    /// `InitMcFunc` is a **constant function of its CPU-flag argument**.
     ///
-    /// That is the claim direct dispatch actually rests on — that there is one
-    /// function per slot to call, not a family selected at run time. Every
-    /// `_sse2`/`_neon` variant in this port is a delegating stub or a dead
-    /// extern (Phase 0 deleted 62 dead ones from this module alone), so
-    /// `_uiCpuFlag` selects nothing; this pins that, for every flag value the
-    /// port can produce rather than for the one this machine reports.
+    /// Every `_sse2`/`_neon` variant in this port is a delegating stub or a dead
+    /// extern, so `_uiCpuFlag` selects nothing; this pins that, for every flag
+    /// value the port can produce rather than for the one this machine reports.
     ///
     /// **Why this compares two tables instead of a table against named
     /// functions.** The obvious assert-map — `t.pMcLumaFunc as usize
-    /// == McLuma_c as usize`, the shape
-    /// `encoder_deblocking_table_installs_the_common_shims` uses — is *unsound
-    /// for these six functions*, and both a cross-crate and an in-crate draft
-    /// of it failed before this one worked. Four of them are
-    /// `#[inline(always)]`, and an `#[inline(always)]` function whose address
-    /// is taken gets instantiated locally in whatever codegen unit takes it:
-    /// the integration-test crate gets its own copy, and so does this `tests`
-    /// submodule. Neither address is the one `InitMcFunc` stored. The
-    /// deblocking assert-map only works because those kernels happen to carry
-    /// no inline attribute — luck, not design, and worth knowing before the
-    /// next table is de-virtualized.
+    /// == McLuma_c as usize` — is *unsound for these six functions*. Four of
+    /// them are `#[inline(always)]`, and an `#[inline(always)]` function whose
+    /// address is taken gets instantiated locally in whatever codegen unit takes
+    /// it: the integration-test crate gets its own copy, and so does this
+    /// `tests` submodule. Neither address is the one `InitMcFunc` stored.
     ///
     /// Both addresses here come from the same `InitMcFunc` instantiation, so
-    /// the comparison is meaningful. The complementary half — that the
-    /// installed function *is* the one the direct calls name — is behavioural
-    /// and lives in `tests/kernels_differential_phase2.rs`
-    /// (`mc_table_slots_match_the_direct_calls`), where identity is proven by
-    /// output rather than by symbol address.
-    /// Not under Miri: it mints a fresh synthetic address for each reified
-    /// function pointer, so even two calls of the *same* installer compare
-    /// unequal there. The property this test states is about symbol identity,
-    /// which Miri deliberately does not model; the behavioural half
-    /// (`mc_table_slots_match_the_direct_calls`) does run under Miri and is
-    /// what covers this path there.
+    /// the comparison is meaningful. Not under Miri: it mints a fresh synthetic
+    /// address for each reified function pointer, so even two calls of the
+    /// *same* installer compare unequal there.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn init_mc_func_ignores_the_cpu_flag() {
@@ -1515,33 +1367,7 @@ mod tests {
             }
         }
     }
-
-    // **`mc_table_is_all_none_before_init_and_all_some_after` stood here.** It was
-    // Phase 4a's de-virtualization mitigation: five of fifteen former call sites
-    // spelled the dispatch `if let Some(f) = ..`, which *silently skips the call*,
-    // and the evidence that replacing them was safe was that a default table is
-    // all-`None` while a post-init one is all-`Some`. Both halves are gone with the
-    // slots' `Option`s — a `fn` has no null, so the `if let` shape cannot be written
-    // and "installed" is not a state the table can fail to be in.
-    //
-    // It is not replaced. The successor that briefly stood here compared
-    // `InitMcFunc`'s table against `SMcFunc::default()`, which is this file's
-    // constructor checked against itself; and the slots hold non-capturing closures,
-    // reified per codegen unit, so even that comparison only held while both sides
-    // were built in one function body.
-
-    // **D-cov-1 (T9.B4): `test_mc_horiz_and_vert_luma_aliases` deleted with its
-    // subjects.** It proved `McHorizLuma_c == McHorVer20_c` and
-    // `McVertLuma_c == McHorVer02_c` — an equivalence between two raw shims, all four
-    // of which are now gone (no `src/` caller since T9.B29). The safe kernels it would
-    // have to be rewritten against, `mc_hor_ver20` and `mc_hor_ver02`, have no aliases
-    // to disagree with: the aliasing was a property of the C header, not of the
-    // arithmetic. F130 records that this is a **third** mc test dying here — B4's
-    // brief and F124 between them named two, both in
-    // `tests/kernels_differential_phase2.rs`, and neither noticed this one.
 }
 
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
-// used to live in this module disagreed with cpu_core.h and with each other --
-// WELS_CPU_NEON alone had seven distinct values across eight modules.
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_3DNOW, WELS_CPU_3DNOWEXT, WELS_CPU_ALTIVEC, WELS_CPU_ARMv7, WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3, WELS_CPU_VFPv3};

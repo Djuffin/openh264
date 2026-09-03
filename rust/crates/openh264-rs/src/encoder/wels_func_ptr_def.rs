@@ -7,10 +7,7 @@
 
 //! Encoder function-pointer table.
 //!
-//! Translated from `codec/encoder/core/inc/wels_func_ptr_def.h`. `SWelsFuncPtrList`
-//! previously existed as ten partial copies, the largest of which had 13 of its 70
-//! members; it is 1280 bytes and every entry is dispatched through at encode time, so
-//! a missing member silently shifts every later one.
+//! Translated from `codec/encoder/core/inc/wels_func_ptr_def.h`.
 
 #![forbid(unsafe_code)]
 
@@ -44,25 +41,18 @@ use crate::encoder::svc_motion_estimate::{
 use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
 
 // ============================================================================
-// Function pointer typedefs that had no Rust counterpart
+// Function pointer typedefs
 // ============================================================================
 
-/// `wels_func_ptr_def.h:178`, **safe and split three ways since T9.C2**.
+/// `wels_func_ptr_def.h:178`.
 ///
-/// The C++ has one `PGetIntraPredFunc` serving all three tables, and the port had
-/// one `unsafe extern "C" fn(*mut u8, *mut u8, i32)` doing the same. Both are the
-/// F113/S52 shape: *one type serving several lengths*. The destination is a packed
-/// prediction block whose size is fixed per table — 16, 64 or 256 bytes — so the
-/// safe form names the size, and a chroma predictor can no longer be installed
-/// into the luma table by a slip of the index.
+/// The C++ has one `PGetIntraPredFunc` serving all three tables. The destination is
+/// a packed prediction block whose size is fixed per table — 16, 64 or 256 bytes —
+/// so the safe form names the size, and a chroma predictor can no longer be
+/// installed into the luma table by a slip of the index.
 ///
 /// The reference is the **reconstruction picture**, read and never written, so it
-/// arrives as the seam's read cursor. Note what the type change buys beyond
-/// soundness: `reference`/`top_row` used to turn `(pRef, kiStride)` into a slice
-/// under a hand-written `# Safety` contract naming each kernel's reach; a
-/// `RecCursor` bounds-checks every access against the whole plane allocation, so
-/// the reach constants below are now a *correctness* statement about which
-/// neighbours must be available, not a memory-safety one.
+/// arrives as the seam's read cursor.
 pub type PGetLumaI4x4PredFunc = fn(pred: &mut [u8; 16], rec: &RecCursor<'_>);
 /// [`PGetLumaI4x4PredFunc`] for the 8x8 chroma prediction block.
 pub type PGetChromaPredFunc = fn(pred: &mut [u8; 64], rec: &RecCursor<'_>);
@@ -78,18 +68,11 @@ pub type PIntraFineMdFunc = fn(
 ) -> i32;
 
 /// `wels_func_ptr_def.h:107`
-///
-/// **S11.28: the six mode-decision slot types are safe fn pointers** — F276's
-/// chain, one family later. Every installed target went safe first (the union
-/// collapse, the SAD-row slot, the background-flag indexing, and sixteen
-/// bodies whose `unsafe` guarded nothing the compiler could find), so the
-/// types follow, and the dispatch sites' claims go with them.
 pub type PInterFineMdFunc = for<'a> fn(
-    // **S10.8: the context and the mode-decision record share a lifetime.** The
-    // fine-partition body resolves the reference picture through the context now
-    // (`layer_ref_pic` takes it since `SDqLayer::pRefList` went), and that picture
-    // is what `SWelsMD`'s cursors point into — so the slot has to say the two
-    // outlive each other, where before the layer's own raw field hid the tie.
+    // The context and the mode-decision record share a lifetime. The fine-partition
+    // body resolves the reference picture through the context, and that picture is
+    // what `SWelsMD`'s cursors point into — so the slot has to say the two outlive
+    // each other.
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     slice: &mut SSlice,
@@ -105,21 +88,7 @@ pub type PInterMdFirstIntraModeFunc = fn(
     pMbCache: &mut SMbCache,
 ) -> bool;
 
-// `PAccumulateSadFunc` (`wels_func_ptr_def.h:111`) stood here, with its
-// `pfAccumulateSadForRc` slot below. **S18, deleted in S4.C1**: the slot was
-// never installed and never dispatched — whole-tree grep at deletion found the
-// type declaration, the field declaration and the one `None` initialiser and
-// nothing else, in `src/`, `tests/`, `benches/` or `rust/tools/`. It is the
-// rate-control SAD accumulator the C++ assigns in `WelsInitEncodingFuncs`; the
-// port's rate control reads its SADs directly, so the indirection never had a
-// producer. One `unsafe` fn-pointer alias retires without a conversion.
-
 /// `wels_func_ptr_def.h:116`
-/// **S4.C1**: `pKeepPskip` was `*mut bool` — a pure out-parameter whose single
-/// dispatch site passes `&mut` on a local `bool`, and whose two implementations
-/// only read-modify-write it. The leading context stays raw: this slot is
-/// dispatched inside the fork, so S63 keeps it a pointer until the root converts.
-/// `extern "C"` came off — nothing in this table crosses the C ABI (T4b.1).
 pub type PInterMdBackgroundDecisionFunc = fn(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -130,8 +99,6 @@ pub type PInterMdBackgroundDecisionFunc = fn(
 
 /// `wels_func_ptr_def.h:118`
 pub type PMdBackgroundInfoUpdateFunc = extern "C" fn(
-    // S10.8: the context, because the body resolves the reference picture through
-    // it now that `SDqLayer::pRefList` is gone.
     pEncCtx: &sWelsEncCtx,
     pCurLayer: &SDqLayer,
     pCurMb: &mut SMB,
@@ -148,17 +115,14 @@ pub type PInterMdScrollingPSkipDecisionFunc = fn(
 ) -> bool;
 
 /// `wels_func_ptr_def.h:123`
-/// **S4.C1: shared, and deliberately not `&mut`.** `SetScrollingMvToMdNull` is
-/// fork-reachable (`phase9_forksplit.py --why`: `<- WelsMdInterSecondaryModesEnc
-/// <- WelsMdInterMb <- ... <- EncodeOnePartitionSizeLimited <- fork seed`), so an
-/// exclusive reference here would be N workers each taking a `Unique` retag over
-/// the one video-analysis block every worker shares — F223's second defect
-/// verbatim, and a data race whether or not anything is written through it. The
-/// real implementation only *reads* the block (two scalars off
-/// `sScrollDetectInfo`); everything it writes goes through `pMd`, which is
-/// already exclusive and per-macroblock.
+/// **Shared, and deliberately not `&mut`.** `SetScrollingMvToMdNull` is
+/// fork-reachable, so an exclusive reference here would be N workers each taking a
+/// `Unique` retag over the one video-analysis block every worker shares — a data
+/// race whether or not anything is written through it. The real implementation only
+/// *reads* the block (two scalars off `sScrollDetectInfo`); everything it writes
+/// goes through `pMd`, which is already exclusive and per-macroblock.
 ///
-/// **D-scc-4 (P10.3.D3): the slot carries the extension, not the base block.**
+/// **The slot carries the extension, not the base block.**
 /// The C++ hands this slot an `SVAAFrameInfo*` and `SetScrollingMvToMd`
 /// downcasts it (`static_cast<SVAAFrameInfoExt*>`) because upstream's screen
 /// path always passes an extension in that parameter. The port's caller reaches
@@ -171,9 +135,9 @@ pub type PSetScrollingMv = fn(pVaaExt: Option<&SVAAFrameInfoExt>, pMd: &mut SWel
 
 /// `wels_func_ptr_def.h:125`
 pub type PInterMdFunc = for<'a> fn(
-    // S10.8, as `PInterFineMdFunc`: the reference picture is resolved through the
-    // context now, and `SWelsMD`'s cursors point into it, so the slot says the two
-    // share a lifetime.
+    // As `PInterFineMdFunc`: the reference picture is resolved through the context,
+    // and `SWelsMD`'s cursors point into it, so the slot says the two share a
+    // lifetime.
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     slice: &mut SSlice,
@@ -184,7 +148,7 @@ pub type PInterMdFunc = for<'a> fn(
 pub type PDeQuantizationHadamardFunc = fn(pRes: &mut [i16; 16], kuiMF: u16);
 
 /// `wels_func_ptr_def.h:190`
-/// **S4.C1: safe, and `pCoff` is a slice rather than a fixed array on purpose.**
+/// **`pCoff` is a slice rather than a fixed array on purpose.**
 /// The two call families walk different extents off the same flat cursor —
 /// luma steps `sDct.iLumaBlock` (a `[[i16; 16]; 16]` read flat) in sixteens with
 /// `iEndIdx = 15`, chroma DC steps `sDct.iChromaDc` (`[[i16; 4]; 2]`) in fours
@@ -193,8 +157,7 @@ pub type PDeQuantizationHadamardFunc = fn(pRes: &mut [i16; 16], kuiMF: u16);
 /// the implementation's backward scan starts at `iEndIdx` inside it.
 ///
 /// `pRun`/`pLevel` are the caller's own `[0u8; 16]` / `[0i16; 16]` locals, so
-/// the fixed-array shape is exact there. `extern "C"` came off with the raws:
-/// nothing in this table crosses the C ABI (T4b.1's precedent).
+/// the fixed-array shape is exact there.
 pub type PCavlcParamCalFunc = fn(
     pCoff: &[i16],
     pRun: &mut [u8; 16],
@@ -204,7 +167,7 @@ pub type PCavlcParamCalFunc = fn(
 ) -> i32;
 
 // ============================================================================
-// Entropy-coder dispatch — T4b.1
+// Entropy-coder dispatch
 // ============================================================================
 
 /// Which entropy coder a slice is written with: `iEntropyCodingModeFlag`, as a type.
@@ -214,35 +177,10 @@ pub type PCavlcParamCalFunc = fn(
 /// `pfStashMBStatus`, `pfStashPopMBStatus`) and their four typedefs. They were
 /// never four independent choices: `InitCoeffFunc` set all four together, from one
 /// `if`, on one boolean, so what the table actually held was a *configuration*, not
-/// a dispatch — the distinction plan §2.2.5 draws and Phase 4a deferred to here.
-///
-/// Three things fall out of saying so in the type system, and they are the reason
-/// this is an `enum` rather than a `Box<dyn EntropyCoder>`:
-///
-/// * **The CAVLC arm drops `buf`.** T3.5 had to add `buf: &mut [u8]` to the stash
-///   pair for CABAC's sake — `PropagateCarry` rewrites bytes behind the cursor, so
-///   restoring the cursor alone would leave the output wrong — and the CAVLC
-///   variants took it and ignored it, because a detached cursor is `Copy` and its
-///   snapshot is a value (T3.4). One signature per arm means only the arm that
-///   needs the buffer names it.
-/// * **The CABAC thunk disappears.** `WelsSpatialWriteMbSynCabac` is a plain Rust
-///   `fn` and the slot held an `extern "C"` pointer, so a bridging thunk existed.
-///   With no slot there is no slot type, and the thunk was pure deletion.
-/// * **The `is_some()` guards disappear** — with them the "installed?" question,
-///   which had exactly one answer from `InitFunctionPointers` onward.
-///
-/// Per the brief's §1.2 the methods `match` at the call site and are `#[inline]`;
-/// what this buys is a signature the compiler can see through, not speed — these
-/// are per-macroblock calls with a runtime-selected arm, and 4a's finding is that
-/// direct dispatch recovers scaffolding only where the caller supplies constant
-/// dimensions.
+/// a dispatch.
 ///
 /// The discriminants are `iEntropyCodingModeFlag`'s own values, and `Cavlc = 0`
-/// is deliberately the zero one. That used to be load-bearing: it was what kept
-/// `SWelsFuncPtrList`'s `mem::zeroed()` construction sound (S21). **T6.I1 wrote
-/// that constructor out field by field**, so the property is no longer relied on
-/// — it is kept because `Cavlc` is genuinely the C++'s default entropy coder, and
-/// `#[default]` below now states that directly instead of a memset implying it.
+/// is deliberately the zero one: `Cavlc` is the C++'s default entropy coder.
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum EntropyCoder {
@@ -272,10 +210,9 @@ impl EntropyCoder {
 
     /// `pfWelsSpatialWriteMbSyn` — writes one macroblock's syntax elements.
     ///
-    /// The record comes as the grid window (E3): both writers read same-slice
+    /// The record comes as the grid window: both writers read same-slice
     /// neighbours for context modelling and write the current record's QP and
     /// MVD state, so `mbs` is exactly "my slice's records so far, current last".
-    ///
     #[inline]
     pub fn WelsSpatialWriteMbSyn(
         self,
@@ -300,21 +237,11 @@ impl EntropyCoder {
     ///
     /// `buf` is the slice's output buffer and is **used by the CABAC arm only**;
     /// `pBs` is the slice's writer (`slice_bs_writer`) and is **used by the CAVLC arm
-    /// only** — see the type-level note. Both are parameters here because the
-    /// caller cannot know which arm it is calling, and every caller holds the
-    /// context both derive from.
+    /// only**. Both are parameters here because the caller cannot know which arm it
+    /// is calling, and every caller holds the context both derive from.
     ///
-    /// `pBs` must be the slice's writer and `buf` the buffer it is positioned
-    /// in — a contract the arms now check by slicing rather than assume
-    /// (S11.30: safe, with the pair's last raw — the restore scratch — a
-    /// bounded slice inside `pDss`).
+    /// `pBs` must be the slice's writer and `buf` the buffer it is positioned in.
     #[inline]
-    /// **T9.E6**: `pSlice` became the three things the two arms touch — the
-    /// CABAC coder state, the last macroblock QP as a value, and (on the pop
-    /// side, at the call sites) the restore of that QP — so no argument of
-    /// this call names `SSlice` and nothing here retags the slice when the
-    /// family flips (the two shape-B sites q1c reported here were exactly the
-    /// writer-resolver result held across the future `&mut *pSlice` argument).
     pub fn StashMBStatus(
         self,
         buf: &mut [u8],
@@ -337,14 +264,8 @@ impl EntropyCoder {
     /// `pfStashPopMBStatus` — restores what [`StashMBStatus`] saved, returning the
     /// stashed `iMbSkipRun`. See there for `buf` and `pBs`.
     ///
-    /// See [`StashMBStatus`] for `buf` and `pBs` — safe with it since S11.30.
-    ///
     /// [`StashMBStatus`]: EntropyCoder::StashMBStatus
     #[inline]
-    /// **T9.E6**, as [`StashMBStatus`]: the caller restores
-    /// `uiLastMbQp` from `sDss` beside the call — it owns both.
-    ///
-    /// [`StashMBStatus`]: EntropyCoder::StashMBStatus
     pub fn StashPopMBStatus(
         self,
         buf: &mut [u8],
@@ -365,10 +286,7 @@ impl EntropyCoder {
     /// `pfGetBsPosition` — the slice writer's bit position, in the units each coder
     /// counts in. Needs no buffer on either arm: CAVLC reads the writer's own
     /// position (`pBs`, from `slice_bs_writer`) and CABAC subtracts two offsets held
-    /// in the slice's coder state (T3.5).
-    ///
-    /// # Safety
-    /// `pSlice` must be live and `pBs` must be its writer.
+    /// in the slice's coder state.
     #[inline]
     pub fn GetBsPosition(
         self,
@@ -387,20 +305,9 @@ impl EntropyCoder {
 // ============================================================================
 
 /// `TagWelsFuncPointerList` — `codec/encoder/core/inc/wels_func_ptr_def.h:198`.
-/// 1280 bytes and 70 members in C++, in C++ declaration order; the port's size is
-/// tracked by `encoder/abi_guard.rs`, which records each de-virtualization that
-/// shrinks it.
+/// 1280 bytes and 70 members in C++, in C++ declaration order.
 #[repr(C)]
-// T4b.2a: `Copy, Clone` came off when `pParametersetStrategy` became an owned
-// `Option<Box<_>>`. Nothing copied the table by value -- it is only ever reached
-// through `sWelsEncCtx::pFuncList`, a pointer -- so this is a derive that had been
-// silently licensing a double-owner ever since the strategy was allocated at all.
 pub struct SWelsFuncPtrList {
-    // T4b.3b: `sExpandPicFunc: SExpandPicFunc` was the first member (24 bytes).
-    // Both codecs installed the same three `_c` constants into it, so it is gone
-    // and `common/expand_pic.rs::ExpandReferencingPicture` names them directly.
-    // This is the first member deleted from this struct since T4b.1 -- and the
-    // first time since Phase 4a's entry that `assert_size!` moves.
     pub pfFillInterNeighborCache: PFillInterNeighborCacheFunc,
 
     pub pfGetVarianceFromIntraVaa: PGetVarianceFromIntraVaaFunc,
@@ -423,14 +330,8 @@ pub struct SWelsFuncPtrList {
     pub pfGetLumaI4x4Pred: [Option<PGetLumaI4x4PredFunc>; I4_PRED_A],
     pub pfGetChromaPred: [Option<PGetChromaPredFunc>; C_PRED_A],
 
-    // `pfSampleSadHor8: [Option<PSampleSadHor8Func>; 2]` stood here — the
-    // screen-content SIMD horizontal-SAD pair. Zero writers and zero readers in
-    // the whole tree (the C++ fills it only from SSE4.1 kernels this port does
-    // not have). S18, session F step 0.
     pub pfMotionSearch: [Option<PMotionSearchFunc>; BLOCK_STATIC_IDC_ALL],
-    /// The slots the search family reaches — see [`SMeFuncs`]. Same six
-    /// members the table carried flat until session F, regrouped so the five
-    /// de-virtualized typedefs can take `&SMeFuncs` instead of the table.
+    /// The slots the search family reaches — see [`SMeFuncs`].
     pub sMeFuncs: SMeFuncs,
 
     pub pfInitializeHashforFeature: Option<PInitializeHashforFeatureFunc>,
@@ -470,44 +371,29 @@ pub struct SWelsFuncPtrList {
     pub pfDequantization4x4: PDeQuantization4x4Func,
     pub pfDequantizationFour4x4: PDeQuantizationFunc,
     pub pfDequantizationIHadamard4x4: PDeQuantizationHadamardFunc,
-    // `pfIDctFourT4`/`pfIDctT4`/`pfIDctI16x16Dc` stood here — installed by
-    // `WelsInitReconstructionFuncs`, asserted `is_some()`, and never called
-    // (F138/F139): the reconstruction writes go through the seam's kernels
-    // directly since T9.C2. S18, session F step 0; the kernels stay (the
-    // differential tests drive them), only the write-only slots go.
 
     /* For Deblocking */
     pub pfDeblocking: DeblockingFunc,
-    // `pfSetNZCZero` stood here — one writer (`WelsBlockFuncInit`), one
-    // reader (`DeblockingBSCalc_c`), the reader direct since session F (F118).
 
     pub pfRc: SWelsRcFunc,
-
-    // The three `pfSetMemZeroSize*` slots were here (`PSetMemoryZero`, i.e.
-    // `fn(*mut c_void, i32)`): sizes times 8, times 64, times 64 aligned to 16.
-    // All three were installed with the one `WelsSetMemZero_c` body and nothing
-    // else, so the dispatch had one arm — deleted with the type, and the seven
-    // call sites call `encoder_context::WelsSetMemZero_c` directly (S18, Phase 6
-    // session B).
 
     pub pfCavlcParamCal: PCavlcParamCalFunc,
 
     /// `pfWelsSpatialWriteMbSyn`, `pfGetBsPosition`, `pfStashMBStatus` and
     /// `pfStashPopMBStatus` (`wels_func_ptr_def.h:192-195`) were four slots set
-    /// together by one `if`; T4b.1 made them one [`EntropyCoder`]. -32 bytes of
-    /// slots, +8 for the discriminant and its padding.
+    /// together by one `if`.
     pub eEntropyCoder: EntropyCoder,
 
     /// `IWelsParametersetStrategy*` — C++ declares an 8-byte pointer to a
-    /// polymorphic object; **T4b.2a** made it an owned `Option<Box<_>>`, which is
-    /// also 8 bytes by the null-pointer niche and which has a `Drop`.
+    /// polymorphic object; here it is an owned `Option<Box<_>>`, which is also
+    /// 8 bytes by the null-pointer niche and which has a `Drop`.
     ///
     /// The name keeps its C++ `p` for diffability, but this member **owns** its
     /// object: `None` is the uninstalled state (and the all-zero pattern
     /// `WelsMallocz` produces), and dropping the box is `WELS_DELETE_OP`. Because
     /// the table itself is `WelsMallocz`'d and `WelsFree`'d, *this struct's* drop
     /// glue never runs — so `WelsUninitEncoderExt` `take()`s the field explicitly,
-    /// at the same point `encoder_ext.cpp:1995` deletes it. See F19.
+    /// at the same point `encoder_ext.cpp:1995` deletes it.
     pub pParametersetStrategy:
         Option<Box<crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj>>,
 }
@@ -515,34 +401,13 @@ pub struct SWelsFuncPtrList {
 pub type TagWelsFuncPointerList = SWelsFuncPtrList;
 
 impl Default for SWelsFuncPtrList {
-    /// **T6.I1 — field-wise, replacing `{ mem::zeroed() }`.**
-    ///
-    /// The zeroed version was sound and said so (S21): every member is a function
-    /// pointer, an array of them, a POD sub-table of them, an `EntropyCoder` /
-    /// `RCMode` whose zero discriminant is a declared variant, or an
-    /// `Option<Box<_>>` whose all-zero is `None` by the null-pointer niche. But
-    /// "sound" was a property re-argued in a comment every time a member was added,
-    /// and the argument had to be re-checked by hand on each change — the member
-    /// that would break it (any type without a valid all-zero bit pattern) is
-    /// exactly the member nobody would notice adding.
-    ///
-    /// Written out, the compiler checks it instead, and the table stops being the
-    /// last thing in the encoder context that needs an `unsafe` block to come into
-    /// existence. Field for field this produced the same image the memset did; the
-    /// three `init_fills_*` tests are unmodified across that change and are the
-    /// proof, since they assert what `InitFunctionPointers` writes on top of it.
-    ///
-    /// **The table is no longer uniformly uninstalled**, and the twenty-nine slots
-    /// below that name a kernel are why. They were `Option<fn>` because
-    /// `WelsMallocz`'s all-zero image was the C++'s uninstalled table; but every
-    /// one of them is written unconditionally by an installer
+    /// The twenty-nine slots below that name a kernel are plain `fn`, not
+    /// `Option<fn>`: every one of them is written unconditionally by an installer
     /// (`WelsInitEncodingFuncs`, `WelsInitReconstructionFuncs`,
     /// `InitIntraAnalysisVaaInfo`, `InitCoeffFunc`,
     /// `InitFillNeighborCacheInterFunc`) that `InitFunctionPointers` calls on every
-    /// path, before any frame is touched — so `None` was a state no dispatch could
-    /// observe, and forty-one call sites nonetheless spelled the dispatch `if let
-    /// Some(f) = ..`, which *silently skips the call*. A `fn` has no null, so those
-    /// forty-one become unconditional calls and the shape stops being writable.
+    /// path, before any frame is touched, so `None` is a state no dispatch could
+    /// observe.
     ///
     /// Where an installer chooses between two kernels on a coding parameter —
     /// `WelsInitBGDFunc`, `WelsInitSCDPskipFunc`, `InitFillNeighborCacheInterFunc`
@@ -558,15 +423,6 @@ impl Default for SWelsFuncPtrList {
     /// that `SetFastCodingFunc` re-aims, and `pParametersetStrategy`, whose `None`
     /// is a construction *failure* this function's caller turns into
     /// `ENC_RETURN_MEMALLOCERR`.
-    ///
-    /// Each of those twenty-nine slots now has two writers — this constructor and
-    /// the upstream installer that runs over the top — and **no test asserts they
-    /// agree**, deliberately. Such a test can only compare the constructor with
-    /// itself: it would name the same kernels this does, and for the ten slots
-    /// backed by `#[inline]` kernels it would not even do that, since an
-    /// `#[inline]` function's address is per-codegen-unit. What a wrong kernel in
-    /// either writer actually breaks is the encoded bitstream, and the diffharness
-    /// sweeps are what say it does not.
     fn default() -> Self {
         Self {
             pfFillInterNeighborCache: crate::encoder::md::FillNeighborCacheInterWithoutBGD,

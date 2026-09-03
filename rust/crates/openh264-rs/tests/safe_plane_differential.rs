@@ -1,27 +1,24 @@
 //! Differential tests: `safe::plane` against the raw mid-pointer arithmetic it
-//! replaces (plan §2.2.1, taxonomy T2).
+//! replaces.
 //!
 //! The unit tests inside `src/safe/plane.rs` prove `PaddedPlane` is *self*-consistent.
 //! These prove it is *C*-consistent: for every legal logical coordinate, the sample it
 //! returns is the sample `pData[i][y * iLinesize[i] + x]` returns, over the exact
 //! layouts `AllocPicture` builds.
 //!
-//! This file lives outside `src/`, so unlike everything under `src/safe/` it may use
-//! `unsafe` — it has to, because the reference implementation *is* raw-pointer code.
-//! Every `unsafe` block here drives the old side of a comparison.
+//! Every `unsafe` block here drives the raw side of a comparison.
 //!
-//! Running this under Miri additionally checks those raw accesses for UB; see
-//! `rust/docs/phase1_findings.md`.
+//! Running this under Miri additionally checks those raw accesses for UB.
 
 mod common;
 
 use common::prng::Prng;
 use openh264_rs::safe::plane::PaddedPlane;
 
-/// Sample sizes are cut hard under Miri, which runs ~100x slower and would otherwise
-/// turn a phase-exit gate into an hour. The *shapes* tested are identical — every
-/// corner, every geometry except the 1080p one, both planes — only the PRNG sample
-/// counts shrink, and the full-size run happens on every `cargo test`.
+/// Sample sizes are cut hard under Miri, which runs ~100x slower. The *shapes* tested
+/// are identical — every corner, every geometry except the 1080p one, both planes —
+/// only the PRNG sample counts shrink, and the full-size run happens on every
+/// `cargo test`.
 fn scale(n: usize) -> usize {
     if cfg!(miri) { (n / 100).max(2) } else { n }
 }

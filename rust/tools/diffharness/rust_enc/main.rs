@@ -9,16 +9,14 @@ use std::io::{Read, Write};
 use std::ffi::c_char;
 
 // ---------------------------------------------------------------------------
-// The log referee's capture side (T9.X2, F100) — `cxx_enc.cpp`'s mirror.
+// The log referee's capture side — `cxx_enc.cpp`'s mirror.
 //
 // `OH264_TRACE_LOG=<path>` installs a trace callback that writes every delivered
 // message as `<level>|<text>`, and raises the trace level to INFO because the
 // default is WELS_LOG_WARNING and the parameter/statistics blocks are INFO. Unset
 // — every sweep run — none of this executes and the driver is unchanged.
 //
-// The callback writes through a `File` reached from the trace *context*, which is
-// the one pointer in this plumbing that genuinely belongs to the caller; the
-// registration idiom is `tests/trace_callback_test.rs`'s.
+// The callback writes through a `File` reached from the trace *context*.
 // ---------------------------------------------------------------------------
 struct TraceSinkCtx {
     file: File,
@@ -63,11 +61,8 @@ unsafe fn install_trace_capture(pEnc: *mut ISVCEncoder) -> Option<Box<TraceSinkC
         // gets this value from the real header, so this driver must ask the port
         // for the same number a C caller would. Importing the port's own constant
         // would make the two drivers agree by construction and hide exactly the
-        // divergence the level check exists to catch. It said 3 until D-fid-4
-        // (2026-08-26) — the sixth copy of F184's defect, outside the `src tests`
-        // scope every enumeration of it had used.
+        // divergence the level check exists to catch.
         //
-        // **P10.2.C1: the default stays the literal; the override is parsed.**
         // `OH264_TRACE_LEVEL`, when set, replaces it — that is how
         // `scc_verdicts.sh` asks both drivers for `WELS_LOG_DEBUG` (8) without
         // moving what every other caller sees. An unparseable value falls back to
@@ -121,37 +116,34 @@ fn main() {
     // Optional 14th: iComplexityMode. 0 LOW (default, and what every sweep preset
     // runs), 1 MEDIUM, 2 HIGH. See cxx_enc.cpp.
     let complexity: i32 = if a.len() > 14 { a[14].parse().unwrap() } else { 0 };
-    // Optional 15th: iLTRRefNum. 0 (default) leaves long-term reference OFF, which is
-    // what every preset before `ltr` ran; N > 0 turns bEnableLongTermReference on and
-    // asks for N long-term slots. See cxx_enc.cpp.
+    // Optional 15th: iLTRRefNum. 0 (default) leaves long-term reference OFF; N > 0
+    // turns bEnableLongTermReference on and asks for N long-term slots. See
+    // cxx_enc.cpp.
     let ltr: i32 = if a.len() > 15 { a[15].parse().unwrap() } else { 0 };
     // Optional 16th: iLtrMarkPeriod. 30 is FillDefault's.
     let ltrperiod: i32 = if a.len() > 16 { a[16].parse().unwrap() } else { 30 };
     // Optional 17th: LTR feedback bitmask. 1 = marking feedback, 2 = recovery
     // request. See cxx_enc.cpp — the schedule is fixed and identical on both sides.
     let ltrfb: i32 = if a.len() > 17 { a[17].parse().unwrap() } else { 0 };
-    // Optional 18th: eSpsPpsIdStrategy, as the enum's own value (T8b.B3). See
+    // Optional 18th: eSpsPpsIdStrategy, as the enum's own value. See
     // cxx_enc.cpp — 0/1/2/3/6, and not a dense range.
     let psstrategy: i32 = if a.len() > 18 { a[18].parse().unwrap() } else { 0 };
-    // Optional 19th/20th: iSpatialLayerNum and bEnableDenoise (T8b.C1/C2). The two
-    // axes `METHOD_DOWNSAMPLE` and `METHOD_DENOISE` sit behind; both refused at
-    // `InitializeExt` under S48 until this session, so neither had byte coverage.
-    // Layer geometry is `BaseEncoderTest`'s (`test/api/BaseEncoderTest.cpp:43`).
+    // Optional 19th/20th: iSpatialLayerNum and bEnableDenoise. The two axes
+    // `METHOD_DOWNSAMPLE` and `METHOD_DENOISE` sit behind. Layer geometry is
+    // `BaseEncoderTest`'s (`test/api/BaseEncoderTest.cpp:43`).
     let dlayers: i32 = if a.len() > 19 { a[19].parse().unwrap() } else { 1 };
     let denoise: i32 = if a.len() > 20 { a[20].parse().unwrap() } else { 0 };
-    // Optional 21st: bEnableBackgroundDetection (Phase 9 session B4, D-ref-1). See
-    // cxx_enc.cpp — pinned `false` by every driver before this session, which is what
-    // left the background family dark. It does NOT reach the scene-change family:
-    // `WelsInitSCDPskipFunc` also requires `bScreenContent`, which is the `usage`
-    // argument below (P10.1; F125).
+    // Optional 21st: bEnableBackgroundDetection. See cxx_enc.cpp. It does NOT reach
+    // the scene-change family: `WelsInitSCDPskipFunc` also requires `bScreenContent`,
+    // which is the `usage` argument below.
     let bgd: i32 = if a.len() > 21 { a[21].parse().unwrap() } else { 0 };
     // 23rd: the log referee's reach into `SetOption` — see `cxx_enc.cpp` for why.
     // N > 0 re-applies the same `SEncParamExt` through
     // `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` after frame N-1. 0 in every
     // sweep row.
     let setoptext: i32 = if a.len() > 22 { a[22].parse().unwrap() } else { 0 };
-    // 24th/25th: iUsageType (0 camera — the default and every preset before P10.1 —
-    // 1 SCREEN_CONTENT_REAL_TIME) and bIsLosslessLink, which the encoder reads only
+    // 24th/25th: iUsageType (0 camera — the default — 1 SCREEN_CONTENT_REAL_TIME)
+    // and bIsLosslessLink, which the encoder reads only
     // under screen usage (`ParamValidationExt` turns long-term reference off
     // without it). See cxx_enc.cpp for the forcing screen usage applies to the
     // three pinned flags below, and the `scc` preset in sweep.sh.

@@ -21,10 +21,6 @@ pub const I16x16_COUNT: usize = 16;
 
 use crate::safe::plane::PlaneCursorMut;
 
-// T5.X8: two more duplicate dispatch typedefs — `decoder_context.rs` holds the
-// pair the tables are actually typed by, and these two, unused here, described the
-// deleted wrappers' signature. S18's straggler class.
-
 #[inline(always)]
 pub fn WelsClip1(iX: i32) -> u8 {
     if (iX & !255) != 0 {
@@ -35,32 +31,14 @@ pub fn WelsClip1(iX: i32) -> u8 {
 }
 
 // ============================================================================
-// Safe kernels (plan §Phase 2, recipe R2)
+// Kernels
 // ============================================================================
 //
-// These are the implementations; the `Wels*_c` functions below are strangler
-// shims (R7) that build a `PlaneCursorMut` from the raw pointer and call in here,
-// so no call site and no dispatch-table installer changes in this phase.
-//
-// Unlike the pilot family, **every kernel here reads outside its own block** —
-// the row above at `dy == -1` and the column to the left at `dx == -1`, and for
-// the diagonal modes the row above extends up to 8 (4x4) or 16 (8x8, 16x16)
-// samples to the right of the block's left edge. That is legal because the block
-// always sits inside a `PADDING_LENGTH`-padded picture plane; each shim's
-// `# Safety` contract states the exact span, and it is the same contract for
-// every kernel of a given block size.
-//
-// Two idioms carry the whole file, and both are plain byte moves rather than the
-// word punning they replace (taxonomy T7):
-//
-//   `ST32(p, 0x01010101 * v)` / `ST64(p, 0x0101010101010101 * v)`
-//       -> `row_mut(dy, 0, n).fill(v)`.  The multiply existed only to splat one
-//          byte across a machine word for the store; `fill` is that, exactly, and
-//          it is endian-neutral by construction rather than by argument.
-//   `ST32(p, LD32(q))` / a window of a local `kuiList`
-//       -> `row_mut(dy, 0, n).copy_from_slice(&list[k..k + n])`.  Also a pure
-//          byte move. Note this file has **no** punned access that is used
-//          arithmetically, so `u32::from_ne_bytes` is not needed anywhere in it.
+// **Every kernel here reads outside its own block** — the row above at
+// `dy == -1` and the column to the left at `dx == -1`, and for the diagonal
+// modes the row above extends up to 8 (4x4) or 16 (8x8, 16x16) samples to the
+// right of the block's left edge. That is legal because the block always sits
+// inside a `PADDING_LENGTH`-padded picture plane.
 
 /// The four samples of the row above a 4x4 block, `dx` in `0..4`.
 #[inline]
@@ -83,9 +61,8 @@ fn left4(pred: &PlaneCursorMut<'_>) -> [u8; 4] {
 
 /// Writes `rows[k]` of a 4x4 block from `list[off[k] .. off[k] + 4]`.
 ///
-/// The C++ writes these four rows as four unaligned `u32` stores from sliding
-/// windows of a local `kuiList`; the window offsets are the mode's whole identity,
-/// which is why they stay explicit here rather than being folded into a formula.
+/// The window offsets are the mode's whole identity, which is why they stay
+/// explicit here rather than being folded into a formula.
 #[inline]
 fn write4x4_windows(pred: &mut PlaneCursorMut<'_>, list: &[u8], off: [usize; 4]) {
     for (dy, &o) in off.iter().enumerate() {
@@ -348,11 +325,8 @@ pub fn i4x4_luma_pred_hd(pred: &mut PlaneCursorMut<'_>) {
 // --- 8x8 luma (High Profile) ------------------------------------------------
 //
 // Every 8x8 mode opens with the same prologue: low-pass the neighbours with a
-// 3-tap `(a + 2b + c + 2) >> 2` before predicting from them. The C++ writes that
-// prologue out longhand in each of the fourteen kernels, with the two ends
-// special-cased on `bTLAvail`/`bTRAvail`; here it is three shared functions, which
-// is the one place this file departs from a line-for-line transliteration. The
-// per-mode *bodies* stay exactly as the C++ writes them.
+// 3-tap `(a + 2b + c + 2) >> 2` before predicting from them, with the two ends
+// special-cased on `bTLAvail`/`bTRAvail`.
 
 /// `(a + 2b + c + 2) >> 2` — the 3-tap low-pass applied to every neighbour sample.
 #[inline]
@@ -377,9 +351,7 @@ fn tap2(a: u8, b: u8) -> u8 {
 /// The eight filtered samples of the row above an 8x8 block.
 ///
 /// `tl_avail` decides whether the first sample may use the top-left corner;
-/// `tr_avail` whether the last may use `T8`. **`T8` is read only when `tr_avail`**,
-/// exactly as the C++ does — reading it unconditionally would widen every shim's
-/// contract by one byte for no gain.
+/// `tr_avail` whether the last may use `T8`. **`T8` is read only when `tr_avail`**.
 fn i8x8_filter_top8(pred: &PlaneCursorMut<'_>, tl_avail: bool, tr_avail: bool) -> [u8; 8] {
     let t: [u8; 8] = pred.row(-1, 0, 8).try_into().unwrap();
     let mut f = [0u8; 8];
@@ -439,8 +411,8 @@ fn i8x8_filter_top16(pred: &PlaneCursorMut<'_>, tl_avail: bool) -> [u8; 16] {
 }
 
 /// Sixteen filtered samples for the `*Top` variants, where the block to the top-right
-/// is unavailable: only eight real samples exist and `T7` — **unfiltered**, as the C++
-/// has it — stands in for the other eight.
+/// is unavailable: only eight real samples exist and `T7` — **unfiltered** — stands in
+/// for the other eight.
 fn i8x8_filter_top16_edge(pred: &PlaneCursorMut<'_>, tl_avail: bool) -> [u8; 16] {
     let t: [u8; 8] = pred.row(-1, 0, 8).try_into().unwrap();
     let mut f = [0u8; 16];
@@ -468,11 +440,6 @@ fn fill8x8(pred: &mut PlaneCursorMut<'_>, v: u8) {
 }
 
 /// C++: `WelsI8x8LumaPredV_c`.
-///
-/// The C++ packs the eight filtered samples into a `uint64_t` low byte first and
-/// stores that word, which reproduces `f[0..8]` in memory **only on a little-endian
-/// target**. Copying the bytes says what was meant and is correct everywhere; on
-/// every target this project builds for the two are the same bytes.
 pub fn i8x8_luma_pred_v(pred: &mut PlaneCursorMut<'_>, tl_avail: bool, tr_avail: bool) {
     let f = i8x8_filter_top8(pred, tl_avail, tr_avail);
     for dy in 0..8 {
@@ -865,22 +832,6 @@ pub fn i16x16_luma_pred_dc_na(pred: &mut PlaneCursorMut<'_>) {
     fill16x16(pred, 0x80);
 }
 
-// **T5.X8: the 42 strangler shims that stood here are deleted.**
-//
-// Each was an `unsafe extern "C" fn(pPred: *mut u8, kiStride: i32)` whose entire
-// body rebuilt a `(len, center)` span from the stride, made one
-// `slice::from_raw_parts_mut`, and called the kernel above it. They existed so that
-// no call site and no dispatch-table installer had to change in Phase 2 (plan §4
-// R7) — and Phase 5's reconstruction bracket now hands the kernels a
-// `PlaneCursorMut` built from the picture's own plane, so there is nothing left for
-// them to bridge. The dispatch tables in `decoder_core.rs` name the kernels
-// directly; `PGetIntraPredFunc` is `Option<fn(&mut PlaneCursorMut<'_>)>`.
-//
-// `shim_span` went with them: the span it computed was the shim's way of saying
-// "this kernel reads one row up and one column left"; `PaddedPlane` says it by
-// being padded, and `PlaneCursorMut` bounds-checks the reach against the whole
-// plane rather than against a re-derived window.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,10 +845,6 @@ mod tests {
         assert_eq!(WelsClip1(300), 255);
     }
 
-    /// **T5.X8**: the shims are gone, so this exercises the kernels through the
-    /// same cursor the dispatch tables now hand them. The fixture is unchanged —
-    /// an 8-stride buffer with the block anchored at (1, 2) — so the values pinned
-    /// are the values the pointer form pinned.
     #[test]
     fn test_i4x4_pred_v_h_dc() {
         let mut buf = [0u8; 64];

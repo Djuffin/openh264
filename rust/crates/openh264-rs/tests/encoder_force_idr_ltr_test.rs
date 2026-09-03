@@ -1,5 +1,4 @@
-//! **`ForceIntraFrame` with LTR on** — `ltr_test.cpp:14-42`'s loop, re-stated in the
-//! tree (Phase 8b session A, T8b.A4).
+//! **`ForceIntraFrame` with LTR on** — `ltr_test.cpp:14-42`'s loop.
 //!
 //! The reference's assertion is blunt: with long-term reference enabled
 //! (`iLTRRefNum = 1`, marking period 2) and `ForceIntraFrame(true)` called after every
@@ -19,8 +18,7 @@
 //! The three gtest instances of this are `rand()`-seeded (`simple_test.cpp:20-24`
 //! seeds from `time(NULL)`, and `iIDRPeriod` is `2^(layers-1) * (rand()%5 + 1)`), so
 //! *which* instance fails moves between runs and the gtest binary alone is a poor
-//! regression net. This file pins the configuration and the frame types, and runs per
-//! commit.
+//! regression net. This file pins the configuration and the frame types.
 //!
 //! The configuration below is `prepareParamDefault` + `prepareParam`
 //! (`encode_decode_api_test.cpp`) with the fixture's first parameter row

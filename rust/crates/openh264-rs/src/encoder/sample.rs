@@ -3,12 +3,7 @@
 //! layer scores every candidate with.
 //!
 //! The SAD kernels already live in `common/sad_common.rs` (`sad_common.cpp`); only
-//! the SATD half and the table filler are new here.
-//!
-//! The seven `satd_*` kernels are the family since session F: the park ended
-//! when B2-B4 flipped the cost tables safe and session F converted the last
-//! raw reader — the raw `WelsSampleSatd*_c` bodies and T9.B25's transitional
-//! raw tables are deleted, the same close as `sad_common.rs`'s SAD family.
+//! the SATD half and the table filler are here.
 //!
 //! The `Combined3` entries are set to `NULL` by the scalar path and only ever
 //! assigned from SIMD kernels behind a `uiCpuFlag` test. Measured against
@@ -18,12 +13,8 @@
 #![allow(non_snake_case, non_upper_case_globals, dead_code)]
 
 // ---------------------------------------------------------------------------
-// Safe kernels — the family, since session F (the D-perf-2 park ended when
-// B2-B4 installed them into the flipped tables and session F retired the raw
-// bodies with T9.B25's transitional tables).
-//
-// Arithmetic parity (R-e): the whole butterfly is `i32`, exactly as the C++
-// (`int32_t pSampleMix[4][4]`) and the raw port — total over all `u8` inputs
+// Arithmetic parity: the whole butterfly is `i32`, exactly as the C++
+// (`int32_t pSampleMix[4][4]`) — total over all `u8` inputs
 // (|diff| <= 255, 16x Hadamard gain, `(sum + 1) >> 1` per 4x4 sub-block; the
 // per-sub-block rounding makes the composition order part of the contract,
 // mirrored below).
@@ -44,7 +35,7 @@ pub fn satd_4x4<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i
     let mut mix = [[0i32; 4]; 4];
 
     for (i, row) in mix.iter_mut().enumerate() {
-        // S10.2: `RecCursor::row` is const-sized and returns by value — a shared
+        // `RecCursor::row` is const-sized and returns by value — a shared
         // cell view cannot lend a row. Same four samples, same order.
         let r1: [u8; 4] = c1.row_n::<4>(i as isize, 0);
         let r2: [u8; 4] = c2.row_n::<4>(i as isize, 0);
@@ -118,12 +109,6 @@ use crate::encoder::svc_mode_decision::{
 };
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
-// The seven raw `WelsSampleSatd*_c` bodies stood here — the parked raw half
-// of the SATD family, installed only into T9.B25's transitional raw tables.
-// Session F converted the tables' last readers and deleted the tables, so the
-// raw bodies went per the park's own charter (the safe `satd_*` kernels above
-// are the family now, and the property tests below drive them).
-
 /// `sample.cpp:336`. Installs the scalar SAD/SATD/4-SAD tables and clears the five
 /// `Combined3` slots. The SIMD overrides that follow in the C++ are all behind
 /// `uiCpuFlag` tests that do not fire here.
@@ -131,15 +116,9 @@ use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 /// **This is the only writer of the three tables, and `_uiCpuFlag` is unused** —
 /// so every slot is a compile-time constant from the first frame on, and a call
 /// site whose block index is itself a constant may call the kernel directly,
-/// byte-identically, without going through the table at all. That fact (F118) is
-/// what lets session B3 convert the cost sites function by function instead of in
-/// one commit; the table exists for the runtime-indexed readers (the motion search
-/// hoists `[block_size]`, and `md_cost`/`me_cost`'s family selection).
-///
-/// **T9.B25 / session F**: the tables hold the safe kernels — `sample_sad::<W,
-/// H>` / `sample_sad_four::<W, H>` (`common/sad_common.rs`) and `satd_WxH`
-/// (above); the transitional raw tables lived beside them from B3 until
-/// session F converted the last raw reader.
+/// byte-identically, without going through the table at all. The table exists for
+/// the runtime-indexed readers (the motion search hoists `[block_size]`, and
+/// `md_cost`/`me_cost`'s family selection).
 pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
     let sdf = &mut pFuncList.sSampleDealingFuncs;
 
@@ -169,24 +148,14 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) 
     sdf.pfSample4Sad[BLOCK_8x4] = Some(|a, b, sad| sample_sad_four::<8, 4, _>(a, b, sad));
     sdf.pfSample4Sad[BLOCK_4x8] = Some(|a, b, sad| sample_sad_four::<4, 8, _>(a, b, sad));
 
-    // The transitional raw tables (T9.B25) were installed here beside the safe
-    // ones, from the same fourteen raw SAD shims and seven raw SATD bodies.
-    // Session F converted the last raw reader, and the tables, the shims and
-    // the raw bodies are deleted per T9.B25's own charter.
-
     // The five `pfIntra*Combined3*` slots were nulled here, as the C++ does. They
     // were never anything else on any target this port builds for, and the fields
-    // are deleted (S18, Phase 6 session B).
+    // are deleted.
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Session F: these property tests drove the raw `WelsSampleSatd*_c` bodies
-    // (deleted with the transitional raw tables); the properties are the safe
-    // kernels' now — same shapes, same expected values, cursors over the same
-    // buffers.
 
     /// SATD of a block against itself is zero for every size.
     #[test]
@@ -243,9 +212,6 @@ mod tests {
     /// `Combined3` slots must be left NULL — `svc_base_layer_md` asserts on that.
     #[test]
     fn init_fills_sad_and_satd_and_clears_combined3() {
-        // Zeroing this table is sound for the reason its own `Default` gives
-        // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
-        // tables. T6.H12 enumerated it here rather than leaving it to a grep.
         let mut fl = SWelsFuncPtrList::default();
         WelsInitSampleSadFunc(&mut fl, 0);
 

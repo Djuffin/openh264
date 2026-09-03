@@ -1,20 +1,14 @@
-//! **D-api-1's covering test** (Phase 8 session C, T8.C6) — the default trace sink is
-//! upstream's, and a consumer who installs nothing still hears the library speak.
+//! The default trace sink is upstream's, and a consumer who installs nothing still
+//! hears the library speak.
 //!
-//! Session B shipped the *installed-callback* path (F79) and left the default sink at
-//! `None`, recording it as a stated divergence on the grounds that turning it on would
-//! flood this project's own instruments. **D-api-1 rules the other way**: a drop-in
-//! that is silent where the reference speaks is a divergence a consumer cannot see by
-//! reading the header, and the instruments are the project's problem, not the
-//! library's. `welsCodecTrace::welsCodecTrace()` installs `welsStderrTrace` at
+//! `welsCodecTrace::welsCodecTrace()` installs `welsStderrTrace` at
 //! `WELS_LOG_DEFAULT`, and so does this port.
 //!
-//! **The two constructors do not agree, and the port now disagrees the same way.**
+//! **The two constructors do not agree.**
 //! `welsCodecTrace()` sets `WELS_LOG_WARNING`; `CWelsDecoder::CWelsDecoder()` then
 //! calls `SetTraceLevel (WELS_LOG_ERROR)` (`welsDecoderExt.cpp:164`) and
 //! `CWelsH264SVCEncoder` does not (`welsEncoderExt.cpp:166`). So the decoder's default
-//! is ERROR and the encoder's is WARNING — a one-level difference the port had wrong
-//! in the same direction the missing sink hid.
+//! is ERROR and the encoder's is WARNING.
 //!
 //! # Capturing stderr
 //!
@@ -170,7 +164,7 @@ fn an_installed_callback_replaces_the_default_sink_on_both_codecs() {
 }
 
 /// The decoder's default level is `WELS_LOG_ERROR`, not the trace object's
-/// `WELS_LOG_WARNING` — `welsDecoderExt.cpp:164`, the line this port did not have.
+/// `WELS_LOG_WARNING` — `welsDecoderExt.cpp:164`.
 ///
 /// It cannot be read back: neither codec's `GetOption` handles `*_TRACE_LEVEL`
 /// upstream (only `SetOption` does, `welsDecoderExt.cpp:541` /

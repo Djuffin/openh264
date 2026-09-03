@@ -49,21 +49,8 @@ pub struct SBackgroundOU {
 }
 
 /// `CBackgroundDetection::vBGDParam` — `BackgroundDetection.h:69`.
-///
-/// `pOU_array` is a `Vec` here rather than a `WelsMalloc` block; nothing outside
-/// the plugin sees it, and the C++ reallocates it on the same growth rule.
 #[derive(Default)]
 struct vBGDParam {
-    // **S10.12: `pCur`, `pRef` and `pBackgroundMbFlag` are gone from here.** They
-    // were the two pixmaps' plane roots and the caller's per-macroblock flag array,
-    // copied in at each `Process` and read back out two calls deeper — working
-    // state, stored. Storing them made `CBackgroundDetection`, and through it
-    // `CWelsPreProcess` and `sWelsEncCtx`, **`!Sync`**, which was the last thing
-    // between `SliceJobHandle` and carrying a reference across the encode fork.
-    //
-    // They are parameters now, which is the move T9.X made for the two GOM arrays
-    // and Phase 6 session B for `pCalcResult`. The geometry below stays: it is this
-    // plugin's own derived state, not a borrow of the caller's.
     iBgdWidth: i32,
     iBgdHeight: i32,
     iStride: [i32; 3],
@@ -117,32 +104,21 @@ pub struct BgdPlanes<'a> {
 }
 
 impl CBackgroundDetection {
-    /// `CBackgroundDetection::Set`. Typed since Phase 6 session B (the `IWelsVP`
-    /// vtable's `void*` is gone). The C++ class has no `Get` override
-    /// (`IStrategy::Get` returned success without writing), and nothing called it.
-    /// **S10.12: nothing left to store.** It stashed `param.pBackgroundMbFlag`,
-    /// which reaches `Process` as a slice now. Kept as the port's counterpart of
-    /// `CBackgroundDetection::Set` — the C++ method exists and the call site still
-    /// makes the call — but it has no state to take.
+    /// `CBackgroundDetection::Set`. It has no state to take.
     pub fn Set(&mut self, _param: &SBGDInterface) -> i32 {
         RET_SUCCESS
     }
 
     /// `CBackgroundDetection::Process` — `BackgroundDetection.cpp:63`. `calc` is the
-    /// VAA statistics of this picture pair, handed over at the call (the C++ stored
-    /// `pCalcRes` in the parameter block; take what you reach).
-    ///
-    /// S11.43: the safety section is a signature now — the planes arrive as
-    /// borrows and `calc`'s arrays bound every read.
+    /// VAA statistics of this picture pair.
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
         _pRefPixMap: &SPixMap,
-        // S11.43: the six planes as borrows (the family's `ScdPlanes` shape);
-        // the pixel maps carry geometry only.
+        // the six planes; the pixel maps carry geometry only.
         planes: &BgdPlanes<'_>,
         calc: &SVAACalcResult,
-        // S10.12: the caller's per-macroblock flag array, as a slice.
+        // the caller's per-macroblock flag array.
         pVaaBackgroundMbFlag: &mut [i8],
     ) -> i32 {
         for i in 0..3 {
@@ -252,7 +228,7 @@ impl CBackgroundDetection {
 
         if pBackgroundOU.iMAD > pBackgroundOU.iMinSubMad << 1 {
             // `(flag - 1) & mad` is a branchless select: -1 (all ones) when the
-            // flag is 0, 0 when it is 1. Kept verbatim.
+            // flag is 0, 0 when it is 1.
             let aForegroundMad = [
                 (pOU_L.iBackgroundFlag - 1) & pOU_L.iMAD,
                 (pOU_R.iBackgroundFlag - 1) & pOU_R.iMAD,
@@ -305,9 +281,6 @@ impl CBackgroundDetection {
             for i in 0..4 {
                 if iNeighbourForegroundFlags & kaOUPos[i] != 0 {
                     let off = (iStartSamplePos + aEdgeOffset[i]) as usize;
-                    // S10.12 handed the pixmaps in rather than storing them;
-                    // S11.43 hands the planes themselves — the same addresses,
-                    // as tails whose every read is bounds-checked.
                     if Self::CalculateAsdChromaEdge(
                         &planes.refp[plane][off..],
                         &planes.cur[plane][off..],
@@ -394,8 +367,7 @@ impl CBackgroundDetection {
     ///
     /// The C++ carries four raw neighbour pointers into the same array it is
     /// mutating. Rust's aliasing rules make that awkward, so each iteration copies
-    /// the four neighbours by value before touching the current OU — every callee
-    /// reads them and none writes them, so the values are the same.
+    /// the four neighbours by value before touching the current OU.
     fn ForegroundDilationAndBackgroundErosion(
         &mut self,
         planes: &BgdPlanes<'_>,
@@ -407,11 +379,6 @@ impl CBackgroundDetection {
         let iOUStrideUV = iPicStrideUV << (LOG2_BGD_OU_SIZE - 1);
         let iPicWidthInMb = (15 + self.m_BgdParam.iBgdWidth) >> 4;
 
-        // **S10.12: an index cursor, not a roving pointer.** The walk moved a
-        // `*mut i8` forward one OU-row at a time and reached *backwards* one row to
-        // clear the OU above (`offset(-(OU_SIZE_IN_MB * iPicWidthInMb))`). Both are
-        // integer arithmetic on the same array; as indices they are the same
-        // addresses and every one of them is bounds-checked.
         let kiRowStep = (OU_SIZE_IN_MB * iPicWidthInMb) as isize;
         let mut iRowBase: isize = 0;
 

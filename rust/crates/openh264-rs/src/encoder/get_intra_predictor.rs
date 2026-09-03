@@ -7,8 +7,7 @@
 //! I16x16), while the decoder's predict in place with a single stride argument.
 //!
 //! Only the `_c` scalar variants exist here. The SIMD variants in the C++ are all
-//! behind `uiCpuFlag` tests that do not fire on any target this port builds for;
-//! `WelsCPUFeatureDetect` measured `0x00000000` against `libopenh264.a` on darwin/arm64.
+//! behind `uiCpuFlag` tests that do not fire on any target this port builds for.
 //!
 //! # Three same-named families, and they must never be unified
 //!
@@ -17,11 +16,10 @@
 //!
 //! | module | signature | destination |
 //! |---|---|---|
-//! | `decoder/get_intra_predictor.rs` (T3) | `(pPred, kiStride)` | **in place**, strided |
-//! | `common/intra_pred_common.rs` (T5) | `(pPred, pRef, kiStride)` | packed, 16x16 only |
+//! | `decoder/get_intra_predictor.rs` | `(pPred, kiStride)` | **in place**, strided |
+//! | `common/intra_pred_common.rs` | `(pPred, pRef, kiStride)` | packed, 16x16 only |
 //! | **this module** | `(pPred, pRef, kiStride)` | **packed** candidate buffer |
 //!
-//! Third occurrence of the collision trap (`safety_refactor_log.md`, T3/T5/F-1).
 //! Same names, different functions: never unify them, never delete one for the
 //! other. The two 16x16 modes this module *does* share with `intra_pred_common`
 //! (`V` and `H`) it imports rather than redefines — those two really are the same
@@ -55,7 +53,7 @@ fn WelsClip1(iX: i32) -> u8 {
 }
 
 // ============================================================================
-// Safe kernels (plan §Phase 2, recipe R2)
+// Safe kernels
 // ============================================================================
 //
 // Every predictor in this module has **two surfaces with different rules**, and the
@@ -66,8 +64,7 @@ fn WelsClip1(iX: i32) -> u8 {
 //     mode-decision ping-pong halves (`pMemPredBlk4`, `pMemPredChroma`,
 //     `pMemPredMb`; `svc_base_layer_md.rs:437`, `:734`, `svc_mode_decision.rs:1167`),
 //     never a picture plane, so it is a fixed-size array and `kiStride` says
-//     nothing about it. That is what separates these from the same-named strided
-//     decoder cousins converted in T3;
+//     nothing about it;
 //   * the **reference** is the reconstructed plane, read at `x = -1` and
 //     `y = -1` around the block. Those reads are in-allocation because a picture
 //     plane is `PADDING_LENGTH`-padded on every side, and they are *correct*
@@ -77,8 +74,7 @@ fn WelsClip1(iX: i32) -> u8 {
 //     `uiNeighborIntra`, which is why `…DcTop`, `…DcLeft`, `…DDLTop` and
 //     `…VLTop` exist at all.
 //
-// **Per-kernel reference shapes, not one shared shape** (T4's "per-kernel reach,
-// not the union"; T5-intra applied it to this exact pair of modes). A predictor
+// **Per-kernel reference shapes, not one shared shape.** A predictor
 // that reads only the row above takes `&[u8; N]` — it *cannot* touch the left
 // column, which is the whole reason mode decision may offer it when the left
 // neighbour is missing. A predictor that reads the left column takes a
@@ -114,18 +110,14 @@ impl Reach {
 /// `center`, and the kernel's relative coordinates then land inside it by
 /// construction.
 ///
-/// This is R-c's one-helper rule: the whole file's reference arithmetic lives here,
-/// and every shim is three lines that cannot get it wrong differently from its
-/// neighbours. Note the span covers **reads only** — nothing in this module writes
+/// The span covers **reads only** — nothing in this module writes
 /// the reference, and `pRef` itself is *not* read by any predictor — so it is the
-/// tightest claim each contract can make, and the probe test hands exactly-sized
-/// allocations to prove it.
+/// tightest claim each contract can make.
 ///
 /// A consequence worth stating: for a reach that reads only the row above, the span
 /// lies **entirely above `pRef`** and `center >= len`, which no [`PlaneCursor`] will
 /// accept. That is not a defect — those kernels take `&[u8; N]` rather than a
-/// cursor, precisely because their whole reach is one contiguous run. T5-intra's
-/// probe made the same observation about `WelsI16x16LumaPredV_c`.
+/// cursor, precisely because their whole reach is one contiguous run.
 ///
 /// # Panics
 /// Never. A reach that reads nothing (`DcNA`) produces `(0, 0)`; those kernels take
@@ -213,9 +205,7 @@ pub const REACH_I16X16_PLANE: Reach = Reach::new(16, 16, true);
 // The three lookups below are the reach table as mode decision sees it. Nothing in
 // `src/` calls them — each shim names its own constant, which is statically known
 // and folds — but they are what makes the availability argument *checkable*
-// (`reach_table_agrees_with_the_availability_tables` in this module's tests), and
-// they are the shape Phase 5 needs when it converts the call sites: given a mode
-// and a neighbour mask, exactly which samples must exist.
+// (`reach_table_agrees_with_the_availability_tables` in this module's tests).
 
 /// Reference reach of the I4x4 luma predictor installed at `mode`.
 pub const fn reach_i4x4(mode: i8) -> Reach {
@@ -260,10 +250,9 @@ pub const fn reach_i16x16(mode: i8) -> Reach {
 //
 // The C++ builds a 16-byte `uiSrc` scratch by *index assignment* and then moves it
 // to `pPred` with `WelsFillingPred8x2to16` (two `u64` stores — a byte move, not
-// arithmetic: taxonomy T7). Here the destination *is* that scratch, because every
+// arithmetic). Here the destination *is* that scratch, because every
 // one of these modes assigns all sixteen positions. The index sets stay written out
-// rather than folded into a formula: they are the mode's whole identity, and T3's
-// `write4x4_windows` made the same call for the same reason.
+// rather than folded into a formula: they are the mode's whole identity.
 
 /// C++: `WelsI4x4LumaPredV_c`, `codec/encoder/core/src/get_intra_predictor.cpp:79`.
 ///
@@ -621,7 +610,7 @@ pub fn chroma_pred_v(pred: &mut [u8; 64], top: &[u8; 8]) {
 /// The C++ walks rows 7 down to 0 carrying two descending offsets (and lets the
 /// destination one wrap past zero on the last step); each row is written once from
 /// an input the block does not contain, so ascending is the same eight writes in a
-/// different order — the pilot's argument.
+/// different order.
 #[inline(always)]
 pub fn chroma_pred_h(pred: &mut [u8; 64], reference: &impl RefSamples) {
     for y in 0..8 {
@@ -633,11 +622,10 @@ pub fn chroma_pred_h(pred: &mut [u8; 64], reference: &impl RefSamples) {
 
 /// C++: `WelsIChromaPredPlane_c`, `:433`. Reach [`REACH_CHROMA_PLANE`].
 ///
-/// Arithmetic parity (R-e): every intermediate is `i32` in both the C++ and the old
-/// port. `iTopSum`/`iLeftSum` are bounded by `10 * 255 = 2550`, `iLTshift` by
+/// Arithmetic parity: every intermediate is `i32`.
+/// `iTopSum`/`iLeftSum` are bounded by `10 * 255 = 2550`, `iLTshift` by
 /// `510 << 4 = 8160`, and the per-sample expression by roughly `2^16` — nowhere
-/// near `i32`, so this family has no F8-class hazard and the differential drives
-/// full-range reference samples.
+/// near `i32`.
 #[inline(always)]
 pub fn chroma_pred_plane(pred: &mut [u8; 64], reference: &impl RefSamples) {
     let mut top_sum: i32 = 0;
@@ -729,11 +717,11 @@ pub fn chroma_pred_dc_na(pred: &mut [u8; 64]) {
 // --- I16x16 luma: kernels ----------------------------------------------------
 //
 // The vertical and horizontal modes are **not** here: they are shared with the
-// decoder's common module and live in `common/intra_pred_common.rs`, converted in
-// T5-intra. `WelsInitIntraPredFuncs` installs those two by import.
+// decoder's common module and live in `common/intra_pred_common.rs`.
+// `WelsInitIntraPredFuncs` installs those two by import.
 
 /// C++: `WelsI16x16LumaPredPlane_c`, `:542`. Reach [`REACH_I16X16_PLANE`]; the same
-/// R-e argument as [`chroma_pred_plane`], with `iTopSum` bounded by `36 * 255`.
+/// argument as [`chroma_pred_plane`], with `iTopSum` bounded by `36 * 255`.
 #[inline(always)]
 pub fn i16x16_luma_pred_plane(pred: &mut [u8; 256], reference: &impl RefSamples) {
     let mut top_sum: i32 = 0;
@@ -796,13 +784,12 @@ pub fn i16x16_luma_pred_dc_na(pred: &mut [u8; 256]) {
     pred.fill(0x80);
 }
 // ============================================================================
-// C ABI shims (plan §Phase 2, recipe R7)
+// C ABI shims
 // ============================================================================
 //
-// The twenty-six `Wels*_c` names below are now strangler shims: they materialise
+// The twenty-six `Wels*_c` names below are shims: they materialise
 // this kernel's own reference span and hand the packed destination to the safe
-// kernel above. `WelsInitIntraPredFuncs` installs the same names it always did, so
-// no call site and no dispatch table changes in this phase.
+// kernel above.
 //
 // The `# Safety` contracts share one availability argument, stated here once and
 // referred to by each:
@@ -830,21 +817,6 @@ pub fn i16x16_luma_pred_dc_na(pred: &mut [u8; 256]) {
 // Per-kernel, each contract names only the samples that kernel reads. Those are
 // the `REACH_*` constants; `ref_span` turns one into a slice and nothing else in
 // this file does that arithmetic.
-
-// **`pred`, `top_row` and `reference` stood here — deleted in T9.C2.**
-//
-// They were this file's whole raw surface: three helpers that turned
-// `(pPred, pRef, kiStride)` into a fixed-size array, a top-row array and a
-// `PlaneCursor`, each under a `# Safety` contract naming the caller's promise
-// about the reach. Every one of the twenty-eight shims above them called exactly
-// one, which is what made the family convertible in a single step.
-//
-// The prediction destination is now `&mut [u8; N]` taken from the macroblock
-// cache's arena by the caller, and the reference is a `RecCursor` that
-// bounds-checks each access against the whole plane allocation. `ref_span` and
-// the `REACH_*` constants stay: they are no longer a memory-safety contract but
-// they are still the *availability* contract, which is what
-// `reach_table_agrees_with_the_availability_tables` checks.
 
 // --- I4x4 luma ---------------------------------------------------------------
 
@@ -937,8 +909,7 @@ pub fn WelsI4x4LumaPredDDL_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 /// * `kiStride > 0`, and the two regions do not overlap.
 ///
 /// No availability offset offers this mode (see
-/// `reach_table_agrees_with_the_availability_tables`); it is installed, so it is
-/// converted and proven, but nothing reaches it through the table.
+/// `reach_table_agrees_with_the_availability_tables`).
 pub fn WelsI4x4LumaPredDDLTop_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_ddl_top(pred, &rec.row_n::<4>(-1, 0))
 }
@@ -973,11 +944,7 @@ pub fn WelsI4x4LumaPredVL_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 /// * `pRef` has the four samples `[-kiStride, -kiStride + 4)` readable.
 /// * `kiStride > 0`, and the two regions do not overlap.
 ///
-/// The raw body this replaces formed `pRef - kiStride - 1` as a walking base and
-/// then indexed `+1 .. +4` from it, so it computed a corner pointer it never read
-/// through — out-of-allocation arithmetic on an exactly-sized top row, F10's class.
-/// The shim's span starts at the top row, so the pointer ceases to exist; like
-/// `DDL_TOP`, no availability offset offers this mode.
+/// Like `DDL_TOP`, no availability offset offers this mode.
 pub fn WelsI4x4LumaPredVLTop_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     i4x4_luma_pred_vl_top(pred, &rec.row_n::<4>(-1, 0))
 }
@@ -1151,7 +1118,7 @@ pub fn WelsI16x16LumaPredDcNA_c(pred: &mut [u8; 256], _rec: &RecCursor<'_>) {
 }
 
 /// C++: `WelsI16x16LumaPredV_c`, `codec/common/src/intra_pred_common.cpp` — mode 0,
-/// vertical. **The adapter moved here in T9.C2**; the kernel stays in `common`.
+/// vertical. The kernel stays in `common`.
 ///
 /// Reads [`REACH_I16X16_TOP`]: the sixteen samples of the row above, and nothing
 /// else — in particular never to the left.
@@ -1160,7 +1127,7 @@ pub fn WelsI16x16LumaPredV_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
 }
 
 /// C++: `WelsI16x16LumaPredH_c`, `codec/common/src/intra_pred_common.cpp` — mode 1,
-/// horizontal. **The adapter moved here in T9.C2**; the kernel stays in `common`.
+/// horizontal. The kernel stays in `common`.
 ///
 /// Reads [`REACH_I16X16_LEFT`]: one sample per row at `x = -1`, and never the row
 /// above — which is why it and the vertical one take different reference shapes
@@ -1172,10 +1139,6 @@ pub fn WelsI16x16LumaPredH_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
 /// `get_intra_predictor.cpp:614`. Installs the scalar predictor tables. The SIMD
 /// overrides that follow in the C++ are all guarded by `kuiCpuFlag & WELS_CPU_*`,
 /// which is 0 on every target this port builds for, so none are translated.
-///
-/// **Safe since T9.C2**: the parameter was always a `&mut`, and the body's only
-/// use of it was a reborrow that needed no `unsafe` once the three tables held
-/// safe function pointers.
 pub fn WelsInitIntraPredFuncs(pFuncList: &mut SWelsFuncPtrList, _kuiCpuFlag: u32) {
     let fl = pFuncList;
 
@@ -1221,14 +1184,6 @@ mod tests {
     use crate::safe::plane::PaddedPlane;
 
     /// A reference plane with a known ramp, and the seam cursor at its `(0, 0)`.
-    ///
-    /// **T9.C2**: these tests drove the shims through `(pPred, pRef, kiStride)` over
-    /// a flat `Vec<u8>`, with `pRef` hand-offset to `(1, 1)` so the negative reads
-    /// landed inside the allocation. The tables are safe over `RecCursor` now, so
-    /// the plane is a real `PaddedPlane` and the "is it in range" question is the
-    /// view's rather than the test's — which is the point of the conversion, and
-    /// why the expectations below read their reference *through the cursor* instead
-    /// of recomputing flat indices.
     fn ramp_at_origin(w: usize, h: usize, pad: usize, stride: usize) -> PaddedPlane {
         let mut p = PaddedPlane::new(w, h, pad, stride);
         for y in -(pad as isize)..(h + pad) as isize {
@@ -1351,9 +1306,6 @@ mod tests {
         let view = shared_plane_for_test(&mut plane);
         let rec = view.cursor(0, 0);
 
-        // Zeroing this table is sound for the reason its own `Default` gives
-        // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
-        // tables. T6.H12 enumerated it here rather than leaving it to a grep.
         let mut fl = SWelsFuncPtrList::default();
         WelsInitIntraPredFuncs(&mut fl, 0);
 
@@ -1376,9 +1328,6 @@ mod tests {
         let view = shared_plane_for_test(&mut plane);
         let rec = view.cursor(0, 0);
 
-        // Zeroing this table is sound for the reason its own `Default` gives
-        // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
-        // tables. T6.H12 enumerated it here rather than leaving it to a grep.
         let mut fl = SWelsFuncPtrList::default();
         WelsInitIntraPredFuncs(&mut fl, 0);
 
@@ -1404,19 +1353,14 @@ mod tests {
     /// This is what the per-kernel [`Reach`] types are *for*. The shims' `# Safety`
     /// contracts say the negative reads are in-allocation because the plane is
     /// `PADDING_LENGTH`-padded; this test says they are *correct* because mode
-    /// decision never offers a mode whose neighbours are missing. R-d asks for the
-    /// selector sweep to be exhaustive, and for this family the selector is the
-    /// availability offset — all 16 of the I4x4 ones and all 8 of the others, every
-    /// mode in each.
+    /// decision never offers a mode whose neighbours are missing.
     ///
     /// Two facts the test pins that are easy to lose:
     ///
     /// * **`g_kiIntra4AvailMode` never offers `DDL_TOP` or `VL_TOP`.** Both are
     ///   installed in the dispatch table and neither is reachable through it — the
     ///   `*_TOP` variants exist for a top-right-substitution path the C++ tables do
-    ///   not take either. They are converted anyway (an installed slot is live
-    ///   surface) and swept by the differential, and this test asserts the
-    ///   unreachability rather than leaving it as folklore.
+    ///   not take either.
     /// * **The I16x16 and chroma tables have no top-left bit.** Their index is
     ///   `uiNeighborIntra & 0x07` = left | top<<1 | topright<<2, yet the plane mode
     ///   they offer at index 7 reads the corner at `(-1, -1)`. The corner is
@@ -1529,14 +1473,9 @@ mod tests {
         }
     }
 
-    /// Every table slot the mode-decision code can index must be filled — this is the
-    /// regression test for the defect that motivated the module: the three tables were
-    /// declared but never populated, so `WelsMdI16x16` unwrapped a `None`.
+    /// Every table slot the mode-decision code can index must be filled.
     #[test]
     fn init_fills_every_slot_the_md_layer_indexes() {
-        // Zeroing this table is sound for the reason its own `Default` gives
-        // (`wels_func_ptr_def.rs`, S21); session I converts both with the dispatch
-        // tables. T6.H12 enumerated it here rather than leaving it to a grep.
         let mut fl = SWelsFuncPtrList::default();
         WelsInitIntraPredFuncs(&mut fl, 0);
 

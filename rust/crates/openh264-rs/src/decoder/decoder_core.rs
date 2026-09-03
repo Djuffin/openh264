@@ -42,20 +42,6 @@
 )]
 
 #![deny(unsafe_code)]
-// **Phase 5b, T5b.6: the five enumerated families are gone, and so is the
-// enumeration.** They retired in this order — `PPicture survivor (F42)` at T5b.1
-// (the arm became an identity), `sMCRefMember` with it, `parse tree` at T5b.3 (the
-// access unit's slots own; F55/S34 is what that cost), the two zeroed shells at
-// T5b.5, and `api boundary` here: `ppDst`, `pDstInfo` and `kpBsBuf` are a plane
-// array, a struct and a slice, and **the api-owned context fields are the context's
-// own** since T8.A5–A8 — including the reordering buffers, which were
-// `CWelsDecoderImpl`'s `[SPictInfo; 16]` reached through a stamped pointer.
-//
-// `src/decoder/` carries **two** `#[allow(unsafe_code)]` items in total, neither of
-// them here: `picture.rs`'s pair of Miri provenance tests for `data_ptr`. What is
-// still owed is `data_ptr` itself — its one production use is
-// `DecodeFrameConstruction`'s three `ppDst[i]` writes across the C ABI, which is a
-// boundary write and belongs with the boundary.
 
 use std::ffi::{c_char, c_void};
 
@@ -63,11 +49,6 @@ use std::ffi::{c_char, c_void};
 pub const MIN_ACCESS_UNIT_CAPACITY: usize = 262144;
 pub const MAX_ACCESS_UNIT_CAPACITY: usize = 4194304;
 pub const MAX_BUFFERED_NUM: usize = 8;
-// `MAX_NAL_UNIT_NUM_IN_AU` was declared **here** as 1024 and in `nalu.rs` as the
-// C++'s 32 (`wels_const.h:59`), and the two allocators that disagreed about it are
-// gone (T5.O4). The C++'s value is re-exported: it is the argument
-// `WelsInitStaticMemory` passes, exactly as `decoder_core.cpp:763` passes it, and the
-// growth path `MemGetNextNal` owns is what covers an access unit that needs more.
 pub use crate::decoder::nalu::MAX_NAL_UNIT_NUM_IN_AU;
 pub const MAX_NAL_UNITS_IN_LAYER: usize = 128;
 pub const MAX_MB_SIZE: i32 = 36864;
@@ -98,13 +79,7 @@ pub const LIST_0: usize = 0;
 pub const LIST_1: usize = 1;
 pub const LIST_A: usize = 2;
 
-// Macroblock Types -- `wels_common_defs.h:276-283`. This module used to declare
-// its own set shifted one bit down (16x16 = 0x2 where the header says 0x8, and so
-// on through SKIP = 0x40 where the header says 0x100), and the match in
-// `CheckRefPicturesComplete` below reads them, so every macroblock there was
-// classified against the wrong mask. Error-free conformance streams never take
-// that path, which is why 53/53 stayed green. Twelve other modules already had
-// the header's values; use them.
+// Macroblock Types -- `wels_common_defs.h:276-283`.
 pub const MB_TYPE_INTRA4x4: u32 = 0x00000001;
 pub use crate::decoder::decode_slice::{
     MB_TYPE_16x16, MB_TYPE_16x8, MB_TYPE_8x16, MB_TYPE_8x8, MB_TYPE_8x8_REF0, MB_TYPE_SKIP,
@@ -183,10 +158,7 @@ pub const OVERWRITE_SUBSETSPS: i32 = 4;
 pub use crate::decoder::error_concealment::{ERROR_CON_IDC, ERROR_CON_IDC::*};
 
 
-// Log levels — **re-exported, not redeclared** (D-fid-4, 2026-08-26, from F184).
-// This file used to carry its own copy; all five copies were consecutive integers
-// where `codec_app_def.h:323-331` is a bit mask, and the level reaches the caller's
-// own callback. A re-export cannot diverge from the canonical block again.
+// Log levels
 pub use crate::common::wels_trace::{WELS_LOG_DEBUG, WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING};
 
 pub const videoFormatI420: i32 = 23;
@@ -312,30 +284,19 @@ pub use crate::decoder::decoder_context::{SNalUnitHeader, SNalUnitHeaderExt};
 pub use crate::decoder::decoder_context::{FEEDBACK_NON_VCL_NAL, FEEDBACK_UNKNOWN_NAL, FEEDBACK_VCL_NAL};
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice};
 
-
-
-// The duplicate SVclNal/SPrefixNalUnit/SNalData definitions that used to sit here
-// were deleted dead at T3.3 (S18): every live `sNalData` access resolves through
-// `nalu::SNalUnit`, whose own definitions are the ones the decoder uses.
-
 pub use crate::decoder::nalu::SAccessUnit;
 use crate::decoder::decoder_context::{
     active_fmo, active_pps, active_sps, au_has_nals, cur_au, cur_and_refs, cur_dq_layer, dec_pic,
     fmo_of_mut, parser_bs, pic_pool_mut, pic_refs, pool_pic, pps_of, ref_id, ref_pic, sps_of,
     sps_ref_of, subset_sps_of, SpsRef,
 };
-// T5.W1: `use crate::decoder::picture::pic_slot;` sat here with **no user** — the
-// last one went at T5.P″1 (`:3691`'s comment records the deletion), and the import
-// outlived it because `unused_imports` is allowed crate-wide (`lib.rs`). Found by
-// family 2's caller grep, deleted here.
-
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SLayerInfo {
     pub sNalHeaderExt: SNalUnitHeaderExt,
     pub sSliceInLayer: SSlice,
-    /// T5.R6: the layer's copies of the slice header's parameter-set ids.
+    /// The layer's copies of the slice header's parameter-set ids.
     pub sps_ref: Option<SpsRef>,
     pub pps_id: Option<i32>,
     pub subset_sps_id: Option<i32>,
@@ -353,57 +314,19 @@ impl Default for SLayerInfo {
     }
 }
 
-
-
 /// The decoder's DQ-layer state.
-///
-/// **Named `SDqLayer` until T5.M1**, when the last of the 22 per-macroblock array
-/// families flipped onto [`MbGrid`] and the struct stopped holding a per-macroblock
-/// pointer at all. The `S`-prefix said "this is the C's `dec_frame.h:50` struct,
-/// field for field"; it is not one any more — it owns its heap, it is not `Copy`,
-/// and its per-macroblock state is one bounds-checked container rather than 22
-/// bare pointers. The encoder's namesake keeps the C's name and the C's shape.
-///
-/// `Copy` came off at **T5.H3**, for the reason it came off `SPicture` at T5.C3:
-/// the struct owns heap now. `#[repr(C)]` stays because every other field is still
-/// the C's, but nothing pins this struct's layout — the `assert_size!(SDqLayer,
-/// 512)` in `encoder/abi_guard.rs` pins the **encoder's** same-named struct and is
-/// unaffected by this rename. The compiler was asked first: nothing in the crate
-/// copied a decoder layer by value.
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct DqLayerState {
-    /// **The grid** (5.2). Every per-macroblock array the layer owns, with one set
-    /// of dimensions — the **allocation's**, fixed when the layer is constructed
-    /// (T5.E2) — and indexing that panics rather than running off the end.
+    /// Every per-macroblock array the layer owns, with one set of dimensions — the
+    /// **allocation's**, fixed when the layer is constructed — and indexing that
+    /// panics rather than running off the end.
     ///
-    /// Sized once at [`InitialDqLayersContext`] and dropped with the layer. **All 22
-    /// families are on it** (T5.H4–T5.L7); every one of their `WelsMallocz`/`WelsFree`
-    /// pairs died with its accesses, and the rename above is what that completion
-    /// bought.
+    /// Sized once at [`InitialDqLayersContext`] and dropped with the layer.
     pub grid: MbGrid,
     pub sLayerInfo: SLayerInfo,
-    // T5.M3: `pBitStringAux: *mut BsReader` sat here, mirroring
-    // `&pNalCur->sNalData.sVclNal.sSliceBitsRead` beside its owner for 43 readers.
-    // `bit_stream::slice_bit_reader(pCtx)` derives it instead; the NAL unit owns the
-    // reader and nothing else holds its address.
-    // T5.S1: `pFmo: *mut TagFmo` sat here, mirroring `dec_frame.h:65`'s field. It is
-    // dead in **both** trees — zero readers and zero writers here, and every C++
-    // `->pFmo` is `pCtx->pFmo` — so it deletes the way `DqLayerState::pRef` did
-    // (T5.P′1) rather than converting. The FMO state a slice needs is the context's
-    // `sFmoList` entry, reached through `active_fmo`.
-    // T5.H1: `pNzcRs` (24 bytes per macroblock) and `pInterPredictionDoneFlag`
-    // (one byte per macroblock) sat here. Both are dead in **both** trees: `pNzcRs` is allocated, aliased onto
-    // the layer (`decoder_core.cpp:2471`) and never read or written by anything;
-    // `pInterPredictionDoneFlag` is written `= 0` at 14 sites in `decode_slice.cpp`
-    // and read at none. Deleting them costs 2 of the grid's 24 arrays and 2 of its
-    // 27 allocations before 5.2 carries either into a safe container.
     pub iLumaStride: i32,
     pub iChromaStride: i32,
-    // T5.X8: `pPred: [*mut u8; 3]` stood here — the current macroblock's top-left
-    // sample in each plane, stamped once per macroblock by
-    // `WelsFillRecNeededMbInfo`. It was a cache of `(iMbX, iMbY)` resolved against
-    // the picture, and both are parameters of every function that read it.
     pub iMbX: i32,
     pub iMbY: i32,
     pub iMbXyIndex: i32,
@@ -419,50 +342,10 @@ pub struct DqLayerState {
     pub iInterLayerSliceBetaOffset: i32,
     pub iSliceGroupChangeCycle: i32,
 
-    // **T5.AC2 — the layer's four aliases into the NAL's slice header, converted
-    // and one of them deleted.** Each was `addr_of_mut!` of a field of the slice
-    // header the layer had *already copied whole* one statement earlier
-    // (`sLayerInfo.sSliceInLayer.sSliceHeaderExt`), so the pointer carried no
-    // datum the layer did not own — it carried a **retention rule**, which is the
-    // part a naive read of the copy would have lost: all four are stamped only
-    // when `uiQualityId == BASE_QUALITY_ID`, and at an SVC quality-enhancement
-    // slice they keep the base slice's values while `sLayerInfo` is overwritten
-    // with the enhancement slice's. That is exactly what an `Option` written in
-    // the same block reproduces: the field is assigned nowhere else, so it
-    // retains, and `None` is the null the readers already tested for.
-    //
-    // `pRefPicBaseMarking` is **deleted rather than converted** — one stamp
-    // (`:3619`), zero readers anywhere in the crate, the same shape as
-    // `DqLayerState::pRef` at T5.P′1.
     pub sRefPicListReordering: Option<SRefPicListReorderSyn>,
     pub sPredWeightTable: Option<SPredWeightTable>,
     pub sRefPicMarking: Option<SRefPicMarking>,
 
-    // **T5.P′1 (W2b) — `pRef` and `pDec` sat here, and both are gone.**
-    //
-    // `pRef` was dead in this port: zero readers, zero writers, at every commit the
-    // grep was taken.
-    //
-    // `pDec` was a **cache of `dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec)`**, not a second carrier. One stamp site
-    // in the whole decoder (`InitDqLayerInfo`, from `DecodeCurrentAccessUnit`'s inner
-    // loop), and S23's question — *can the source change behind the cache?* — is
-    // answered no by an invariant that is worth keeping written down:
-    //
-    //   Every `(*pCtx).pDec = None` in `DecodeCurrentAccessUnit` either fires only
-    //   when `iTotalNumMbRec == 0` (`:3716`, `:3738`) or runs after
-    //   `DecodeFrameConstruction` has just zeroed it (`:3847`, `:3862`), and the one
-    //   reader reachable outside the decode window — `GetAvilInfoFromCorrectMb`, via
-    //   `CheckAndFinishLastPic` → `ImplementErrorCon` — is gated on
-    //   `iTotalNumMbRec != 0`. So "the context has no picture" and "a layer read can
-    //   run" are mutually exclusive, and no reader could ever observe the cache
-    //   holding a picture the context had dropped.
-    //
-    // Readers that hold `pCtx` derive; the layer-only leaves take the picture as a
-    // parameter from their `pCtx`-holding caller (never storing it); the one identity
-    // comparison is `PicId` equality with no dereference on either side. 160 sites
-    // over seven files, and the layer never advances mid-access-unit — the cache field
-    // that made that claim readable is gone (T5.R1) and the layer itself is threaded
-    // from the access-unit loop's own derivation.
     pub iColocMv: [[[i16; 2]; 16]; 2],
     pub iColocRefIndex: [[i8; 16]; 2],
     pub iColocIntra: [i8; 16],
@@ -483,34 +366,11 @@ impl DqLayerState {
     /// A layer whose [`grid`](Self::grid) covers `dims`, and whose every other field
     /// is what `WelsMallocz`'s zeroing left it — plus the two the C++ constructor
     /// overwrites (`uiRefLayerDqId = 255`, `uiRefLayerChromaPhaseYPlus1 = 1`).
-    ///
-    /// # S21, and why `Default` is gone
-    ///
-    /// `impl Default for DqLayerState` zeroed the whole struct through the intrinsic, and
-    /// `InitialDqLayersContext` reached the same state the other way, through
-    /// `WelsMallocz`. Both stopped being legal the moment the struct owned a `Vec`:
-    /// a zeroed `Vec` is a null pointer where a dangling-aligned one is required,
-    /// and the value is invalid before anything reads it. T5.F2 made the allocator
-    /// carry provenance, which is what lets Miri *see* that heap — it does not make
-    /// a zeroed `Vec` valid.
-    ///
-    /// **T5b.5: the shell is gone and the constructor says what the zeroing meant.**
-    /// It used to be `SWelsDecoderContext::new_boxed`'s shape (zero a `MaybeUninit`,
-    /// write the owning field through it with `addr_of_mut!`, materialize) — a
-    /// spelling that put every *other* field's initial value beyond reading. Written
-    /// out, the C's `WelsMallocz` zero is a value like any other, and the two the C++
-    /// constructor overwrites stop being a fixup after the fact.
-    ///
-    /// `Default` is not reinstated on top of this: a layer cannot be constructed
-    /// without dimensions any more, and a `Default` that invented some would be the
-    /// same lie the wholesale zeroing was.
     pub fn for_grid(dims: MbDims) -> Self {
         Self {
-            // The one owning field, and the reason the shell existed: a zeroed `Vec`
-            // is a null pointer where a dangling-aligned one is required.
             grid: MbGrid::new(dims),
             // `SLayerInfo`'s `Default` is `WelsMallocz`'s zero field for field, with
-            // one deliberate difference and it is T5.Z1's: `Option<SpsRef>` keeps its
+            // one deliberate difference: `Option<SpsRef>` keeps its
             // niche in a `bool`, so the all-zero pattern reads back as
             // `Some(SpsRef { id: 0, subset: false })` where the C's memset leaves a
             // null `pSps`. `None` is the faithful spelling; the zero pattern was not.
@@ -521,7 +381,7 @@ impl DqLayerState {
             iMbY: 0,
             iMbXyIndex: 0,
             // Not the allocation's dimensions: these are the *current slice's*, and
-            // the C leaves them zero until `InitDqLayerInfo` writes them (T5.E2).
+            // the C leaves them zero until `InitDqLayerInfo` writes them.
             iMbWidth: 0,
             iMbHeight: 0,
             iSliceIdcBackup: 0,
@@ -554,30 +414,8 @@ impl DqLayerState {
     }
 }
 
-// **T5.AA3: `mb_grid_ptr` is deleted.** It was the phase's last raw bridge into
-// [`MbGrid`]'s per-macroblock arrays — the base as a pointer, for callers that
-// index at *neighbour* addresses and so could not take a narrowing slice (S28).
-// Its final production caller was `ParseIntraPredModeChromaCabac`'s two neighbour
-// reads of the picture's `pMbType`, and `MbArray::get` reaches both with a bound.
-// The seven Miri provenance tests that pinned its reach go with it: the accessor
-// they instrument no longer exists. `SPicture::data_ptr` is the phase's one
-// remaining bridge of this shape, and it is the named survivor (Phase 8's).
-
-
 pub use crate::decoder::decoder_context::SRefPic;
 
-// **T8.A1 — a second `SSysMEMBuffer` and a second `SUsrData` stood here, and the
-// first of them disagreed with the ABI's.** Neither had a consumer: `SUsrData` had
-// none at all, and `SSysMEMBuffer` had exactly one — `SUsrData`'s member. The live
-// union is `api/codec_api.rs`'s `SBufferInfoUsrData`, re-exported with `SBufferInfo`
-// just below, and the live `SSysMEMBuffer` is the api's, re-exported through
-// `decoder_context.rs`.
-//
-// The divergence they carried is worth naming, because it is the reason a dead
-// duplicate is still a defect: this copy's `Default` set `iFormat` to
-// `videoFormatI420` (23) where the api's derives it to **0**. One `use` line
-// resolving the other way — the shape F43 turned on — and every `SBufferInfo`
-// default in the port would have announced a colour format the C++ leaves zero.
 pub use crate::api::codec_api::SBufferInfo;
 
 pub use crate::decoder::decoder_context::SDecoderStatistics;
@@ -589,36 +427,15 @@ pub use crate::decoder::decoder_context::{SDecodingParam, SLogContext};
 pub use crate::decoder::decoder_context::SWelsCabacDecEngine;
 
 
-// **F43, T5.S1: a second, structurally different `SFmo` stood here** —
-// `pSliceGroupMap`/`iSliceGroupCount` against `fmo.rs`'s
-// `pMbAllocMap`/`iCountMbNum`/`iSliceGroupCount`/`iSliceGroupType`/`bActiveFlag`.
-// It existed only to type this file's two FMO stubs, and its one use cast the
-// context's real `TagFmo` to it. The name resolves to `fmo.rs`'s now, which is the
-// type the context's `sFmoList` has always held.
 pub use crate::decoder::fmo::SFmo;
 
 /// Reference-picture border expansion length (`PADDING_LENGTH` in
 /// `codec/common/inc/expand_pic.h`).
 pub const PADDING_LENGTH: usize = 32;
 
-// **T5.AA3: `expand_shim_span`, `ExpandPictureLuma_c` and `ExpandPictureChroma_c`
-// moved to `common/expand_pic.rs`.** They were phase-2 shim wrappers living in
-// `src/decoder/` whose only consumer is `common::expand_pic::ExpandReferencingPicture`
-// — a `common/` function importing from the decoder, the dependency the wrong way
-// round, and the reason two of the decoder's six shim markers were not the
-// decoder's work at all. Both codecs call them through that one consumer, so the
-// move touches no encoder line (F12/P10) and Phase 6 deletes them with the rest of
-// the raw entry points.
-
 pub use crate::decoder::decoder_context::SWelsDecoderContext;
 
 pub use crate::decoder::nalu::{SNalUnit};
-
-// `PDqLayer` stood here — the C's `typedef SDqLayer*`, and the last raw alias into
-// the layer. **T5.AA1 deleted it**: the two brackets that derived it move the layer
-// out of the context for the loop instead, so every function that took it now takes
-// `Option<&mut DqLayerState>` and the compiler checks what the round trip through a
-// pointer was hiding.
 
 pub use crate::decoder::decoder_context::{Picture, SPicture, SPicBuff};
 
@@ -626,13 +443,7 @@ pub use crate::decoder::decoder_context::{Picture, SPicture, SPicBuff};
 
 // Logging and Bitstream Reading Helpers
 
-/// The C++'s logging entry point, stubbed. It keeps `unsafe` although the body is
-/// empty: the parameter is a raw log context and any real implementation
-/// dereferences it, so the contract is the signature's, not today's body's.
-// **T8.B6: the decoder's `WelsLog` stub stood here**, the twin of the encoder's,
-// and this side already had seventeen call sites feeding it — every one of them
-// dropped on the floor. One implementation now, in `common::wels_trace`, and it
-// delivers.
+/// The C++'s logging entry point.
 pub use crate::common::wels_trace::WelsLog;
 
 #[inline]
@@ -655,31 +466,17 @@ pub fn BsGetSe(buf: &[u8], pBs: &mut BsCursor, pOut: &mut i32) -> i32 {
     crate::decoder::dec_golomb::BsGetSe(buf, pBs, pOut)
 }
 
-// `WelsMalloczHelper` and `WelsFreeHelper` stood here — the decoder's allocator
-// wrappers, each with a `pMa`-or-global arm, and after T5.R4 they had no callers: the
-// last three were the parse-only descriptor and its two buffers. **W3's done-test is
-// this**: `WelsMallocz|WelsFree` in `src/decoder/` is now prose only, and every
-// allocation the decoder makes is an owner with drop glue.
-
 // External and Internal Helper Stubs
 
 /// Number of decoding threads. Always **0**: the C++ decoder's multi-threading was
-/// never ported, and `SWelsDecoderContext::pThreadCtx` — the field this used to read
-/// through — was declared and read but never once assigned (T5c).
+/// never ported.
 ///
-/// Matches `GetThreadCount` in `decoder_context.h`, and the function is kept rather
-/// than inlined away so its ~10 call sites stay honest about the question they are
-/// asking. **The literal must be `0`, not `1`**: every other caller tests `> 1` or
-/// `<= 1` and cannot tell the two apart, but `api/codec_api.rs:1831` branches on
-/// `GetThreadCount(p_ctx) <= 0` to increment `uiDecodeTimeStamp`, so a `1` here would
-/// silently stop that branch running and change the decoding timestamp.
+/// Matches `GetThreadCount` in `decoder_context.h`. **The literal must be `0`, not
+/// `1`**: every other caller tests `> 1` or `<= 1` and cannot tell the two apart,
+/// but `api/codec_api.rs:1831` branches on `GetThreadCount(p_ctx) <= 0` to increment
+/// `uiDecodeTimeStamp`, so a `1` here would silently stop that branch running and
+/// change the decoding timestamp.
 #[inline]
-/// **T5.Z4: it takes a shared borrow now, and the parameter is still unused.**
-/// F36 owns whether decoder threading returns at all; until then this is `0`. As a
-/// `&mut` it was worse than useless — a `Unique` function-entry retag over the whole
-/// context at every call site, which pops every live derivation from it. That is
-/// what the flip's one Miri failure was: `slice_ctx` derived `sRawData`, then read
-/// this, then built the struct, and the field borrow was already dead.
 pub fn GetThreadCount(_pCtx: &SWelsDecoderContext) -> i32 {
     0
 }
@@ -711,10 +508,6 @@ pub fn UpdateDecStatNoFreezingInfo(pCtx: &mut SWelsDecoderContext, pCurDq: Optio
     let Some(pCurDq) = pCurDq else {
         return;
     };
-    // The two facts this body needs from *other* context fields, taken as values
-    // before the statistics borrow opens: `pParam` and `pPicBuff` are disjoint from
-    // `pDecoderStatistics`, and reading them out is cheaper than proving it at four
-    // interleaved sites.
     let bEcDisabled =
         pCtx.pParam.eEcActiveIdc == ERROR_CON_DISABLE;
     if pCtx.pDec.is_none() {
@@ -882,17 +675,6 @@ pub fn WelsMarkAsRef(
     }
 }
 
-// T4b.3b: a forwarding `ExpandReferencingPicture` stood here, taking the two
-// function-pointer slots as an inline `extern "C"` type and handing them to
-// `error_concealment`'s copy through **the crate's last two `mem::transmute`
-// calls** -- one of them over an entire `[Option<fn>; 2]` array. All four
-// `PExpandPictureFunc` typedefs in play were the same type,
-// `unsafe extern "C" fn(*mut u8, i32, i32, i32)`, so the two calls reinterpreted
-// a type into itself and bridged nothing at all. **The crate now contains zero
-// such calls**; every remaining ratchet match, including this comment, is prose.
-// Callers use `common/expand_pic.rs` directly.
-
-
 #[inline]
 pub fn ComputeColocatedTemporalScaling(
     pCtx: &mut SWelsDecoderContext,
@@ -900,12 +682,8 @@ pub fn ComputeColocatedTemporalScaling(
 ) {
     {
         if let Some(dq) = pCurDqLayer {
-            // T5.Y2: a slice bracket of its own — the pool view and the context view
-            // come out of the same context, and the two are disjoint by construction.
             let (pDec, pRefs, mut view, _nal) =
                 crate::decoder::decoder_context::slice_split(pCtx, None);
-            // The picture travels as a shared borrow: this scan only reads POCs, and
-            // F42 lets a list entry name it (T5b.2).
             let pDec = pDec.map(|p| &*p);
             let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
                 &mut view,
@@ -949,23 +727,9 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
         let iPicBufSize = GetTargetRefListSize(pCtx);
         (*pCtx).iPicQueueNumber = iPicBufSize;
 
-        // **F77 (T8.C1): the resolution-change arm.** `WelsRequestMem`
-        // (`decoder.cpp:464–545`) is what this function's first half is; the port had
-        // only its *first-allocation* case, so the pool built for the opening sequence
-        // survived every later one. `InitialDqLayersContext` below re-sizes the layer
-        // from the new SPS unconditionally, so a mid-stream resolution change left the
-        // **layer** at the new macroblock count and the **pictures** at the old one —
-        // `res/Error_I_P.264` goes 352x288 → 640x480 → 352x288, and the first switch
-        // put `WelsActualDecodeMbCavlcISlice` at `iMbXy` 396 in a 396-entry
-        // `pDec.pMbType`. Through an `extern "C"` thunk that panic is a process abort,
-        // which is plan §P13's line. The C++ logs the three transitions it makes here
-        // ("memory re-alloc for resolution change, size change from 352 * 288 to
-        // 640 * 480") and emits five frames; the port emitted two and died.
-        //
-        // The C's early return is `bHaveGotMemory && same size && !bNeedChangePicQueue`.
-        // **T8b.C3 supplies its `bNeedChangePicQueue` half** —
-        // `IncreasePicBuff`/`DecreasePicBuff`, F80/F87 — so all three of
-        // `WelsRequestMem`'s arms are here now. `WelsResetRefPic` is the caller's
+        // `WelsRequestMem` (`decoder.cpp:464–545`) is what this function's first
+        // half is. The C's early return is `bHaveGotMemory && same size &&
+        // !bNeedChangePicQueue`. `WelsResetRefPic` is the caller's
         // (`AllocPicBuffOnNewSeqBegin`, matching `decoder.cpp:489`'s placement relative
         // to this work), so the reference lists are already clear of the pool being
         // dropped or reordered here.
@@ -982,12 +746,6 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
         }
 
         if (*pCtx).pPicBuff.is_none() {
-            // **T8.A8: the `pMemAlign` guard is gone with the allocator.** `CreatePicBuff`'s
-            // C++ opens `if (NULL == pCtx || NULL == pCtx->pMemAlign) return 1;` — a
-            // null test on the aligned allocator it is about to call. This port's pool
-            // is a `Vec` and the only failure it can report is the `None` the `else`
-            // arm below already takes, so the guard tested a field whose one remaining
-            // job was to be non-null.
             let Some(pool) = crate::decoder::pic_queue::CreatePicBuff(
                 crate::decoder::decoder_context::parse_only(&pCtx.pParam),
                 iPicBufSize,
@@ -1006,14 +764,9 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
             (*pCtx).bHaveGotMemory = true;
             (*pCtx).pDec = None;
         } else {
-            // **The third arm (F80/F87): same resolution, different queue size.**
+            // The third arm: same resolution, different queue size.
             // `decoder.cpp:493-509`. A stream that changes `num_ref_frames` without
-            // changing resolution lands here; the port had no branch for it and
-            // returned `dsOutOfMemory` from the switch onward —
-            // `tests/data/f80/num_ref_change_320x192.264` decoded 34 of 48 frames.
-            //
-            // The reference logs the transition, and that log line is ported with the
-            // behaviour it describes rather than ahead of it.
+            // changing resolution lands here.
             let capacity = pic_pool_mut(pCtx).map_or(0, |pool| pool.capacity());
             if capacity != iPicBufSize {
                 WelsLog(
@@ -1059,9 +812,7 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
                 (*pCtx).bHaveGotMemory = true;
                 (*pCtx).pDec = None;
             }
-            // Report the pool's real capacity, resized or not. The borrow ends before
-            // the field write, which is the discipline every `pic_pool_mut` call site
-            // keeps.
+            // Report the pool's real capacity, resized or not.
             let capacity = pic_pool_mut(pCtx).map_or(0, |pool| pool.capacity());
             (*pCtx).iPicQueueNumber = capacity;
         }
@@ -1080,24 +831,6 @@ pub fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
 
 pub use crate::decoder::pic_queue::PrefetchLastPicForThread;
 
-// `MemInitNalList` and `MemFreeNalList` were **duplicated** here, in a different
-// shape from `nalu.rs`'s: three `WelsMallocz` blocks against one `alloc_zeroed`, and
-// `MAX_NAL_UNIT_NUM_IN_AU` = 1024 against 32. This file's pair was the live one
-// (`WelsInitStaticMemory`/`WelsFreeStaticMemory` call it), and `nalu.rs`'s
-// `MemGetNextNal` grew *that* allocation through `nalu.rs`'s free — F39. T5.O4
-// deleted the duplicate and unified the survivor over an owned `Vec<Box<SNalUnit>>`;
-// **T5.P1 deleted the survivor too.** Once the context's field owns the access unit,
-// the allocator is `SAccessUnit::with_nodes` and the deallocator is drop glue, so
-// neither has a name to call and the F39 shape cannot be rewritten.
-
-// **F43, T5.S1: three stubs stood here and shadowed `error_concealment.rs`.**
-// `NeedErrorCon` returned `false`, `ImplementErrorCon` did nothing, and
-// `MarkECFrameAsRef` returned `ERR_NONE` — declared in the same module that calls
-// them, so a local item beat every path to the real bodies and the port's whole
-// error-concealment subsystem was reachable only from its own unit tests. The
-// imports below are what the call sites resolve to now; they are `use`s and not a
-// glob on purpose, because the defect was name resolution and an explicit import
-// is the form that shows which body runs.
 use crate::decoder::error_concealment::{ImplementErrorCon, MarkECFrameAsRef, NeedErrorCon};
 
 #[inline]
@@ -1115,12 +848,6 @@ pub fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
 /// access unit's **first** NAL (`uiStartPos`, not the last — the AU is ordered and the
 /// base layer leads it).
 ///
-/// **T8b.A3: this was `{}`.** Four phases of an empty body, and 21 of the 44 remaining
-/// `test/api` rows behind it — `iFeedbackVclNalInAu` never left the caller's stack
-/// garbage, `iFeedbackTidInAu` never left −1. `find_stub_bodies.py` could not see it
-/// because it diffs *call sets* and this C++ body makes no calls (S46, closed in
-/// T8b.A2's empty-body rule).
-///
 /// The reference has no null guard here — `pAccessUnitList` and its `pNalUnitsList`
 /// entry are both live at the one call site (`decoder_core.cpp:2274`, right after
 /// `WelsDecodeAccessUnitStart`). The port's accessors return `Option`, and a `None`
@@ -1137,38 +864,7 @@ pub fn GetVclNalTemporalId(pCtx: &mut SWelsDecoderContext) {
     (*pCtx).iFeedbackNalRefIdc = i32::from(uiNalRefIdc);
 }
 
-// **T8b.A3: `GetPrevFrameNum` deleted dead (S18).** It returned 0 — a stub of the
-// multi-threaded detour's helper, which walks the other decoding contexts for the
-// most recent frame number. This port's single call site reads
-// `pLastDecPicInfo.iPrevFrameNum` directly (`:4356`), which is exactly what the
-// reference's single-threaded path does. Fixing it would have been porting the
-// threaded decoder; deleting it is what the plan says (D3).
-
-// **T5b.9: `CopySpsPps` deleted dead (S18, D3).** The C++ calls it only from the
-// threaded decoder (`decoder_core.cpp:2875`, `welsDecoderExt.cpp:1308`) — the
-// subsystem this port stubbed out and the plan deletes. Here it was an empty body
-// with zero callers, and the last thing in `src/decoder/` that spelled
-// `PWelsDecoderContext` in code; the typedef goes with it.
-
-// **F43, T5.S1: the other two stubs.** `FmoParamUpdate` returned `ERR_NONE`
-// without building a map and `FmoNextMb` returned `iMbIdx + 1` — raster order, the
-// answer FMO exists to *not* give — and both took the second `SFmo` deleted at the
-// top of this file, so the one call site cast the context's real `TagFmo` to a
-// structurally different type to reach them. `fmo.rs` is the resolution now.
 use crate::decoder::fmo::{FmoNextMb, FmoParamUpdate};
-
-// **F52 (T5.X7): a sixth F43-class stub stood here** — `CheckAccessUnitBoundaryExt`
-// returning `true` unconditionally, in the module that calls it, shadowing the real
-// 80-line implementation in `nalu.rs` (which had **no caller at all**). A local item
-// beats every import, so `CheckAndFinishLastPic`'s access-unit boundary test read
-// `iTotalNumMbRec != 0 && true` where the C++ compares fifteen header fields.
-//
-// The F43 sweep (`tools/find_shadowing_stubs.py`) reported clean over this: it counts
-// a function's statements as the lines between the `fn` line and the closing brace,
-// so a **multi-line signature** is counted as statements and a four-parameter stub
-// scores 6 — `SUBSTANTIAL`, not `TRIVIAL`. The instrument is fixed with the finding
-// (S33's corollary: an instrument that disagrees with a hand count is wrong until
-// proven otherwise). Callers use `nalu.rs` directly.
 
 // Core Functions Implemented in `decoder_core.cpp`
 pub fn DecodeFrameConstruction(
@@ -1180,12 +876,6 @@ pub fn DecodeFrameConstruction(
     let Some(pCurDq) = pCurDq else {
         return ERR_INFO_INVALID_PTR;
     };
-    // **T5.Z4: the picture is re-derived where it is written, not held.** T5.Q2 took
-    // one derivation for the whole function because a second one would invalidate the
-    // first; with the context a `&mut` the *statistics* calls in between take it too,
-    // so the borrow cannot span them. `pCtx->pDec` is not written anywhere in here,
-    // so every re-derivation names the same slot — which is what made one derivation
-    // safe in the first place, said the other way round.
     if dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec).is_none() {
         return ERR_INFO_INVALID_PTR;
     }
@@ -1201,7 +891,6 @@ pub fn DecodeFrameConstruction(
     let mut bFrameCompleteFlag = true;
 
     if (*pCtx).bNewSeqBegin {
-        // A value: the destination is another field of the same context (T5.Z1).
         let sFrameCrop = sps_of(
             &(*pCtx).sSpsPpsCtx,
             pCurDq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
@@ -1210,15 +899,9 @@ pub fn DecodeFrameConstruction(
         if let Some(sFrameCrop) = sFrameCrop {
             (*pCtx).sFrameCrop = sFrameCrop;
         }
-        // **F46, T5.T2 — the wrong side of the `#ifdef`.** `LONG_TERM_REF` is defined
-        // (`decoder_context.h:67`), so `decoder_core.cpp:60` clears
-        // **`bParamSetsLostFlag`** here and leaves `bReferenceLostAtT0Flag` alone; the
-        // port took the `#else` line. It cost nothing while nothing read the flag —
-        // `bReferenceLostAtT0Flag` has no reader in either tree under this `#ifdef` —
-        // and it costs a return code now that `UpdateAccessUnit`'s mosaic-avoidance
-        // block reads `bParamSetsLostFlag`: without the clear the port would raise
-        // `dsRefLost` on every non-IDR access unit for the life of the decoder, which
-        // is not "references lost", it is "we have never seen a key frame".
+        // `LONG_TERM_REF` is defined (`decoder_context.h:67`), so
+        // `decoder_core.cpp:60` clears **`bParamSetsLostFlag`** here and leaves
+        // `bReferenceLostAtT0Flag` alone.
         (*pCtx).bParamSetsLostFlag = false;
         if (*pCtx).iTotalNumMbRec == kiTotalNumMbInCurLayer {
             (*pCtx).bPrintFrameErrorTraceFlag = true;
@@ -1245,10 +928,6 @@ pub fn DecodeFrameConstruction(
 
     if (*pCtx).pParam.bParseOnly {
         if (*pCtx).iErrorCode == dsErrorFree {
-            // The cropped dimensions as values, above the descriptor's borrow: the
-            // parse-only descriptor is the context's own `Box` and the SPS is the
-            // context's array, so the two cannot be borrowed through it at once
-            // once the context is a reference (T5.Z1).
             let sps_dims = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps).map(|sps| {
                 (
                     (sps.iMbWidth as i32) * 16
@@ -1257,22 +936,14 @@ pub fn DecodeFrameConstruction(
                         - ((sps.sFrameCrop.iTopOffset + sps.sFrameCrop.iBottomOffset) << 1),
                 )
             });
-            // ------------------------------------------------------------------
-            // **T8b.B2 — the byte copies.** Until now this arm kept the reference's
-            // length bookkeeping and *none* of its `memcpy`s: T3.3 deleted them with
-            // `pNalPos`, correctly for that tree (nothing wrote the field), and the
-            // note that stood here said the next writer of `pDstBuff` would need the
-            // running total. This is that writer. `decoder_core.cpp:88-175`, whole:
-            // the IDR SPS/PPS prepend, the two capacity checks, `ExpandBsLenBuffer`,
-            // and the per-NAL copy out of `sSavedData`.
-            // ------------------------------------------------------------------
-
-            // Everything `ExpandBsLenBuffer` needs is read here, *above* the
-            // destructure: it takes the whole context, and the copies below hold
-            // three of its fields at once. The reference interleaves the two checks
-            // with the copies; hoisting them is the same growth on the same inputs,
-            // because both are functions of `iNalNum` and the access unit's index
-            // range and neither copy changes those.
+            // `decoder_core.cpp:88-175`, whole: the IDR SPS/PPS prepend, the two
+            // capacity checks, `ExpandBsLenBuffer`, and the per-NAL copy out of
+            // `sSavedData`.
+            //
+            // The reference interleaves the two checks with the copies; hoisting them
+            // is the same growth on the same inputs, because both are functions of
+            // `iNalNum` and the access unit's index range and neither copy changes
+            // those.
             let (iIdx0, iEndIdx0) = match cur_au(&mut pCtx.access_unit) {
                 Some(au) => (au.uiStartPos as i32, au.uiEndPos as i32),
                 None => (0, -1),
@@ -1337,12 +1008,6 @@ pub fn DecodeFrameConstruction(
                 }
             }
 
-            // Five field borrows, disjoint: the access unit is `access_unit`'s own
-            // allocation, the descriptor is `pParserBsInfo`'s (T5.Z3), and the three
-            // sources — the saved EBSP and the two parameter-set caches — are their
-            // own arrays. Nothing in this block calls back into the context, so one
-            // derivation of each covers it; the borrow's extent is the check, not a
-            // style choice.
             let SWelsDecoderContext {
                 access_unit,
                 pParserBsInfo,
@@ -1428,10 +1093,9 @@ pub fn DecodeFrameConstruction(
                             *slot = iNalLen;
                             (*pParser).iNalNum += 1;
                         }
-                        // `decoder_core.cpp:155-172` — the copy the port has been
-                        // missing. The source is `sSavedData`, the **EBSP** copy
-                        // `ParseNalHeader` made; `sRawData` holds the de-escaped RBSP
-                        // and is the wrong bytes to hand out.
+                        // `decoder_core.cpp:155-172`. The source is `sSavedData`, the
+                        // **EBSP** copy `ParseNalHeader` made; `sRawData` holds the
+                        // de-escaped RBSP and is the wrong bytes to hand out.
                         if iDstPos + iNalLen.max(0) as usize >= MAX_ACCESS_UNIT_CAPACITY {
                             *iErrorCode |= dsOutOfMemory;
                             (*pParser).iNalNum = 0;
@@ -1478,11 +1142,6 @@ pub fn DecodeFrameConstruction(
             return ERR_INFO_MB_NUM_INADEQUATE;
         }
     } else if pCurDq.sLayerInfo.sNalHeaderExt.bIdrFlag && (*pCtx).iErrorCode == dsErrorFree {
-        // T5.Q2: `dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec)` stood here and at the parse-only arm above. Both
-        // name the picture `pPic` already holds — `pCtx->pDec` is not written
-        // anywhere in this function — and under owned slots a second derivation of
-        // one slot invalidates the first, which `pPic`'s twenty-odd uses below are.
-        // One derivation at the top is what this whole function's region wants.
         pic!().bIsComplete = true;
         (*pCtx).bFreezeOutput = false;
     }
@@ -1575,14 +1234,10 @@ pub fn CheckSliceNeedReconstruct(uiLayerDqId: u8, uiTargetDqId: u8) -> bool {
 
 #[inline]
 pub fn GetTargetDqId(uiTargetDqId: u8, psParam: &SDecodingParam) -> u8 {
-    // T8.A5: the parameter block is the context's own field (F41), so the `Option`
-    // and its 255 null-default are gone — the C's `pCtx->pParam->uiTargetDqLayer`
-    // is a field read, exactly as `decoder_core.cpp:1049` spells it.
     WELS_MIN(uiTargetDqId, psParam.uiTargetDqLayer)
 }
 
-/// The header of NAL `i` of the access unit under construction, or `None` — the
-/// `!pNalCur.is_null()` test, once (T5b.3).
+/// The header of NAL `i` of the access unit under construction, or `None`.
 #[inline]
 fn nal_hdr(pCtx: &SWelsDecoderContext, i: Option<usize>) -> Option<&SNalUnitHeaderExt> {
     let i = i?;
@@ -1637,7 +1292,6 @@ pub fn ParsePredWeightedTable(
     pSh: &mut SSliceHeader,
 ) -> i32 {
     {
-        // The offset travels, not the slice — see `ParseSps` (T5.Z4).
         let buf = pCtx.sRawData.window_from(kiRbspStart);
         let mut uiCode: u32 = 0;
         let mut iCode: i32 = 0;
@@ -1654,7 +1308,7 @@ pub fn ParsePredWeightedTable(
         // "monochrome SPS" and they distinguish them *in opposite directions* — the
         // first parses nothing without an SPS, the second parses chroma weights
         // *because* there is none. A `map_or(0, …)` collapses them and desynchronises
-        // the slice header (T5.Z1).
+        // the slice header.
         let uiChromaArrayType =
             sps_of(&(*pCtx).sSpsPpsCtx, pSh.sps_ref).map(|sps| sps.uiChromaArrayType);
 
@@ -1752,11 +1406,6 @@ pub fn CreateImplicitWeightTable(
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
-    // **The header's three reads travel as values** (T5.Z1's shape, one container
-    // in): `pSliceHeader` was a `&mut` *into* the layer held across writes to the
-    // layer itself — legal only while the layer arrived as a raw pointer. Nothing
-    // below writes the header, so the reads are copies and the writes keep the
-    // borrow.
     let (pps_id, iPoc, uiRefCount) = {
         let pSliceHeader = &pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
         (
@@ -1765,8 +1414,6 @@ pub fn CreateImplicitWeightTable(
             pSliceHeader.uiRefCount,
         )
     };
-    // A value: the pool bracket below reaches the context for every reference it
-    // resolves (T5.Z1).
     let Some(uiWeightedBipredIdc) =
         pps_of(&(*pCtx).sSpsPpsCtx, pps_id).map(|pps| pps.uiWeightedBipredIdc)
     else {
@@ -1786,19 +1433,10 @@ pub fn CreateImplicitWeightTable(
             }
         }
 
-        // T5.AC2: the table is the layer's own now, so the null test is the
-        // `Option` and the writes below are field writes. The `&mut` is taken once
-        // for the whole block and every reference resolution inside it reads the
-        // *context*'s pool — a disjoint object, which is why the borrow can span
-        // them (the layer arrives as its own `&mut` parameter).
         if let Some(pred_weight_table) = pCurDqLayer.sPredWeightTable.as_mut() {
             pred_weight_table.uiLumaLog2WeightDenom = 5;
             pred_weight_table.uiChromaLog2WeightDenom = 5;
             for iRef0 in 0..(uiRefCount[0] as usize) {
-                // The two poc/long-ref pairs are read as **values**, so the
-                // reference borrow ends before the inner loop resolves the second
-                // list — two live shared results of one pool are legal, but the
-                // values make the reach obvious (T5.Z1).
                 let ref0_poc = ref_pic(&(*pCtx).pPicBuff, &(*pCtx).sRefPic, LIST_0, iRef0)
                     .map(|p| (p.iFramePoc, p.bIsLongRef));
                 if let Some((iPoc0, bIsLongRef0)) = ref0_poc {
@@ -1834,7 +1472,6 @@ pub fn ParseRefPicListReordering(
     pSh: &mut SSliceHeader,
 ) -> i32 {
     {
-        // The offset travels, not the slice — see `ParseSps` (T5.Z4).
         let buf = pCtx.sRawData.window_from(kiRbspStart);
         let keSt = pSh.eSliceType;
         if keSt == I_SLICE || keSt == SI_SLICE {
@@ -1910,12 +1547,7 @@ pub fn ParseDecRefPicMarking(
     kbIdrFlag: bool,
 ) -> i32 {
     {
-        // The offset travels, not the slice — see `ParseSps` (T5.Z4).
         let buf = pCtx.sRawData.window_from(kiRbspStart);
-        // **And the SPS travels as a ref, not a pointer.** Its two scalars are read out
-        // here, above every use of the context: derived from `pCtx` and passed beside
-        // it, the pointer dies at this function's own entry retag — Y's verdict, arriving
-        // from a *caller-derived* alias rather than from an accessor.
         let Some((uiLog2MaxFrameNum, iNumRefFrames)) = sps_of(&pCtx.sSpsPpsCtx, sps_ref)
             .map(|sps| (sps.uiLog2MaxFrameNum, sps.iNumRefFrames))
         else {
@@ -2005,14 +1637,10 @@ pub fn ParseDecRefPicMarking(
                             info.iPrevPicOrderCntMsb = 0;
                         }
                         pSh.iPicOrderCntLsb = 0;
-                        // **T5b.3: through the index, not a stored alias.**
-                        // `pCtx->pSliceHeader` was a raw pointer *into* the current
-                        // NAL — the second of the parse tree's two stored aliases, and
-                        // the one that escaped furthest (it outlived the call that set
-                        // it by a whole slice decode). It is deleted; the NAL under
-                        // decode is `pCtx->nal_cur`, and this — its only reader —
-                        // resolves it. `pSh` above is the *layer's* copy and is a
-                        // different object, which is why both writes are here.
+                        // The NAL under decode is `pCtx->nal_cur`, and this — its
+                        // only reader — resolves it. `pSh` above is the *layer's*
+                        // copy and is a different object, which is why both writes
+                        // are here.
                         let nal_cur = (*pCtx).slice_hdr_nal;
                         if let Some(nal) = nal_cur
                             .and_then(|i| cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(i)))
@@ -2064,19 +1692,13 @@ pub fn FillDefaultSliceHeaderExt(
 
 pub fn InitBsBuffer(pCtx: &mut SWelsDecoderContext) -> i32 {
     // `WelsMalloczHelper`'s zeroed allocation, owned: the allocation size *is*
-    // `sRawData.len()` — the `iMaxBsBufferSizeInByte` field died with the pointers,
-    // since a stored copy of the buffer's length is exactly the kind of extent F16
-    // is about.
+    // `sRawData.len()`.
     match RawDataBuffer::try_new_zeroed(MIN_ACCESS_UNIT_CAPACITY * MAX_BUFFERED_NUM) {
         Ok(raw) => (*pCtx).sRawData = raw,
         Err(()) => return ERR_INFO_OUT_OF_MEMORY,
     }
 
     if (*pCtx).pParam.bParseOnly {
-        // T5.R4: three `WelsMallocz` blocks — the descriptor and its two buffers —
-        // become one owned value. The `ERR_INFO_OUT_OF_MEMORY` arms go with the null
-        // returns they tested for; `RawDataBuffer::try_new_zeroed` beside them keeps
-        // its arm because it really can fail (T3.3's fallible reserve).
         (*pCtx).pParserBsInfo = Some(Box::new(ParseOnlyBsBuffers {
             pDstBuff: vec![0u8; MAX_ACCESS_UNIT_CAPACITY],
             pNalLenInByte: vec![0i32; MAX_NAL_UNITS_IN_LAYER + 2],
@@ -2090,18 +1712,6 @@ pub fn InitBsBuffer(pCtx: &mut SWelsDecoderContext) -> i32 {
     }
     ERR_NONE
 }
-
-// `ExpandBsBuffer` was deleted at T3.3, not converted. Its growth policy (when to
-// grow is `WelsDecodeBs`'s check; by how much is `max(srcLen * MAX_BUFFERED_NUM,
-// len << 1)`) lives in [`RawDataBuffer::grow`]. Everything else it did was pointer
-// maintenance that offsets made meaningless: the `sRawData`/`sSavedData` rebases
-// (offsets survive a reallocation by definition — plan §2.2.2, P5) and the
-// per-pending-NAL `sSliceBitsRead` rebase with its stale-`avail` repair (F16's
-// second instance) — under the derive-don't-store rule there is nothing left to go
-// stale, so the hazard is unrepresentable rather than repaired. `CheckBsBuffer`
-// (upstream's per-frame growth trigger) had no caller in this port and died with
-// it; the port's only trigger is the single-NAL-bigger-than-the-buffer check in
-// `WelsDecodeBs`, unchanged.
 
 pub fn ExpandBsLenBuffer(pCtx: &mut SWelsDecoderContext, kiCurrLen: i32) -> i32 {
     if !parser_bs(&mut (*pCtx).pParserBsInfo)
@@ -2118,11 +1728,6 @@ pub fn ExpandBsLenBuffer(pCtx: &mut SWelsDecoderContext, kiCurrLen: i32) -> i32 
     };
     let mut iNewLen = kiCurrLen << 1;
     iNewLen = WELS_MIN(iNewLen, MAX_MB_SIZE + 2);
-    // **F40 is unrepresentable here now.** The allocate-copy-free triple this was —
-    // and whose `copy_nonoverlapping` counted bytes where the count is in elements, so
-    // it copied four times the source — is `Vec::resize`, which knows both the element
-    // size and the old length. The old length was `pCtx->iMaxNalNum`, a stored extent
-    // that went with the pointer (F16).
     (*pParser).pNalLenInByte.resize(iNewLen as usize, 0);
     ERR_NONE
 }
@@ -2131,27 +1736,8 @@ pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
     {
         let cpu_flag = (*pCtx).uiCpuFlag;
 
-        // 0. Block helpers. `WelsBlockFuncInit` filled `sBlockFunc` here (`InitDecFuncs`
-        // in `decoder.cpp`), through a `*mut _ as *mut _` double cast that bridged the
-        // port's two incompatible declarations of one struct. T4b.3c deleted both. The
-        // one slot that was ever read -- `pWelsSetNonZeroCountFunc`, which clamps every
-        // non-zero coefficient count to 1 after inter reconstruction so that deblocking
-        // derives the boundary strengths the C++ derives -- is a direct call at its
-        // single use in `decode_slice.rs`.
-
-        // 1. Deblocking Filter — the `DeblockingInit` install stood here. **S18,
-        // S4.D4**: it filled a twelve-slot table nothing read (T5.Y3 had already
-        // deleted `pLoopf`, the alias the C++ dispatches through), and it ignored
-        // its own `cpu_flag` besides. A future SIMD pass builds its dispatch from
-        // the safe kernels' signatures, not from these C-ABI shims.
-
         // 2. Motion Compensation
         crate::common::mc::InitMcFunc(&mut (*pCtx).sMcFunc, cpu_flag);
-
-        // 2b. Reference picture border expansion installed `sExpandPicFunc` here,
-        // three constants that T4b.3b turned into direct calls. Both chroma slots held
-        // `ExpandPictureChroma_c`, so the aligned/unaligned index selected between two
-        // identical functions -- the 4a shape, in the decoder.
 
         // 3. IDCT Inverse Transform
         (*pCtx).pIdctResAddPredFunc = Some(crate::decoder::decode_mb_aux::idct_res_add_pred);
@@ -2233,10 +1819,7 @@ pub fn WelsCPUFeatureDetect(pCpuCores: &mut i32) -> u32 {
 /// Fill data fields in default for decoder context.
 /// Matches `void WelsDecoderDefaults (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp`.
 pub fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, pLogCtx: Option<&SLogContext>) {
-    // `decoder.cpp:340` — `pCtx->sLogCtx = *pLogCtx`. The parameter was `_pLogCtx:
-    // *mut c_void` and ignored until T8.B6, which is one half of why the decoder's
-    // seventeen `WelsLog` call sites delivered nothing: the context they log
-    // through had never been given a destination.
+    // `decoder.cpp:340` — `pCtx->sLogCtx = *pLogCtx`.
     if let Some(pLogCtx) = pLogCtx {
         pCtx.sLogCtx = *pLogCtx;
     }
@@ -2259,13 +1842,6 @@ pub fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, pLogCtx: Option<&SLog
     }
     (*pCtx).iErrorCode = ERR_NONE;
     (*pCtx).pDec = None;
-    // T5.P″1: both were `= null_mut()` and are now `= None`, which *drops* what they
-    // held. Checked rather than assumed (S23's question, aimed at a lifecycle): this
-    // function is `WelsDecoderDefaults`, called from exactly one place —
-    // `codec_api.rs:1454`, on the line after `Box::into_raw(ctx_box)` — so it runs on
-    // a context that has never decoded, both fields are already `None`, and the drop
-    // is of nothing. The C leaked here for the same reason it could not free: it had
-    // only a pointer's zero to write.
     (*pCtx).pTempDec = None;
     WelsResetRefPic(pCtx);
     (*pCtx).iActiveFmoNum = 0;
@@ -2320,11 +1896,8 @@ pub fn WelsDecoderLastDecPicInfoDefaults(sLastDecPicInfo: &mut crate::decoder::d
 
 /// Reset picture reordering buffer list.
 /// Matches `void ResetReorderingPictureBuffers (...)` in `decoder.cpp`.
-/// The list is the context's own `[SPictInfo; 16]` since T8.A7 (it was
-/// `CWelsDecoderImpl::sPictInfoList`, reached through a stamped pointer), so the
-/// parameter is that array: the `16` the `fullReset` arm writes was the C's `sizeof`
-/// and is now the type's own length, and the `pPictInfo.add(i)` walk is an index.
-/// `iLargestBufferedPicIndex + 1` is clamped to it — the C++ trusts the field.
+/// `iLargestBufferedPicIndex + 1` is clamped to the array's length — the C++ trusts
+/// the field.
 pub fn ResetReorderingPictureBuffers(
     pPictReoderingStatus: &mut crate::decoder::decoder_context::SPictReoderingStatus,
     pPictInfo: &mut [crate::decoder::decoder_context::SPictInfo; 16],
@@ -2351,32 +1924,14 @@ pub fn ResetReorderingPictureBuffers(
 /// Matches `int32_t DecoderConfigParam (PWelsDecoderContext pCtx, const SDecodingParam* kpParam)`
 /// in `decoder.cpp:649`.
 ///
-/// **The C++'s own name for "the caller's parameters become the context's"**, and
-/// T8.A5 gives the port the function rather than the two lines it had scattered
-/// across the boundary. The copy is `decoder.cpp:653`'s `memcpy` — into the block
-/// the context owns, which is the whole of **F41**: the port used to point
-/// `pCtx->pParam` at `CWelsDecoderImpl::param` and overwrite *that* on every
-/// `Initialize`, so a field the teardown reads lived in an object with its own
-/// lifetime and its own writers.
-///
-/// `InitErrorCon` is the C++'s next statement and F44's first call site: the mode
+/// `InitErrorCon` is the C++'s next statement: the mode
 /// just copied selects which kernels `sCopyFunc` holds, and it also clears
 /// `bFreezeOutput`, which `WelsDecoderDefaults` sets **true**.
 ///
-/// **F76, T8.B1 — the three statements this function used to be missing are here.**
-/// The range clamp (`:654`) is not: it has to run on the `int` the caller wrote,
-/// before the value is an `ERROR_CON_IDC` at all, so it lives at the boundary in
-/// `api::codec_api::read_decoding_param` and the block that arrives here is already
-/// in range. The other two — the parse-only concealment disable (`:663`) and the
-/// `pCtx->eVideoType` assignment (`:667`) — are written below in the reference's
-/// order, and the second is what makes `eVideoType` a field with a writer: it was
-/// set once by the context constructor and never again, so its one reader (the
-/// key-frame-loss arm of `DecodeFrame2`'s error block) would have fired on every
-/// stream rather than on AVC ones.
 /// `void CWelsDecoder::OutputStatisticsLog (SDecoderStatistics&)` —
 /// `welsDecoderExt.cpp:947`.
 ///
-/// **F76, T8.B3.** One line every `iStatisticsLogInterval` decoded frames (1000 by
+/// One line every `iStatisticsLogInterval` decoded frames (1000 by
 /// default, `WelsDecoderDefaults`), and the reason `uiDecodedFrameCount` has to be
 /// counted on *both* of `DecodeFrame2`'s tails rather than only the error one: the
 /// interval is a modulus over it, and a counter that never moves prints nothing and
@@ -2432,9 +1987,7 @@ pub fn OutputStatisticsLog(pCtx: &mut SWelsDecoderContext) {
 
 pub fn DecoderConfigParam(pCtx: &mut SWelsDecoderContext, kpParam: &SDecodingParam) {
     pCtx.pParam = *kpParam;
-    // `decoder.cpp:663` — parse-only decoding disables concealment. Inert on output
-    // today only because `DecodeParser` is a stub; not inert as configuration,
-    // because the mode selects `sCopyFunc`'s kernels one line below.
+    // `decoder.cpp:663` — parse-only decoding disables concealment.
     if pCtx.pParam.bParseOnly {
         pCtx.pParam.eEcActiveIdc = ERROR_CON_DISABLE;
     }
@@ -2450,21 +2003,11 @@ pub fn DecoderConfigParam(pCtx: &mut SWelsDecoderContext, kpParam: &SDecodingPar
     );
 }
 
-/// **S12.6 dropped the `SLogContext* pLogCtx` parameter.** `decoder.cpp:600` takes
-/// one and uses it in exactly one place — the `WelsLog` on
-/// `WelsInitStaticMemory`'s failure arm. This port has no such arm in this body,
-/// so the parameter had no subject: it was `_pLogCtx: *mut c_void`, ignored, and
-/// all three callers passed `null_mut()`. Were the arm ever ported it would log
-/// through `pCtx.sLogCtx`, which the body beside it already does — the context
-/// carries its own log now (T8's flip), so the C's out-of-band parameter has
-/// nothing left to say. S18's `pShortRefList` deletion, second instance.
 pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext) -> i32 {
     let mut cpu_cores = 0i32;
     (*pCtx).uiCpuFlag = { WelsCPUFeatureDetect(&mut cpu_cores) } as u32;
     { WelsInitDecoderFuncs(pCtx) };
-    // `decoder.cpp:606` — the vlc tables, right after the function pointers. T8.A6
-    // moved this here from `WelsCreateDecoder`, which had it because the table was a
-    // `CWelsDecoderImpl` member rather than the context's field.
+    // `decoder.cpp:606` — the vlc tables, right after the function pointers.
     crate::decoder::parse_mb_syn_cavlc::InitVlcTable(&mut pCtx.pVlcTable);
     (*pCtx).bParamSetsLostFlag = true;
     (*pCtx).bNewSeqBegin = true;
@@ -2492,14 +2035,7 @@ pub fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
         crate::decoder::pic_queue::DestroyPicBuff(pCtx, pool);
     }
 
-    // T5.P″1: `FreePicture((*pCtx).pTempDec, pMa)` followed by a null store. One
-    // `= None` is both, and F19's question — which line frees this? — is answered by
-    // the type: this line, or the context's drop glue if this line never runs (R4).
     (*pCtx).pTempDec = None;
-
-    // T5.O2: the CABAC engine's free block stood here. The engine is a field now, so
-    // there is no allocation to release and no pointer to null — and, unlike the
-    // pointer, the field cannot be read after this function has run.
 
     (*pCtx).iImgWidthInPixel = 0;
     (*pCtx).iImgHeightInPixel = 0;
@@ -2526,8 +2062,6 @@ pub fn WelsEndDecoder(pCtx: &mut SWelsDecoderContext) {
 pub fn WelsInitStaticMemory(pCtx: &mut SWelsDecoderContext) -> i32 {
     {
         WelsOpenDecoder(pCtx);
-        // F19: freed by the context's drop glue. `MAX_NAL_UNIT_NUM_IN_AU` is still the
-        // caller's argument, exactly as `decoder_core.cpp:763` passes it.
         (*pCtx).access_unit = Some(SAccessUnit::with_nodes(MAX_NAL_UNIT_NUM_IN_AU));
         if { InitBsBuffer(pCtx) } != 0 {
             (*pCtx).iErrorCode |= dsOutOfMemory;
@@ -2540,32 +2074,18 @@ pub fn WelsInitStaticMemory(pCtx: &mut SWelsDecoderContext) -> i32 {
 }
 
 pub fn WelsFreeStaticMemory(pCtx: &mut SWelsDecoderContext) {
-    // R4, first entry: the access unit's free is `Option::take`'s drop, and it happens
-    // here rather than in the context's own `Drop` only because this function still
-    // exists. Both of its callers run `drop(Box::from_raw(pCtx))` on the next line, so
-    // moving it either way is the same program.
     (*pCtx).access_unit = None;
 
-    // The buffers own their allocations now; reset releases them (the WelsFreeHelper
-    // free-cascade entries for sRawData/sSavedData died with the pointers).
+    // The buffers own their allocations now; reset releases them.
     (*pCtx).sRawData.reset();
 
     if (*pCtx).pParam.bParseOnly {
         (*pCtx).sSavedData.reset();
     }
-    // **Outside the `bParseOnly` arm on purpose (T5.R4, and it is half of F41).** The
-    // three free calls that stood inside it — the two buffers and the descriptor —
-    // were reachable only when the flag still read `true` at teardown, and the flag
-    // lives in the API object where a second `Initialize` can flip it. As an owned
-    // field the release is unconditional, so those three blocks can no longer leak;
-    // what remains of F41 is `sSavedData` above and the `pParam` alias itself, which
-    // is Phase 8's.
+    // Outside the `bParseOnly` arm on purpose: as an owned field the release is
+    // unconditional.
     (*pCtx).pParserBsInfo = None;
 }
-
-// A duplicate `DecodeNalHeaderExt` was deleted dead here at T3.3 (S18): it had no
-// callers — both call sites resolve to `nalu::DecodeNalHeaderExt`, which takes the
-// 3-byte window as a slice since this seam.
 
 pub fn UpdateDecoderStatisticsForActiveParaset(
     pDecoderStatistics: Option<&mut SDecoderStatistics>,
@@ -2582,17 +2102,13 @@ pub fn UpdateDecoderStatisticsForActiveParaset(
     pDecoderStatistics.uiLevel = pSps.uiLevelIdc as u32;
 }
 
-/// **T5b.3: the header is parsed into a scratch and written back once.**
+/// The header is parsed into a scratch and written back once.
 ///
-/// The body below took three `addr_of_mut!` derivations into the access unit's last
-/// node and held them across its whole 576 lines — which is sound only while the
-/// container's slots are raw, and they own now. A local scratch, copied in and copied
+/// A local scratch, copied in and copied
 /// back at the single exit, is behaviour-identical: the C++ parses in place, and
 /// nothing between the two copies reads that node (the sub-parsers take the scratch;
 /// `ParseDecRefPicMarking`'s second POC write targets a *different* NAL, the decode
-/// loop's, through `slice_hdr_nal`). What it buys is that the parse can keep taking
-/// the context — which it does five times, for `sRawData`, `sSpsPpsCtx`,
-/// `iErrorCode`, `pLastDecPicInfo` and `pDecoderStatistics`.
+/// loop's, through `slice_hdr_nal`).
 pub fn ParseSliceHeaderSyntaxs(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
@@ -2631,11 +2147,7 @@ fn parse_slice_header_into(
     pNalHeaderExt: &mut SNalUnitHeaderExt,
 ) -> i32 {
     {
-        // **The window is re-derived per read, not bound** (T5.Z4). This function
-        // interleaves reads with calls that take the context — the three sub-parsers and
-        // the parameter-set lookups — so a `let win!() = …` at the top is a shared borrow of
-        // `sRawData` live across a `&mut` of its parent. Each `win!()` ends with its
-        // expression; S25's shape, and the same one `ref_set` takes for the DPB.
+        // The window is re-derived per read, not bound.
         macro_rules! win {
             () => {
                 pCtx.sRawData.window_from(kiRbspStart)
@@ -2697,21 +2209,6 @@ fn parse_slice_header_into(
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_PPS_ID);
         }
 
-        // The same rule, for the paramset side — a second live instance of F24's shape,
-        // not a precaution. `pSps` was `&mut (*pSubsetSps).sSps`, nested inside a `&mut` of
-        // the subset SPS entry, and the three later `let pSubsetSps` bindings each took
-        // `&mut` of that *same* entry again — popping the nested tag, after which every
-        // `(*pSps)` read is UB (`uiLog2MaxFrameNum`, `uiTotalMbCount`, `bFrameMbsOnlyFlag`,
-        // the POC block, and on). Every `kbExtensionFlag` path, which means every SVC
-        // stream. **No gate reaches it**: `bExtensionFlag` is `eType == NAL_UNIT_CODED_SLICE_EXT`
-        // (`nalu.rs:684`) and the probe decodes AVC, so it was found by reading while fixing
-        // the pair above and dies in the same commit rather than waiting for a test that
-        // does not exist. The stored `pSliceHeadExt.sSliceHeader.pps_id` / `pSps` pointers get the
-        // context's provenance for free, which is what S28 asks of a pointer that outlives
-        // the expression that made it.
-        // T5b.3: an index, not an address. The `addr_of_mut!` was S29's spelling for a
-        // *raw* parent; the parse has the context as a borrow and re-resolves per read,
-        // exactly as `win!()` and `sps!()` below do.
         let pps_idx = iPpsId as usize;
         macro_rules! pps {
             () => {
@@ -2723,11 +2220,6 @@ fn parse_slice_header_into(
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_NO_PARAM_SETS);
         }
 
-        // **T5.Z4: the ref, not the address.** This derived a raw `SSps` alias out of
-        // the context and read it across two dozen calls that take the context — the
-        // same class the accessors shed at T5.Z1, arriving from a hand-written
-        // derivation. `sps!()` re-resolves in one expression, exactly as `win!()` does
-        // for the bitstream window above.
         let sps_ref = Some(SpsRef { id: pps!().iSpsId, subset: kbExtensionFlag });
         macro_rules! sps {
             () => {
@@ -2747,9 +2239,6 @@ fn parse_slice_header_into(
 
         pSliceHeadExt.sSliceHeader.iPpsId = iPpsId;
         pSliceHeadExt.sSliceHeader.iSpsId = pps!().iSpsId;
-        // T5.R6: what the two stored pointers carried — an id and, for the SPS, which of
-        // the two buffers it indexes. `kbExtensionFlag` is that choice, made three lines
-        // above where `pSps` was derived.
         pSliceHeadExt.sSliceHeader.pps_id = Some(iPpsId);
         pSliceHeadExt.sSliceHeader.sps_ref = Some(SpsRef { id: pps!().iSpsId, subset: kbExtensionFlag });
         if kbExtensionFlag {
@@ -2792,13 +2281,6 @@ fn parse_slice_header_into(
             pSliceHeadExt.sSliceHeader.uiIdrPicId = uiCode as u16;
             // `decoder_core.cpp:1060-1062`, under `LONG_TERM_REF` (which
             // `decoder_context.h:67` defines, so it is on in every reference build).
-            //
-            // **T8b.A3: `uiCurIdrPicId` was declared, reset, and never written.**
-            // F77's signature exactly — and it is the only feeder for
-            // `DECODER_OPTION_IDR_PIC_ID`, so `decode_api_test.cpp:132`'s three rows
-            // read a field that could only ever be 0. Written here, at the reference's
-            // point: the *parse* of the IDR's slice header, not its reconstruction,
-            // which is why the test reads the same value on both `DecodeFrame2` calls.
             pCtx.uiCurIdrPicId = uiCode as u16;
         }
 
@@ -2818,7 +2300,6 @@ fn parse_slice_header_into(
                 }
                 pSliceHeadExt.sSliceHeader.iDeltaPicOrderCntBottom = iCode;
             }
-            // The api-owned alias family, through its accessor (T5.AC4).
             let prevLsb = pCtx.pLastDecPicInfo.iPrevPicOrderCntLsb;
             let prevMsb = pCtx.pLastDecPicInfo.iPrevPicOrderCntMsb;
             let pocMsb = if pocLsb < prevLsb && (prevLsb - pocLsb) >= (iMaxPocLsb / 2) {
@@ -3065,11 +2546,8 @@ fn parse_slice_header_into(
             // Extra syntax elements newly introduced (G.7.3.3.4). These bits are part of
             // the slice header, so skipping them desynchronises the slice-data parse.
             pSliceHeadExt.subset_sps_id = Some(pps!().iSpsId);
-            // The borrow lives across the whole SVC extension parse below, which reads
-            // `win!()`/`pBs` and writes `pSliceHeadExt` — three allocations, none of them
-            // the context — so nothing here can invalidate it (T5.Z1). The `None` arm is
-            // unreachable: the id is the PPS's own `iSpsId`, which `ParsePps` bounds to
-            // `< MAX_SPS_COUNT` before the PPS is ever stored.
+            // The `None` arm is unreachable: the id is the PPS's own `iSpsId`, which
+            // `ParsePps` bounds to `< MAX_SPS_COUNT` before the PPS is ever stored.
             let Some(pSubsetSps) = subset_sps_of(&(*pCtx).sSpsPpsCtx, pSliceHeadExt.subset_sps_id)
             else {
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_SPS_ID);
@@ -3291,22 +2769,15 @@ pub fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
             (*pCtx).uiTargetDqId = dq_id;
         }
 
-        // **F46, T5.T2 — the mosaic-avoidance block, never ported** (`decoder_core.cpp:1454`).
-        // "Added for mosaic avoidance, 11/19/2009": an access unit that arrives while the
-        // decoder is still waiting for a key frame, and that contains no IDR, means the
-        // references this AU predicts from are gone — `dsRefLost`. The port stopped at the
-        // three assignments above, so **the whole block was absent** and `dsRefLost` had no
-        // producer anywhere in the decoder: `iErrorCode |= dsRefLost` appears once
-        // (`HandleReferenceLost`) against the C++'s four, and this is the site the corpus
-        // reaches. Measured: this block plus the `bParamSetsLostFlag` clear it depends on
-        // take the corpus's disagreeing truncation rows from **399 to 188** — 211 rows,
-        // one bit on one call.
+        // `decoder_core.cpp:1454`. "Added for mosaic avoidance, 11/19/2009": an
+        // access unit that arrives while the decoder is still waiting for a key
+        // frame, and that contains no IDR, means the references this AU predicts
+        // from are gone — `dsRefLost`.
         //
         // `LONG_TERM_REF` is defined (`decoder_context.h:67`), so the guard is
         // `bParamSetsLostFlag || bNewSeqBegin`. Both trees leave `bParamSetsLostFlag` true
         // from `WelsOpenDecoder` on every non-parse-only path — the only clear is inside
-        // `DecodeFrameConstruction`'s `bParseOnly` arm — so the guard is not what was
-        // missing and is written here as the C++ writes it rather than folded away.
+        // `DecodeFrameConstruction`'s `bParseOnly` arm.
         let waiting_for_key = (*pCtx).bParamSetsLostFlag || (*pCtx).bNewSeqBegin;
         if waiting_for_key {
             let mut uiActualIdx = 0u32;
@@ -3368,30 +2839,12 @@ pub fn InitialDqLayersContext(
 
         // The **allocation's** dimensions, from the negotiated maximum — the layer's
         // `iMbWidth`/`iMbHeight` are the current slice's and are smaller on any stream
-        // decoding below it (T5.E2). `pMa` and a separate `numMb` were still declared
-        // here for the 25 raw array allocations that died at T5.H3; the grid is the only
-        // consumer of this arithmetic now.
+        // decoding below it.
         let dims = MbDims::new(
             ((kiMaxWidth + 15) >> 4) as usize,
             ((kiMaxHeight + 15) >> 4) as usize,
         );
 
-        // One layer, and these 27 arrays are now allocated *into* it. They used to be
-        // allocated into `SWelsDecoderContext::sMb` and re-aliased onto the layer once per
-        // picture by `InitCurDqLayerData`; the alias carried every real access (316 against
-        // the cache's 130, of which 129 were lifecycle), so the cache was an owner with no
-        // readers and it is gone. The block scopes `pDq`; it was a
-        // `for i in 0..LAYER_NUM_EXCHANGEABLE` loop, and that constant was 1.
-        // T5.H3: the layer is heap-*constructed*, not zero-allocated — it owns a `MbGrid`
-        // and a zeroed `Vec` is an invalid value (S21). The allocation cannot fail by
-        // returning null, so the `ERR_INFO_OUT_OF_MEMORY` arm that guarded `WelsMallocz` is
-        // gone with it; the 25 array allocations below still go through the C's allocator
-        // and are still checked where they were.
-        //
-        // **T5.R2: the context owns it.** `Box::into_raw` and the `Box::from_raw` in
-        // `UninitialDqLayersContext` were F19's last pair in `src/decoder/` — the
-        // assignment *is* the ownership transfer now, and the old block scope existed only
-        // to bound the raw `pDq`.
         (*pCtx).pDqLayersList = Some(Box::new(DqLayerState::for_grid(dims)));
 
         (*pCtx).bInitialDqLayersMem = true;
@@ -3402,27 +2855,18 @@ pub fn InitialDqLayersContext(
 }
 
 pub fn UninitialDqLayersContext(pCtx: &mut SWelsDecoderContext) {
-    // T5.E2's `numMb` — the free path's copy of the allocation's dimensions, and the
-    // one the closure got wrong — is gone with the raw arrays it sized. The layer's
-    // drop glue needs no size at all, which is the whole argument for owning it, and
-    // at T5.R2 the drop *is* the assignment: the grid's 22 `Vec`s go with the field's
-    // own glue, there is no way to forget one and no size to get wrong.
     (*pCtx).pDqLayersList = None;
     (*pCtx).iPicWidthReq = 0;
     (*pCtx).iPicHeightReq = 0;
     (*pCtx).bInitialDqLayersMem = false;
 }
 
-/// **The rotation moves nodes, so the indices that name nodes move with it** (F55).
+/// The rotation moves nodes, so the indices that name nodes move with it.
 ///
-/// `pCtx->pNalCur` and `pCtx->pSliceHeader` were raw pointers *into* a node, and the
-/// C's rotation exchanges two entries of a **pointer array** — the node objects do not
-/// move, so a pointer that named one before the rotation still names it after. The
-/// port's slots own their nodes and the rotation is a `Vec::swap`, which likewise
+/// The rotation is a `Vec::swap`, which
 /// leaves the boxed node where it is; what it does move is the node's **index**, and an
 /// index is what [`SWelsDecoderContext::nal_cur`] and
-/// [`SWelsDecoderContext::slice_hdr_nal`] hold. Carrying them through the swap is what
-/// makes the index spelling mean what the pointer spelling meant.
+/// [`SWelsDecoderContext::slice_hdr_nal`] hold.
 #[inline]
 fn swap_au_nodes(
     pAu: &mut SAccessUnit,
@@ -3442,8 +2886,6 @@ fn swap_au_nodes(
 }
 
 pub fn ResetCurrentAccessUnit(pCtx: &mut SWelsDecoderContext) {
-    // The three fields are disjoint, and spelling them as a split is what lets the
-    // rotation carry the two indices (T5.Z1's shape, `swap_au_nodes`' reason).
     let SWelsDecoderContext { access_unit, nal_cur, slice_hdr_nal, .. } = pCtx;
     let Some(pCurAu) = cur_au(access_unit) else {
         return;
@@ -3456,8 +2898,6 @@ pub fn ResetCurrentAccessUnit(pCtx: &mut SWelsDecoderContext) {
         let kuiAvailNum = pCurAu.uiAvailUnitsNum;
         let kuiLeftNum = if kuiAvailNum > kuiActualNum { kuiAvailNum - kuiActualNum } else { 0 };
         for iIdx in 0..kuiLeftNum as usize {
-            // The C swapped two entries of the pointer array; the nodes are owned
-            // now, so the same rotation is a `Vec` swap and no node moves.
             swap_au_nodes(
                 pCurAu,
                 nal_cur,
@@ -3501,12 +2941,6 @@ pub fn ForceResetCurrentAccessUnit(
     pAu.uiEndPos = 0;
     pAu.bCompletedAuFlag = false;
 }
-
-// `ForceClearCurrentNal` was declared **here as well as in `nalu.rs`**, and this copy
-// had no caller — the second rival pair the access-unit code carried (F39 was the
-// first, and that one was live in both directions). It is deleted rather than
-// re-exported: the surviving copy takes `&mut SAccessUnit`, so the shapes had already
-// diverged and a re-export would have been a new fact rather than a preserved one.
 
 pub fn ForceResetParaSetStatusAndAUList(pCtx: &mut SWelsDecoderContext) {
     (*pCtx).sSpsPpsCtx.bSpsExistAheadFlag = false;
@@ -3569,8 +3003,6 @@ pub fn CheckAvailNalUnitsListContinuity(
 }
 pub fn RefineIdxNoInterLayerPred(pCurAu: &SAccessUnit, pIdxNoInterLayerPred: &mut i32) {
     {
-        // T5.AC11: the out-parameter is a borrow and the node arrives through the AU's
-        // shared reader, so this whole function is safe (T5.AC5's `node`).
         let idx = *pIdxNoInterLayerPred as usize;
         let Some(pNal) = pCurAu.node(idx) else {
             return;
@@ -3672,9 +3104,7 @@ pub fn CheckIntegrityNalUnitsList(pCtx: &mut SWelsDecoderContext) -> bool {
             pCurAu.uiStartPos = iIdxNoInterLayerPred as u32;
 
             // `CheckAvailNalUnitsListContinuity` derives the access unit itself and writes
-            // `uiEndPos` through its own borrow, so everything below re-derives. This is
-            // the shape the raw field made invisible: the old `pCurAu` stayed usable
-            // afterwards precisely because nothing owned the thing it pointed at.
+            // `uiEndPos` through its own borrow, so everything below re-derives.
             CheckAvailNalUnitsListContinuity(pCtx, iIdxNoInterLayerPred, kiEndPos);
 
             let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
@@ -3881,9 +3311,7 @@ pub fn WelsDecodeInitAccessUnitStart(
     let bTmpNewSeqBegin = CheckNewSeqBeginAndUpdateActiveLayerSps(pCtx);
     if bTmpNewSeqBegin {
         // `decoder_core.cpp:2265`'s `if (pCtx->pStreamSeqNum) (*pCtx->pStreamSeqNum)++;
-        // else pCtx->iSeqNum++;`. **T8.A6 retires the else arm with the pointer**: the
-        // counter is the context's own field now, so the null the C tested for cannot
-        // occur and the arm it guarded is unreachable code, not a fallback.
+        // else pCtx->iSeqNum++;`.
         pCtx.pStreamSeqNum += 1;
     }
     (*pCtx).bNewSeqBegin = (*pCtx).bNewSeqBegin || bTmpNewSeqBegin;
@@ -3909,8 +3337,7 @@ pub fn WelsDecodeInitAccessUnitStart(
 
     // Derived here, not at the head: `CheckNewSeqBeginAndUpdateActiveLayerSps` and
     // `WelsDecodeAccessUnitStart` both derive the access unit in between, and the
-    // second of them moves `uiStartPos`. Hoisting this was legal only while the field
-    // was a raw pointer into memory nothing owned.
+    // second of them moves `uiStartPos`.
     let pNal = match cur_au(&mut pCtx.access_unit) {
         Some(au) => au.node(au.uiStartPos as usize).map(|nal| {
             (
@@ -3929,8 +3356,7 @@ pub fn WelsDecodeInitAccessUnitStart(
 
 pub fn AllocPicBuffOnNewSeqBegin(pCtx: &mut SWelsDecoderContext) -> i32 {
     {
-        // T5.R6: the fallback scan now yields the *id* of the first initialized entry —
-        // the same entry its `sps as *mut SSps` named, without the alias.
+        // The fallback scan yields the *id* of the first initialized entry.
         let active = if (*pCtx).active_sps.is_some() {
             (*pCtx).active_sps
         } else {
@@ -3942,8 +3368,6 @@ pub fn AllocPicBuffOnNewSeqBegin(pCtx: &mut SWelsDecoderContext) -> i32 {
                 .map(|i| SpsRef { id: i as i32, subset: false })
         };
 
-        // The dimensions as values: `WelsResetRefPic` and `SyncPictureResolutionExt`
-        // both re-enter through the context (T5.Z1).
         let Some((iMbWidth, iMbHeight)) =
             sps_of(&(*pCtx).sSpsPpsCtx, active).map(|sps| (sps.iMbWidth, sps.iMbHeight))
         else {
@@ -3987,11 +3411,6 @@ pub fn ConstructAccessUnit(
             return iErr;
         }
     }
-    // T5.O2: the CABAC engine's lazy allocation stood here — allocate on the first
-    // access unit, null-check twice, carry an out-of-memory arm. The engine is a
-    // field now, zeroed with the context, which is the state that allocation
-    // produced on its one execution.
-
     let iErr = { DecodeCurrentAccessUnit(pCtx, ppDst, pDstInfo) };
     { WelsDecodeAccessUnitEnd(pCtx) };
     iErr
@@ -4014,23 +3433,14 @@ pub fn WelsDecodeBs(
         let input_slice = &kpBsBuf[..kiBsLen as usize];
         let units = crate::split_annexb_units(input_slice);
 
-        // **F48, T5.U3 — a buffer with no start code is an error, not an empty
-        // loop.** The C++ opens with `DetectStartCodePrefix`, and its *return
-        // value* is a verdict, not just an offset:
+        // A buffer with no start code is an error, not an empty loop. The C++ opens
+        // with `DetectStartCodePrefix`, and its *return value* is a verdict, not just
+        // an offset:
         //
         //     if (NULL == DetectStartCodePrefix (kpBsBuf, &iOffset, kiBsLen)) {
         //       pCtx->iErrorCode |= dsBitstreamError;
         //       return dsBitstreamError;      // decoder.cpp:760
         //     }
-        //
-        // The port reached the same *decoding* by iterating `split_annexb_units`,
-        // which yields nothing for such a buffer — so the loop body ran zero times
-        // and the function fell out reporting `dsErrorFree`. The transliteration
-        // deleted `DetectStartCodePrefix` as dead at T3.3 (S18: it had no callers)
-        // and the error signal went with it, because the caller only ever used the
-        // offset. Nothing could see it: the four rows it moves are `raw.*` feeds of
-        // one to three bytes, which is the family that got its first C++ referee in
-        // this commit.
         if units.is_empty() {
             (*pCtx).iErrorCode |= dsBitstreamError;
             return dsBitstreamError;
@@ -4049,7 +3459,7 @@ pub fn WelsDecodeBs(
             } else if payload_slice.starts_with(&[0, 0, 1]) {
                 payload_slice = &payload_slice[3..];
             }
-            // **`kpSrcNal`, T8b.B2** — the *escaped* NAL, start code included, which
+            // `kpSrcNal` — the *escaped* NAL, start code included, which
             // is what parse-only hands back to its caller and the one thing
             // `sRawData` cannot supply (it holds the RBSP). The reference passes
             // `pSrcNal - 3` with length `iSrcIdx + 3` (`decoder.cpp:815`, `:877`):
@@ -4058,16 +3468,16 @@ pub fn WelsDecodeBs(
             // Trailing zeros belonging to the next start code are inside this window
             // in the reference too, and both trees trim them the same way.
             let src_nal: &[u8] = if unit.starts_with(&[0, 0, 0, 1]) { &unit[1..] } else { unit };
-            // **F46, T5.T3 — an empty NAL is a NAL.** This used to `continue`. The C++
+            // An empty NAL is a NAL. The C++
             // has no such skip: a start code with nothing behind it reaches
             // `ParseNalHeader` with `iSrcRbspLen == 0`, whose header byte then reads
             // out of the **four reserved zero bytes** the scanner writes at the write
             // position before every parse (`decoder.cpp:875`, `:874`). That is
             // `nal_unit_type` 0 — `NAL_UNIT_UNSPEC_0` — with no SPS ahead of it, so
-            // the C++ answers `dsNoParamSets` where the port answered `dsErrorFree`.
+            // the C++ answers `dsNoParamSets`.
             // The four zeroes are written below rather than assumed: they are also the
-            // guard bytes the refill predicate is allowed to touch past an RBSP end
-            // (F4/P6), and `sRawData` is reused across access units, so "the buffer
+            // guard bytes the refill predicate is allowed to touch past an RBSP end,
+            // and `sRawData` is reused across access units, so "the buffer
             // starts zeroed" stops being true after the first rewind.
 
             // Copy the NAL into the persistent raw-data buffer, stripping
@@ -4079,11 +3489,7 @@ pub fn WelsDecodeBs(
                 // the current write position) is not overwritten.
                 (*pCtx).sRawData.rewind();
                 if (*pCtx).sRawData.len() < payload_slice.len() + 4 {
-                    // ExpandBsBuffer's policy, now RawDataBuffer::grow. Offsets —
-                    // the write position, every pending reader's `start`/cursor —
-                    // survive the reallocation by definition, so the pointer
-                    // rebasing block is gone rather than converted, and the saved
-                    // buffer keeps `sRawData`'s size as before.
+                    // ExpandBsBuffer's policy, now RawDataBuffer::grow.
                     if (*pCtx).sRawData.grow(payload_slice.len()).is_err() {
                         (*pCtx).iErrorCode |= dsOutOfMemory;
                         return (*pCtx).iErrorCode;
@@ -4151,10 +3557,6 @@ pub fn WelsDecodeBs(
     (*pCtx).iErrorCode
 }
 
-/// **T5.P′1 dropped `pPicDec`.** It wrote `pDqLayer->pDec`, the layer's copy of
-/// `dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec)` — a cache with one stamp site (this one) and no way for a reader
-/// to observe it diverging from its source, which is what W2b's S23 check
-/// established. The readers derive; the parameter had nothing left to write.
 pub fn InitDqLayerInfo(
     pCtx: &mut SWelsDecoderContext,
     pDqLayer: Option<&mut DqLayerState>,
@@ -4165,15 +3567,6 @@ pub fn InitDqLayerInfo(
         let Some(pDqLayer) = pDqLayer else {
             return;
         };
-        // F24's shape, third site (T5.E1). `pSh` was a `&mut` *inside* `pShExt`'s `&mut`,
-        // so every `(*pShExt)` read below popped it and every later `(*pSh)` read was UB;
-        // worse, the four escaping borrows in the `kuiQualityId` block store pointers into
-        // the layer that outlive this function, and as `&mut` they died at the next use of
-        // their parent. Raw derivations from `pNalUnit` carry the NAL unit's provenance and
-        // nothing pops anything.
-        // T5b.3: the node is a borrow, so the three `addr_of_mut!` chains — S29's
-        // spelling for a *raw* parent — are ordinary field paths, and the four
-        // "escaping borrows" the note above worried about are the layer's own copies.
         let Some(pNalUnit) = pNalUnit else {
             return;
         };
@@ -4190,7 +3583,6 @@ pub fn InitDqLayerInfo(
             | (pNalHdrExt.uiQualityId as i32);
 
         if let Some(iPpsId) = pLayerInfo.pps_id {
-            // T5.R6: the id *is* what the pointer was carried for here.
             pDqLayer.uiPpsId = iPpsId as u32;
         }
         pDqLayer.uiDisableInterLayerDeblockingFilterIdc = pShExt.uiDisableInterLayerDeblockingFilterIdc;
@@ -4207,19 +3599,9 @@ pub fn InitDqLayerInfo(
         pDqLayer.bUseWeightedBiPredIdc = false;
 
         if kuiQualityId == BASE_QUALITY_ID {
-            // **T5.AC2: the four `addr_of_mut!`s are three copies and a deletion.** Each
-            // addressed a field of `(*pSh)` / `(*pShExt)` — the very slice header
-            // `pDqLayer.sLayerInfo = *pLayerInfo` copied whole at the top of this
-            // function — so the value is taken here instead of the address. The
-            // assignment stays inside this `kuiQualityId` block, which is what keeps
-            // the retention rule the pointers carried: at a quality-enhancement slice
-            // nothing writes these three and they still read the base slice's.
-            //
-            // Nothing wrote *through* two of the three (the marking and the
-            // reordering syntax are read-only below this point); the third,
-            // `sPredWeightTable`, is written by `CreateImplicitWeightTable`, whose
-            // writes now land in the layer's own copy and are read back through it —
-            // the NAL's copy had no other reader.
+            // The assignment stays inside this `kuiQualityId` block, which is what
+            // keeps the retention rule: at a quality-enhancement slice nothing writes
+            // these three and they still read the base slice's.
             pDqLayer.sRefPicListReordering = Some(pSh.pRefPicListReordering);
             pDqLayer.sRefPicMarking = Some(pSh.sRefMarking);
             if let Some((bWeightedPredFlag, uiWeightedBipredIdc)) =
@@ -4238,19 +3620,13 @@ pub fn InitDqLayerInfo(
     }
 }
 
-/// **The parameter sets arrive as ids** (T5.Z1). They used to arrive as pointers
-/// the caller derived from the context it passes beside them, which is the shape
-/// this face removes; resolved here, at the one line that reads them, nothing else
-/// of the context is borrowed.
+/// The parameter sets arrive as ids, resolved at the one line that reads them.
 pub fn WelsDqLayerDecodeStart(
     pCtx: &mut SWelsDecoderContext,
     nal_idx: Option<usize>,
     sps_ref: Option<SpsRef>,
     pps_id: Option<i32>,
 ) {
-    // T5b.3: the two scalars this lifted out of the slice header travel as values.
-    // `pCtx->pSliceHeader` — the raw alias it used to stamp — is deleted; the NAL
-    // under decode is `pCtx->nal_cur`, an index, and its one reader resolves it.
     let Some(nal_idx) = nal_idx else {
         return;
     };
@@ -4268,10 +3644,7 @@ pub fn WelsDqLayerDecodeStart(
     pCtx.eSliceType = eSliceType;
     pCtx.bUsedAsRef = false;
     pCtx.iFrameNum = iFrameNum;
-    // `pCtx->pSliceHeader = pSh`'s replacement: the node, by index.
     pCtx.slice_hdr_nal = Some(nal_idx);
-    // The three arguments are three disjoint fields of the context: the statistics,
-    // owned since T8.A6, and both parameter sets out of `sSpsPpsCtx`.
     let SWelsDecoderContext { pDecoderStatistics, sSpsPpsCtx, .. } = &mut *pCtx;
     UpdateDecoderStatisticsForActiveParaset(
         Some(pDecoderStatistics),
@@ -4324,36 +3697,18 @@ pub fn DecodeCurrentAccessUnit(
     let kuiDependencyIdMax = (kuiTargetLayerDqId & 0x7F) >> 4;
     (*pCtx).uiNalRefIdc = 0;
 
-    // Node pointers only, one derivation each. The slice loop below calls back into
-    // the context on every iteration, so nothing about the access unit may be held
-    // across it — but a node is its own allocation and outlives every retag (T5.O4).
-    // **T5b.3: the index travels, not the node.** This local was a raw pointer held
-    // across the whole slice loop, which calls back into the context — the second half
-    // of what kept the access unit's slots raw. It is `Some(iIdx)` while `iIdx` names a
-    // NAL and `None` past the end, which is what the null tests below were reading.
     if cur_au(&mut pCtx.access_unit).is_none() {
         return ERR_INFO_INVALID_PTR;
     }
     let pNalCur: Option<usize> = Some(iIdx as usize);
     (*pCtx).nal_cur = pNalCur;
 
-    // **The access-unit bracket owns the layer** (T5.AA1). It is `slice_split`'s
-    // maneuver one container over, and it takes the other of the two available
-    // shapes: instead of splitting the borrow, the bracket *moves* the layer out of
+    // The bracket *moves* the layer out of
     // the context for the call and puts it back below. That is what makes the dozen
-    // calls under it — every one of which takes `pCtx` beside the layer — safe code
-    // with no round trip through a pointer.
+    // calls under it — every one of which takes `pCtx` beside the layer — safe code.
     //
-    // The move is invisible to everything under here, and the check is a grep rather
-    // than an argument: `pDqLayersList` has exactly two readers in the decoder, this
-    // bracket and `CheckAndFinishLastPic`'s, and one writer, `InitialDqLayersContext`,
-    // which runs in `InitConstructAccessUnit` *above* this function and never under
-    // it.
-    //
-    // **The labelled block is the restore's guarantee**, and it is why this is one
-    // function rather than two: every path out of the loop — the five `break 'au`s
-    // that were `return`s — lands on the line that puts the layer back, and no new
-    // signature has to repeat the two output parameters to get there.
+    // **The labelled block is the restore's guarantee**: every path out of the loop —
+    // the five `break 'au`s — lands on the line that puts the layer back.
     let mut owned_layer = pCtx.pDqLayersList.take();
     let mut dq_cur = owned_layer.as_deref_mut();
     let mut pNalCur = pNalCur;
@@ -4368,7 +3723,7 @@ pub fn DecodeCurrentAccessUnit(
 
     while iIdx <= iEndIdx {
         let mut pLayerInfo = SLayerInfo::default();
-        // **F96.** `decoder_core.cpp:2538-2541`:
+        // `decoder_core.cpp:2538-2541`:
         //
         // ```c
         // bool isNewFrame = true;
@@ -4377,22 +3732,7 @@ pub fn DecodeCurrentAccessUnit(
         // }
         // ```
         //
-        // The port had only the assignment, without the `iThreadCount > 1` that
-        // guards it — so on a continuing frame (`pDec` already prefetched) it read
-        // `false` where the reference reads `true`, and the one thing this flag
-        // gates, `InitRefPicList` at `:4627`, was **skipped**.
-        //
-        // That is the whole of F96. On `res/Error_I_P.264` under `ERROR_CON_DISABLE`
-        // the reference calls `InitRefPicList` on two P-slice access units whose
-        // reference list is empty; `WelsReorderRefList`'s search finds nothing,
-        // falls out at `i < 0` and returns `ERR_INFO_REFERENCE_PIC_LOST`
-        // (`manage_dec_ref.cpp:462`) — the one of its four failure returns that sets
-        // no `iErrorCode`, which is why the reference reports a bare `dsRefLost`
-        // (0x2) there. The arm below then returns early under DISABLE. The port
-        // never entered it, decoded the slice instead, and failed it with
-        // `dsBitstreamError` (0x4).
-        //
-        // `GetThreadCount` returns 0 here (F36 fences the threaded decoder), so this
+        // `GetThreadCount` returns 0 here, so this
         // reads `true` in every configuration the port can be in today. It is
         // written as the C++ writes it because the condition is the fact, and a
         // `true` literal would lose why.
@@ -4400,9 +3740,8 @@ pub fn DecodeCurrentAccessUnit(
 
         if (*pCtx).pDec.is_none() {
             // The prefetch hands back the slot it landed on, which is what this field
-            // holds; `pic_slot(prefetched)` stood here and read the same value back
-            // out of the picture's stamp. `None` is the pool being empty or fully
-            // held, which is the arm below.
+            // holds. `None` is the pool being empty or fully held, which is the arm
+            // below.
             (*pCtx).pDec = match pic_pool_mut(pCtx) {
                 Some(pool) => pool.prefetch_free(),
                 None => None,
@@ -4412,7 +3751,7 @@ pub fn DecodeCurrentAccessUnit(
             // the C's does. Without it a count left over from a dropped access unit
             // (EC disabled, refs lost) accumulates across frames, and
             // `ResetActiveSPSForEachLayer` — gated on `iTotalNumMbRec == 0` in both
-            // trees — never fires again (F93's root).
+            // trees — never fires again.
             if (*pCtx).iTotalNumMbRec != 0 {
                 (*pCtx).iTotalNumMbRec = 0;
             }
@@ -4433,8 +3772,6 @@ pub fn DecodeCurrentAccessUnit(
             }
         }
 
-        // The two stamps travel as values: the picture is the pool's borrow and
-        // both sources are read before it opens (T5.Z1).
         let uiTimeStamp = pNalCur
             .and_then(|i| pCtx.access_unit.as_deref().and_then(|au| au.node(i)))
             .map(|nal| nal.uiTimeStamp);
@@ -4452,14 +3789,11 @@ pub fn DecodeCurrentAccessUnit(
             // `DecodeCurrentAccessUnit` in `decoder_core.cpp`.
             let iMbCacheNum =
                 ((((*pCtx).iPicWidthReq + 15) >> 4) * (((*pCtx).iPicHeightReq + 15) >> 4)) as usize;
-            // This re-derived from the list mid-loop where everything around it read
-            // the cache; both were this iteration's `dq_cur`, and now it says so.
             if let Some(pDq) = dq_cur.as_deref_mut() {
                 // `memset(pSliceIdc, 0xff, numMb * sizeof(int32_t))` — 0xff bytes in
                 // an `i32` is -1. `iMbCacheNum` is computed from `iPicWidthReq`, which
                 // `InitialDqLayersContext` sets to the same `kiMaxWidth` the grid's
-                // dimensions come from, so the bound is an identity; spelling it as a
-                // slice makes it a checked one (P13), where the C had no bound at all.
+                // dimensions come from, so the bound is an identity.
                 pDq.grid.slice_idc.as_mut_slice()[..iMbCacheNum].fill(-1);
             }
             if let Some(iMbNum) = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
@@ -4471,8 +3805,7 @@ pub fn DecodeCurrentAccessUnit(
                         .fill(false);
                     // The C's `memset(.., 0, iMbWidth * iMbHeight)` over the
                     // **SPS's** dimensions, which are the current sequence's and can
-                    // be smaller than the grid's negotiated maximum (T5.E2). As a
-                    // slice the bound is checked; as a `write_bytes` it was not.
+                    // be smaller than the grid's negotiated maximum.
                     pDq.grid.mb_ref_concealed_flag.as_mut_slice()[..iMbNum]
                         .fill(false);
                 }
@@ -4489,10 +3822,6 @@ pub fn DecodeCurrentAccessUnit(
         }
 
         (*pCtx).bRPLRError = false;
-        // T5.X8: `GetI4LumaIChromaAddrTable` filled `iDecBlockOffsetArray` here,
-        // once per access unit, because the 24 byte offsets it held depended on the
-        // picture's two strides. The reconstruction path addresses blocks by sample
-        // coordinate now (`decode_slice.rs`'s `blk4_xy`), so there is no table.
 
         if nal_hdr(pCtx, pNalCur).is_some_and(|h| h.uiLayerDqId > kuiTargetLayerDqId) {
             break;
@@ -4502,13 +3831,6 @@ pub fn DecodeCurrentAccessUnit(
             if pNalCur.is_none() || dq_cur.is_none() {
                 break;
             }
-            // **T5b.3: the node's fields are copied out once, and nothing is held.**
-            // The C++ declares `pSh`/`pShExt` at function scope and re-derives them
-            // per iteration; the port spelled that with `addr_of_mut!` because the
-            // node was raw. It is a borrow now, so the shape that works is the one
-            // T5.Z1 already uses everywhere else — read what this iteration needs, in
-            // one expression, then let the borrow end before the calls that re-enter
-            // the context.
             let Some(nal) = pNalCur
                 .and_then(|i| pCtx.access_unit.as_deref().and_then(|au| au.node(i)))
             else {
@@ -4543,28 +3865,6 @@ pub fn DecodeCurrentAccessUnit(
             pLayerInfo.sSliceInLayer.eSliceType = pSh.eSliceType as u8;
 
             pLayerInfo.sSliceInLayer.iLastMbQp = pSh.iSliceQp;
-            // **T5.M3 — where `dq_cur->pBitStringAux` was written.** The layer mirrored
-            // `&pNalCur->sNalData.sVclNal.sSliceBitsRead` here and every reader in
-            // `decode_slice.rs` and `parse_mb_syn_cabac.rs` went through the mirror;
-            // `decoder_context::slice_bit_reader` derives it from `pNalCur` instead, so the
-            // one thing that has to be true is that **this** field is as fresh as the
-            // mirror was.
-            //
-            // It was not. `(*pCtx).pNalCur` was written **once**, before the loop
-            // (`:3573`), while `pNalCur` itself is re-read at the bottom of the inner
-            // loop — so from the second slice NAL of any access unit onward the
-            // context's copy pointed at the first NAL while the layer's mirror pointed
-            // at the right one. Nothing read the stale copy (its one reader is
-            // `WelsDecodeAndConstructSlice`, F36's dead `iThreadCount > 1` arm), which
-            // is why five phases of byte-exact gates never saw it. The write moves
-            // here, to the statement the mirror occupied, and the field is now correct
-            // by the same construction the mirror was.
-            //
-            // The C++ has no counterpart to correct: `decoder_core.cpp:2491` sets
-            // `pCtx->pNalCur = NULL` and never writes it again, so its own
-            // `decode_slice.cpp:1621` reader — the same dead MT arm — reads NULL. The
-            // port already diverged by writing the first NAL; this makes the divergence
-            // *useful* instead of merely different, and F36 owns the arm either way.
             (*pCtx).nal_cur = Some(iIdx as usize);
 
             (*pCtx).uiNalRefIdc = hdr_ext.sNalUnitHeader.uiNalRefIdc;
@@ -4573,10 +3873,7 @@ pub fn DecodeCurrentAccessUnit(
             pLayerInfo.sps_ref = pSh.sps_ref;
             pLayerInfo.subset_sps_id = pShExt.subset_sps_id;
 
-            // **FMO activation** (`decoder_core.cpp:2651-2663`), restored at T5.S1.
-            // Nothing wrote `pFmo` in this port — F43's other half — so `fmo.rs` was
-            // unreachable in production and every multi-slice-group stream decoded in
-            // raster order through the deleted `FmoNextMb` stub. The id is what the C
+            // **FMO activation** (`decoder_core.cpp:2651-2663`). The id is what the C
             // indexes `sFmoList` with, and the slice header parse has already rejected
             // `iPpsId >= MAX_PPS_COUNT` (`:2155`), so the entry always exists.
             //
@@ -4584,11 +3881,6 @@ pub fn DecodeCurrentAccessUnit(
             // parameters changed (`FmoParamSetsChanged`), which is why the state is
             // per-PPS and kept across access units rather than per slice.
             (*pCtx).fmo_id = Some(iPpsId);
-            // **Three disjoint fields of one context, in one call** (T5.Z1). This
-            // is the site session Y's Miri verdict could not repair site-locally:
-            // two accessor results derived from `pCtx` and passed together, each
-            // popping the other's derivation. Spelled as the fields they actually
-            // reach, the disjointness is the compiler's to check.
             let SWelsDecoderContext { sFmoList, sSpsPpsCtx, iActiveFmoNum, .. } = &mut *pCtx;
             iRet = FmoParamUpdate(
                 fmo_of_mut(sFmoList, Some(iPpsId)),
@@ -4624,16 +3916,10 @@ pub fn DecodeCurrentAccessUnit(
                     .copied();
                 InitDqLayerInfo(pCtx, dq_cur.as_deref_mut(), &mut pLayerInfo, nal_copy.as_ref());
 
-                // **F46, T5.T2 — subclause 8.2.5.2, gaps in `frame_num`**
-                // (`decoder_core.cpp:2675`), the second of the C++'s four `dsRefLost`
-                // sites and also never ported. A non-IDR slice whose `frame_num` is
+                // Subclause 8.2.5.2, gaps in `frame_num`
+                // (`decoder_core.cpp:2675`). A non-IDR slice whose `frame_num` is
                 // neither the previous one nor its successor means frames went missing
                 // in transmission, so the pictures this one predicts from are gone.
-                // This is the site `BA_MW_D_P_LOST` reaches — the stream is a lost P
-                // frame, which is precisely a `frame_num` gap.
-                // Two values, read above the block that logs and writes through the
-                // context (T5.Z1) — and the layer's three with them, because the block
-                // both reads the layer's NAL header and writes the context.
                 let dq_layer_info = dq_cur.as_deref().map(|dq| {
                     (
                         dq.sLayerInfo.sps_ref,
@@ -4650,9 +3936,8 @@ pub fn DecodeCurrentAccessUnit(
                     let kbIdrFlag = bIdrFlag
                         || eNalUnitType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
                     // `pLastThreadCtx` is the multi-threaded arm's `GetPrevFrameNum`
-                    // detour; `GetThreadCount` is identically 0 here (F36 owns the
-                    // threading gap), so the C++'s single-threaded read is the whole
-                    // of it.
+                    // detour; `GetThreadCount` is identically 0 here, so the C++'s
+                    // single-threaded read is the whole of it.
                     let iPrevFrameNum =
                         pCtx.pLastDecPicInfo.iPrevFrameNum;
                     let wrap = (1i32 << uiLog2MaxFrameNum) - 1;
@@ -4690,10 +3975,7 @@ pub fn DecodeCurrentAccessUnit(
                         bAllRefComplete = false;
                         let h = nal_hdr(pCtx, pNalCur).copied();
                         HandleReferenceLost(pCtx, h.as_ref());
-                        // `decoder_core.cpp:2713`, ported with the fix it explains
-                        // rather than ahead of it (F96): it is a behaviour change on
-                        // the trace surface, and it is the line that named this arm
-                        // when the reference was run at `--trace=8`.
+                        // `decoder_core.cpp:2713`.
                         WelsLog(
                             (*pCtx).sLogCtx,
                             WELS_LOG_DEBUG,
@@ -4715,11 +3997,7 @@ pub fn DecodeCurrentAccessUnit(
                     ComputeColocatedTemporalScaling(pCtx, dq_cur.as_deref_mut());
                 }
 
-                // `DECODER_MT(incomplete: F36)` — this arm is unreachable
-                // (`GetThreadCount` returns 0) and its callee is a partial translation
-                // of the reference. See `decode_slice::WelsDecodeAndConstructSlice` for
-                // the list of statements that are missing and what turning this on
-                // would require. T7.C7 left it and fenced it.
+                // This arm is unreachable (`GetThreadCount` returns 0).
                 if iThreadCount > 1 {
                     iRet = WelsDecodeAndConstructSlice(pCtx, dq_cur.as_deref_mut());
                 } else {
@@ -4795,8 +4073,6 @@ pub fn DecodeCurrentAccessUnit(
                         && ec_active_idc(&(*pCtx).pParam) != ERROR_CON_DISABLE
                     {
                         ImplementErrorCon(pCtx, dq_cur.as_deref_mut());
-                        // Values first, then the picture: `dec_pic` borrows the
-                        // pool and the ids are the parameter sets' (T5.Z1).
                         let sps_dims_id = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
                             .map(|sps| (sps.iMbWidth, sps.iMbHeight, sps.iSpsId));
                         let pps_id = active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps)
@@ -4833,14 +4109,6 @@ pub fn DecodeCurrentAccessUnit(
                     // MapColToList0 reads them back off the colocated picture when a
                     // later B slice uses temporal direct mode; without this the lookup
                     // always misses and every mapped ref index collapses to 0.
-                    //
-                    // **T5.P′2: a handle-to-handle copy.** Both sides are `Option<PicId>`
-                    // now, so the snapshot that used to duplicate up to 34 raw aliases
-                    // into the pool — onto a *pooled picture*, for as long as it stays a
-                    // reference — reaches the pool exactly once, for `pDec` itself.
-                    // The handles are copied out of `sRefPic` first (T5.Z1): the
-                    // destination borrows `pPicBuff` and the source is another field
-                    // of the same context, so the copy is between two values.
                     let kpRefList = (*pCtx).sRefPic.pRefList;
                     if let Some(pDec) = dec_pic(&mut (*pCtx).pPicBuff, (*pCtx).pDec) {
                         for listIdx in LIST_0..LIST_A {
@@ -4870,14 +4138,8 @@ pub fn DecodeCurrentAccessUnit(
             }
             (*pCtx).pDec = None;
 
-            // **F46, T5.T2 — "need update frame_num due current frame is well
-            // decoded"** (`decoder_core.cpp:2864`). The port had the *other* writer of
-            // `iPrevFrameNum` — `CheckAndFinishLastPic`'s, off `sLastSliceHeader` — and
-            // not this one, which is the writer on the ordinary path where an access
-            // unit decodes to completion. With only half the state machine the frame
-            // number the gap test compares against went stale after the first frame,
-            // so the gap test above would report a gap on **every** subsequent access
-            // unit rather than on the one that actually skipped a frame.
+            // "need update frame_num due current frame is well decoded"
+            // (`decoder_core.cpp:2864`).
             let bStartNalIsRef = cur_au(&mut pCtx.access_unit)
                 .and_then(|au| au.node(au.uiStartPos as usize))
                 .is_some_and(|nal| nal.sNalHeaderExt.sNalUnitHeader.uiNalRefIdc > 0);
@@ -4927,8 +4189,6 @@ pub fn CheckAndFinishLastPic(
             .as_deref()
             .and_then(|au| au.node(au.uiEndPos as usize))
             .copied();
-        // The last-picture halves are copied out first: the field borrow and
-        // `sps_of`'s borrow of `sSpsPpsCtx` are both arguments to one call.
         let last = Some((pCtx.pLastDecPicInfo.sLastNalHdrExt, pCtx.pLastDecPicInfo.sLastSliceHeader));
         if let (Some(pCurNal), Some((last_hdr, last_sh))) = (cur_nal.as_ref(), last) {
             bAuBoundaryFlag = (*pCtx).iTotalNumMbRec != 0
@@ -4957,20 +4217,17 @@ pub fn CheckAndFinishLastPic(
         }
     }
 
-    // **The error-concealment bracket** (T5.R1, T5.AA1): this runs *between* access
+    // The error-concealment bracket: this runs *between* access
     // units — `ConstructAccessUnit` above may have just returned — so it takes its own
-    // derivation of the layer rather than inheriting one. It is the value the deleted
-    // cache field held at this point, and the list is what the cache was stamped from.
+    // derivation of the layer rather than inheriting one.
     // The layer is *moved out* of the context for the block, exactly as
-    // `DecodeCurrentAccessUnit`'s bracket moves it, because every call below takes
-    // `pCtx` beside it; the restore is at the single exit.
+    // `DecodeCurrentAccessUnit`'s bracket moves it; the restore is at the single exit.
     let mut owned_layer = pCtx.pDqLayersList.take();
     let mut dq_cur = owned_layer.as_deref_mut();
     let bRet = 'ec: {
     if bAuBoundaryFlag && (*pCtx).iTotalNumMbRec != 0 && NeedErrorCon(pCtx, dq_cur.as_deref_mut()) {
         if (*pCtx).pParam.eEcActiveIdc != ERROR_CON_DISABLE {
             ImplementErrorCon(pCtx, dq_cur.as_deref_mut());
-            // Values first, then the picture — see `ConstructAccessUnit` (T5.Z1).
             let sps_dims_id = active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
                 .map(|sps| (sps.iMbWidth, sps.iMbHeight, sps.iSpsId));
             let pps_id = active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps).map(|pps| pps.iPpsId);
@@ -5050,14 +4307,10 @@ pub fn CheckRefPicturesComplete(
         let Some(pCurDqLayer) = pCurDqLayer else {
             return true;
         };
-        // **A bracket** (T5.Q2): this scan reads the current picture's macroblock types
-        // and reference indices *while* resolving the reference-list entries those
-        // indices name, and a malformed stream can put the current picture in that list
-        // (F42). One borrow, split — the same shape the slice brackets take, over a
-        // whole-slice operation rather than a whole slice.
+        // This scan reads the current picture's macroblock types and reference
+        // indices *while* resolving the reference-list entries those indices name,
+        // and a malformed stream can put the current picture in that list.
         let (pDec, pRefs) = cur_and_refs(&mut pCtx.pPicBuff, pCtx.pDec);
-        // T5b.2: the picture is a borrow, and the whole scan reads it — so F42's arm
-        // resolves through `PicRefs::resolve` and the two shared borrows coexist.
         let Some(pDec) = pDec.map(|p| &*p) else {
             return true;
         };
@@ -5142,15 +4395,6 @@ pub fn CheckRefPicturesComplete(
 mod tests {
     use super::*;
 
-    // -----------------------------------------------------------------------
-    // T5.H2 — `MbGrid`'s raw bridge, and S28's instrument.
-    //
-    // These are the tests S28 exists for, and the only ones in the battery that
-    // can fail on the defect it names. Byte-exactness cannot: the wrong
-    // derivation produces the identical address. Run under Miri they are the
-    // proof that a converted family may keep handing pointers to a kernel.
-    // -----------------------------------------------------------------------
-
     /// The grid's per-list arrays and `decoder_context::LIST_A` are the same
     /// number. `safe/mb_grid.rs` depends on nothing, so it declares its own
     /// `LIST_COUNT`; this is the one place both names are in scope, which makes
@@ -5164,13 +4408,9 @@ mod tests {
         assert_eq!(g.ref_index.len(), LIST_A);
     }
 
-    /// **S21's discharge for T5.H3.** The layer's construction is a zeroed shell
-    /// with the one owning field written through it, so: every C-defaulted field
-    /// still reads zero, the two the C++ constructor overwrites read their
-    /// overwritten values, and the grid is a real grid rather than 22 null `Vec`s.
-    ///
-    /// Under Miri this is also the test that would fail if the shell were ever
-    /// materialized before the grid was written into it.
+    /// Every C-defaulted field still reads zero, the two the C++ constructor
+    /// overwrites read their overwritten values, and the grid is a real grid rather
+    /// than 22 null `Vec`s.
     #[test]
     fn for_grid_constructs_a_layer_whose_grid_is_valid_and_whose_rest_is_zero() {
         {
@@ -5195,8 +4435,7 @@ mod tests {
     }
 
     /// The grid is sized from the **allocation's** dimensions, and the layer's
-    /// `iMbWidth`/`iMbHeight` are the current slice's — T5.E2's correction, now
-    /// structural rather than a comment on a `numMb` expression.
+    /// `iMbWidth`/`iMbHeight` are the current slice's.
     #[test]
     fn the_grid_outlives_a_narrower_slice() {
         {
@@ -5217,8 +4456,6 @@ mod tests {
     fn test_update_dec_stat_null_layer() {
         {
             {
-                // T5.Z4: the null-*context* arm is gone with the raw parameter; the
-                // null-*layer* arm is what these two still answer.
                 let mut ctx = SWelsDecoderContext::new_boxed();
                 UpdateDecStatNoFreezingInfo(&mut ctx, None);
                 UpdateDecStat(&mut ctx, None, true);
@@ -5282,11 +4519,6 @@ mod tests {
                     WelsDecodeAndConstructSlice(pCtx, None),
                     ERR_NONE
                 );
-                // **T5.Z4: these five asserted the null-*context* guard, not the
-                // null-layer one.** With the context a `&mut` the guard is gone and the
-                // remaining arm is the layer's, which every one of them answers by doing
-                // nothing — the values below are what the tree returns, read off the
-                // run rather than predicted (S33).
                 assert_eq!(WelsInitRefList(pCtx, None, 0), ERR_NONE);
                 assert_eq!(WelsInitBSliceRefList(pCtx, None, 0), ERR_NONE);
                 // `manage_dec_ref`'s `ERR_INFO_INVALID_PTR` is 3 where this module's own
@@ -5309,18 +4541,15 @@ mod tests {
                 let mut cpu_cores = 0;
                 assert_eq!(WelsCPUFeatureDetect(&mut cpu_cores), 0);
                 assert_eq!(cpu_cores, 1);
-                // T5.Z4: this asserted the null-context guard too. `WelsOpenDecoder`
-                // on a real context is the success path `Initialize` takes.
+                // `WelsOpenDecoder` on a real context is the success path
+                // `Initialize` takes.
                 assert_eq!(
                     WelsOpenDecoder(&mut SWelsDecoderContext::new_boxed()),
                     ERR_NONE
                 );
                 WelsEndDecoder(&mut SWelsDecoderContext::new_boxed());
-                // T5.Z4: the null-context arm is gone; a zero-length source on a real
-                // context is the flush path, which succeeds.
-                // T5b.6: the three null pointers were the api's three arguments and
-                // are the three empty values now — an empty source, the caller's own
-                // plane array, and the buffer descriptor it fills.
+                // A zero-length source on a real context is the flush path, which
+                // succeeds.
                 let mut ppDst = [std::ptr::null_mut(); 3];
                 let mut dst_info = SBufferInfo::default();
                 assert_eq!(
@@ -5374,10 +4603,7 @@ mod tests {
                     ),
                     false
                 );
-                // **The arm this asserted is now the type's.** It read
-                // `ERR_INFO_INVALID_PTR` from `DecodeFrameConstruction`'s two null
-                // tests; with `ppDst` and `pDstInfo` borrows there is no null to test,
-                // and the absent layer is what the function refuses on.
+                // The absent layer is what the function refuses on.
                 assert_eq!(
                     DecodeFrameConstruction(
                         &mut SWelsDecoderContext::new_boxed(),
@@ -5406,7 +4632,7 @@ mod tests {
         }
     }
 
-    /// **F55's red-under-revert test.** `ResetCurrentAccessUnit`'s rotation moves the
+    /// `ResetCurrentAccessUnit`'s rotation moves the
     /// access unit's slots; the C rotates a *pointer array*, so `pCtx->pSliceHeader` —
     /// a pointer *into* a node — still names the same slice header afterwards. The port
     /// holds that reference as an index, so the rotation has to carry it: without
@@ -5488,25 +4714,17 @@ mod tests {
         );
     }
 
-    /// **The arm F56 unblocked (T5b.8).** `AllocPicBuffOnNewSeqBegin` opens with
-    /// "the active SPS, or else the first initialized entry of `sSpsBuffer`". While
-    /// `active_sps` was born `Some(SpsRef { id: 0 })` — the `Option<SpsRef>` niche
-    /// reading out of the zeroed shell, not anything the C wrote — the `else` could
-    /// not run on a first access unit, and the scan had no test because it had no
-    /// caller.
+    /// `AllocPicBuffOnNewSeqBegin` opens with
+    /// "the active SPS, or else the first initialized entry of `sSpsBuffer`".
     ///
-    /// **No stream in either gate reaches it even now**, and this test says so
-    /// rather than implying otherwise: `WelsDecodeInitAccessUnitStart` writes
-    /// `active_sps` from the start NAL's slice header before this runs, so on the
-    /// corpus and the conformance set the `if` arm is always the one taken. The
+    /// `WelsDecodeInitAccessUnitStart` writes
+    /// `active_sps` from the start NAL's slice header before this runs, so the `if`
+    /// arm is always the one taken. The
     /// scan is exercised here directly, which is the only way it is exercised.
     ///
-    /// **What it selects, and against what reference.** The scan is the *port's*
+    /// The scan is the *port's*
     /// guard, not a transcription: the C++ reads `pCtx->pSps->iMbWidth` with no null
-    /// test, so this state is a null dereference there. What the port has always
-    /// done — before T5.R6 by taking the entry's address, after it by taking the
-    /// entry's id — is select the first `sSpsBuffer` entry with
-    /// `uiTotalMbCount > 0`. That equivalence is what is asserted.
+    /// test, so this state is a null dereference there.
     #[test]
     fn the_fallback_scan_takes_the_first_initialized_sps() {
         use crate::decoder::decoder_context::SpsRef;
@@ -5541,9 +4759,7 @@ mod tests {
     fn test_parse_slice_header_syntaxs_no_access_unit() {
         {
             {
-                // T5.Z4: the null-*context* arm is gone with the raw parameter; what this
-                // still covers is the arm the body actually takes first — no access unit
-                // in flight, so no NAL to read a header out of.
+                // No access unit in flight, so no NAL to read a header out of.
                 let mut cursor = crate::safe::bits::BsCursor::default();
                 let mut ctx = SWelsDecoderContext::new_boxed();
                 let res = ParseSliceHeaderSyntaxs(&mut ctx, 0, &mut cursor, false);

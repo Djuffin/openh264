@@ -1,12 +1,3 @@
-// **S12.2 deleted this file's `#![allow(clippy::not_unsafe_ptr_arg_deref)]`,
-// because it suppressed nothing.** Session J's header claimed 44 sites — every
-// method of `CWelsH264SVCEncoder` taking one of the application's own pointers —
-// and named "the `void*` of `SetOption`" among them. Both halves are now false:
-// the conversion campaign turned those parameters into references, `SetOption`
-// and `GetOption` left for `api/encoder_options.rs` at this checkpoint, and with
-// the attribute removed `cargo clippy --lib` (clippy 0.1.97) reports the lint
-// **zero** times in the whole crate. Measured, then deleted, on session J's own
-// rule for the four lints it weighed at the crate root.
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -20,11 +11,6 @@
 //! Translated from `codec/encoder/plus/inc/welsEncoderExt.h` and `codec/encoder/plus/src/welsEncoderExt.cpp`.
 
 #![deny(unsafe_code)]
-// **S12.2 sealed this file.** Its last two allows were `SetOption`/`GetOption`,
-// whose `void* pOption` is the C interface's untyped blob and not encoder logic;
-// they moved to `api/encoder_options.rs`, the island the plan's end state gives
-// that surface. Nothing else in 3,200 lines needed `unsafe`, so the file takes
-// `forbid`, which no inner allow can reopen.
 #![forbid(unsafe_code)]
 
 use std::ffi::{c_char, c_void};
@@ -88,11 +74,9 @@ pub const VERSION_NUMBER: &str = "openh264 2.6.0";
 // codec/encoder/core/inc/wels_const.h
 pub const MAX_DEPENDENCY_LAYER: i32 = 4;
 pub const MAX_TEMPORAL_LEVEL: i32 = 4;
-/// `1 << (MAX_TEMPORAL_LEVEL - 1)` — wels_const.h:113. Was 64 here, which let
-/// `InitializeInternal` accept GOP 16/32/64 and then index `g_kuiRefTemporalIdx`
-/// (a `[[u8; 8]; 4]`) with `iTemporalLayerNum` up to 7.
+/// `1 << (MAX_TEMPORAL_LEVEL - 1)` — wels_const.h:113.
 pub const MAX_GOP_SIZE: u32 = 1 << (MAX_TEMPORAL_LEVEL - 1);
-/// `MAX_GOP_SIZE >> 1` — wels_const.h:115, *not* 16.
+/// `MAX_GOP_SIZE >> 1` — wels_const.h:115.
 pub const MAX_SHORT_REF_COUNT: i32 = (MAX_GOP_SIZE >> 1) as i32;
 pub const MIN_FRAME_RATE: f32 = 1.0;
 pub const MAX_FRAME_RATE: f32 = 60.0;
@@ -127,10 +111,7 @@ pub const DEBLOCKING_OFFSET: i32 = 6;
 pub const DEBLOCKING_OFFSET_MINUS: i32 = -6;
 
 // `LAYER_TYPE` -- `codec_app_def.h:200` says NON_VIDEO_CODING_LAYER = 0 and
-// VIDEO_CODING_LAYER = 1. This module previously declared the two as bare `u8`
-// constants with the values **swapped**, so every `SLayerBSInfo::uiLayerType` this
-// encoder wrote was mislabelled: parameter-set layers were tagged VCL and slice
-// layers non-VCL. Re-exported from the canonical enum in `api/codec_api.rs` instead.
+// VIDEO_CODING_LAYER = 1.
 pub const VIDEO_CODING_LAYER: u8 = crate::api::codec_api::LAYER_TYPE::VIDEO_CODING_LAYER as u8;
 pub const NON_VIDEO_CODING_LAYER: u8 =
     crate::api::codec_api::LAYER_TYPE::NON_VIDEO_CODING_LAYER as u8;
@@ -146,7 +127,7 @@ pub const cmInitExpected: i32 = 4;
 pub const cmUnsupportedData: i32 = 5;
 
 // Encoder core return codes — codec/encoder/core/inc/wels_const.h:161-171.
-// These are a bit field in C++; the values here previously ran 0..5 densely.
+// These are a bit field in C++.
 pub const ENC_RETURN_SUCCESS: i32 = 0;
 pub const ENC_RETURN_MEMALLOCERR: i32 = 0x01;
 pub const ENC_RETURN_UNSUPPORTED_PARA: i32 = 0x02;
@@ -158,8 +139,7 @@ pub const ENC_RETURN_VLCOVERFLOWFOUND: i32 = 0x40;
 pub const ENC_RETURN_KNOWN_ISSUE: i32 = 0x80;
 
 // Log levels matching WELS_LOG_LEVEL
-// T8.B6: the six levels are `codec_app_def.h:323`'s and are declared once, beside
-// the `WelsLog` that filters on them.
+// The six levels are `codec_app_def.h:323`'s.
 pub use crate::common::wels_trace::{
     WELS_LOG_DEBUG, WELS_LOG_DEFAULT, WELS_LOG_DETAIL, WELS_LOG_ERROR, WELS_LOG_INFO,
     WELS_LOG_QUIET, WELS_LOG_WARNING,
@@ -210,7 +190,7 @@ pub fn WELS_MIN<T: PartialOrd + Copy>(a: T, b: T) -> T {
 
 /// `(RC_MODES) iValue` — `welsEncoderExt.cpp:957`.
 ///
-/// **Deviation from the C++, and the only one in `SetOption`.** C++ casts the
+/// **Deviation from the C++.** C++ casts the
 /// caller's `int32_t` straight into the enum, so an out-of-range value is stored
 /// verbatim; `WelsRcInitFuncPointers`'s switch has no `default`, so the dispatch
 /// table is then left pointing at the previous mode's callbacks. A Rust enum
@@ -247,15 +227,6 @@ pub fn WelsTime() -> i64 {
     }
 }
 
-// **T8.B6: `WelsTraceCallback`, `welsCodecTrace` and `WelsLog` stood here.**
-//
-// The first was a second declaration of `codec_api.h`'s callback type (the census
-// carried it as `alias WelsTraceCallback x2`); the second had a fifth member,
-// `m_pCodecInstance`, that `welsCodecTrace.h` does not have and nothing read; and
-// the third was a stub — `let _ = (pLogCtx, iLevel, msg);` — so a caller who
-// installed a trace callback through `ENCODER_OPTION_TRACE_CALLBACK` was handed
-// silence. All three are `common::wels_trace`'s now, one copy for both codecs, and
-// `WelsLog` delivers.
 pub use crate::common::wels_trace::{WelsLog, WelsTraceCallback, welsCodecTrace};
 
 #[repr(C)]
@@ -269,9 +240,7 @@ pub struct SLTRConfig {
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SProfileInfo {
     pub iLayer: i32,
-    /// `EProfileIdc uiProfileIdc` — codec_app_def.h:693. Was a bare `i32` here,
-    /// which forced every `ENCODER_OPTION_PROFILE` caller to hand
-    /// `CheckProfileSetting` an untyped value.
+    /// `EProfileIdc uiProfileIdc` — codec_app_def.h:693.
     pub uiProfileIdc: EProfileIdc,
 }
 
@@ -285,15 +254,6 @@ pub struct SLevelInfo {
 
 /// `TagDeliveryStatus` — `codec_app_def.h:708`, the payload of
 /// `ENCODER_OPTION_DELIVERY_STATUS`.
-///
-/// **F81 (T8.C4): the two `int` fields were missing.** This struct had one field
-/// where the header has three, so it was **1 byte against the ABI's 12** — a
-/// truncated declaration of a type a caller passes by pointer. Nothing misread
-/// memory, because the one field the option arm reads is at offset 0 in both; what
-/// was missing was the *rest of the caller's struct*, so any later read of
-/// `iDropFrameType` would have been out of bounds and any by-value copy short. Found
-/// by `api/abi_guard.rs`'s new pin, which is the whole reason to pin a size rather
-/// than an offset.
 ///
 /// Both are marked "reserved" upstream and neither is read by
 /// `welsEncoderExt.cpp:1150-1155`, which takes `bDeliveryFlag` and logs it. They are
@@ -315,14 +275,9 @@ pub struct SDumpLayer {
     pub pFileName: *mut c_char,
 }
 
-
-
 // SWelsSvcCodingParam is declared once, in param_svc.rs (mirroring
-// codec/encoder/core/inc/param_svc.h). The copy that used to live here was a
-// strict subset with truncated FillDefault/ParamBaseTranscode/ParamTranscode
-// and a DetermineTemporalSettings that ignored the temporal-id table.
+// codec/encoder/core/inc/param_svc.h).
 pub use crate::encoder::param_svc::SWelsSvcCodingParam;
-
 
 pub use crate::encoder::encoder_context::SLTRState;
 
@@ -386,20 +341,7 @@ pub use crate::encoder::rc::SWelsSvcRc;
 // in NAL units.
 
 /// `WelsWriteOneSPS` — encoder_ext.cpp:2831.
-// The three `*Rust` sketch entry points that used to live here -- WelsInitEncoderExtRust,
-// WelsUninitEncoderExtRust and WelsEncoderEncodeExtRust -- are deleted. The real
-// `encoder_ext.rs` implementations replace them at both C-ABI call sites.
-//
-// They were not merely redundant: the sketch teardown freed CMemoryAlign allocations
-// with Rust's `Box`/`Vec::from_raw_parts`. Once Initialize switched to the real
-// WelsInitEncoderExt, that mismatch corrupted the heap at Uninitialize (SIGTRAP in
-// libsystem_malloc), which is how it was found.
-
 pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32) -> i32 {
-    // S3.B1: `pOut` is re-borrowed per statement rather than bound once — the
-    // borrows are transient, so the `ParasetStrategy(pCtx)` claim and the
-    // `frame_bs_cur()` read in between conflict with nothing. §4.6: the parameter
-    // set and the strategy's offset-list argument are hoisted out first.
     let iNal = pCtx.out().iNalIndex;
     crate::encoder::nal_encap::WelsLoadNal(
         pCtx.out_mut(),
@@ -408,9 +350,6 @@ pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32
     );
 
     let sSps = pCtx.sps_array()[kiSpsIdx as usize];
-    // **S7.A3**: the id-offset list borrows the strategy and stays live across the
-    // `pOut` write, so the two come out of one split rather than two whole-context
-    // claims.
     {
         let (strategy, pOut) = crate::encoder::paraset_strategy::ctx_strategy_and_out(pCtx);
         let pSpsIdOffsetList = strategy.GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32);
@@ -423,12 +362,6 @@ pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32
     }
     crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
 
-    // The nal/buffer arguments and the frame-bs arguments are all shared reads or
-    // raws off disjoint storage; the two `as_deref()`s and `frame_bs_cur()` are
-    // shared reborrows of the context and coexist.
-    // **S11.17**: destructured — the NAL entry and source bytes are in
-    // `pOut`, the destination is `pFrameBs`'s tail; disjoint fields, both
-    // borrows live, no copy.
     let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
     let kpOut = pOut.as_deref().expect("pOut lives");
     let kiPos = *iPosBsBuffer as usize;
@@ -450,7 +383,6 @@ pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32
 
 /// `WelsWriteOnePPS` — encoder_ext.cpp:2849.
 pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32) -> i32 {
-    // S3.B1: as `WelsWriteOneSPS` — per-statement reborrows, arguments hoisted.
     let iNal = pCtx.out().iNalIndex;
     /* generate picture parameter set */
     crate::encoder::nal_encap::WelsLoadNal(
@@ -459,11 +391,7 @@ pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32
         NRI_PRI_HIGHEST as i32,
     );
 
-    // §4.6, as the SPS above.
-    // The strategy reference is hoisted whole: it lives in the `pFuncList` box,
-    // so the binding holds no borrow of the context.
     let sPps = pCtx.pps_array()[kiPpsIdx as usize];
-    // **S7.A3**: strategy and output block, split off one `&mut` context.
     {
         let (pStrategy, pOut) = crate::encoder::paraset_strategy::ctx_strategy_and_out(pCtx);
         WelsWritePpsSyntax(
@@ -475,9 +403,6 @@ pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32
     }
     crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
 
-    // **S11.17**: destructured — the NAL entry and source bytes are in
-    // `pOut`, the destination is `pFrameBs`'s tail; disjoint fields, both
-    // borrows live, no copy.
     let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
     let kpOut = pOut.as_deref().expect("pOut lives");
     let kiPos = *iPosBsBuffer as usize;
@@ -501,15 +426,9 @@ pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32
 /// PPS the context holds.
 ///
 /// Note the loops are bounded by `iSpsNum`/`iSubsetSpsNum`/`iPpsNum`, so an
-/// unpopulated context writes **nothing** — which is what happens until Phase 4 builds
-/// the parameter-set arrays. The previous version of this function substituted a count
-/// of 1 when those were zero and swallowed each writer's return value; that turned
-/// blocker C into a silent success.
+/// unpopulated context writes **nothing**.
 pub fn WelsWriteParameterSets(
     pCtx: &mut sWelsEncCtx,
-    // S11.47: the out-array pointer is gone — every caller passed the *current
-    // layer's* slot, which is `pOut.iNalLenBase`, and the storage behind it is
-    // `pOut.sNalLen`. The lengths are written by index below.
     pNumNal: &mut i32,
     pTotalLength: &mut i32,
 ) -> i32 {
@@ -521,25 +440,14 @@ pub fn WelsWriteParameterSets(
     let mut iNalLength = 0i32;
     let mut iReturn;
 
-    // T9.H9: the `pCtx.is_null()` disjunct that opened this multi-line guard
-    // is gone — a `&mut sWelsEncCtx` cannot be null. S11.47: so is the
-    // `pNalLen.is_null()` one, which asked whether the caller had a length array
-    // — `pOut`'s own, and the `expect`s below are that question.
     if pCtx.func_list().pParametersetStrategy.is_none() {
         return ENC_RETURN_UNEXPECTED;
     }
-    // Every access below re-acquires. `WelsWriteOneSPS` and `WelsWriteOnePPS` reach
-    // this same object through `pCtx->pFuncList`, so the local this function used to
-    // keep was an alias of theirs — invisible while it was a `*mut`. T4b.2a.
 
     *pTotalLength = 0;
     /* write all SPS */
     iIdx = 0;
     while iIdx < pCtx.iSpsNum {
-        // **S7.A3**: the id is read before the strategy borrow opens. It used to be
-        // read *inside* the call's argument list, which is a shared borrow of the
-        // context while `ParasetStrategy` holds it mutably — legal only because the
-        // strategy came through a raw pointer.
         let uiSpsId = pCtx.sps_array()[iIdx as usize].uiSpsId;
         ParasetStrategy(pCtx).Update(uiSpsId, PARA_SET_TYPE_AVCSPS as i32);
         /* generate sequence parameters set */
@@ -559,7 +467,6 @@ pub fn WelsWriteParameterSets(
     while iIdx < pCtx.iSubsetSpsNum {
         iNal = pCtx.out().iNalIndex;
 
-        // **S7.A3**, as the SPS loop above.
         let uiSpsId = pCtx.subset_array()[iIdx as usize].pSps.uiSpsId;
         ParasetStrategy(pCtx).Update(uiSpsId, PARA_SET_TYPE_SUBSETSPS as i32);
 
@@ -572,12 +479,8 @@ pub fn WelsWriteParameterSets(
             NRI_PRI_HIGHEST as i32,
         );
 
-        // §4.6, as the SPS above; S3.B1 hoists the strategy's offset list too.
         let sSubsetSps = pCtx.subset_array()[iId as usize];
-        // **S7.A3**, as `WelsWriteOneSPS`.
         {
-            // (The S67/H2 audit note this block used to carry is now borrowck's
-            // job: the two `&mut`s below are disjoint fields of one `&mut pOut`.)
             let (strategy, pOut) = crate::encoder::paraset_strategy::ctx_strategy_and_out(pCtx);
             let pSpsIdOffsetList = strategy.GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32);
             WelsWriteSubsetSpsSyntax(
@@ -589,9 +492,6 @@ pub fn WelsWriteParameterSets(
         }
         crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
 
-        // **S11.17**: destructured — the NAL entry and source bytes are in
-        // `pOut`, the destination is `pFrameBs`'s tail; disjoint fields, both
-        // borrows live, no copy.
         let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
         let kpOut = pOut.as_deref().expect("pOut lives");
         let kiPos = *iPosBsBuffer as usize;
@@ -616,8 +516,6 @@ pub fn WelsWriteParameterSets(
     }
 
     {
-        // **S7.A3**, as `WriteSavcParaset_Listing`: strategy and PPS list split off
-        // one `&mut` context.
         let (strategy, pps, pPpsNum) =
             crate::encoder::paraset_strategy::ctx_strategy_and_pps(pCtx);
         strategy.UpdatePpsList(pps, pPpsNum);
@@ -625,7 +523,6 @@ pub fn WelsWriteParameterSets(
 
     iIdx = 0;
     while iIdx < pCtx.iPpsNum {
-        // **S7.A3**, as the two loops above.
         let iPpsId = pCtx.pps_array()[iIdx as usize].iPpsId;
         ParasetStrategy(pCtx).Update(iPpsId, PARA_SET_TYPE_PPS as i32);
 
@@ -644,30 +541,19 @@ pub fn WelsWriteParameterSets(
     ENC_RETURN_SUCCESS
 }
 
-
-
-
 pub fn WelsEncoderEncodeParameterSetsRust(
     pCtx: &mut sWelsEncCtx,
-    // S11.20: by reference — its caller holds `&mut SFrameBSInfo`.
     pBsInfo: &mut SFrameBSInfo,
 ) -> i32 {
-    // T9.H: the `pCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     let pLayerBsInfo = &mut pBsInfo.sLayerInfo[0];
     pLayerBsInfo.pBsBuf = pCtx.frame_bs();
     {
-        // S11.47: the frame's first layer starts at entry 0 of `pOut.sNalLen`;
+        // The frame's first layer starts at entry 0 of `pOut.sNalLen`;
         // the ABI pointer is that position, resliced.
         let pOut = pCtx.out_mut();
         pOut.iNalLenBase = 0;
         pLayerBsInfo.pNalLengthInByte = pOut.nal_len_ptr();
     }
-    // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
-    // where they were; the writer is a position, and resetting it is all `InitBits`
-    // did that still means anything. Its `kpBuf: *const u8` parameter — stored as
-    // `pStartBuf: *mut u8` and written through — is deleted rather than amended
-    // (`phase2_findings.md` F13, third site).
     pCtx.out_mut().sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
     pCtx.iPosBsBuffer = 0;
 
@@ -691,30 +577,11 @@ pub fn WelsEncoderEncodeParameterSetsRust(
 
 /// `ForceCodingIDR` — `encoder_ext.cpp:3046`.
 ///
-/// **T8b.A4: this was a stub.** It checked `pCtx` for null and returned 0, so
-/// `ISVCEncoder::ForceIntraFrame(true)` reported success and *did nothing*. What the
-/// caller got instead of an IDR was whatever the normal GOP logic produced next —
-/// with the default `iIdrInterval` that is often an IDR anyway, which is why the
-/// diffharness, the sweeps and `EncoderOutputTest`'s hashes never saw it: the
-/// reference and the port agree on the frames where nothing was forced. `ltr_test.cpp:39`
-/// is the assertion that does not agree, and it is about the *frame type reported*,
-/// which no byte referee reads.
-///
-/// The measured shape (`tests/encoder_force_idr_ltr_test.rs`, red before this
-/// commit): at IDR interval 1 every frame was IDR and the stub was invisible; at
-/// interval 2 frame 1 came back `videoFrameTypeI` (3) instead of
-/// `videoFrameTypeIDR` (1).
-///
 /// The reference's two arms differ only in *which* dependency layers they reset:
 /// all of them unless simulcast-AVC is on and the caller named a valid one. Both
 /// reset the same five fields and bump the same counter, so the loop below is
 /// written once over the layer range each arm selects.
 pub fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
-    // T9.H: `if pCtx.is_null() { ... }` stood here. A `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one, so the guard is not
-    // merely dead — it is inexpressible. Nothing replaces it.
-    // A7: the null test went with the raw — see `param_opt`; and the two fields
-    // read here are scalars, so the borrow ends before the loop's writes.
     let Some((bSimulcastAVC, iSpatialLayerNum)) = pCtx
         .param_opt()
         .map(|p| (p.bSimulcastAVC, p.iSpatialLayerNum))
@@ -730,8 +597,6 @@ pub fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
         (iLayerId, iLayerId + 1)
     };
     for iDid in first..last {
-        // A7, §4.6 reorder: the layer's block is claimed and released inside the
-        // loop body, because the statistics write below reaches the context again.
         {
             let pParamInternal = &mut pCtx.param_mut().sDependencyLayers[iDid as usize];
             pParamInternal.iCodingIndex = 0;
@@ -742,9 +607,7 @@ pub fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
         }
         // The reference counts the request against layer **0** in the all-layers arm
         // and against `iLayerId` in the other — `sEncoderStatistics[0]` inside the
-        // loop, not `sEncoderStatistics[iDid]`. Kept as it is: it is a statistic, and
-        // a "fix" here would diverge from what a consumer reading
-        // `ENCODER_OPTION_GET_STATISTICS` sees.
+        // loop, not `sEncoderStatistics[iDid]`.
         let stat_idx = if all_layers { 0 } else { iLayerId as usize };
         pCtx.sEncoderStatistics[stat_idx].uiIDRReqNum =
             pCtx.sEncoderStatistics[stat_idx].uiIDRReqNum.wrapping_add(1);
@@ -771,14 +634,6 @@ pub fn WelsEncoderParamAdjust(
     let mut iCacheLineSize: i32 = 16; // on chip cache line size in byte
     let mut uiCpuFeatureFlags: u32 = 0;
 
-    // T9.H: `if pNewParam.is_null() { return 1; }` stood here. A
-    // `&mut SWelsSvcCodingParam` cannot be null and all three callers pass
-    // `&mut sConfig`, so the guard is not merely dead — it is inexpressible.
-    // Nothing replaces it.
-    // **T8.B5 (S42), converted in B3.** Everything below that used to spell `*ppCtx`
-    // reads through this; the re-initialisation branch binds a *second* reference,
-    // because the box this one came from is gone by then — and borrowck now enforces
-    // that separation instead of leaving it to the comment.
     let ctx = match ppCtx.as_deref_mut() {
         Some(pEncContext) => pEncContext,
         None => return 1,
@@ -910,13 +765,6 @@ pub fn WelsEncoderParamAdjust(
             iIndexD += 1;
         }
 
-        // **B3 — §4.6's reorder, and borrowck is what asked for it.** `sLogCtx` was
-        // read at the top of this branch, above the `pOldParam` loop; it is a `&mut`
-        // into the parameter block taken off `ctx`, so a read of `ctx` while it is
-        // live is a borrow conflict. Every read here is of a `Copy` scalar and
-        // nothing between the old position and this one writes any of them, so the
-        // move is behaviour-preserving by construction. Under the old raw root this
-        // conflict was invisible to every gate except Miri.
         let sLogCtx = ctx.sLogCtx;
 
         // for sEncoderStatistics
@@ -927,25 +775,9 @@ pub fn WelsEncoderParamAdjust(
         // for sEncoderStatistics
 
         let mut sExistingParasetList = SExistingParasetList::default();
-        // S11.13: an `Option`, not a conditionally-set raw. The flag below is
-        // the same one the null did, said in the type.
         let mut bHaveExistingParasetList = false;
 
         if iOldSpsPpsIdStrategy != CONSTANT_ID && pNewParam.eSpsPpsIdStrategy != CONSTANT_ID {
-            // S67 blessed (H2): live across it are `sTempEncoderStatistics` (a **copy**, taken
-            // by value at the top of this block), two stack arrays, and a receiver in the
-            // strategy object's own `Box`.
-            // **B3.** `ParasetStrategy` still takes the context as a raw — it is
-            // `ctx_func_list_raw`'s second surviving caller (A6) — so the raw is
-            // derived here, at the one site that needs it, rather than the whole
-            // body being held as one. The S67 blessing above is unchanged and is
-            // what makes the pair lawful: the receiver lives in the strategy's own
-            // `Box`, a different allocation from the context, so the `&mut` handed
-            // to `OutputCurrentStructure` cannot pop it.
-            // **S7.A3**: strategy and the three arrays it copies, split off one
-            // `&mut` context. The S67 blessing above said the same thing in prose —
-            // the receiver lives in the strategy's own `Box`, a different allocation
-            // — and needed a raw pointer to say it; this says it in the type.
             let (strategy, pSpsArray, pSubsetArray, pPpsArray) =
                 crate::encoder::paraset_strategy::ctx_strategy_and_paraset_arrays(ctx);
             strategy.OutputCurrentStructure(
@@ -973,7 +805,7 @@ pub fn WelsEncoderParamAdjust(
             return 1;
         }
         // The context below this line is a different allocation from the one above
-        // it. `encoder_ext.cpp` hides that behind `*ppCtx`; here it is a statement.
+        // it.
         let ctx = match ppCtx.as_deref_mut() {
             Some(pEncContext) => pEncContext,
             None => return 1,
@@ -998,9 +830,6 @@ pub fn WelsEncoderParamAdjust(
             || (iOldSpsPpsIdStrategy == SPS_PPS_LISTING
                 && pNewParam.eSpsPpsIdStrategy == SPS_PPS_LISTING)
         {
-            // `ParasetStrategy`'s raw parameter again — see the note at
-            // `OutputCurrentStructure` above. Nothing of the context is live
-            // alongside the receiver here, so this is the plain form.
             ParasetStrategy(ctx).LoadPreviousStructure(
                 &sTmpPsoVariable,
                 &mut iTmpPpsIdList,
@@ -1120,11 +949,6 @@ pub fn WelsEncoderApplyFrameRate(pParam: &mut SWelsSvcCodingParam) {
 
     // set input frame rate to each layer
     for i in 0..kiNumLayer as usize {
-        // S10.5b: the `addr_of_mut!` cursor is gone. It existed when `pParam` was
-        // raw; the parameter has been `&mut` since the frame-rate family flipped,
-        // so the layer slot is reached by indexing, and the two fields written
-        // below (`sDependencyLayers[i]`, `sSpatialLayers[i]`) are sequential
-        // borrows rather than a live cursor beside a second claim.
         let pLayerParamInternal = &mut pParam.sDependencyLayers[i];
         let fRatio = pLayerParamInternal.fOutputFrameRate / pLayerParamInternal.fInputFrameRate;
         if (kfMaxFrameRate - pLayerParamInternal.fInputFrameRate) > kfEpsn
@@ -1232,12 +1056,8 @@ pub fn WelsEncoderApplyLTR(
 }
 
 /// `ParamValidation` — codec/encoder/core/src/encoder_ext.cpp:264.
-///
-/// Complete port, including the RC-on bitrate loop and QP-range correction.
 pub fn ParamValidation(pLogCtx: SLogContext, pCfg: &mut SWelsSvcCodingParam) -> i32 {
     const fEpsn: f32 = 0.000001;
-    // T9.H: a `&mut SWelsSvcCodingParam` cannot be null, so the `debug_assert`
-    // that stood here is inexpressible. Nothing replaces it.
 
     if !((pCfg.iUsageType as i32) < INPUT_CONTENT_TYPE_ALL as i32) {
         return ENC_RETURN_UNSUPPORTED_PARA;
@@ -1331,7 +1151,7 @@ pub fn ParamValidation(pLogCtx: SLogContext, pCfg: &mut SWelsSvcCodingParam) -> 
             return ENC_RETURN_INVALIDINPUT;
         }
         // `encoder_ext.cpp:370-374` — log-only: the bitrate cannot actually be
-        // held without frame skipping, and the reference says so out loud.
+        // held without frame skipping.
         if (pCfg.iRCMode == RC_QUALITY_MODE
             || pCfg.iRCMode == RC_BITRATE_MODE
             || pCfg.iRCMode == RC_TIMESTAMP_MODE)
@@ -1392,23 +1212,17 @@ pub fn ParamValidation(pLogCtx: SLogContext, pCfg: &mut SWelsSvcCodingParam) -> 
 
 /// `ParamValidationExt` — codec/encoder/core/src/encoder_ext.cpp:403.
 ///
-/// Complete, including the tail call to `ParamValidation`. All four slice modes are
-/// handled: `SM_FIXEDSLCNUM_SLICE` and `SM_RASTER_SLICE` dispatch to
-/// `SliceArgumentValidationFixedSliceMode` / `CheckRowMbMultiSliceSetting` /
-/// `CheckRasterMultiSliceSetting` in `svc_enc_slice_segment.rs` (Phase 3.9); they were
-/// `todo!()` before that landed.
+/// All four slice modes are handled: `SM_FIXEDSLCNUM_SLICE` and `SM_RASTER_SLICE`
+/// dispatch to `SliceArgumentValidationFixedSliceMode` /
+/// `CheckRowMbMultiSliceSetting` / `CheckRasterMultiSliceSetting` in
+/// `svc_enc_slice_segment.rs`.
 ///
-/// The `WelsLog` calls that accompany each rejection in C++ have no counterpart here,
-/// as elsewhere in this port — only the control flow and the returned code are
-/// reproduced.
+/// The `WelsLog` calls that accompany each rejection in C++ have no counterpart
+/// here — only the control flow and the returned code are reproduced.
 pub fn ParamValidationExt(
     pLogCtx: SLogContext,
     pCodingParam: &mut SWelsSvcCodingParam,
 ) -> i32 {
-    // T9.H's convention: a `&mut SWelsSvcCodingParam` cannot be null, so the
-    // `debug_assert` and the `ENC_RETURN_INVALIDINPUT` guard that stood here are
-    // not merely dead — they are inexpressible. Nothing replaces them.
-
     if pCodingParam.iUsageType != CAMERA_VIDEO_REAL_TIME
         && pCodingParam.iUsageType != SCREEN_CONTENT_REAL_TIME
     {
@@ -1449,13 +1263,10 @@ pub fn ParamValidationExt(
 
     // eSpsPpsIdStrategy checkings — `encoder_ext.cpp:466-491`.
     //
-    // **The three traces were missing until T8b.B3.** The adjustments themselves were
-    // ported; the `WelsLog` beside each was not, so an application that asked for a
-    // listing strategy in a configuration that does not support one had it silently
-    // replaced. The reference tells it. The messages are the reference's, argument for
-    // argument — including the third one's, which prints `eSpsPpsIdStrategy` where it
-    // says `bSimulcastAVC` and vice versa (`encoder_ext.cpp:487-489`); reproduced
-    // rather than repaired, because a consumer grepping its logs matches on text.
+    // The messages are the reference's, argument for argument — including the third
+    // one's, which prints `eSpsPpsIdStrategy` where it says `bSimulcastAVC` and vice
+    // versa (`encoder_ext.cpp:487-489`); reproduced rather than repaired, because a
+    // consumer grepping its logs matches on text.
     let sps_listing = SPS_LISTING as i32;
     if pCodingParam.iSpatialLayerNum > 1
         && !pCodingParam.bSimulcastAVC
@@ -1503,29 +1314,6 @@ pub fn ParamValidationExt(
     if pCodingParam.bSimulcastAVC && pCodingParam.bPrefixNalAddingCtrl {
         pCodingParam.bPrefixNalAddingCtrl = false;
     }
-
-    // -----------------------------------------------------------------------
-    // -----------------------------------------------------------------------
-    // **S48's two refusals are gone — both plugins are ported (Phase 8b session C).**
-    //
-    // `METHOD_DENOISE` (T8b.C1, `processing/denoise.rs`) and `METHOD_DOWNSAMPLE`
-    // (T8b.C2, `processing/downsample.rs`) were untranslated, and *both callers
-    // dropped the `RET_NOTSUPPORTED` they returned*, so asking for either
-    // succeeded and produced wrong bytes: un-denoised frames, and lower spatial
-    // layers encoded from whatever the picture pool last held. S48 made them
-    // refuse at the entry point instead — `ENC_RETURN_UNSUPPORTED_PARA` here,
-    // `cmInitParaError` out of `InitializeExt` — which cost 17 gtest rows that had
-    // been "passing" by never checking bytes. All 17 are back.
-    //
-    // Kept for the record, because it is the reason the check that stood here was
-    // written the way it was: the downsample test was `JudgeNeedOfScaling`'s own,
-    // per layer (`wels_preprocess.rs:710`), comparing each layer against
-    // `SUsedPicRect` — the *input rect*. Testing `iPicWidth != <top layer>` instead
-    // looks equivalent and is not, because layer dimensions are rounded up to a
-    // multiple of 16 by `ParamTranscode` while `iPicWidth` is not, so 140x96
-    // legitimately becomes a 144x96 layer. Measured, not reasoned:
-    // `tests/encoder_force_idr_ltr_test.rs`'s 140x96 row failed at `InitializeExt`
-    // against the first version of that check.
 
     for i in 0..pCodingParam.iSpatialLayerNum {
         let idx = i as usize;
@@ -1600,8 +1388,6 @@ pub fn ParamValidationExt(
                 let iMbHeight = (kiPicHeight + 15) >> 4;
                 let iMbNumInFrame = iMbWidth * iMbHeight;
                 let iMaxSliceNum = MAX_SLICES_NUM as i32;
-                // **S6.D1**: the `as *mut SSliceArgument` cast is gone — it existed only
-                // to feed the raw-parameter checkers below, which take `&mut` now.
                 let pSliceArgument = &mut pCodingParam.sSpatialLayers[idx].sSliceArgument;
 
                 if (*pSliceArgument).uiSliceMbNum[0] == 0 {
@@ -1809,20 +1595,10 @@ pub fn WelsEncoderApplyBitVaryRang(
 /// CWelsH264SVCEncoder class implementation
 #[repr(C)]
 pub struct CWelsH264SVCEncoder {
-    /// **T8.B5 — the boundary object owns the encoder context (S42).**
-    ///
-    /// `CWelsH264SVCEncoder::m_pEncContext` is a `sWelsEncCtx*` in the reference
-    /// because C has no other way to say "mine, or nothing". This is the
-    /// allocation root: `WelsInitEncoderExt` fills the slot, `WelsUninitEncoderExt`
-    /// takes it by value, and every `*mut sWelsEncCtx` in the tree below is derived
-    /// from this `Box` for the duration of one call. The tree itself stays raw and
-    /// stays tagged `port-raw(Phase 9)` — what moves here is the *root*, which is
-    /// the only place the question "who frees this" was ever open.
+    /// This is the allocation root: `WelsInitEncoderExt` fills the slot,
+    /// `WelsUninitEncoderExt` takes it by value.
     pub m_pEncContext: Option<Box<sWelsEncCtx>>,
-    /// The trace object, owned outright. It was a `Box::into_raw` in the
-    /// constructor and a `Box::from_raw` in `Drop` with a null test at every use
-    /// between them; the reference's `m_pWelsTrace` is a `new`ed object with the
-    /// same lifetime as the encoder and no null state after construction.
+    /// The trace object, owned outright.
     pub m_pWelsTrace: Box<welsCodecTrace>,
     pub m_iMaxPicWidth: i32,
     pub m_iMaxPicHeight: i32,
@@ -1837,16 +1613,6 @@ impl Default for CWelsH264SVCEncoder {
 }
 
 impl CWelsH264SVCEncoder {
-    // **B3 retired `ctx_ptr`.** It was S42's root read-out — the one expression in
-    // this file that turned the boundary object's ownership back into the
-    // `*mut sWelsEncCtx` the tree below still speaks. Every one of its five callers
-    // now resolves the context off `m_pEncContext` as a reference at the point of
-    // use (`as_deref()` / `as_deref_mut()`), so the whole-context retag it minted on
-    // each call is gone and borrowck referees what only Miri could before. Its
-    // reason for taking the slot rather than `&mut self` — keeping the log-context
-    // pointers, which come off a *sibling* field, out of the borrow — survives it:
-    // the call sites still spell `self.m_pEncContext` rather than `self`.
-
     /// `VERSION_NUMBER` — the string `welsEncoderExt.cpp` puts in its trace lines,
     /// built from the version this crate reports through `WelsGetCodecVersion`.
     fn version_number() -> String {
@@ -1862,8 +1628,6 @@ impl CWelsH264SVCEncoder {
         self.m_pWelsTrace.m_sLogCtx
     }
 
-    /// **T8.B6 — the write-through that replaces the reference's back-pointer.**
-    ///
     /// `WelsInitEncoderExt` copies the log context into `sWelsEncCtx::sLogCtx`, and
     /// in C++ that copy stays current because it holds a route to the trace object
     /// rather than the settings. Here it holds the settings, so a `SetOption` that
@@ -1891,27 +1655,21 @@ impl CWelsH264SVCEncoder {
     pub fn InitEncoder(&mut self) {
         // `welsEncoderExt.cpp:180` — `m_pWelsTrace->SetCodecInstance (this)`, which
         // writes `m_sLogCtx.pCodecInstance`. It is the value `WelsLog` prints in the
-        // message tag and nothing else, so it travels as an address (T8.B6).
+        // message tag and nothing else, so it travels as an address.
         let instance = std::ptr::from_mut(self) as usize;
         self.m_pWelsTrace.SetCodecInstance(instance);
     }
 
-    /// T8.B7: the caller's block, for the duration of the call. The thunk owns the
-    /// null check and the alignment claim; from here in it is a place.
     pub fn GetDefaultParams(&mut self, argv: &mut SEncParamExt) -> i32 {
         SWelsSvcCodingParam::FillDefaultExt(argv);
         cmResultSuccess
     }
 
-    /// T8.B7: `None` is the reference's `NULL argv`, which is a *reported* error
+    /// `None` is the reference's `NULL argv`, which is a *reported* error
     /// (`welsEncoderExt.cpp:192`) and not a caller contract, so it survives the
     /// translation as an `Option` rather than being rejected at the thunk.
     pub fn Initialize(&mut self, argv: Option<&SEncParamBase>) -> i32 {
-        // `welsEncoderExt.cpp`'s `if (m_pWelsTrace == NULL) return cmMallocMemeError`
-        // stood here on both entry points. It guards a `new welsCodecTrace` that can
-        // return null in C++; `Box::new` cannot, and T8.B5 makes the member owned,
-        // so the arm is unreachable rather than untaken and is deleted.
-        // `welsEncoderExt.cpp:188` (T8.B6).
+        // `welsEncoderExt.cpp:188`.
         WelsLog(
             self.log_ctx(),
             WELS_LOG_INFO,
@@ -1940,8 +1698,7 @@ impl CWelsH264SVCEncoder {
 
     /// See [`Self::Initialize`] for why `argv` is an `Option` and not a contract.
     pub fn InitializeExt(&mut self, argv: Option<&SEncParamExt>) -> i32 {
-        // See `Initialize`: the trace's null guard is unreachable since T8.B5.
-        // `welsEncoderExt.cpp:215` (T8.B6).
+        // `welsEncoderExt.cpp:215`.
         WelsLog(
             self.log_ctx(),
             WELS_LOG_INFO,
@@ -1968,10 +1725,6 @@ impl CWelsH264SVCEncoder {
         self.InitializeInternal(&mut sConfig)
     }
 
-    // **S11.13: the parameter is a reference.** Both callers pass `&mut sConfig`,
-    // a local they just built — the raw was the C signature's shape and nothing
-    // more, and the null guard it required is inexpressible on a reference
-    // (T9.H). 43 dereferences retire with it.
     pub fn InitializeInternal(&mut self, pCfg: &mut SWelsSvcCodingParam) -> i32 {
 
         if self.m_bInitialFlag {
@@ -2081,7 +1834,7 @@ impl CWelsH264SVCEncoder {
         if !self.m_bInitialFlag {
             return 0;
         }
-        // `welsEncoderExt.cpp:358` (T8.B6).
+        // `welsEncoderExt.cpp:358`.
         WelsLog(
             self.log_ctx(),
             WELS_LOG_INFO,
@@ -2090,12 +1843,6 @@ impl CWelsH264SVCEncoder {
                 Self::version_number()
             ),
         );
-        // T8.B5: `if !is_null { Uninit(&mut p); p = null }` was three statements
-        // saying what `take()` says in one, and the null store is the type's now.
-        // The obligation this block carries is the tree below the root, not the
-        // root: `WelsUninitEncoderExt` takes the context *by value* since T8.B5, so
-        // there is no aliasing question left at this call — only the free cascade's
-        // own raw walk, which is `port-raw(Phase 9)`.
         crate::encoder::encoder_ext::WelsUninitEncoderExt(self.m_pEncContext.take());
         self.m_bInitialFlag = false;
         0
@@ -2127,21 +1874,6 @@ impl CWelsH264SVCEncoder {
         if pSrcPic.iPicWidth < 16 || pSrcPic.iPicHeight < 16 {
             return cmUnsupportedData;
         }
-        // **T9.H3 — the flip's top boundary.** The encode root takes
-        // `&mut sWelsEncCtx`, so the context reaches it as a borrow of the owning
-        // `Box` rather than through `ctx_ptr`'s `addr_of_mut!`. This is the one
-        // `&mut` the whole encode tree hangs from: everything below re-derives a
-        // raw from it at each use, so there is exactly one `Unique` on the
-        // context's allocation and every other derivation is its child.
-        //
-        // `WelsEncoderEncodeExt`'s own `pCtx.is_null()` guard moved here with it,
-        // and it reproduces the whole old null path, not just the return code: a
-        // null context made that function answer `ENC_RETURN_MEMALLOCERR`, which
-        // fell into the arm below and ran `WelsUninitEncoderExt(take())` before
-        // returning `cmMallocMemeError`. `take()` on an unset slot is `None`, so
-        // this is the same two statements in the same order.
-        // S11.41: the "back to raw for the tree below" downgrade retired with the
-        // tree — the frame root takes both blocks as references now.
         let Some(pCtx) = self.m_pEncContext.as_deref_mut() else {
             crate::encoder::encoder_ext::WelsUninitEncoderExt(None);
             return cmMallocMemeError;
@@ -2175,13 +1907,9 @@ impl CWelsH264SVCEncoder {
         if !self.m_bInitialFlag {
             return cmInitParaError;
         }
-        // **B3.** The callee already takes `&mut sWelsEncCtx`, so the raw round-trip
-        // through `ctx_ptr` bought nothing but the retag: the slot hands out the
-        // reference directly. `None` is where `pCtx.is_null()` returned.
         let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
             return cmInitParaError;
         };
-        // S67 blessed (H2): nothing of the context is live here; `pBsInfo` is the caller's.
         WelsEncoderEncodeParameterSetsRust(ctx, pBsInfo)
     }
 
@@ -2190,12 +1918,6 @@ impl CWelsH264SVCEncoder {
             if !self.m_bInitialFlag {
                 return 1;
             }
-            // T9.H5: `ForceCodingIDR` takes `&mut sWelsEncCtx`, so the context is
-            // borrowed from the owning `Box` rather than flattened through
-            // `ctx_ptr`. The `pCtx.is_null()` half of the old guard becomes the
-            // `else` arm and answers the same `1`; `ctx_ptr` has no side effect,
-            // so deriving it inside the `bIDR` arm rather than above it is the
-            // same program.
             let Some(pCtx) = self.m_pEncContext.as_deref_mut() else {
                 return 1;
             };
@@ -2204,26 +1926,16 @@ impl CWelsH264SVCEncoder {
         0
     }
 
-    /// `CWelsH264SVCEncoder::TraceParamInfo` — **`welsEncoderExt.cpp:505`**, ported
-    /// in T9.X2 (F100).
+    /// `CWelsH264SVCEncoder::TraceParamInfo` — **`welsEncoderExt.cpp:505`**.
     ///
     /// One `WELS_LOG_INFO` line carrying the whole parameter block, then one more
-    /// per spatial layer. Both bodies were empty here since the port began; nothing
-    /// a byte gate can see passes through them, which is exactly why they survived
-    /// eight phases and why `log_referee.sh` exists to check them.
-    ///
-    /// The port's own doc used to cite `:1197` for this function. That line is
-    /// inside `GetOption`; the reference's `TraceParamInfo` is at `:505` and always
-    /// was. See F182 — a citation nobody could act on until somebody tried to.
+    /// per spatial layer.
     ///
     /// **Every unsigned field printed through `%d` is cast to `i32` here, and that
     /// is not a lint — it is the reference's output.** C's `%d` on a `uint32_t`
     /// reinterprets the bits as signed, so upstream prints `uiIntraPeriod= -1`
     /// where the stored value is `0xFFFFFFFF`; Rust's `{}` on a `u32` prints
-    /// `4294967295`. `log_referee.sh` caught exactly that divergence on this
-    /// function's first covered run (F186), which is the argument for the referee
-    /// in one line: the port was *already wrong* the day it was written and no
-    /// other instrument in this repo could have said so.
+    /// `4294967295`.
     ///
     /// **Format fidelity is the whole contract**, so the odd spellings below are
     /// deliberate transcriptions and not typos: `fFrameRate= %.6ff` really does
@@ -2308,13 +2020,10 @@ uiProfileIdc = {};uiLevelIdc = {};iDLayerQp = {}",
         }
     }
 
-    /// `CWelsH264SVCEncoder::LogStatistics` — `welsEncoderExt.cpp:569`, ported in
-    /// T9.X2 (F100).
+    /// `CWelsH264SVCEncoder::LogStatistics` — `welsEncoderExt.cpp:569`.
     ///
     /// One `WELS_LOG_INFO` line per dependency id in `[0, iMaxDid]`, read straight
-    /// out of `sEncoderStatistics[iDid]` — which `UpdateStatistics` (already ported)
-    /// has been filling all along, so this is a reader over live state and not a
-    /// second accounting of it.
+    /// out of `sEncoderStatistics[iDid]`.
     ///
     /// `uLTRSentNum=NA` is a literal in the reference: the field exists
     /// (`uiLTRSentNum`) and the line does not print it.
@@ -2357,12 +2066,6 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
     }
 
     pub fn UpdateStatistics(&mut self, pBsInfo: &SFrameBSInfo, kiCurrentFrameMs: i64) {
-        // **B3.** The context resolves off its own slot per use rather than being
-        // held as `ctx_ptr`'s raw for the whole body. The two scalars below are
-        // `Copy`, so this borrow ends before the loop; the loop re-takes it per
-        // iteration, which is what lets `LogStatistics` — a `&mut self` method —
-        // be called from inside the loop at all. The null guard becomes the
-        // `None` arm and returns where `pCtx.is_null()` did.
         let kiCurrentFrameTs = pBsInfo.uiTimeStamp;
         let (kiTimeDiff, iMaxDid) = {
             let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
@@ -2380,12 +2083,10 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
         for iDid in 0..=iMaxDid {
             let mut eFrameType = EVideoFrameType::videoFrameTypeSkip;
             let mut kiCurrentFrameSize = 0;
-            // **S11.47: the lengths are read out of `pOut.sNalLen` by
-            // index.** Each layer's `pNalLengthInByte` is the previous one's
-            // advanced by the previous one's `iNalCount` — so the running sum
-            // below *is* the pointer chain, in the units the storage is made
-            // of, and this walk visits the layers in the order that chain was
-            // built. `is_null` becomes the range check the slice performs.
+            // Each layer's `pNalLengthInByte` is the previous one's advanced by
+            // the previous one's `iNalCount` — so the running sum below *is* the
+            // pointer chain, in the units the storage is made of, and this walk
+            // visits the layers in the order that chain was built.
             let kpNalLen: &[std::sync::atomic::AtomicI32] = match self.m_pEncContext.as_deref() {
                 Some(ctx) => match ctx.pOut.as_deref() {
                     Some(pOut) => &pOut.sNalLen,
@@ -2416,44 +2117,15 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
             let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
                 return;
             };
-            // **T9.H14: hoisted above `pStatistics` — T9.G6's shape, found by
-            // the session gate's Miri lane.** `ctx_ltr(&mut *pCtx)` stood
-            // here — a `Unique` retag of the **whole context** at
-            // [0x0..0x17f10] that popped the held `pStatistics` (a `&mut`
-            // into `sEncoderStatistics[iDid]`, inside that same allocation),
-            // so the flag is read into a `bool` before that cursor exists.
-            // **T9.H3**: `ctx_ltr` itself is gone with the raw family — this
-            // was its last caller — and the read is the safe Vec projection
-            // of the root's element 0, with the old empty-array null check
-            // becoming `first()`. The hoist stays: the shared borrow here
-            // still must end before `pStatistics` is derived — and since B3 the
-            // compiler is what says so.
             let bLtrMarkingFlag = ctx
                 .pLtr
                 .first()
                 .map_or(false, |pLtr| pLtr.bLTRMarkingFlag);
-            // **F208, and B3 changed who enforces it.** The average QP is read
-            // *here*, before `pStatistics` is derived, for the reason the comment
-            // above gives for `bLtrMarkingFlag`: the reader is a shared reborrow
-            // of the whole context, and a `SharedReadOnly` retag over it
-            // invalidates any `Unique` derived from the same context — including
-            // one into a disjoint field. When this body held `ctx_ptr`'s raw,
-            // borrowck could not see either derivation and Miri was the only
-            // referee; it refused this exact shape at A2's spelling of line 2412.
-            // The root is a `&mut sWelsEncCtx` now, so **borrowck referees it**:
-            // moving this read below `pStatistics` is a compile error rather than
-            // silent UB, and `f208_reader_retag_scan.py` no longer lists the body.
-            // The order is kept as it stands because it is also the correct one.
             let uiAverageFrameQP = if !ctx.rc().is_empty() {
                 ctx.rc_at(iDid as usize).iAverageFrameQp as u32
             } else {
                 26
             };
-            // **F208 again, and at the same three lines.** The reads of the
-            // parameter block move *above* the `&mut`, not beside it: every one
-            // of them is a `&self` accessor, i.e. a `SharedReadOnly` retag over
-            // `[0x0..0x17f10]` that pops `pStatistics`. A7 adds two more such
-            // reads to this body (`fMaxFrameRate` below), and both are scalars.
             let kiActualWidth =
                 ctx.param().sDependencyLayers[iDid as usize].iActualWidth;
             let kiActualHeight =
@@ -2531,9 +2203,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     // `LogStatistics` takes `&mut self` and the reset writes
                     // back into the statistics this scope is holding, so both
                     // move below the borrow. The C++ order — log, *then* reset
-                    // `iTotalEncodedBytes` — is preserved exactly, and the log
-                    // still sees every mutation above it because they are
-                    // written through the context, not to a copy.
+                    // `iTotalEncodedBytes` — is preserved exactly.
                     bLogStatisticsNow = true;
                 }
             }
@@ -2551,9 +2221,6 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
 
 impl Drop for CWelsH264SVCEncoder {
     fn drop(&mut self) {
-        // T8.B5: the trace's `Box::from_raw` stood here. Both members are owned, so
-        // this is the drop glue's work and the body is `Uninitialize`'s alone —
-        // which the reference's destructor also calls (`welsEncoderExt.cpp`).
         // `welsEncoderExt.cpp:136` — the destructor announces itself first, then
         // uninitializes, so the two lines land in the reference's order.
         crate::common::wels_trace::WelsLog(
@@ -2565,29 +2232,4 @@ impl Drop for CWelsH264SVCEncoder {
     }
 }
 
-// **T8.B4 — the second encoder boundary stood here, and it was dead.**
-//
-// `G_ISVCENCODER_VTBL`, nine `ext_*` thunks duplicating `codec_api.rs`'s nine
-// `encoder_*_c` bodies, and `WelsCreateSVCEncoderExt`/`WelsDestroySVCEncoderExt`:
-// a whole parallel C-ABI surface over `CWelsH264SVCEncoder` itself, reached by
-// casting `*mut ISVCEncoder` straight to `*mut CWelsH264SVCEncoder` because the
-// struct opened with a `vptr` slot.
-//
-// Nothing called any of it. The two factories have no caller in the crate, in the
-// tests, in the benches or in the diffharness; they are not among the seven names
-// `codec_api.h` declares (there is no `WelsCreateSVCEncoderExt` upstream); and
-// `vptr` itself was written once by the constructor and **never read** — the live
-// boundary object is `CWelsH264SVCEncoderImpl { base, pVtbl, inner }`, whose
-// vtable pointer is `base`'s and whose slots are the `*_c` thunks.
-//
-// So the encoder had two vtables, two factories and two sets of nine thunk bodies
-// under one interface type, and only one of each was reachable. Deleted rather than
-// carried into step 2's contracts, where writing a `# Safety` window for a slot
-// nothing can call would have documented a fiction. **F78.**
-
-// **S11.5 (step 4): the two version exports moved to `api/version.rs`**, with
-// `G_ST_CODEC_VERSION` beside them. They are `#[unsafe(no_mangle)]` C-ABI
-// entry points, and the plan's end state puts the ABI island — not this file —
-// among the places `unsafe` may live. The identifier string below still reads
-// the constant, now through `crate::api::version`.
 pub use crate::api::version::G_ST_CODEC_VERSION;

@@ -88,12 +88,7 @@ fn test_encoder_set_and_get_options() {
 ///
 /// The expectations are **measured**, not derived: a probe linked against
 /// `libopenh264.a` called the same sequence on the same 160x96 configuration and
-/// printed each return code and the fields it wrote. See
-/// `rust/docs/encoder_port_status.md`, Phase 5.2.
-///
-/// Before this test the port handled 12 of C++'s 32 `SetOption` cases and ended
-/// its match with `_ => {}` followed by `return 0`, so the other 20 were accepted
-/// and silently ignored.
+/// printed each return code and the fields it wrote.
 #[test]
 fn test_set_get_option_matches_cxx_for_every_option() {
     use openh264_rs::encoder::ref_list_mgr_svc::{SLTRMarkingFeedback, SLTRRecoverRequest};
@@ -145,7 +140,7 @@ fn test_set_get_option_matches_cxx_for_every_option() {
             );
         }
 
-        // ---- SetOption: the 20 options the port used to swallow ---------------
+        // ---- SetOption --------------------------------------------------------
         let set = |e: ENCODER_OPTION, p: *mut std::ffi::c_void| ISVCEncoder::SetOption(p_encoder, e, p);
         macro_rules! setopt {
             ($id:ident, $val:expr) => {{
@@ -215,9 +210,9 @@ fn test_set_get_option_matches_cxx_for_every_option() {
                 ENCODER_OPTION_DELIVERY_STATUS,
                 SDeliveryStatus {
                     bDeliveryFlag: true,
-                    // F81 (T8.C4): the header's other two fields, "reserved" upstream
-                    // and read by nothing. They are here because the struct a caller
-                    // passes is 12 bytes, not 1.
+                    // The header's other two fields, "reserved" upstream and read
+                    // by nothing. They are here because the struct a caller passes
+                    // is 12 bytes, not 1.
                     iDropFrameType: 0,
                     iDropFrameSize: 0,
                 }
@@ -264,9 +259,7 @@ fn test_set_get_option_matches_cxx_for_every_option() {
 
         // C++'s `default: return cmInitParaError` has no testable counterpart:
         // `SetOption` takes a typed `ENCODER_OPTION`, so an out-of-range id is
-        // not constructible. The port instead matches all 32 variants with no
-        // wildcard arm, which makes "an option was added and not handled" a
-        // compile error rather than a silent success.
+        // not constructible.
 
         // ---- read back what those options wrote ------------------------------
         let mut ext = SEncParamExt::default();

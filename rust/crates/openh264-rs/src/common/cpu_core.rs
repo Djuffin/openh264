@@ -4,16 +4,8 @@
 
 //! CPU feature flags — `codec/common/inc/cpu_core.h`.
 //!
-//! The single definition for every `WELS_CPU_*` bit. Eight modules used to
-//! declare their own subsets and they did **not** agree: `WELS_CPU_NEON` had
-//! seven distinct values across eight copies, `WELS_CPU_LSX` five across six,
-//! `WELS_CPU_AVX`/`AVX2`/`SSE42`/`SSSE3`/`SSE41`/`FMA`/`MMI`/`MSA` three or four
-//! each. Every one of them is a mask tested against `WelsCPUFeatureDetect`'s
-//! result, which is `0x00000000` on this target, so the wrong values are dead
-//! today — but the first SIMD dispatch that goes live would have selected
-//! kernels at random.
-//!
-//! The values below are `cpu_core.h` verbatim, including the deliberate reuse
+//! The single definition for every `WELS_CPU_*` bit. The values below are
+//! `cpu_core.h` verbatim, including the deliberate reuse
 //! across architectures (`WELS_CPU_NEON` and `WELS_CPU_SSE` are both `0x4`,
 //! `WELS_CPU_MMI` and `WELS_CPU_MMX` are both `0x1`): the header namespaces them
 //! by target, not by value, and so does this module.

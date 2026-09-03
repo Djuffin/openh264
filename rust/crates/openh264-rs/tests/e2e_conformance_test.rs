@@ -9,13 +9,10 @@
 //!   ffmpeg is not on `PATH`.
 //!
 //! A number of tests here are `#[ignore]`d because upstream openh264 itself
-//! does not decode them bit-exactly: running the C++ `h264dec` on the same
-//! bitstream diverges from the reference at the very same byte, with the very
-//! same value, that this port does. They are kept (run them with
-//! `cargo test -- --ignored`) because they document real conformance gaps, but
-//! they cannot go green by making the Rust port a more faithful port -- that is
-//! what the `#[ignore]` reason on each one records. Every such gap involves
-//! B slices, B-slice weighted prediction, or High-profile 8x8 coding.
+//! does not decode them bit-exactly. They are kept (run them with
+//! `cargo test -- --ignored`) because they document real conformance gaps.
+//! Every such gap involves B slices, B-slice weighted prediction, or
+//! High-profile 8x8 coding.
 
 #![allow(non_snake_case, unused_imports)]
 

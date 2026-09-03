@@ -15,28 +15,6 @@
 
 use crate::safe::plane::PlaneCursor;
 
-
-// `TagBitStringAux` / `SBitStringAux` / `PBitStringAux` were declared here — the
-// pointer-triple bitstream cursor of `codec/common/inc/wels_common_defs.h:232`
-// (`pStartBuf`/`pEndBuf`/`pCurBuf` plus `iBits`, `iIndex` and the 32-bit
-// accumulator), and Phase 3's emblem: the type its §1.2 taxonomy named as the
-// thing the phase existed to remove.
-//
-// It has no users left. T3.1b and T3.2 moved the decoder's read side onto
-// `safe::bits::BsCursor`, T3.3 gave the decoder an owned buffer, and T3.4 moved
-// the encoder's write side onto `BsWriter`; what remained by then was a handful of
-// `pub use` re-exports and two `pub type PBitStringAux = *mut SBitStringAux`
-// aliases that nothing named. The inventory that licensed this deletion is in the
-// commit message.
-//
-// Nothing crossed a C ABI with this layout — it appears in no header under
-// `codec/api/wels/`, and `api/abi_guard.rs` guards the public surface separately.
-// The encoder CABAC writer kept its own `m_pBufStart`/`m_pBufCur`/`m_pBufEnd`
-// triple inside `SCabacCtx`, which never used this struct. T3.5 converted it to
-// three `usize` offsets, and with that the bitstream layer holds no pointer
-// cursor of any kind, on either side.
-
-
 /// NAL Unit Type (5 bits) per ITU-T H.264 / AVC and Annex G (SVC).
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -199,9 +177,7 @@ impl Default for SNalUnitHeaderExt {
 
 /// `EWelsSliceType` — `codec/common/inc/wels_common_defs.h:163`.
 ///
-/// Note `P_SLICE` is **0** and `I_SLICE` is **2**. `svc_set_mb_syn_cavlc.rs` used to
-/// shadow these with `I_SLICE: i32 = 0` / `P_SLICE: i32 = 1`, which inverted the
-/// mb-type offset switch at `svc_set_mb_syn_cavlc.cpp:76`.
+/// Note `P_SLICE` is **0** and `I_SLICE` is **2**.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum EWelsSliceType {
@@ -217,13 +193,6 @@ pub enum EWelsSliceType {
 /// `g_kuiGolombUELength` — `codec/common/src/common_tables.cpp:886`, declared at
 /// `codec/common/inc/wels_common_defs.h:79`. The number of bits `ue(v)` needs for
 /// each value 0..255.
-///
-/// This is the canonical copy. Three encoder modules each carried their own, and
-/// **two of them were wrong**: `svc_set_mb_syn_cavlc.rs` had 253 entries and
-/// `vlc_encoder.rs` had 274, both diverging from the real table at index 125. The
-/// short one is the copy the macroblock-layer writer indexes, so any `ue(v)` of 253
-/// or more indexed out of bounds — which is how a 320x192 encode aborted at frame 7
-/// — and every value from 125 up was written with the wrong bit count.
 pub const g_kuiGolombUELength: [u32; 256] = [
     1, 3, 3, 5, 5, 5, 5, 7, 7, 7, 7, 7, 7, 7, 7, 9,
     9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 11,
@@ -265,12 +234,9 @@ pub fn CALC_PSNR(w: i32, h: i32, s: i64) -> f32 {
 /// difference is `i32`, exactly as the C++ (`int64_t` / `int32_t`); the widths are
 /// part of the contract, not an implementation choice.
 ///
-/// **The null-plane sentinel moved to the caller (T9.B3).** The raw form took two
-/// `*const u8` and returned `-1.0` when either was null — the C++'s "no picture
-/// bound". A plane cursor cannot be null, so the caller answers that question
-/// where it already has the handle: `encoder_ext.rs`'s `LayerPlanePsnr` returns
-/// `-1.0` for an unresolved picture or an empty plane, which is the same value at
-/// the same times.
+/// The C++'s `-1.0` "no picture bound" answer is the caller's:
+/// `encoder_ext.rs`'s `LayerPlanePsnr` returns `-1.0` for an unresolved picture or
+/// an empty plane.
 pub fn calc_psnr(
     tar: &PlaneCursor<'_>,
     refc: &PlaneCursor<'_>,
@@ -299,9 +265,6 @@ mod psnr_tests {
 
     /// Expectations **measured** against `libopenh264.a`, not derived: a probe
     /// called `WelsCalcPsnr` on the same inputs and printed these values.
-    /// See `rust/docs/encoder_port_status.md`, Phase 5.3. The golden is the
-    /// reference implementation, so this survives the shim's deletion intact —
-    /// contrast F106.
     #[test]
     fn test_wels_calc_psnr_matches_cxx() {
         const W: i32 = 32;

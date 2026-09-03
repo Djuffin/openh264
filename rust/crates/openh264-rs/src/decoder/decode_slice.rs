@@ -9,12 +9,6 @@
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
-// **Phase 5b, T5b.6: this file's `unsafe` is gone and no exception is enumerated.**
-// `src/decoder/` carries **two** `#[allow(unsafe_code)]` items in total (T8.A8), and
-// both are `picture.rs`'s Miri provenance tests for `data_ptr` — the instruments S28
-// mandates for that accessor, not production code. The two that used to sit beside
-// them, `decoder_context.rs`'s `api_alias`/`api_alias_mut`, retired with the api-owned
-// fields they dereferenced. Nothing here is one of them.
 
 use crate::decoder::decoder_context::{
     PicRefs, SRefPic, SliceCtx, SpsRef, active_fmo, active_pps, active_sps, cur_au, pps_of,
@@ -66,10 +60,7 @@ pub const ERR_INFO_BS_INCOMPLETE: i32 = ERR_INFO_LOGIC_BASE + 9;
 
 pub const dsBitstreamError: i32 = 0x04;
 
-// Log levels — **re-exported, not redeclared** (D-fid-4, 2026-08-26, from F184).
-// This file used to carry its own copy; all five copies were consecutive integers
-// where `codec_app_def.h:323-331` is a bit mask, and the level reaches the caller's
-// own callback. A re-export cannot diverge from the canonical block again.
+// Log levels — **re-exported, not redeclared**.
 pub use crate::common::wels_trace::{WELS_LOG_DEBUG, WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING};
 
 #[inline(always)]
@@ -311,10 +302,8 @@ pub static g_kuiCache30ScanIdx: [u8; 16] = [
     21, 22, 27, 28,
 ];
 
-// `common_tables.cpp:49` declares this `[24]`, not `[16]`: the eight chroma
-// entries were missing from this module's copy. Nothing here indexes past 15, so
-// the truncation was latent -- the same shape as `g_kuiGolombUELength` in Phase
-// 4.6, where a short copy did index out of bounds.
+// `common_tables.cpp:49` declares this `[24]`, not `[16]`. Nothing here indexes
+// past 15.
 pub static g_kuiCache48CountScan4Idx: [u8; 24] = [
     /* Luma */
     9, 10, 17, 18,
@@ -329,8 +318,8 @@ pub static g_kuiCache48CountScan4Idx: [u8; 24] = [
     46, 47,
 ];
 
-// `wels_common_defs.h:64` declares this `[24]`, not `[16]`: the eight chroma
-// entries were missing here. Only indices below 16 are read in this module.
+// `wels_common_defs.h:64` declares this `[24]`, not `[16]`. Only indices below 16
+// are read in this module.
 pub static g_kuiMbCountScan4Idx: [u8; 24] = [
     0, 1, 4, 5,
     2, 3, 6, 7,
@@ -471,12 +460,6 @@ pub static g_kuiMatrixV: [[[u8; 8]; 8]; 6] = [
 ];
 
 /// `TagPartMbInfo` — `codec/decoder/core/inc/wels_common_basis.h:235`.
-///
-/// Single declaration for the decoder. C++ puts this type and its four tables in
-/// one header; the port had transliterated them per consumer, so `mv_pred.rs`,
-/// `parse_mb_syn_cabac.rs` and `parse_mb_syn_cavlc.rs` each carried a copy and
-/// `mv_pred.rs`'s named the first field `iMbType` (unified at T5.A3 — the values
-/// were identical, the field name was not).
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SPartMbInfo {
@@ -550,11 +533,6 @@ pub static g_ksInterBSubMbTypeInfo: [SPartMbInfo; 13] = [
 // Function Pointer Types & Block Structures
 // ============================================================================
 
-/// **T5.P″3: the dispatch carries the slice's two derivations.** The per-macroblock
-/// function used to reach the pool through `pCtx` at each of its levels; the slice
-/// bracket resolves once and hands the result down, so the type that crosses the
-/// loop is where the hoist becomes visible. `PDeblockingFilterMbFunc` gained its
-/// `pDec` the same way at T5.P′1, for the same reason.
 pub type PWelsDecMbFunc = fn(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -563,30 +541,6 @@ pub type PWelsDecMbFunc = fn(
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
 ) -> i32;
-
-// T5.R7: `PFillInfoCacheIntraNxNFunc`, `PMapNxNNeighToSampleFunc` and
-// `PMap16x16NeighToSampleFunc` stood here with **no uses at all** — Phase 4b turned
-// their three dispatch slots into an enum method and two direct calls and left the
-// typedefs behind. S18's straggler class, deleted where it was found.
-
-// T5.X8: two more of that class, and this pair was worse than unused — they were a
-// *second* declaration of `PIdctResAddPredFunc` (`decoder_context.rs` holds the one
-// the tables are typed by) with a different parameter list, so a reader who found
-// this one learned the wrong signature. Neither had a use in this file.
-
-// T4b.3c: `SBlockFunc` was declared **twice** -- here and in `decoder_context.rs`,
-// with the same three members and two different `PWelsNonZeroCountFunc` /
-// `PWelsBlockZeroFunc` typedef pairs. `WelsInitDecoderFuncs` bridged the two
-// definitions with `&mut (*pCtx).sBlockFunc as *mut _ as *mut _`, a double cast
-// doing exactly what T4b.3b's pair of reinterpreting calls did: laundering one
-// type into an identical one that a second declaration had made incompatible.
-//
-// Both are deleted. Of the three slots, **one was ever read** -- in this port and
-// in the C++: `pWelsSetNonZeroCountFunc`, at `WelsMbInterConstruction` below.
-// `pWelsBlockZero16x16Func` and `pWelsBlockZero8x8Func` are installed by
-// `decode_slice.cpp:2992-2993` and called from nowhere in the C++ tree either, so
-// they and their two `_c` kernels went with the table rather than being kept as
-// dead ports of dead code.
 
 // ============================================================================
 // Core Decoder Structures
@@ -691,12 +645,6 @@ pub fn ComputeColocatedTemporalScaling(
 }
 
 pub fn WelsCalcDeqCoeffScalingList(pCtx: &mut SWelsDecoderContext) -> i32 {
-    // **The lists travel as values, not as borrows** (T5.Z1). The loop below writes
-    // `pDequant_coeff_buffer*` through the context on every iteration, so a borrow of
-    // the parameter sets held across it is the shape this face removes — and the two
-    // lists are `[[i8; 16]; 6]` and `[[i8; 64]; 6]`, small enough that copying them
-    // out is cheaper than re-resolving the active set 40 thousand times, which is
-    // what the per-use spelling did.
     let ps = &(*pCtx).sSpsPpsCtx;
     let (Some(sps), Some(pps)) = (
         active_sps(ps, (*pCtx).active_sps),
@@ -718,10 +666,6 @@ pub fn WelsCalcDeqCoeffScalingList(pCtx: &mut SWelsDecoderContext) -> i32 {
 
         if !(*pCtx).bDequantCoeff4x4Init || (*pCtx).iDequantCoeffPpsid != iPpsId {
             for i in 0..6 {
-                // T5.Y1: the two alias stores that stood here (`pDequant_coeff4x4[i]
-                // = pDequant_coeff_buffer4x4[i]`'s first row, and the 8x8 twin) are
-                // gone with the fields — every reader indexes the buffer by the same
-                // `i` the alias was derived from.
                 for q in 0..51 {
                     for x in 0..16 {
                         let scale4 = kList4x4[i][x] as u32;
@@ -745,55 +689,15 @@ pub fn WelsCalcDeqCoeffScalingList(pCtx: &mut SWelsDecoderContext) -> i32 {
 }
 
 // ============================================================================
-// Inverse Transform & Dequantization Functions
-// ============================================================================
-
-// **T5.AC6: `WelsLumaDcDequantIdct` and `WelsChromaDcIdct` stood here and are
-// deleted, not converted.** They were this file's copies of the two DC transforms
-// and they had **zero callers anywhere in the crate** — `parse_mb_syn_cavlc.rs` and
-// `parse_mb_syn_cabac.rs` each call their own. Worse, this pair had *drifted*: its
-// luma form clipped the QP and read `g_kuiDequantCoeff` unconditionally, with no
-// scaling-list arm at all, so it was the pre-`bUseScalingList` version preserved by
-// having no user. S18's shape — a raw duplicate beside the live one — found by the
-// signature conversion that would otherwise have had to convert it too.
-//
-// The surviving pair is still two copies of one C++ function (`decode_slice.cpp`'s
-// `WelsLumaDcDequantIdct` and `WelsChromaDcIdct`), which is **F22's class and not
-// this phase's**: they are allowlisted in the duplicate census and their C++ home
-// is a decoder file both parsers include. Deduplicating them is a Phase 8 item with
-// the rest of the census's 59.
-
-// ============================================================================
 // Neighbor Availability Mapping
 // ============================================================================
 
 /// `bConstainedIntraPredFlag`, as a type. (The misspelling is upstream's, in both
-/// the PPS field and the `Constrain0`/`Constrain1` function names; P14 keeps it.)
+/// the PPS field and the `Constrain0`/`Constrain1` function names.)
 ///
-/// **This replaces three `Option<fn>` members of `SWelsDecoderContext`** —
-/// `pFillInfoCacheIntraNxNFunc`, `pMapNxNNeighToSampleFunc`,
-/// `pMap16x16NeighToSampleFunc` — and their three typedefs. They were never three
-/// independent choices: `WelsDecodeSlice` and `WelsDecodeAndConstructSlice` each set
-/// all three together, from one `if`, on one flag read out of the slice's PPS. The
-/// same *configuration, not dispatch* shape as T4b.1's entropy slots.
-///
-/// **Why this seam is where the crate's oldest ratchet metric finally moves.** The
-/// three typedefs declared
-/// `pNeighAvail: *mut c_void` and `extern "C"`; the functions actually stored take
-/// `PWelsNeighAvail` / a layer pointer and two of them are not `extern "C"` at all. So
-/// *every* install and *every* fallback had to launder the mismatch through
-/// `mem::transmute` — **19 of the crate's 21 such calls, in this one family**.
-/// (T4b.3b took the remaining two, at `decoder_core.rs`'s expand wrapper. The
-/// crate's count is now **zero calls**; the metric's residue is prose only.)
-/// Naming the configuration lets the methods take the real types, and the casts at
-/// the call sites (`as *mut _ as *mut c_void`) go with them. Nothing is reinterpreted
-/// any more; the types simply match.
-///
-/// `Constrain0 = 0` is load-bearing twice over: `SWelsDecoderContext` is built from a
+/// `Constrain0 = 0` is load-bearing: `SWelsDecoderContext` is built from a
 /// `MaybeUninit::zeroed()` shell (`decoder_context.rs`), so the zero pattern must be a
-/// declared variant (S21) — and `Constrain0` is also exactly what every former
-/// `unwrap_or_else` fallback named, so a zeroed context dispatches where an
-/// uninstalled slot used to.
+/// declared variant.
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum IntraPredConstraint {
@@ -976,37 +880,9 @@ pub extern "C" fn WelsMap16x16NeighToSampleConstrain1(
 }
 
 // ============================================================================
-// Block Zeroing & NonZero Count Functions -- deleted at T4b.3c
-// ============================================================================
-//
-// `WelsBlockInit`, `WelsBlockZero16x16_c` and `WelsBlockZero8x8_c`
-// (`decode_slice.cpp:3021-3036`) were installed into `SBlockFunc`'s two zeroing
-// slots and **called from nowhere**, in this port and in the C++ tree alike; they
-// went with the table. `WelsBlockFuncInit` (`decode_slice.cpp:2990`) went with
-// them: its `iCpu` argument selected between `_c`, `_neon`, `_AArch64_neon` and
-// `_sse2` in the C++ and selected nothing here.
-//
-// This module's third `WelsNonZeroCount_c` went too. The C++ has **one**, in
-// `common/src/deblocking_common.cpp:248`; the port had three, and this one was the
-// copy that never got Phase 2's conversion -- a hand-written `if *p != 0 { *p = 1 }`
-// loop where the other two are shims over the safe `nonzero_count` kernel
-// (`(*v != 0) as i8`, the C++'s `!!`). The single reader below now calls
-// `common/deblocking_common.rs`'s shim, which is a plain `unsafe fn`: with no
-// `Option<fn>` slot to fill, the `extern "C"` this copy carried had nothing left to
-// satisfy. `encoder/deblocking.rs` keeps its own `extern "C"` copy for now because
-// `pfSetNZCZero` is still a slot -- that is the last member of this family.
-
-// ============================================================================
 // Macroblock Reconstruction Functions
 // ============================================================================
 
-/// **T5.X8: the residual add takes the picture, not three plane pointers.**
-///
-/// The three `*mut u8` and two strides were the caller's `data_ptr(i) + (mb << 4)`
-/// arithmetic, handed on so the IDCT shims could rebuild a slice out of them. The
-/// picture owns its planes, so the cursor is `plane_mut(i).cursor_mut(x, y)` and
-/// the block offsets are sample coordinates rather than byte offsets that had to be
-/// recomputed whenever a stride changed.
 pub fn WelsMbInterSampleConstruction(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -1080,44 +956,27 @@ pub fn WelsMbInterSampleConstruction(
     ERR_NONE
 }
 
-// Phase 4a: `BaseMC` calls these directly instead of through `SMcFunc` slots.
-// T5b.2: and the safe kernels directly rather than through the raw shims, because
-// the callers now hold pictures rather than plane pointers.
 use crate::common::mc::{mc_chroma, mc_chroma_same, mc_luma, mc_luma_same};
 
 // ============================================================================
-// Inter prediction — `rec_mb.cpp`, and what became of `sMCRefMember`
+// Inter prediction — `rec_mb.cpp`
 // ============================================================================
 //
-// **T5b.2 (face 0 + face 2).** The C++'s MC descriptor is six raw plane cursors,
-// two source strides, two destination strides and the picture's dimensions; the port
-// built one per macroblock with `mem::zeroed()` and walked its `pDst*` fields with
-// pointer arithmetic. Every one of those fields is something a picture already
-// carries or a coordinate the walk already knows, so the descriptor is gone and what
-// replaces it is [`McDst`] (where the block lands) plus [`McSrc`] (where the samples
-// come from). The two `mem::zeroed()` sites die with it — S21's question, "what does
-// the all-zero pattern mean now", had no answer here: a zeroed descriptor is six
-// null cursors that every path overwrites before use.
-//
-// **What made this face a design question rather than a spelling pass is F42.** A
-// malformed stream can put the picture being decoded into its own reference list, so
-// `pSrcY` and `pDstY` can address one allocation — which is why `pDec` was a raw
-// pointer in twenty-three signatures, and why converting them needed a *type* for
-// the answer. [`PicRefs::classify`] is that type: `RefSlot::Other` is a picture
+// A malformed stream can put the picture being decoded into its own reference list,
+// so `pSrcY` and `pDstY` can address one allocation. `RefSlot::Other` is a picture
 // disjoint from the destination and runs the two-cursor kernels; `RefSlot::Current`
 // resolves to the destination itself and runs `mc_luma_same`/`mc_chroma_same`
-// (`common/mc.rs`, T5b.1), which read and write through the one `&mut`.
+// (`common/mc.rs`), which read and write through the one `&mut`.
 
 /// **Where a partition's prediction lands**: the block's sample coordinates in the
 /// destination picture's luma and chroma planes.
 ///
-/// `sMCRefMember`'s `pDstY`/`pDstU`/`pDstV`, as the coordinates the pointers were
-/// carrying. **Luma and chroma are tracked separately rather than derived from one
+/// **Luma and chroma are tracked separately rather than derived from one
 /// another**, and `rec_mb.cpp:1014` is the reason: it applies the 8x8 sub-partition
 /// offset *twice* to the LIST_1 luma destination of a bi-predicted 4x4 block and
 /// once to its chroma. The C's two walks were independent, so the divergence was
 /// expressible; deriving `chroma = luma >> 1` would silently repair it, which is a
-/// behaviour change on a B-slice path (S6).
+/// behaviour change on a B-slice path.
 #[derive(Clone, Copy)]
 struct McDst {
     luma: (isize, isize),
@@ -1161,7 +1020,7 @@ enum McSrc<'a> {
     /// A picture disjoint from the destination: the ordinary case, and the one the
     /// two-cursor kernels are written for.
     Other(&'a SPicture),
-    /// The destination picture is its own reference (**F42**): one allocation, and
+    /// The destination picture is its own reference: one allocation, and
     /// `mc_luma_same`/`mc_chroma_same` are what run.
     Dst,
 }
@@ -1199,7 +1058,7 @@ fn ref_for_current<'a>(
     }
     match pRefs.classify(ref_id(sRefPic, listIdx, iRefIdx as usize)) {
         RefSlot::Empty => Err(ref_pic_lost()),
-        // F42. The C resolved this to `pCtx->pDec` and read on; so does the `Dst`
+        // The C resolved this to `pCtx->pDec` and read on; so does the `Dst`
         // arm, and the destination's own planes are the ones `has_planes` would have
         // tested — the caller holds them mutably, so the test moves there.
         RefSlot::Current => Ok(McSrc::Dst),
@@ -1210,9 +1069,6 @@ fn ref_for_current<'a>(
 
 /// [`ref_for_current`] for a destination that is **not** the bracket's picture: the
 /// B-slice scratch (`pCtx->pTempDec`), where the LIST_1 hypothesis lands.
-///
-/// F42's arm is an ordinary disjoint reference here — the destination is a different
-/// allocation — so `cur` is passed in and the answer never needs the `Dst` form.
 #[inline]
 fn ref_for_other<'s>(
     pRefs: PicRefs<'s>,
@@ -1233,8 +1089,7 @@ fn ref_for_other<'s>(
 /// Motion-compensate one block from the reference into the destination.
 /// Matches `BaseMC` in `rec_mb.cpp` (single-thread path).
 ///
-/// `geom` is `sMCRefMember`'s `(iPicWidth, iPicHeight)` — the MV clamp's bounds, and
-/// the descriptor's only two fields that were data rather than cursors.
+/// `geom` is `sMCRefMember`'s `(iPicWidth, iPicHeight)` — the MV clamp's bounds.
 fn BaseMC(
     geom: (i32, i32),
     src: &McSrc<'_>,
@@ -1272,12 +1127,6 @@ fn BaseMC(
     let (bwc, bhc) = (bw >> 1, bh >> 1);
     let (mvx, mvy) = (iFullMVx as i16, iFullMVy as i16);
 
-    // Phase 4a's direct-dispatch note stands and is recorded at the safe kernels:
-    // `pMCFunc` held `McLuma_c`/`McChroma_c` and nothing else, and the block
-    // dimensions arrive here as parameters, which is why de-virtualization recovered
-    // nothing on this side. What T5b.2 changes is that the shims — `shim_wh`'s
-    // `from_raw_parts` pair per call, three per partition — are gone with the plane
-    // pointers: the kernels are handed cursors over the pictures themselves.
     match *src {
         McSrc::Other(pic) => {
             mc_luma(
@@ -1299,8 +1148,8 @@ fn BaseMC(
                 );
             }
         }
-        // F42's arm: the source anchor is expressed *relative to* the destination's,
-        // because one plane has one stride and there is only one borrow to give.
+        // The source anchor is expressed *relative to* the destination's, because
+        // one plane has one stride and there is only one borrow to give.
         McSrc::Dst => {
             mc_luma_same(
                 &mut dst.plane_mut(0).cursor_mut(at.luma.0, at.luma.1),
@@ -1336,9 +1185,6 @@ fn WeightPrediction(
     iBlkWidth: i32,
     iBlkHeight: i32,
 ) {
-    // T5.X2 — take what you reach. The layer was the parameter and one nullable
-    // field of it was the reach; the null test that stood on the field stands on the
-    // `Option` here, with the same two arms.
     let Some(pwt) = pwt.filter(|_| iRefIdx >= 0) else {
         return;
     };
@@ -1382,8 +1228,7 @@ fn WeightPrediction(
 
 /// Matches `BiWeightPrediction` in `rec_mb.cpp`.
 ///
-/// `tmp` is `pCtx->pTempDec` — a different picture from `dst` at every call site, so
-/// the two halves of the blend are two borrows the compiler separates for free.
+/// `tmp` is `pCtx->pTempDec` — a different picture from `dst` at every call site.
 fn BiWeightPrediction(
     pwt: Option<&SPredWeightTable>,
     dst: &mut SPicture,
@@ -1396,7 +1241,6 @@ fn BiWeightPrediction(
     iBlkWidth: i32,
     iBlkHeight: i32,
 ) {
-    // T5.X2, as `WeightPrediction` above.
     let Some(pwt) = pwt else {
         return;
     };
@@ -1459,8 +1303,6 @@ fn BiWeightPrediction(
 }
 
 /// Matches `BiPrediction` in `rec_mb.cpp`.
-// T5.X2: the layer parameter was `_pCurDqLayer` — unused since the function was
-// written — and it is deleted rather than converted.
 fn BiPrediction(
     dst: &mut SPicture,
     at: McDst,
@@ -1550,7 +1392,7 @@ pub fn GetInterPred(
             mc!(mb.blk(8, 0), ref_mb[2], iMBOffsetX + 8, iMBOffsetY, 8, 16, mv_mb[2]);
         }
         MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
-            // T5.I1: one window borrow at the loop head, where the C++ hoists
+            // One window borrow at the loop head, where the C++ hoists
             // `pCurDqLayer->pSubMbType[iMBXY]` into a `uint32_t (*)[4]`.
             let pSubMbType = *pCurDqLayer.grid.sub_mb_type.get(iMBXY);
             for i in 0..4usize {
@@ -1606,9 +1448,7 @@ pub fn GetInterPred(
 ///
 /// `pTempDec` receives the LIST_1 prediction so the two hypotheses can be blended in
 /// place by [`BiPrediction`] / [`BiWeightPrediction`]. It is `pCtx->pTempDec`, a
-/// different picture from `pDec` — which is why F42's arm never reaches the LIST_1
-/// half: for that half the current picture is an ordinary disjoint reference
-/// ([`ref_for_other`]).
+/// different picture from `pDec`.
 pub fn GetInterBPred(
     sRefPic: &SRefPic,
     pRefs: PicRefs<'_>,
@@ -1652,8 +1492,7 @@ pub fn GetInterBPred(
             BaseMC(geom, &src, pDec, $at, $x, $y, $w, $h, $mvs);
         }};
     }
-    /// LIST_1's hypothesis, into `pTempDec`. `pDec` is only read here, so the
-    /// shared reborrow coexists with the scratch picture's `&mut`.
+    /// LIST_1's hypothesis, into `pTempDec`.
     macro_rules! mc1 {
         ($at:expr, $list:expr, $iref:expr, $x:expr, $y:expr, $w:expr, $h:expr, $mvs:expr) => {{
             let src = match ref_for_other(pRefs, sRefPic, $iref, $list, &*pDec) {
@@ -1704,14 +1543,13 @@ pub fn GetInterBPred(
             }
         }
     } else if IS_INTER_16x8(iMBType) {
-        // **The two destination walks accumulate, and that is not a transcription
-        // choice.** `rec_mb.cpp:749` advances `pMCRefMem.pDst*` *inside* the list
-        // loop under `if (i)`, and `pMCRefMem` is function-scoped — so a second-half
-        // partition predicted from **both** lists advances it **twice**, and the
-        // LIST_1 hypothesis of that partition lands 8 rows below where a single
-        // advance would put it. Reproduced verbatim (S6); a fixed per-partition
-        // coordinate diverges on exactly the bi-predicted 16x8 macroblock, which is
-        // what eight B-slice conformance assets caught when this face first landed.
+        // **The two destination walks accumulate.** `rec_mb.cpp:749` advances
+        // `pMCRefMem.pDst*` *inside* the list loop under `if (i)`, and `pMCRefMem` is
+        // function-scoped — so a second-half partition predicted from **both** lists
+        // advances it **twice**, and the LIST_1 hypothesis of that partition lands 8
+        // rows below where a single advance would put it. Reproduced verbatim; a
+        // fixed per-partition coordinate diverges on exactly the bi-predicted 16x8
+        // macroblock.
         let mut at = mb;
         let mut tat = mb;
         for i in 0..2usize {
@@ -1783,7 +1621,6 @@ pub fn GetInterBPred(
             }
         }
     } else if IS_Inter_8x8(iMBType) {
-        // T5.I1: hoisted as in `GetInterPred`.
         let pSubMbType = *pCurDqLayer.grid.sub_mb_type.get(iMBXY);
         for i in 0..4usize {
             let iSubMBType = pSubMbType[i];
@@ -1924,11 +1761,7 @@ pub fn GetInterBPred(
 
 /// `pCtx->pTempDec`, lazily allocated on the first B macroblock — the `else` branch
 /// shared by `WelsMbInterConstruction` / `WelsMbInterPrediction` in
-/// `decode_slice.cpp`, with the three plane pointers it used to hand back replaced by
-/// the picture itself (T5b.2).
-///
-/// **The borrow is on the field** (S29), so the caller's other reads of the view are
-/// disjoint field paths and the compiler separates them.
+/// `decode_slice.cpp`.
 #[inline]
 fn temp_pred_pic<'v>(pCtx: &'v mut SliceCtx<'_>) -> Option<&'v mut SPicture> {
     if pCtx.pTempDec.is_none() {
@@ -1936,12 +1769,6 @@ fn temp_pred_pic<'v>(pCtx: &'v mut SliceCtx<'_>) -> Option<&'v mut SPicture> {
             Some(sps) => (sps.iMbWidth, sps.iMbHeight),
             None => return None,
         };
-        // T5.P″1: `alloc_picture` hands back the owner, and the field keeps it. The
-        // lazy arm's two null tests are the same two states — "not allocated yet" and
-        // "the allocation failed" — with `Option` spelling them.
-        // T8.A8: the `pMemAlign` guard `alloc_picture` used to carry — `if
-        // (pCtx->pMemAlign)` around the C's `AllocPicture` — went with the allocator;
-        // the picture's planes are `Vec`s and `None` is still the failure.
         *pCtx.pTempDec = crate::decoder::pic_queue::alloc_picture(
             pCtx.bParseOnly,
             (iMbWidth << 4) as i32,
@@ -1964,13 +1791,9 @@ pub fn WelsMbInterConstruction(
 
     WelsMbInterSampleConstruction(pCtx, pCurDqLayer, Some(pDec));
 
-    // `decode_slice.cpp:240`, the only reader of the former `sBlockFunc` table.
-    // The C++ guards this with `GetThreadCount (pCtx) <= 1`; the port's
-    // `GetThreadCount` is hard-coded 0 (decoder threading was never ported, T5c),
-    // so the guard is always true and is not transcribed.
-    //
-    // T5b.2: the safe kernel directly. The `WelsNonZeroCount_c` shim it went through
-    // existed to turn `*mut i8` into `&mut [i8; 24]`, and the grid already has one.
+    // `decode_slice.cpp:240`. The C++ guards this with `GetThreadCount (pCtx) <= 1`;
+    // the port's `GetThreadCount` is hard-coded 0, so the guard is always true and is
+    // not transcribed.
     crate::common::deblocking_common::nonzero_count(
         pCurDqLayer.grid.nzc.get_mut(pCurDqLayer.iMbXyIndex as usize),
     );
@@ -1991,11 +1814,6 @@ pub fn WelsMbInterPrediction(
 
 /// The prediction step both of the two above open with, and the one place the
 /// P-slice and B-slice paths are told apart.
-///
-/// **The view is read field by field rather than through its methods**, and that is
-/// what lets the B path hold `pTempDec` mutably beside `sRefPic`: `(*pCtx).pTempDec`
-/// and `(*pCtx).sRefPic` are disjoint places, where `pCtx.ref_id(..)` would borrow
-/// the whole view.
 #[inline]
 fn inter_pred(
     pCtx: &mut SliceCtx<'_>,
@@ -2003,7 +1821,6 @@ fn inter_pred(
     pRefs: PicRefs<'_>,
     pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
-    // A shared reference field copies out, so this borrow of the view ends here.
     let sRefPic: &SRefPic = pCtx.sRefPic;
     if pCtx.eSliceType == EWelsSliceType::P_SLICE {
         return GetInterPred(sRefPic, pRefs, pDec, pCurDqLayer);
@@ -2041,32 +1858,8 @@ pub fn WelsFillRecNeededMbInfo(
     (*pCurDqLayer).iLumaStride = iLumaStride;
     (*pCurDqLayer).iChromaStride = iChromaStride;
 
-    // T5.X8: `pPred[0..3]` was stamped here — the macroblock's top-left sample in
-    // each plane, cached as three raw pointers under `bOutput && !data_ptr(0)
-    // .is_null()`. It was a cache of `(iMbX, iMbY)`, which this layer already
-    // carries, resolved against a picture the reconstruction path already has; the
-    // field is deleted and its readers derive `plane_mut(i).cursor_mut(x, y)`. The
-    // guard went with it: a null `data_ptr(0)` is an empty plane, and every read of
-    // it now goes through `PaddedPlane`, which answers by bounds rather than by a
-    // stale pointer.
     let _ = bOutput;
 }
-
-// **T5.X8: the intra reconstruction bracket.**
-//
-// This family reached the picture through `DqLayerState::pPred[3]` — three raw plane
-// pointers stamped once per macroblock by `WelsFillRecNeededMbInfo` — and then
-// offset them by `iDecBlockOffsetArray`, a 24-entry table of **byte** offsets that
-// `WelsDecodeSlice` recomputed every time a stride changed. Both are cache, not
-// carrier: the picture owns its planes, and a 4x4 block's position inside a
-// macroblock is a pair of sample coordinates that no stride enters. So the family
-// takes `pDec` and derives `plane_mut(i).cursor_mut(x, y)` at the block, and the
-// dispatch tables hold the safe kernels themselves.
-//
-// The layer is read for small per-macroblock values (the modes, the availability
-// mask, the non-zero counts) which are **copied**, and for the coefficient block,
-// which is borrowed shared — the picture is a different object, so writing it
-// through `pDec` while holding that borrow is not an aliasing question at all.
 
 /// Sample coordinates of 4x4 block `i` inside its macroblock — `iDecBlockOffsetArray`
 /// with the stride factored out (`i4_luma_ichroma_addr_table`'s `(x, y)` before it
@@ -2324,11 +2117,6 @@ pub fn WelsTargetMbConstruction(
         WelsMbIntraPredictionConstruction(pCtx, Some(pDec), pCurDqLayer, true);
         ERR_NONE
     } else if IS_INTER(mb_type) {
-        // T5.H12: a `pCbp.is_null()` guard returning `ERR_INFO_MB_RECON_FAIL` sat
-        // here. `WelsTargetMbConstruction` (`decode_slice.cpp:334-355`) has no such
-        // test — the port invented it, and it could only fire if the array's
-        // allocation had failed, which the C++ answers by dereferencing null. The
-        // grid makes it unrepresentable: `cbp` is a `Vec` sized with the layer.
         let cbp = *pCurDqLayer.grid.cbp.get(iMbXy);
         if cbp == 0 {
             if !CheckRefPics(pCtx) {
@@ -2351,17 +2139,10 @@ pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref.is_none() {
             return ERR_NONE;
         }
-        // **The split** (T5.Y2), the third of the three: this bracket reconstructs
-        // rather than parses, and reaches the context for exactly what the view carries.
         let (pDec, pRefs, mut view, _nal) = slice_split(pCtx, None);
-        // T5b.2: the picture is a borrow, so the one place its absence is tested is
-        // here rather than at every level below. `DecodeCurrentAccessUnit` prefetches
-        // it and returns `ERR_INFO_REF_COUNT_OVERFLOW` when the pool cannot supply
-        // one, so this arm is unreachable from the decode path — same condition, same
-        // code, stated once.
         let mut pDec = pDec;
         // The view's scope is the macroblock loop; the deblocking tail below it still
-        // takes the context, and converts with the rest of `deblocking.rs`.
+        // takes the context.
         let (iCurLayerWidth, iCurLayerHeight) = {
         let pCtx = &mut view;
         let iTotalMbTargetLayer = pCtx
@@ -2466,11 +2247,8 @@ pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc == 1 || (*dq).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice <= 0 {
             return ERR_NONE;
         } else {
-            // **The deblocking bracket** (T5.AA2): its own split, taken here rather than
-            // inherited, because the reconstruction bracket above closed with the view.
-            // The picture is a borrow and the view is what deblocking reads of the
-            // context; `None` is no pool or no current picture, and the family below
-            // has nothing to filter then.
+            // `None` is no pool or no current picture, and the family below has
+            // nothing to filter then.
             let (pDec, view) = crate::decoder::decoder_context::pic_split(pCtx);
             if let Some(pDec) = pDec {
                 crate::decoder::deblocking::WelsDeblockingFilterSlice(
@@ -2493,17 +2271,13 @@ pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
 /// picture and update QP/NZC state. Shared by the I- and P-slice CAVLC paths.
 /// Matches the `25 == uiMbType` branch of `WelsActualDecodeMbCavlcISlice` /
 /// `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp`.
-/// **The reader arrives as parameters — F47's second instance.** This opened by
-/// re-deriving `&mut *slice_bit_reader(pCtx)` below callers that already hold the
-/// split, which removes their strongly-protected `&mut` argument. The all-I_PCM
-/// FMO asset is what reached it: no probe before T5.S2 decoded a PCM macroblock.
 fn DecodeMbCavlcPcm(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture) -> i32 {
     {
         let iMbX = (*dq).iMbX;
         let iMbY = (*dq).iMbY;
         let iMbXy = (*dq).iMbXyIndex as usize;
 
-        // T5b.6: the macroblock's top-left in plane coordinates. The C++ computes
+        // The macroblock's top-left in plane coordinates. The C++ computes
         // `(iMbX + iMbY * stride) << 4` — one linear offset off `pData[i]` — and the
         // two halves of it are exactly `x = iMbX * 16` and `y = iMbY * 16`, which is
         // what a padded plane is addressed by.
@@ -2517,7 +2291,7 @@ fn DecodeMbCavlcPcm(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq:
         // step 1: locate the bit-stream position (must align to an integer byte).
         // `pCurBuf - iIndex` becomes `pos - iIndex`; the C++ computed a pointer here and a
         // negative result was an out-of-bounds pointer with no check, so an underflow is a
-        // pre-existing overrun surfacing (plan §2.2.2) — `pos` is `usize` and the slice
+        // pre-existing overrun surfacing — `pos` is `usize` and the slice
         // index below is what reports it.
         let iPcmStart = (pBs.pos() as isize - iIndex as isize) as usize;
         pBs.set_pos(iPcmStart);
@@ -2571,8 +2345,6 @@ fn DecodeMbCavlcPcm(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq:
 /// Matches `WelsActualDecodeMbCavlcISlice` in `decode_slice.cpp`.
 pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture) -> i32 {
     {
-        // T5.W4: the table is read-only — no `SVlcTable` field is written outside
-        // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
         let pVlcTable = pCtx.pVlcTable;
 
         let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
@@ -2589,13 +2361,6 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
         let mut pNonZeroCount = [0u8; 48];
         crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), Some(&*pDec));
 
-        // T5.I3's two macroblock windows stood here as `&mut` cursors into `grid.cbp`
-        // and `grid.transform_size8x8_flag`, held across the whole parse. **T5.X3**: the
-        // layer is a borrow now, so a cursor's span is the layer's span, and every call
-        // below that takes the layer conflicts with it. Both are re-derived per use
-        // instead — S29's spelling, and the same one expression per access the C++'s
-        // `pCurDqLayer->pCbp[iMbXy]` compiles to. Nothing between a write and a read of
-        // either field writes it, so the values read are the cursors'.
         *(*dq).grid.residual_pred_flag.get_mut(iMbXy) = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultResidualPredFlag as i8;
 
         *(*dq).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
@@ -2758,16 +2523,6 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
 /// Matches the residual sections of `WelsActualDecodeMbCavlcISlice` /
 /// `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp` (after `BsStartCavlc`,
 /// up to `BsEndCavlc`).
-///
-/// **The reader arrives as parameters — F47.** This function used to open with its
-/// own `pNalCur.sNalData.sVclNal.sSliceBitsRead.split(pCtx.sRawData)`, and all three of its
-/// callers had already taken that same split at their own heads. Two live `&mut`
-/// derivations of one `BsCursor` through a raw pointer: the callee's function-entry
-/// retag popped the caller's tag, and the caller then used it again —
-/// `pBs.end_cavlc(buf)` — which is Undefined Behaviour on the ordinary CAVLC path,
-/// every macroblock that carries residual. Threading the split down is the same
-/// bracket maneuver W3 used: derive once at the top, pass it, touch the source
-/// nowhere below.
 fn WelsDecodeMbCavlcResidual(
     pCtx: &mut SliceCtx<'_>,
     buf: &[u8],
@@ -2786,17 +2541,11 @@ fn WelsDecodeMbCavlcResidual(
     let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
     let mb_type = *pDec.pMbType.get(iMbXy);
     let is_intra = IS_INTRA(mb_type);
-    // T5.I2: the QP is read once per residual block, so the four sites below sit
-    // inside `for iId8x8 { for iId4x4 { } }` and cost up to sixteen checks per
-    // macroblock. Nothing here writes the family and `WelsResidualBlockCavlc*` does
-    // not reach it, so one shared window serves the whole function — this is the
-    // same hoist `pNzc` and `scaled_tcoeff_mb` already have on the two lines above.
     let iLumaQp = (*dq).grid.luma_qp.get(iMbXy);
 
-    // T5.R7: the cache is a `[u8; 48]` and the grid's row is an `[i8; 24]`, so the
-    // C's `ST32`/`ST16` writes are four- and two-element copies between two arrays
-    // whose elements differ only in signedness. The `as i8` per element is the same
-    // reinterpretation the pointer cast was, spelled where it happens.
+    // The cache is a `[u8; 48]` and the grid's row is an `[i8; 24]`, so the C's
+    // `ST32`/`ST16` writes are four- and two-element copies between two arrays whose
+    // elements differ only in signedness.
     let copy4 = |dst: &mut [i8], at: usize, src: &[u8; 48], from: usize| {
         for k in 0..4 {
             dst[at + k] = src[from + k] as i8;
@@ -3044,8 +2793,6 @@ pub fn WelsDecodeMbCavlcISlice(
 /// Matches `WelsActualDecodeMbCavlcPSlice` in `decode_slice.cpp`.
 pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture, pRefs: PicRefs<'_>) -> i32 {
     {
-        // T5.W4: the table is read-only — no `SVlcTable` field is written outside
-        // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
         let pVlcTable = pCtx.pVlcTable;
 
         let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
@@ -3061,14 +2808,6 @@ pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
         let mut sNeighAvail = SWelsNeighAvail::default();
         let mut pNonZeroCount = [0u8; 48];
         crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), Some(&*pDec));
-
-        // T5.I3's two macroblock windows stood here as `&mut` cursors into `grid.cbp`
-        // and `grid.transform_size8x8_flag`, held across the whole parse. **T5.X3**: the
-        // layer is a borrow now, so a cursor's span is the layer's span, and every call
-        // below that takes the layer conflicts with it. Both are re-derived per use
-        // instead — S29's spelling, and the same one expression per access the C++'s
-        // `pCurDqLayer->pCbp[iMbXy]` compiles to. Nothing between a write and a read of
-        // either field writes it, so the values read are the cursors'.
 
         let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
         if ret != 0 {
@@ -3102,7 +2841,6 @@ pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
                 return ret;
             }
 
-            // T5.I4: one window over the write-then-test — three checks became one.
             let pResidualPredFlag = (*dq).grid.residual_pred_flag.get_mut(iMbXy);
             if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveResidualPredFlag {
                 let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
@@ -3115,7 +2853,7 @@ pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             }
 
             if *pResidualPredFlag == 0 {
-                // T5.H1: the arm's only statement was a write to `pInterPredictionDoneFlag`,
+                // The arm's only statement was a write to `pInterPredictionDoneFlag`,
                 // which nothing in either tree reads. The `if` stays: its `else` is the error.
             } else {
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
@@ -3385,8 +3123,6 @@ pub fn WelsDecodeMbCavlcPSlice(
 /// so the residual half is shared through [`WelsDecodeMbCavlcResidual`].
 pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &mut BsCursor, dq: &mut DqLayerState, pDec: &mut SPicture, pRefs: PicRefs<'_>) -> i32 {
     {
-        // T5.W4: the table is read-only — no `SVlcTable` field is written outside
-        // `InitVlcTable` — so the derivation is a shared borrow and the callees take one.
         let pVlcTable = pCtx.pVlcTable;
 
         let iScanIdxStart = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.uiScanIdxStart as usize;
@@ -3402,14 +3138,6 @@ pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
         let mut sNeighAvail = SWelsNeighAvail::default();
         let mut pNonZeroCount = [0u8; 48];
         crate::decoder::parse_mb_syn_cavlc::GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), Some(&*pDec));
-
-        // T5.I3's two macroblock windows stood here as `&mut` cursors into `grid.cbp`
-        // and `grid.transform_size8x8_flag`, held across the whole parse. **T5.X3**: the
-        // layer is a borrow now, so a cursor's span is the layer's span, and every call
-        // below that takes the layer conflicts with it. Both are re-derived per use
-        // instead — S29's spelling, and the same one expression per access the C++'s
-        // `pCurDqLayer->pCbp[iMbXy]` compiles to. Nothing between a write and a read of
-        // either field writes it, so the values read are the cursors'.
 
         let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
         if ret != 0 {
@@ -3443,7 +3171,6 @@ pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
                 return ret;
             }
 
-            // T5.I4: one window over the write-then-test — three checks became one.
             let pResidualPredFlag = (*dq).grid.residual_pred_flag.get_mut(iMbXy);
             if (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveResidualPredFlag {
                 let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
@@ -3456,7 +3183,7 @@ pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             }
 
             if *pResidualPredFlag == 0 {
-                // T5.H1: the arm's only statement was a write to `pInterPredictionDoneFlag`,
+                // The arm's only statement was a write to `pInterPredictionDoneFlag`,
                 // which nothing in either tree reads. The `if` stays: its `else` is the error.
             } else {
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
@@ -3653,9 +3380,7 @@ pub fn WelsDecodeMbCavlcBSlice(
 ) -> i32 {
     {
         let (buf, pBs) = pNalCur.sNalData.sVclNal.sSliceBitsRead.split(pCtx.sRawData);
-        // Resolved to the one flag either is read for. **F42 lets a list entry name
-        // `pDec`**, so the shared borrow the resolution needs must not outlive the
-        // expression that takes it — the writes below go through the same picture.
+        // Resolved to the one flag either is read for.
         let ppRefPicL0 = pRefs
             .resolve(pCtx.ref_id(LIST_0, 0), Some(&*pDec))
             .map(|p| p.bIsComplete);
@@ -3800,12 +3525,6 @@ pub fn ParseIntra4x4Mode(
     pNeighAvail: &mut SWelsNeighAvail,
     pIntraPredMode: &mut [i8; 48],
     buf: &[u8],
-    // **T5b.6: a borrow, and F27's reason for the raw spelling is spent.** The
-    // hazard was that the CABAC arm re-reached *this* cursor through the context;
-    // since W6 step 3 the view carries `rbsp` — a shared slice over `sRawData`,
-    // derived once at the bracket top — and the arithmetic engine beside it, so the
-    // CABAC arm never touches the NAL node's `BsCursor` at all. The two are
-    // different allocations, and the aliasing probes are the instrument that says so.
     pBsAux: &mut BsCursor,
     pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
@@ -3827,10 +3546,6 @@ pub fn ParseIntra4x4Mode(
     let pps_entropy = pCtx.pps_of((*dq).sLayerInfo.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
 
     let pps_transform8x8 = pCtx.pps_of((*dq).sLayerInfo.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
-    // T5.I5: the sixteen 4x4 modes are written through one window. Nothing in
-    // the loop reaches this family — `ParseIntraPredModeLumaCabac` and
-    // `CheckIntraNxNPredMode` do not — and the record is `[i8; 16]`, so the
-    // scan-order index inside it is bounded by a constant.
     let pIntra4x4FinalMode = (*dq).grid.intra4x4_final_mode.get_mut(iMbXy);
     for i in 0..16 {
         let iPrevIntra4x4PredMode;
@@ -3925,10 +3640,6 @@ pub fn ParseIntra4x4Mode(
         *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = uiCode as i8;
     }
 
-    // T5.I4: the read and the `&mut i8` argument were two checks on one entry.
-    // The window cannot open any earlier — `ParseIntraPredModeChromaCabac` reads
-    // this family at the top and left addresses, and `Vec`'s `Index` retags the
-    // whole buffer, so an earlier borrow would not survive that call.
     let pChromaPredMode = (*dq).grid.chroma_pred_mode.get_mut(iMbXy);
     if *pChromaPredMode == -1
         || crate::decoder::parse_mb_syn_cavlc::CheckIntraChromaPredMode(
@@ -3947,12 +3658,6 @@ pub fn ParseIntra8x8Mode(
     pNeighAvail: &mut SWelsNeighAvail,
     pIntraPredMode: &mut [i8; 48],
     buf: &[u8],
-    // **T5b.6: a borrow, and F27's reason for the raw spelling is spent.** The
-    // hazard was that the CABAC arm re-reached *this* cursor through the context;
-    // since W6 step 3 the view carries `rbsp` — a shared slice over `sRawData`,
-    // derived once at the bracket top — and the arithmetic engine beside it, so the
-    // CABAC arm never touches the NAL node's `BsCursor` at all. The two are
-    // different allocations, and the aliasing probes are the instrument that says so.
     pBsAux: &mut BsCursor,
     pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
@@ -3978,7 +3683,6 @@ pub fn ParseIntra8x8Mode(
     let pps_entropy = pCtx.pps_of((*dq).sLayerInfo.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
 
     let pps_transform8x8 = pCtx.pps_of((*dq).sLayerInfo.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
-    // T5.I5: as in `ParseIntra4x4Mode` — sixteen writes, one check.
     let pIntra4x4FinalMode = (*dq).grid.intra4x4_final_mode.get_mut(iMbXy);
     for i in 0..4usize {
         let iPrevIntra4x4PredMode;
@@ -4080,10 +3784,6 @@ pub fn ParseIntra8x8Mode(
         *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = uiCode as i8;
     }
 
-    // T5.I4: the read and the `&mut i8` argument were two checks on one entry.
-    // The window cannot open any earlier — `ParseIntraPredModeChromaCabac` reads
-    // this family at the top and left addresses, and `Vec`'s `Index` retags the
-    // whole buffer, so an earlier borrow would not survive that call.
     let pChromaPredMode = (*dq).grid.chroma_pred_mode.get_mut(iMbXy);
     if *pChromaPredMode == -1
         || crate::decoder::parse_mb_syn_cavlc::CheckIntraChromaPredMode(
@@ -4101,12 +3801,6 @@ pub fn ParseIntra16x16Mode(
     pDec: &mut SPicture,
     pNeighAvail: &mut SWelsNeighAvail,
     buf: &[u8],
-    // **T5b.6: a borrow, and F27's reason for the raw spelling is spent.** The
-    // hazard was that the CABAC arm re-reached *this* cursor through the context;
-    // since W6 step 3 the view carries `rbsp` — a shared slice over `sRawData`,
-    // derived once at the bracket top — and the arithmetic engine beside it, so the
-    // CABAC arm never touches the NAL node's `BsCursor` at all. The two are
-    // different allocations, and the aliasing probes are the instrument that says so.
     pBsAux: &mut BsCursor,
     pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
@@ -4158,10 +3852,6 @@ pub fn ParseIntra16x16Mode(
         *(*dq).grid.chroma_pred_mode.get_mut(iMbXy) = uiCode as i8;
     }
 
-    // T5.I4: the read and the `&mut i8` argument were two checks on one entry.
-    // The window cannot open any earlier — `ParseIntraPredModeChromaCabac` reads
-    // this family at the top and left addresses, and `Vec`'s `Index` retags the
-    // whole buffer, so an earlier borrow would not survive that call.
     let pChromaPredMode = (*dq).grid.chroma_pred_mode.get_mut(iMbXy);
     if *pChromaPredMode == -1
         || crate::decoder::parse_mb_syn_cavlc::CheckIntraChromaPredMode(
@@ -4185,13 +3875,6 @@ fn WelsDecodeMbCabacIntraModeHelper(
     uiMbType: u32,
 ) -> i32 {
     {
-        // **Not `split()` here** (F27). `split` hands back `&mut self.cursor`, which this
-        // function then passes down as a strongly protected argument — while the CABAC
-        // engine underneath reaches the *same* `BsReader` whole through
-        // `cabac_rbsp_window`. Two live paths to one object, one of them exclusive —
-        // and since T5.M3 both start at the same `slice_bit_reader` derivation rather
-        // than at a mirror of it. `addr_of_mut!` creates no reference, so there is no
-        // retag to conflict and the CAVLC leaves re-derive per use; S29's spelling.
         let pBsRd: &mut BsReader = &mut pNalCur.sNalData.sVclNal.sSliceBitsRead;
         let buf = pCtx.sRawData.window_from((*pBsRd).start);
         let pBsAux: &mut BsCursor = &mut pBsRd.cursor;
@@ -4203,13 +3886,6 @@ fn WelsDecodeMbCabacIntraModeHelper(
             let pps_entropy = pCtx.pps_of((*dq).sLayerInfo.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
             let pps_transform8x8 = pCtx.pps_of((*dq).sLayerInfo.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
             if pps_transform8x8 {
-                // T5.I2 (F34): the callee reads *this array* at the left and top
-                // addresses, and `Vec`'s `Index` builds a shared slice over the whole
-                // buffer — which removes the strongly-protected `&mut` it was handed.
-                // Proved under Miri on a standalone reproduction; unreachable by the
-                // aliasing probe, whose stream is one macroblock per frame, so both
-                // availability flags are 0 and neither read runs. Keeping the value in
-                // a local and storing it after the call has no borrow live across it.
                 let mut bTransformSize8x8Flag = false;
                 let ret = crate::decoder::parse_mb_syn_cabac::ParseTransformSize8x8FlagCabac(
                     pCtx, &mut *dq,
@@ -4261,13 +3937,6 @@ fn WelsDecodeMbCabacResidualHelper(
     iScanIdxEnd: usize,
 ) -> i32 {
     {
-        // **Not `split()` here** (F27). `split` hands back `&mut self.cursor`, which this
-        // function then passes down as a strongly protected argument — while the CABAC
-        // engine underneath reaches the *same* `BsReader` whole through
-        // `cabac_rbsp_window`. Two live paths to one object, one of them exclusive —
-        // and since T5.M3 both start at the same `slice_bit_reader` derivation rather
-        // than at a mirror of it. `addr_of_mut!` creates no reference, so there is no
-        // retag to conflict and the CAVLC leaves re-derive per use; S29's spelling.
         let pBsRd: &mut BsReader = &mut pNalCur.sNalData.sVclNal.sSliceBitsRead;
         let buf = pCtx.sRawData.window_from((*pBsRd).start);
         let pBsAux: &mut BsCursor = &mut pBsRd.cursor;
@@ -4278,9 +3947,6 @@ fn WelsDecodeMbCabacResidualHelper(
         let pps_layer_entropy = pCtx.pps_of((*dq).sLayerInfo.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
         let pps_layer_transform8x8 = pCtx.pps_of((*dq).sLayerInfo.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
         let iMbXy = (*dq).iMbXyIndex as usize;
-        // T5.X1: the two scalars the residual chain reaches, read once here. The chain
-        // takes them by value, so the `&mut` the caller holds into `grid.scaled_tcoeff`
-        // never has to coexist with a `&mut` to the whole layer.
         let iMbXyIndex = (*dq).iMbXyIndex;
         let iMbWidth = (*dq).iMbWidth;
         let mb_type = *pDec.pMbType.get(iMbXy);
@@ -4288,10 +3954,9 @@ fn WelsDecodeMbCabacResidualHelper(
         let uiCbpLuma;
         let uiCbpChroma;
 
-        // T5.R7: the cache is a `[u8; 48]` and the grid's row is an `[i8; 24]`, so the
-        // C's `ST32`/`ST16` writes are four- and two-element copies between two arrays
-        // whose elements differ only in signedness. The `as i8` per element is the same
-        // reinterpretation the pointer cast was, spelled where it happens.
+        // The cache is a `[u8; 48]` and the grid's row is an `[i8; 24]`, so the C's
+        // `ST32`/`ST16` writes are four- and two-element copies between two arrays
+        // whose elements differ only in signedness.
         let copy4 = |dst: &mut [i8], at: usize, src: &[u8; 48], from: usize| {
             for k in 0..4 {
                 dst[at + k] = src[from + k] as i8;
@@ -4345,8 +4010,6 @@ fn WelsDecodeMbCabacResidualHelper(
                     && pps_layer_transform8x8;
 
                 if bNeedParseTransformSize8x8Flag {
-                    // T5.I2 (F34) — as above; the callee reads the same array at the
-                    // neighbour addresses while holding this borrow.
                     let mut bTransformSize8x8Flag = false;
                     let ret = crate::decoder::parse_mb_syn_cabac::ParseTransformSize8x8FlagCabac(
                         pCtx, &mut *dq,
@@ -4360,9 +4023,8 @@ fn WelsDecodeMbCabacResidualHelper(
                 }
             }
 
-            // T5.X3: the zeroing stays where the C++ has it (`memset (pScaledTCoeff, 0,
-            // …)` before the delta-QP parse); only the *window* moves below the parse,
-            // because `ParseDeltaQpCabac` takes the layer and this is a borrow of it.
+            // The zeroing stays where the C++ has it (`memset (pScaledTCoeff, 0,
+            // …)` before the delta-QP parse).
             (*dq).grid.scaled_tcoeff.get_mut(iMbXy).fill(0);
 
             let mut iQpDelta = 0i32;
@@ -4378,11 +4040,6 @@ fn WelsDecodeMbCabacResidualHelper(
             }
             let scaled_tcoeff_mb = (*dq).grid.scaled_tcoeff.get_mut(iMbXy);
             let new_qp = ((*dq).sLayerInfo.sSliceInLayer.iLastMbQp + iQpDelta + 52) % 52;
-            // T5.I2: the write opens the window and the four residual reads below —
-            // each of them inside `for iId8x8 { for iId4x4 { } }` — read through it.
-            // `ParseResidualBlockCabac` reaches the layer but not this family. The
-            // `else` arm's write at the tail of the function is this branch's
-            // alternative, never the same execution.
             let iLumaQp = (*dq).grid.luma_qp.get_mut(iMbXy);
             *iLumaQp = new_qp as i8;
             (*dq).sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
@@ -4948,7 +4605,7 @@ pub fn WelsDecodeMbCabacPSlice(
             ref_slice.fill(0);
 
             let bIsPending = pCtx.iThreadCount > 1;
-            // F42's clause, as above: resolve and take the flag in one expression.
+            // Resolve and take the flag in one expression.
             let is_complete0 = pRefs
                 .resolve(pCtx.ref_id(LIST_0, 0), Some(&*pDec))
                 .is_some_and(|p| p.bIsComplete || bIsPending);
@@ -5183,7 +4840,6 @@ pub fn WelsDecodeMbCabacBSlice(
             pDec.pRefIndex[LIST_0].get_mut(iMbXy).fill(0);
             pDec.pRefIndex[LIST_1].get_mut(iMbXy).fill(0);
 
-            // F42's clause, as above.
             let is_complete0 = pRefs
                 .resolve(pCtx.ref_id(LIST_0, 0), Some(&*pDec))
                 .is_some_and(|p| p.bIsComplete || bIsPending);
@@ -5261,23 +4917,6 @@ pub fn WelsDecodeSlice(
     bFirstSliceInLayer: bool,
     nal_idx: Option<usize>,
 ) -> i32 {
-    // **The bracket top** (T5.Y2): the slice header's parameter sets are selected,
-    // the CABAC engine is initialized and the scaling lists are computed *before*
-    // the split, because the view copies those scalars; below the split the context
-    // is not reachable at all and `pDec`/`pRefs` travel as their own parameters.
-
-    // **The loop this function's aliasing probe was written for, and the prediction
-    // session D read out of the code is now a Miri finding (T5.E1).** This held
-    // `ctx = &mut *pCtx`, `dq = &mut *pCurDqLayer` and two reborrows of `dq` across
-    // `pDecMbFunc(pCtx, …)`, which re-enters through `pCtx` and reaches the same layer:
-    // the callee's own `&mut *pCtx` invalidated the outer `[0x0..0x8ae00]` retag, and
-    // `ctx.bMbRefConcealed = false` on the next iteration wrote through the dead tag.
-    // Nothing is a borrow now — `(*pCtx)` / `(*pCurDqLayer)` per use, and the two nested
-    // pointers derive from the layer without retagging, so re-entry cannot invalidate
-    // them. T5.G1 removed the last of the invalidators: there is no `&mut *pCtx` left in
-    // `src/decoder/`, so no callee can retag the context out from under a caller.
-    // S25's shape (plan §7.6); S29 is the spelling.
-
     (*pCurDqLayer).sLayerInfo.sSliceInLayer.iTotalMbInCurSlice = 0;
 
     let pDecMbFunc: PWelsDecMbFunc = if active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps)
@@ -5301,8 +4940,6 @@ pub fn WelsDecodeSlice(
     };
 
     // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
-    // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
-    // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
     let bConstrainedIntra = pps_of(
         &(*pCtx).sSpsPpsCtx,
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id,
@@ -5325,16 +4962,11 @@ pub fn WelsDecodeSlice(
             iQp,
         );
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.iLastDeltaQp = 0;
-        // T5b.3: the node's own reader, reached the way everything else in this
-        // function reaches the access unit — by index, in one expression.
         let err = match nal_idx.and_then(|i| {
             cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(i))
         }) {
             Some(nal) => {
                 let reader = &mut nal.sNalData.sVclNal.sSliceBitsRead;
-                // Three disjoint fields, split at the context rather than derived
-                // through it: the node comes out of `access_unit`, and the engine and
-                // the raw buffer are named beside it.
                 crate::decoder::cabac_decoder::InitCabacDecEngineFromBS(
                     &mut pCtx.sCabacDecEngine,
                     reader,
@@ -5349,17 +4981,10 @@ pub fn WelsDecodeSlice(
     }
     WelsCalcDeqCoeffScalingList(pCtx);
 
-    // **The split.** Everything above this line is the context's; everything below
-    // it is the view's, and the pool borrow the two halves of `cur_and_refs` carry
-    // coexists with it because `pPicBuff` is not in the view.
     let (pDec, pRefs, mut view, nal) = slice_split(pCtx, nal_idx);
     let Some(pNalCur) = nal else {
         return ERR_NONE;
     };
-    // T5b.2: with the picture a borrow, the one place its absence is tested is here
-    // rather than at every level below. `DecodeCurrentAccessUnit` prefetches it and
-    // returns `ERR_INFO_REF_COUNT_OVERFLOW` when the pool cannot supply one, so this
-    // arm is unreachable from the decode path — same condition, same code.
     let Some(pDec) = pDec else {
         return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REF_COUNT_OVERFLOW);
     };
@@ -5414,13 +5039,13 @@ pub fn WelsDecodeSlice(
     ERR_NONE
 }
 
-/// **`DECODER_MT(incomplete: F36)` — the multi-threaded parse arm, and it is a
-/// *partial* translation, not a complete one.**
+/// **The multi-threaded parse arm, and it is a *partial* translation, not a
+/// complete one.**
 ///
 /// This is the `iThreadCount > 1` branch of `decoder_core.rs`'s slice loop, and
-/// `GetThreadCount` returns 0 unconditionally, so **nothing reaches it**. What makes
-/// it worth a fence rather than a comment is what is missing: the C++'s copy is 162
-/// lines and this is 101, and the per-macroblock loop lacks the `pSliceIdc` write
+/// `GetThreadCount` returns 0 unconditionally, so **nothing reaches it**. What is
+/// missing: the C++'s copy is 162 lines and this is 101, and the per-macroblock
+/// loop lacks the `pSliceIdc` write
 /// (`decode_slice.cpp:1708`), the `pNzc` copy into the picture, the `SetNonZeroCount`
 /// call, the per-MB deblocking call and the border-padding block — while
 /// `decoder_core.cpp:2595`'s re-point of `pMbCorrectlyDecodedFlag` at the picture's
@@ -5428,26 +5053,13 @@ pub fn WelsDecodeSlice(
 /// neighbour-availability predicate compares, so at its -1 reset every neighbour
 /// reads as available and prediction crosses slice boundaries.
 ///
-/// **Left, not deleted — T7.C7, and the reason is that the record is the asset.**
-/// Deleting it means turning the `if/else` at the branch into an unconditional call,
-/// which is a shape change to a live decoder function in a phase whose charter names
-/// the decoder a non-goal; the body is safe Rust, so it costs no metric and blocks no
-/// deny; and the thing a future porter most needs is exactly the *list above* of which
-/// reference statements are absent, which deleting the function would delete too. The
-/// fence is the change: F36 lived in the log and in scattered comments, and it is
-/// greppable now like the retired screen-content dormancy lane (whose tag Phase 10
-/// removed from the tree entirely) and `LOAD_BALANCING(incomplete: F72)`.
-///
 /// Switching decoder threading on is already a deliberate multi-site act —
 /// `GetThreadCount`'s `0` is load-bearing (`api/codec_api.rs` branches on `<= 0` to
 /// advance `uiDecodeTimeStamp`) — and this must be finished **before** it returns
 /// anything above 1.
 pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: &mut DqLayerState) -> i32 {
     {
-        // T5b.3: `pCtx->pNalCur` is an index now, and `slice_split` resolves it in the
-        // same statement it splits the context — which is what lets the node's bit
-        // reader travel beside the view. The `None` arm is the C's null `pNalCur`; F36
-        // owns it as before.
+        // The `None` arm is the C's null `pNalCur`.
         let Some(iNalCur) = (*pCtx).nal_cur else {
             return ERR_NONE;
         };
@@ -5476,8 +5088,6 @@ pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         };
 
         // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
-        // T4b.3: the `if` that used to fill three laundered slots *is* the assignment
-        // now. A null PPS keeps the `Constrain0` arm the old `else` gave it.
         let bConstrainedIntra = pps_of(
             &(*pCtx).sSpsPpsCtx,
             (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id,
@@ -5488,14 +5098,10 @@ pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         (*pCtx).eSliceType = (*dq).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.eSliceType;
         WelsCalcDeqCoeffScalingList(pCtx);
 
-        // **The split** — `WelsDecodeSlice`'s, one function down: the pool's two halves
-        // and the view come out of the same context in the same statement group, and
-        // nothing below the loop reaches the context again.
         let (pDec, pRefs, mut view, nal) = slice_split(pCtx, Some(iNalCur));
         let Some(pNalCur) = nal else {
             return ERR_NONE;
         };
-        // `WelsDecodeSlice`'s guard, same reason, same code.
         let Some(pDec) = pDec else {
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REF_COUNT_OVERFLOW);
         };
@@ -5562,29 +5168,11 @@ mod tests {
     use super::*;
     use crate::safe::mb_grid::MbDims;
 
-    // T5.X3: these three asserted "a null layer returns ERR_NONE". The layer is a
-    // `&mut` now, so the null arm is unrepresentable *here* — and the guard did not
-    // disappear, it moved to the boundary where a raw layer still arrives
-    // (`decoder_core`'s forwarding shims, which own the `as_mut()`). The tests
-    // follow the behaviour: the null-context arm is still asserted at these three
-    // functions, and the null-*layer* arm is asserted where it now lives.
-    // **T5.Z4: the null-*context* arm is unrepresentable everywhere in the decoder
-    // now.** T5.Y2 moved it to the three bracket tops that still took a raw context;
-    // the flip took the context off them too, so there is no decoder site left where
-    // a null context can be constructed to test. The guard did not disappear — it is
-    // `api/codec_api.rs`'s, at the five entry points that still hold a pointer, and
-    // the api tests below drive it there. What remains testable here is the
-    // null-*layer* arm, which `decoder_core`'s three forwarding shims still own.
-
     #[test]
     fn test_wels_target_slice_construction_null_layer() {
         {
             {
                 let mut ctx = SWelsDecoderContext::new_boxed();
-                // The missing-layer arm, at the boundary it moved to (T5.X3, T5.AA1):
-                // `decoder_core`'s three forwarding shims are where a layer may still be
-                // absent, and each answers `None` the way the per-macroblock callees
-                // answered a null pointer. The null is a `None` since the alias died.
                 assert_eq!(
                     crate::decoder::decoder_core::WelsTargetSliceConstruction(&mut ctx, None),
                     ERR_NONE
@@ -5605,9 +5193,6 @@ mod tests {
     fn test_wels_calc_deq_coeff_scaling_list() {
         {
             {
-                // T5.R6: the active parameter sets are ids into the context's own
-                // buffers, so the fixture fills the buffers rather than pointing the
-                // context at two stack locals — which is the aliasing the ids remove.
                 let mut ctx = SWelsDecoderContext::new_boxed();
                 ctx.sSpsPpsCtx.sSpsBuffer[0].bSeqScalingMatrixPresentFlag = true;
                 ctx.sSpsPpsCtx.sSpsBuffer[0].iScalingList4x4[0][0] = 16;
@@ -5623,64 +5208,7 @@ mod tests {
         }
     }
 
-    // T5.Y2: `test_wels_decode_mb_cavlc_slices_null` stood here, asserting that the
-    // two CAVLC dispatch entry points answer a null context with `ERR_NONE`. Both
-    // take the slice view and a NAL borrow now, so neither argument can be null —
-    // the arm is the bracket tops', asserted above.
-
-    // **The one-macroblock clean-stream probe stood here, and was retired at T5.S3.**
-    //
-    // It decoded `narrow_16x16.264` and asserted a frame came out at 16x16, and it
-    // cost **265.3s of the library's 989.2s** under Miri against 0.001s natively —
-    // the whole of its cost, and the whole of its unique value, is the aliasing
-    // verdict.
-    //
-    // **The stream is still decoded**, by `test_asset_narrow_16x16` in
-    // `decoder_conformance_test.rs`, which checks its full SHA-1 against the C++
-    // decoder's — strictly more than this probe asserted. Retiring a probe whose
-    // vector another test already runs is the rule that removed it (Eugene,
-    // 2026-08-14).
-    //
-    // **What that costs, stated because it is not nothing.** The conformance suite
-    // is not a Miri target, so no aliasing verdict covers this stream any more.
-    // Counting decode entries per probe stream shows the gap precisely:
-    //
-    //     stream                  CavlcPcm CavlcI CavlcP  CabacI CabacP CabacB
-    //     narrow_16x16                   0      0      0       3     21      0
-    //     narrow_16x16_idr_lost          0      3     21       0      7      0
-    //     grid_48x32                     0      0      0       6     18      7
-    //     fmo_2groups_64x64             16     16      0       0      0      0
-    //
-    // CABAC I-slices on a one-macroblock-per-frame picture are now unprobed:
-    // `grid_48x32` reaches `CabacI` but at 3x2 with different stride arithmetic, and
-    // `narrow_16x16_idr_lost` reaches it **zero** times, because in that stream the
-    // CABAC sequence is exactly the one whose IDR was removed.
-    //
-    // *(An earlier version of this note claimed `narrow_16x16_idr_lost` was a strict
-    // superset and that nothing was lost. That was a syntactic argument — profile,
-    // entropy mode, slice count — and the table above is what disproved it. Which
-    // decode entries run is a property of slice types after damage, not of the
-    // parameter sets.)*
-    //
-    // **Why deleting a probe is the lever and shortening one is not.** The probes
-    // cost 268.9s / 265.3s / 257.5s / 196.0s for 36 / 24 / 31 / 16 macroblocks: cost
-    // tracks the number of decoder instantiations, not decoding work, because a full
-    // `Initialize` of a multi-MiB context under an interpreter dwarfs the
-    // macroblocks. Trimming a stream saves nothing.
-    //
-    // F34's lesson — one macroblock per frame was a ceiling, and a real UB hid under
-    // it — is recorded on the grid probe below, which exists because of it.
-
-
-    /// The same gate over a stream that has **neighbours** — Phase 5 session J,
-    /// D-perf-5's "probe first, then flip".
-    ///
-    /// The test above bounds every Miri verdict this phase issued, and F34 is what
-    /// that cost: a real UB in `WelsDecodeMbCabacIntraModeHelper` that Miri
-    /// *executed* and returned green on, because `narrow_16x16.264` is one
-    /// macroblock per frame — `iLeftAvail` and `iTopAvail` are 0 at every
-    /// macroblock in it, so the two lines that make the function UB were
-    /// unreachable. S22's law aimed at a stream instead of at a scope list.
+    /// A stream that has **neighbours**.
     ///
     /// `grid_48x32.264` is 3x2 macroblocks, so MB(1,1) has all four neighbours,
     /// MB(0,1) is missing only its left and MB(2,1) only its top-right: every
@@ -5689,17 +5217,11 @@ mod tests {
     /// and its source window pans so the MVs are non-zero. Built by
     /// `rust/tools/make_narrow_assets.py`, which explains at length why this one
     /// asset comes from libx264 and not from the C++ encoder: **OpenH264's encoder
-    /// has no `transform_8x8_mode_flag` to write**, and F34 sits behind it.
-    ///
-    /// **Coverage is proven, not asserted** (the F21 rule): with T5.I2's fix
-    /// reverted in a scratch worktree, this test goes red under Miri at
-    /// `parse_mb_syn_cabac.rs:1242` — the callee's own left-neighbour read —
-    /// while `decode_slice_loop_runs_under_the_aliasing_checker` stays green.
-    /// Session J's log records the run.
+    /// has no `transform_8x8_mode_flag` to write**.
     ///
     /// The dimension assertion is not decoration. A regenerated asset that
     /// silently came out 16x16 would still pass "a frame came out" while covering
-    /// nothing this test exists for, which is exactly how F34 survived.
+    /// nothing this test exists for.
     #[test]
     fn decode_slice_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
         {
@@ -5719,22 +5241,9 @@ mod tests {
         }
     }
 
-    // **T5b.6: `drive_decoder_over` moved to `api/codec_api.rs`.** It drives the
-    // vtable thunks through a raw `*mut ISVCDecoder` rather than through the
-    // `&mut self` convenience methods, deliberately and for F23's reason — which
-    // makes its `unsafe` the C ABI's, not this module's. The three probes below are
-    // unchanged and call it by path.
     use crate::api::codec_api::abi_test_driver::drive_decoder_over;
 
-    /// **The error-concealment probe** — Phase 5 session S, F43/F44/F45.
-    ///
-    /// Until T5.S1 this path could not be probed, because it did not run: five stubs
-    /// in `decoder_core.rs` shadowed `error_concealment.rs` (F43), `InitErrorCon` had
-    /// no caller so `sCopyFunc` was `None` and the copies were silent no-ops (F44),
-    /// and `bInstantDecFlag` was never written so the emission gate never fired
-    /// (F45). Every Miri verdict this phase issued was on a decoder whose whole
-    /// concealment subsystem was unreachable — **a new container, in S29's sense,
-    /// arriving at the end of the phase rather than the start**.
+    /// **The error-concealment probe.**
     ///
     /// `narrow_16x16_idr_lost.264` is 827 bytes and one macroblock per frame — the
     /// cheapest stream in the tree that actually conceals, which is what makes a
@@ -5748,13 +5257,7 @@ mod tests {
     /// verdict on the path, not the bytes.
     ///
     /// The `dsDataErrorConcealed` assertion is the point. Without it this test
-    /// passes just as well on a decoder where concealment never runs — which is
-    /// precisely the state the port was in for five phases.
-    ///
-    /// **It also carries the retired clean-stream probe's duty** (T5.S3): the
-    /// dimension assertion below was that probe's, and this stream is its superset
-    /// in every syntactic dimension, so the geometry check moves here rather than
-    /// disappearing with it.
+    /// passes just as well on a decoder where concealment never runs.
     #[test]
     fn error_concealment_runs_under_the_aliasing_checker() {
         {
@@ -5771,13 +5274,7 @@ mod tests {
         }
     }
 
-    /// **The FMO probe** — Phase 5 session S, F43.
-    ///
-    /// `fmo.rs` was unreachable in production: `decoder_core.rs`'s `FmoNextMb` stub
-    /// returned `iMbIdx + 1` and nothing ever wrote `pCtx->pFmo`. It has therefore
-    /// never been under the aliasing checker in the shape a stream drives it —
-    /// `FmoParamUpdate` writing the map at paramset activation, `FmoNextMb` reading
-    /// it once per macroblock through the context's `sFmoList` entry.
+    /// **The FMO probe.**
     ///
     /// `fmo_2groups_64x64.264` is built by `rust/tools/make_fmo_asset.py` because no
     /// stream in `res/` has more than one slice group. 16 macroblocks over two
@@ -5794,8 +5291,6 @@ mod tests {
     }
 }
 
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
-// used to live in this module disagreed with cpu_core.h and with each other --
-// WELS_CPU_NEON alone had seven distinct values across eight modules.
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_NEON, WELS_CPU_SSE2};
 pub use crate::decoder::dec_golomb::{g_kuiIntra4x4CbpTable, g_kuiIntra4x4CbpTable400};

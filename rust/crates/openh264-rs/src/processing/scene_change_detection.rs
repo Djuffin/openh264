@@ -8,19 +8,13 @@
 //! leaves **on**. `DecideFrameType` turns a `LARGE_CHANGED_SCENE` verdict into an
 //! IDR, subject to `iFrameIndex >= (VGOP_SIZE << 1)`.
 //!
-//! The C++ is a template, `CSceneChangeDetection<T>`, over two detector functors,
-//! and **both are ported** (P10.2.C4). [`CSceneChangeDetection`] is the video one,
+//! The C++ is a template, `CSceneChangeDetection<T>`, over two detector functors.
+//! [`CSceneChangeDetection`] is the video one,
 //! `METHOD_SCENE_CHANGE_DETECTION_VIDEO`; [`CSceneChangeDetectionScreen`] is
 //! `METHOD_SCENE_CHANGE_DETECTION_SCREEN`, which the screen preprocessor runs once
-//! per available reference on every P frame. The template is spelled as two structs
-//! rather than a generic: the shared `Process` (`SceneChangeDetection.h:215-249`) is
-//! nine statements and the two functors differ in what they *write*, not only in how
-//! they measure — the screen one fills a block-static map the video one has no
-//! parameter for. Two bodies say that; one body over a trait would have to carry the
-//! map for both.
-//!
-//! The screen detector's second input is the scroll vector, which is why it could
-//! not be ported before `processing/scroll_detection.rs` was.
+//! per available reference on every P frame. The two functors differ in what they
+//! *write*, not only in how they measure — the screen one fills a block-static map
+//! the video one has no parameter for.
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -30,9 +24,9 @@ use crate::encoder::wels_preprocess::{ESceneChangeIdc, EStaticBlockIdc, SPixMap,
 use crate::safe::plane::PlaneCursor;
 
 /// The two luma planes this detector walks, routed from the pool pictures that own
-/// them — **S37: built per call, never stored.** `DenoisePlanes` is the same shape one
-/// plugin over (`processing/denoise.rs:220`); this one is read-only and luma-only,
-/// which is all `CSceneChangeDetectorVideo` ever touches.
+/// them. `DenoisePlanes` is the same shape one plugin over
+/// (`processing/denoise.rs:220`); this one is read-only and luma-only, which is all
+/// `CSceneChangeDetectorVideo` ever touches.
 ///
 /// Each slice starts at its plane's logical origin and runs to the end of the padded
 /// allocation, so a block at `(x, y)` is at byte `y * stride + x`.
@@ -42,16 +36,6 @@ pub struct ScdPlanes<'a> {
     pub refp: &'a [u8],
     pub ref_stride: usize,
 }
-
-// `sad_8x8_raw` stood here — **F151 CLOSED, T9.X.** Session F relocated it into this
-// file because the block walk below read `SPixMap.pPixel` raw and so could not take a
-// `PlaneCursor` "until the preprocess family's own session converts the pixmap". This
-// is that session. The walk takes [`ScdPlanes`] now and the kernel is
-// `common::sad_common::sample_sad::<8, 8, _>`, which is the same summation over the same
-// 64 `|a - b|` terms with the same `i32` accumulator.
-//
-// F151's ratchet rebaseline for this file (+2 raw_ptr, +3 unsafe_block, +1 unsafe_fn)
-// comes back out with it.
 
 use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
 
@@ -71,8 +55,7 @@ pub struct CSceneChangeDetection {
 }
 
 impl CSceneChangeDetection {
-    /// `CSceneChangeDetection::Set`. Typed since Phase 6 session B (the `IWelsVP`
-    /// vtable's `void*` is gone).
+    /// `CSceneChangeDetection::Set`.
     pub fn Set(&mut self, param: &SSceneChangeResult) -> i32 {
         self.m_sSceneChangeParam = *param;
         RET_SUCCESS
@@ -87,10 +70,9 @@ impl CSceneChangeDetection {
     /// `CSceneChangeDetection::Process` — `SceneChangeDetection.h:215`, with
     /// `CSceneChangeDetectorVideo::operator()` inlined.
     ///
-    /// **T9.X — safe.** `pSrcPixMap` still carries the geometry (it is the VP's own
-    /// parameter block); the pixels arrive as [`ScdPlanes`], and the block walk is
-    /// slice indexing over two [`PlaneCursor`]s. `denoise::Denoise` has taken its
-    /// pixels this way since it was ported.
+    /// `pSrcPixMap` carries the geometry (it is the VP's own parameter block); the
+    /// pixels arrive as [`ScdPlanes`], and the block walk is slice indexing over two
+    /// [`PlaneCursor`]s.
     pub fn Process(&mut self, pSrcPixMap: &SPixMap, planes: &ScdPlanes<'_>) -> i32 {
         if planes.cur.is_empty() || planes.refp.is_empty() {
             return RET_INVALIDPARAM;
@@ -175,7 +157,7 @@ impl CSceneChangeDetectionScreen {
     /// `CSceneChangeDetection::Process` — `SceneChangeDetection.h:215-249` — with
     /// `CSceneChangeDetectorScreen::operator()` (`:158-191`) inlined.
     ///
-    /// **D-scc-8: the block-static row travels as `&mut [u8]`.** The C++ reads
+    /// **The block-static row travels as `&mut [u8]`.** The C++ reads
     /// `m_sSceneChangeParam.pStaticBlockIdc` — a `uint8_t*` copied in through `Set` —
     /// and post-increments it once per block. Here the *selector* stays in
     /// [`SSceneChangeResult::pStaticBlockIdc`] for the bookkeeping the judgement code
@@ -183,13 +165,11 @@ impl CSceneChangeDetectionScreen {
     /// `SBlockStaticIdcStore::row_mut`. A row shorter than the block grid is
     /// `RET_INVALIDPARAM` and **nothing is written** — where the C++ would run off the
     /// end of the allocation, or write through `NULL` when the selector names no row.
-    /// That is a defined refusal replacing undefined behaviour, recorded as a finding.
     ///
     /// **The scroll test is `(!iScrollMvX || !iScrollMvY)`** — *at least one component
-    /// zero*, not both — and it is ported as written even though this scroll detector
-    /// never produces a non-zero `iScrollMvX`, so the disjunct that can be false is
-    /// unreachable from the encoder. The bounds check that follows it agrees with the
-    /// read it guards: both add the vector.
+    /// zero*, not both. This scroll detector never produces a non-zero `iScrollMvX`,
+    /// so the disjunct that can be false is unreachable from the encoder. The bounds
+    /// check that follows it agrees with the read it guards: both add the vector.
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -469,10 +449,10 @@ mod screen_tests {
         assert!(idc.iter().all(|&v| v == EStaticBlockIdc::NO_STATIC as u8));
     }
 
-    /// **D-scc-8's refusal.** A row one byte short of the block grid is
-    /// `RET_INVALIDPARAM` and *nothing* is written — where the C++, handed the same
-    /// short allocation, would walk off the end of it. The C++'s other undefined case,
-    /// a `NULL` `pStaticBlockIdc`, is the caller's `None` and is refused there.
+    /// A row one byte short of the block grid is `RET_INVALIDPARAM` and *nothing* is
+    /// written — where the C++, handed the same short allocation, would walk off the
+    /// end of it. The C++'s other undefined case, a `NULL` `pStaticBlockIdc`, is the
+    /// caller's `None` and is refused there.
     #[test]
     fn a_short_block_static_row_is_refused_without_a_write() {
         const W: i32 = 64;

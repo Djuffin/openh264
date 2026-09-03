@@ -1,10 +1,4 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code, unused_variables)]
-//! **Sealed at S4.D4** — `forbid(unsafe_code)` below. With the twelve raw
-//! `Deblock*_c` shims and the dispatch table they filled deleted, nothing in this
-//! file is unsafe: the deblocking kernels are the safe ones the decoder and encoder
-//! have called directly since T9.C2, over `PlaneSamples` cursors that carry their
-//! own bounds. This is E2's flip, taken early for one file because the deletion
-//! that made it possible happened here.
 #![forbid(unsafe_code)]
 
 //! H.264 / AVC In-Loop Adaptive Deblocking Filter Primitives.
@@ -60,12 +54,12 @@ pub fn WelsClip1(iX: i32) -> u8 {
 // kernels do all their addressing in flat byte offsets via `at(off, 0)` /
 // `set(off, 0, _)`, exactly as the C++ does around its `pPix`.
 //
-// Arithmetic parity (R-e): everything is `i32` over `u8` samples and `|tc0| <= 26`,
-// so no intermediate can leave `i32` range — no F8-class exposure. One
-// truncation is load-bearing and faithful: the bS<4 kernels store `p1 + clip`
-// and `q1 + clip` (range `[-26, 281]`) with a plain `as u8`, which wraps exactly
-// like the C++'s implicit int-to-uint8_t conversion. `WelsClip1` is applied only
-// where the C++ applies it (p0'/q0').
+// Arithmetic parity: everything is `i32` over `u8` samples and `|tc0| <= 26`, so
+// no intermediate can leave `i32` range. One truncation is load-bearing and
+// faithful: the bS<4 kernels store `p1 + clip` and `q1 + clip` (range
+// `[-26, 281]`) with a plain `as u8`, which wraps exactly like the C++'s implicit
+// int-to-uint8_t conversion. `WelsClip1` is applied only where the C++ applies it
+// (p0'/q0').
 
 use crate::safe::plane::{PlaneCursorMut, PlaneSamples};
 
@@ -300,8 +294,7 @@ pub fn nonzero_count(nzc: &mut [i8; 24]) {
 // Shim span arithmetic
 // ============================================================================
 
-/// The one place that turns a deblocking kernel's reach into a slice span
-/// (R-c: nothing else does this arithmetic).
+/// The one place that turns a deblocking kernel's reach into a slice span.
 ///
 /// A kernel anchored at `pPix` touches byte offsets `j*step_x + i*step_y` for
 /// taps `j ∈ [-reach_back, reach_fwd]` and lines `i ∈ [0, lines)`. Both steps
@@ -317,67 +310,12 @@ fn shim_span(step_x: usize, step_y: usize, reach_back: usize, reach_fwd: usize, 
 }
 
 // ============================================================================
-// Public C ABI wrappers (as declared in deblocking_common.h) — Phase 2 shims
-// ============================================================================
-//
-// The `V`/`H` pairs collapse onto one safe kernel each, exactly as the C++'s
-// wrappers collapse onto one `(iStrideX, iStrideY)` body: `V` fixes the steps
-// to `(iStride, 1)` (taps across rows — a horizontal edge), `H` to
-// `(1, iStride)` (taps across columns — a vertical edge). Each shim
-// materialises exactly the span its kernel's reach declares and anchors a
-// cursor whose stride is the plane's real stride.
-//
-// **Why the negative reach is legal — the availability argument, shared by all
-// twelve shims and quoted from here in each contract:** deblocking runs on
-// decoded picture samples, and the drivers only filter an edge whose p side
-// exists. The macroblock-boundary edge (the anchor's own column or row) is
-// filtered only when the left/top neighbour MB is present and, under
-// `uiFilterIdc == 2`, in the same slice (`decoder/deblocking.rs`
-// `DeblockingAvailableNoInterlayer`; `encoder/deblocking.rs` `bLeftBsValid`/
-// `bTopBsValid`); interior edges sit 4, 8 or 12 samples into the macroblock.
-// So every tap, including the `-reach_back` ones, lands on picture (or left/top
-// neighbour MB) samples — the padding border is *not* part of this argument.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ============================================================================
-// Function Pointer Types & SDeblockingFunc Table
-// ============================================================================
-
-
-
-
-
-
-
-
-
-
-
-
-// ============================================================================
 // Unit Tests
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
-    // The module-level `#![allow(unsafe_code)]` and its `instrument(test)` tag stood
-    // here, for tests that "call the raw slot shims above through their C-ABI
-    // signatures". S4.D4 deleted those shims, so the surface under test is gone and
-    // the allow with it — this module is safe Rust throughout now, as is the file.
     use super::*;
-    
 
     #[test]
     fn test_wels_clip1() {

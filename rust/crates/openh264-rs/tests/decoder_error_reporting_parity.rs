@@ -1,14 +1,8 @@
-//! **F76** — `CWelsDecoder::DecodeFrame2`'s error-reporting block, the three
+//! `CWelsDecoder::DecodeFrame2`'s error-reporting block, the three
 //! `DecoderConfigParam` statements it depends on, and the live re-initialisation
 //! rebuild, as covering tests.
 //!
-//! Every arm below is a *status code, a recovery action, or a statistic*. That is
-//! precisely the class the project's byte referees cannot see — conformance and the
-//! 2707-row malformed corpus are silent about all of it, which is why the whole
-//! block survived the port unnoticed until `eVideoType`'s duplicate declaration sent
-//! someone to read the field (`phase8_findings.md`, F76). So these tests are the
-//! only instrument the arms have, and each one is measured **red** against the tree
-//! that precedes its fix; the message a red run prints is quoted at the test.
+//! Every arm below is a *status code, a recovery action, or a statistic*.
 //!
 //! The reference is `codec/decoder/plus/src/welsDecoderExt.cpp:813–905` (the block)
 //! and `codec/decoder/core/src/decoder.cpp:649–676` (`DecoderConfigParam`).
@@ -135,25 +129,14 @@ unsafe fn decode_all(dec: &Dec, data: &[u8]) -> (i32, u32) {
 }
 
 // ---------------------------------------------------------------------------
-// T8.B1 — the three `DecoderConfigParam` statements
+// The three `DecoderConfigParam` statements
 // ---------------------------------------------------------------------------
 
 /// **`decoder.cpp:654–661`, the range clamp.**
 ///
 /// A C caller's `eEcActiveIdc` is an `int`. The reference clamps it into
 /// `[ERROR_CON_DISABLE, ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE]`,
-/// warns, and uses the top value; the port had neither the clamp nor a way to
-/// survive the read — `ctx_box.pParam = *pParam` produced an `ERROR_CON_IDC` with
-/// no such variant, which is undefined before any policy question arises.
-///
-/// Red before T8.B1 with `DECODER_OPTION_ERROR_CON_IDC` unwired at `GetOption`
-/// (the arm fell through to the catch-all and left the caller's `-1` in place):
-///
-/// ```text
-/// assertion `left == right` failed: eEcActiveIdc = 99 was not clamped to 7
-///   left: -1
-///  right: 7
-/// ```
+/// warns, and uses the top value.
 #[test]
 fn test_error_con_idc_out_of_range_is_clamped_at_initialize() {
     let mut param = SDecodingParam::default();
@@ -174,8 +157,6 @@ fn test_error_con_idc_out_of_range_is_clamped_at_initialize() {
 /// **`welsDecoderExt.cpp:528`, the same clamp on the `SetOption` path.**
 ///
 /// `WELS_CLIP3 (iVal, ERROR_CON_DISABLE, …FREEZE_RES_CHANGE)` before the store.
-/// The port read the option blob as `*const ERROR_CON_IDC` — the same undefined
-/// read as above, one level out — and stored whatever it found.
 #[test]
 fn test_error_con_idc_out_of_range_is_clamped_at_set_option() {
     let mut param = SDecodingParam::default();
@@ -197,14 +178,6 @@ fn test_error_con_idc_out_of_range_is_clamped_at_set_option() {
 /// Inert on output today only because `DecodeParser` is a stub, and *not* inert as
 /// a configuration: the mode the caller asked for stays in the context's parameter
 /// block and selects `sCopyFunc`'s kernels.
-///
-/// Red before T8.B1:
-///
-/// ```text
-/// assertion `left == right` failed: bParseOnly did not disable concealment
-///   left: 2
-///  right: 0
-/// ```
 #[test]
 fn test_parse_only_disables_error_concealment() {
     let mut param = SDecodingParam::default();
@@ -226,32 +199,18 @@ fn test_parse_only_disables_error_concealment() {
 }
 
 // ---------------------------------------------------------------------------
-// T8.B2 — a second `Initialize` on a live decoder rebuilds the context
+// A second `Initialize` on a live decoder rebuilds the context
 // ---------------------------------------------------------------------------
 
-/// **F76's third companion** — `welsDecoderExt.cpp:407–409`.
+/// **`welsDecoderExt.cpp:407–409`.**
 ///
 /// `CWelsDecoder::InitDecoder` calls `InitDecoderCtx` for every context, and
 /// `InitDecoderCtx` opens with `UninitDecoderCtx (pCtx)` and then allocates a fresh
 /// one. So in the reference a second `Initialize` on a live decoder is a rebuild.
-/// This port guarded the whole construction with `if (*dec_impl).pCtx.is_null()`,
-/// so a second call re-copied the parameters into the *existing* context and
-/// returned — keeping the previous session's reordering buffer, statistics, last
-/// decoded-picture record and decode timestamps, all of which the reference
-/// `memset`s.
 ///
 /// The observable is the reordering buffer: a B-frame stream stopped mid-GOP leaves
 /// pictures buffered, `DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER` counts
 /// them, and after a rebuild there is nothing to count.
-///
-/// Red before T8.B2:
-///
-/// ```text
-/// assertion `left == right` failed: a second Initialize kept the previous
-/// session's reordering buffer
-///   left: 1
-///  right: 0
-/// ```
 #[test]
 fn test_second_initialize_rebuilds_the_context() {
     let data = asset("Cisco_Men_whisper_640x320_CABAC_Bframe_9.264");
@@ -285,7 +244,7 @@ fn test_second_initialize_rebuilds_the_context() {
             "the asset never buffered a picture — this test no longer covers the rebuild"
         );
 
-        // The transition the reference rebuilds through, and this port did not.
+        // The transition the reference rebuilds through.
         let mut buf = std::mem::MaybeUninit::<SDecodingParam>::uninit();
         std::ptr::copy_nonoverlapping(
             std::ptr::from_ref(&param).cast::<u8>(),
@@ -319,32 +278,21 @@ unsafe fn remaining_in_buffer(dec: &Dec) -> i32 {
 /// **`decoder.cpp:667–671`, `eVideoType`, and `welsDecoderExt.cpp:833–842`, its
 /// one reader.**
 ///
-/// The field was write-only in this port: set once by the context constructor to
-/// `VIDEO_BITSTREAM_AVC` and never again. Its reader is the key-frame-loss
-/// notification inside the `DecodeFrame2` error block — *"for AVC bitstream, as long
-/// as error occur, SHOULD notify upper layer key frame loss"* — which raises
-/// `bParamSetsLostFlag` when concealment is off. `UpdateAccessUnit`'s
-/// mosaic-avoidance block then counts one `uiIDRLostNum` for the next access unit
-/// that arrives without an IDR.
+/// The field's reader is the key-frame-loss notification inside the `DecodeFrame2`
+/// error block — *"for AVC bitstream, as long as error occur, SHOULD notify upper
+/// layer key frame loss"* — which raises `bParamSetsLostFlag` when concealment is
+/// off. `UpdateAccessUnit`'s mosaic-avoidance block then counts one `uiIDRLostNum`
+/// for the next access unit that arrives without an IDR.
 ///
-/// **The observable is that counter and not the frame count**, and the difference
-/// between the two is the finding stated precisely. `bParamSetsLostFlag` is already
-/// true whenever a frame failed to construct, so the arm only adds something when
-/// an error arrives on a call that *did* construct a frame — one truncated slice in
-/// an otherwise clean stream. Measured across `res/` at T8.B3: whole streams never
-/// produce that coincidence (no asset differs between the two declarations at all),
-/// one truncated slice in `BA_MW_D.264` produces it on every unit from the fourth
-/// on, and it moves `uiIDRLostNum` by exactly one while the emitted frame count
-/// does not move at all. That is the notification the reference documents: an
-/// accounting event for the upper layer, not a change of output.
-///
-/// Red before T8.B3, where neither the assignment nor the reader existed:
-///
-/// ```text
-/// assertion `left == right` failed: declaring the stream AVC changed nothing
-///   left: 27
-///  right: 28
-/// ```
+/// **The observable is that counter and not the frame count.**
+/// `bParamSetsLostFlag` is already true whenever a frame failed to construct, so the
+/// arm only adds something when an error arrives on a call that *did* construct a
+/// frame — one truncated slice in an otherwise clean stream. Whole streams never
+/// produce that coincidence; one truncated slice in `BA_MW_D.264` produces it on
+/// every unit from the fourth on, and it moves `uiIDRLostNum` by exactly one while
+/// the emitted frame count does not move at all. That is the notification the
+/// reference documents: an accounting event for the upper layer, not a change of
+/// output.
 #[test]
 fn test_avc_bitstream_type_notifies_key_frame_loss_when_ec_is_off() {
     let data = asset("BA_MW_D.264");
@@ -419,18 +367,8 @@ unsafe fn decode_units(dec: &Dec, units: &[Vec<u8>]) -> (i32, u32) {
 
 /// **`welsDecoderExt.cpp:856–882`, the four concealment statistics.**
 ///
-/// The port sets `dsDataErrorConcealed` from three sites inside the decoder, so the
-/// *return code* was not lost — but `uiDecodedFrameCount`, `uiAvgEcRatio`,
-/// `uiAvgEcPropRatio` and `uiEcFrameNum` had **no writer anywhere in the tree**, and
-/// `DECODER_OPTION_GET_STATISTICS` is a public option. Nor was the option itself
-/// wired: it fell through `GetOption`'s catch-all and returned success without
-/// touching the caller's buffer, which is why nothing noticed.
-///
-/// Red before T8.B3 — the caller's buffer comes back exactly as it went in:
-///
-/// ```text
-/// assertion failed: after.uiDecodedFrameCount > 0
-/// ```
+/// `uiDecodedFrameCount`, `uiAvgEcRatio`, `uiAvgEcPropRatio` and `uiEcFrameNum`,
+/// read back through the public `DECODER_OPTION_GET_STATISTICS` option.
 #[test]
 fn test_concealment_statistics_reach_get_statistics() {
     let data = asset("BA_MW_D_IDR_LOST.264");

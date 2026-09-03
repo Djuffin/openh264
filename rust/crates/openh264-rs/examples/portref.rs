@@ -1,15 +1,9 @@
 //! `portref` — the **port's** answer for one malformed-corpus entry.
 //!
 //! The exact counterpart of `rust/tools/ecref`, which prints the C++ decoder's
-//! answer for the same bytes, and it exists for the same reason: when the two
-//! disagree, "the port changed" is not evidence either way — the question is what
-//! each decoder *does*.
+//! answer for the same bytes.
 //!
-//! Session S built `ecref` and had to reach for the port's side twice through
-//! temporary test files; session T needed it on every one of F46's five causes and
-//! on face 1. So it is an instrument now rather than a scratch file, and it lives in
-//! `examples/` on purpose: `cargo test` does not run examples, so this cannot become
-//! a test that asserts nothing while occupying a slot in a ratcheted count.
+//! It lives in `examples/` on purpose: `cargo test` does not run examples.
 //!
 //! ```text
 //! cargo run --example portref -- narrow_16x16.264 41
@@ -18,8 +12,7 @@
 //!
 //! Prints, in `DecodeFrame2`/`FlushFrame` call order: the `DECODING_STATE` and
 //! `iBufferStatus` of every call, one SHA-1 per emitted frame **individually**
-//! (which is what `ecref`'s single whole-run digest cannot give you — face 1 is
-//! settled by comparing the two per-frame lists as multisets), and the same
+//! (which is what `ecref`'s single whole-run digest cannot give you), and the same
 //! `frames / dims / codes / bufstatus` row shape the golden tables store.
 //!
 //! Same decode as `tests/malformed_stream_parity.rs`'s `decode_case`: annex-B split,
@@ -44,13 +37,12 @@ fn run(name: &str, want: usize) {
     decode(&format!("{name} @{want}"), &data, false);
 }
 
-/// Bytes on stdin, the mirror of `ecref --stdin` (Phase 5 session U, T5.U2).
+/// Bytes on stdin, the mirror of `ecref --stdin`.
 ///
 /// A prefix truncation is `(stream, length)`; the `hdr*.*`, `tail.*` and
 /// degenerate corpus entries are built inside the harness and no such pair names
 /// them. Both referees therefore read a blob, and the harness hands one over via
-/// `MALFORMED_DUMP_DIR` — which is what makes a per-frame multiset comparison
-/// possible on those rows rather than only on the truncations.
+/// `MALFORMED_DUMP_DIR`.
 fn run_stdin(raw: bool) {
     use std::io::Read as _;
     let mut data = Vec::new();
@@ -59,8 +51,7 @@ fn run_stdin(raw: bool) {
 }
 
 /// `--nodelay` feeds each unit through `DecodeFrameNoDelay` instead of `DecodeFrame2`
-/// — the counterpart of `ecref --nodelay` (T8.C8, F82). Two entry points, two
-/// referees.
+/// — the counterpart of `ecref --nodelay`.
 fn nodelay_wanted() -> bool {
     std::env::args().any(|a| a == "--nodelay")
 }

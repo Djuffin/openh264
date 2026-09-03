@@ -1,39 +1,7 @@
 //! Port of `codec/encoder/core/src/svc_enc_slice_segment.cpp` — the slice-argument
 //! validation group.
-//!
-//! **Partial by design.** This module holds the six functions
-//! `ParamValidationExt` needs, which is what unblocks the `SM_FIXEDSLCNUM_SLICE` and
-//! `SM_RASTER_SLICE` arms:
-//!
-//! - `CheckFixedSliceNumMultiSliceSetting`
-//! - `CheckRowMbMultiSliceSetting`
-//! - `CheckRasterMultiSliceSetting`
-//! - `GomValidCheckSliceNum`
-//! - `GomValidCheckSliceMbNum`
-//! - `SliceArgumentValidationFixedSliceMode`
-//!
-//! The rest of `svc_enc_slice_segment.cpp` — `InitSliceSegment`,
-//! `AssignMbMapSingleSlice`, `AssignMbMapMultipleSlices`, `GetInitialSliceNum`,
-//! `InitSlicePEncCtx`/`UninitSlicePEncCtx`, `WelsGetFirstMbOfSlice` (dead in both
-//! trees — the port's copy was deleted per S18, Phase 9 E3 step 0),
-//! `WelsGetPrevMbOfSlice`, `WelsGetNumMbInSlice`, `DynamicMaxSliceNumConstraint` —
-//! allocates and drives `SSliceCtx::pOverallMbMap` and belongs with the context
-//! construction in Phase 4. `WelsMbToSliceIdc`, `WelsGetNextMbOfSlice`,
-//! `GetCurrentSliceNum` and `DynamicAdjustSlicePEncCtxAll` already exist elsewhere in
-//! the port and are deliberately not re-declared here.
-//!
-//! Note the header comment in the Phase-3 plan places
-//! `SliceArgumentValidationFixedSliceMode` in `svc_enc_slice_segment.cpp`; it is
-//! actually defined at `encoder_ext.cpp:174` and declared in
-//! `svc_enc_slice_segment.h`. It is kept here, with the functions it calls.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-// **S9.2: sealed.** All 20 of this file's allows are gone — nine raw bodies (the
-// slice-argument validators, whose `*mut i32` cursors were type puns over a
-// `[u32; 35]`) and eleven test `unsafe` blocks that turned out to be vestigial:
-// they wrapped calls to those same nine, and became dead the moment the callees
-// went safe. They were not mandated instruments; nothing here reads a raw pointer
-// as its subject.
 #![forbid(unsafe_code)]
 
 use std::ffi::c_char;
@@ -98,16 +66,10 @@ pub fn CheckFixedSliceNumMultiSliceSetting(
     kiMbNumInFrame: i32,
     pSliceArg: &mut SSliceArgument,
 ) -> bool {
-    // **S9.2**: the raw cursor was `uiSliceMbNum.as_mut_ptr() as *mut i32` — a type
-    // pun, writing `i32` into a `[u32; MAX_SLICES_NUM_TMP]`. `v as u32` stores the
-    // same bits, so the array is written directly and the pun retires with the raw.
     let kuiSliceNum = (*pSliceArg).uiSliceNum;
     let mut uiSliceIdx: u32 = 0;
     let kiMbNumPerSlice = kiMbNumInFrame / kuiSliceNum as i32;
     let mut iNumMbLeft = kiMbNumInFrame;
-
-    // C++ null-checks pSlicesAssignList here; the array is inline in the struct, so
-    // the pointer can never be null and the check is elided.
 
     while uiSliceIdx + 1 < kuiSliceNum {
         pSliceArg.uiSliceMbNum[uiSliceIdx as usize] = kiMbNumPerSlice as u32;
@@ -132,8 +94,6 @@ pub fn CheckFixedSliceNumMultiSliceSetting(
 /// `pSliceArg` must be non-null and `uiSliceNum` no greater than `uiSliceMbNum`'s
 /// length.
 pub fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: &mut SSliceArgument) -> bool {
-    // S9.2, as `CheckFixedSliceNumMultiSliceSetting`: the `*mut i32` pun over a
-    // `[u32; _]` becomes a direct write of the same bits.
     let kuiSliceNum = (*pSliceArg).uiSliceNum;
     let mut uiSliceIdx: u32 = 0;
 
@@ -149,16 +109,10 @@ pub fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: &mut SSliceArgumen
 /// Slice parameter check for `SM_RASTER_SLICE`: walks the caller's per-slice
 /// macroblock counts, then corrects the total to exactly `kiMbNumInFrame` and writes
 /// back the resulting slice count.
-///
-/// # Safety
-/// `pSliceArg` must be non-null.
 pub fn CheckRasterMultiSliceSetting(
     kiMbNumInFrame: i32,
     pSliceArg: &mut SSliceArgument,
 ) -> bool {
-    // S9.2: the pun again, read *and* written here. `MAX_SLICES_NUM` and
-    // `MAX_SLICES_NUM_TMP` are both 35 — the loop bound is exactly the array's
-    // length — so indexing introduces no reachable panic where the raw read none.
     let mut iActualSliceCount: i32 = 0;
 
     // check mb_num setting
@@ -205,9 +159,6 @@ pub fn CheckRasterMultiSliceSetting(
 ///
 /// GOM-based RC decision for `uiSliceNum`, only used at `SM_FIXEDSLCNUM_SLICE`.
 /// Returns false — and rewrites `*pSliceNum` — when the requested count does not fit.
-///
-/// # Safety
-/// `pSliceNum` must be non-null.
 pub fn GomValidCheckSliceNum(kiMbWidth: i32, kiMbHeight: i32, pSliceNum: &mut u32) -> bool {
     let kiCountNumMb = kiMbWidth * kiMbHeight;
     let mut iSliceNum: u32 = *pSliceNum;
@@ -247,8 +198,6 @@ pub fn GomValidCheckSliceMbNum(
     kiMbHeight: i32,
     pSliceArg: &mut SSliceArgument,
 ) -> bool {
-    // S9.2: no pun here — the array is already `u32` — so the cursor is simply the
-    // array, indexed at each write.
     let kuiSliceNum = (*pSliceArg).uiSliceNum;
     let kiMbNumInFrame = kiMbWidth * kiMbHeight;
     let kiMbNumPerSlice = kiMbNumInFrame / kuiSliceNum as i32;
@@ -309,9 +258,6 @@ pub fn GomValidCheckSliceMbNum(
 ///
 /// Validates and repairs an `SM_FIXEDSLCNUM_SLICE` argument, falling back to
 /// `SM_SINGLE_SLICE` where the requested slicing cannot work.
-///
-/// # Safety
-/// `pSliceArgument` must be non-null and writable.
 pub fn SliceArgumentValidationFixedSliceMode(
     _pLogCtx: SLogContext,
     pSliceArgument: &mut SSliceArgument,
@@ -384,11 +330,6 @@ pub fn SliceArgumentValidationFixedSliceMode(
 }
 
 /// `AssignMbMapSingleSlice` — svc_enc_slice_segment.cpp:53.
-///
-/// # Safety
-/// `pMbMap` must point to at least `kiCountMbNum * kiMapUnitSize` writable bytes.
-/// (`*mut u16` since Phase 6 session B: the C++ takes `void*` and every caller
-/// passes `pOverallMbMap`, which is `uint16_t*` at both ends.)
 pub fn AssignMbMapSingleSlice(pMbMap: &[AtomicU16], kiCountMbNum: i32) -> i32 {
     if pMbMap.is_empty() || kiCountMbNum <= 0 {
         return 1;
@@ -402,9 +343,7 @@ pub fn AssignMbMapSingleSlice(pMbMap: &[AtomicU16], kiCountMbNum: i32) -> i32 {
     0
 }
 
-/// A zeroed macroblock map of `kiCountMbNum` entries — the port's spelling of the
-/// `WelsMallocz` the C++ carves the map with, now that the element is `AtomicU16`
-/// and `vec![_; n]` cannot clone it (T9.C2).
+/// A zeroed macroblock map of `kiCountMbNum` entries.
 fn new_mb_map(kiCountMbNum: i32) -> Vec<AtomicU16> {
     (0..kiCountMbNum.max(0) as usize).map(|_| AtomicU16::new(0)).collect()
 }
@@ -416,7 +355,6 @@ fn new_mb_map(kiCountMbNum: i32) -> Vec<AtomicU16> {
 /// the shared tail falls through to `return 1` with the comment "extention for other
 /// multiple slice type in the future". `InitSliceSegment` returns that value directly,
 /// so multi-slice `InitSlicePEncCtx` reports failure while still having filled the map.
-/// Reproduced verbatim.
 ///
 /// # Safety
 /// `pCurDq` must be non-null with `sSliceEncCtx.pOverallMbMap` allocated.
@@ -424,9 +362,6 @@ pub fn AssignMbMapMultipleSlices(
     pCurDq: &mut SDqLayer,
     kpSliceArgument: &SSliceArgument,
 ) -> i32 {
-    // T9.E2h: a plain field borrow — the `as *mut` spelling made a raw whose
-    // parent temporary expired at the statement (S29's cast clause); under the
-    // `&mut` parameter the borrow checker referees the window instead.
     let pSliceSeg = &mut pCurDq.sSliceEncCtx;
     let mut iSliceIdx: i32;
     if (*pSliceSeg).uiSliceMode == SM_SINGLE_SLICE {
@@ -454,16 +389,6 @@ pub fn AssignMbMapMultipleSlices(
     } else if (*pSliceSeg).uiSliceMode == SM_RASTER_SLICE
         || (*pSliceSeg).uiSliceMode == SM_FIXEDSLCNUM_SLICE
     {
-        // **S9.2**: the last of this file's `*const i32` puns over `[u32; 35]`.
-        //
-        // The loop below is bounded by `iSliceNumInFrame`, not by the array, so
-        // indexing is only lawful if that count cannot exceed the array — otherwise a
-        // defined-but-garbage read would become a fresh panic, which is the one rule
-        // this family has. It cannot: both modes that reach here set
-        // `iSliceNumInFrame = uiSliceNum` (`GetInitialSliceNum`), and `uiSliceNum` is
-        // capped at `MAX_SLICES_NUM` by `SliceArgumentValidationFixedSliceMode:353`
-        // for FIXEDSLCNUM and bounded by its own loop in `CheckRasterMultiSliceSetting`
-        // for RASTER. `MAX_SLICES_NUM` and `MAX_SLICES_NUM_TMP` are both 35.
         debug_assert!(
             (*pSliceSeg).iSliceNumInFrame.load(Ordering::Relaxed) as usize
                 <= (*kpSliceArgument).uiSliceMbNum.len(),
@@ -508,14 +433,7 @@ pub fn AssignMbMapMultipleSlices(
 }
 
 /// `GetInitialSliceNum` — svc_enc_slice_segment.cpp:325.
-///
-/// # Safety
-/// `pSliceArgument` may be null, which returns -1 as in C++.
 pub fn GetInitialSliceNum(pSliceArgument: &SSliceArgument) -> i32 {
-    // **S6.D1**, and T9.H's idiom: the `is_null()` guard (and its `-1`) retire with the
-    // parameter. Every caller reaches this through a *field* —
-    // `&(*pDLayer).sSliceArgument` at `encoder_ext.rs:193` and `:829`, and the third
-    // caller threads the same reference on — so the pointer was never absent.
     match (*pSliceArgument).uiSliceMode {
         SM_SINGLE_SLICE | SM_FIXEDSLCNUM_SLICE | SM_RASTER_SLICE => {
             (*pSliceArgument).uiSliceNum as i32
@@ -527,24 +445,15 @@ pub fn GetInitialSliceNum(pSliceArgument: &SSliceArgument) -> i32 {
 }
 
 /// `InitSliceSegment` — svc_enc_slice_segment.cpp:358.
-///
-/// # Safety
-/// `pCurDq` and `pSliceArgument` must be non-null.
 pub fn InitSliceSegment(
     pCurDq: &mut SDqLayer,
     pSliceArgument: &SSliceArgument,
     kiMbWidth: i32,
     kiMbHeight: i32,
 ) -> i32 {
-    // T9.E2h: a plain field borrow — the `as *mut` spelling made a raw whose
-    // parent temporary expired at the statement (S29's cast clause); under the
-    // `&mut` parameter the borrow checker referees the window instead.
     let pSliceSeg = &mut pCurDq.sSliceEncCtx;
     let kiCountMbNum = kiMbWidth * kiMbHeight;
 
-    // **S6.D1**: the `is_null()` disjunct goes with the parameter — `InitSliceSegment`
-    // has one caller (`InitSlicePEncCtx`), reached from `encoder_ext.rs:1009` with the
-    // address of a `sSliceArgument` field. The two dimension arms are the live guard.
     if kiMbWidth == 0 || kiMbHeight == 0 {
         return 1;
     }
@@ -586,8 +495,6 @@ pub fn InitSliceSegment(
             return 1;
         }
 
-        // `WelsMallocz` zeroed the block and the `WelsSetMemMultiplebytes_c` that
-        // followed zeroed it again; a zeroed map is both.
         (*pSliceSeg).pOverallMbMap = new_mb_map(kiCountMbNum);
 
         // SM_SIZELIMITED_SLICE: init, set pSliceSeg->iSliceNumInFrame = 1
@@ -622,17 +529,8 @@ pub fn InitSliceSegment(
 }
 
 /// `UninitSliceSegment` — svc_enc_slice_segment.cpp:449.
-///
-/// # Safety
-/// `pCurDq` and `pMa` must be non-null.
 pub fn UninitSliceSegment(pCurDq: &mut SDqLayer) {
-    // T9.E2h: a plain field borrow — the `as *mut` spelling made a raw whose
-    // parent temporary expired at the statement (S29's cast clause); under the
-    // `&mut` parameter the borrow checker referees the window instead.
     let pSliceSeg = &mut pCurDq.sSliceEncCtx;
-    // The map is a `Vec<u16>` since T6.D7 — clearing it releases the storage the
-    // explicit `WelsFree` used to, and the layer's `Drop` covers the paths that never
-    // reach here at all.
     (*pSliceSeg).pOverallMbMap = Vec::new();
 
     (*pSliceSeg).uiSliceMode = SM_SINGLE_SLICE; // single in default
@@ -648,9 +546,6 @@ pub fn UninitSliceSegment(pCurDq: &mut SDqLayer) {
 ///
 /// `bFmoUseFlag` and `pPpsArg` are accepted and unused, as in C++, and the return
 /// value of `InitSliceSegment` is discarded — C++ returns a literal 0 here.
-///
-/// # Safety
-/// `pCurDq` may be null, which returns 1 as in C++.
 pub fn InitSlicePEncCtx(
     pCurDq: &mut SDqLayer,
     _bFmoUseFlag: bool,
@@ -663,18 +558,9 @@ pub fn InitSlicePEncCtx(
 }
 
 /// `UninitSlicePEncCtx` — svc_enc_slice_segment.cpp:508.
-///
-/// # Safety
-/// `pMa` must be non-null when `pCurDq` is.
 pub fn UninitSlicePEncCtx(pCurDq: &mut SDqLayer) {
     UninitSliceSegment(pCurDq);
 }
-
-// `WelsGetFirstMbOfSlice` stood here — dead in **both** trees: the C++ defines it
-// (`svc_enc_slice_segment.cpp:540`) and never calls it, and the port's copy had
-// zero callers (read grep at deletion, Phase 9 E3 step 0:
-// `grep -rn 'WelsGetFirstMbOfSlice' src tests benches | grep -v 'fn '` → the module
-// doc's mention alone). **S18: deleted, not converted** — one `port-raw` tag with it.
 
 #[cfg(test)]
 mod tests {

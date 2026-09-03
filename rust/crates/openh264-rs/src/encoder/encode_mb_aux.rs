@@ -198,67 +198,26 @@ pub const KI_TRUN_TABLE: [i32; 16] = [3, 2, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 
 // Function Pointer Types
 // ============================================================================
 
-/// The fixed-shape block-copy slot — **S9.0c: safe, and no longer `extern "C"`.**
+/// The fixed-shape block-copy slot.
 ///
-/// It took `(*mut u8, i32, *mut u8, i32)`. The strides ride inside the cursors now,
-/// and **both operands are `RecCursor`** because the slot's two callers disagree
-/// about storage: the background path copies picture-to-picture (F117), while the
+/// Both operands are `RecCursor` because the slot's two callers disagree
+/// about storage: the background path copies picture-to-picture, while the
 /// mode-decision path copies an owned prediction scratch into a picture plane. A
 /// function-pointer table cannot be generic, so the scratch reaches the same type
-/// through `RecCursor::over_owned` — `Cell::from_mut(..).as_slice_of_cells()`, safe
-/// and raw-free.
-///
-/// `extern "C"` goes for F241's reason: a reference operand is not FFI-safe, and the
-/// slot is internal dispatch that was never reachable from C.
+/// through `RecCursor::over_owned`.
 pub type PCopyFunc =
     fn(pDst: &crate::encoder::rec_view::RecCursor<'_>, pSrc: &crate::encoder::rec_view::RecCursor<'_>);
-/// The forward-DCT slot — **S9.0: safe, and no longer `extern "C"`.**
-///
-/// It took `(*mut i16, *mut u8, i32, *mut u8, i32)`: a coefficient block and two
-/// pixel roots with their strides. The strides travel *inside* the cursors now and
-/// the coefficient block is a slice, so the slot carries no raw pointer at all.
-///
-/// `extern "C"` had to go for the conversion to be expressible — `&mut [T]` in an
-/// `extern "C"` signature is not FFI-safe (`improper_ctypes_definitions`), which
-/// F241 established when the screen-content kernels dropped it. Nothing is lost:
-/// the slot is internal dispatch and was never reachable from C.
+/// The forward-DCT slot.
 pub type PDctFunc = fn(
     pDct: &mut [i16],
     pSample1: &crate::encoder::rec_view::RecCursor<'_>,
-    // S10.2: the prediction operand is a `RecCursor` too now. It is always a
-    // caller-owned scratch pane on `SMbCache`, reached through
-    // `RecCursor::over_owned` — the door this type documents for exactly this
-    // case, so a dispatch slot needs one operand type rather than two.
     pSample2: &crate::encoder::rec_view::RecCursor<'_>,
 );
 
-// ---------------------------------------------------------------------------
-// **T9.D8 — the residual family's slots hold safe function pointers.**
-//
-// F103 split the coefficient family: five kernels had a direct caller and went
-// safe in T9.A3/A4; these eleven were reached *only* through `SWelsFuncPtrList`,
-// and every call-through passed a walking `SMbCache` cursor (`pRes.add(64)`,
-// `pBlock.add(16)`), so they were handed to this family. With the arena behind
-// `&mut SMbCache` the call sites index it instead, and the slot can hold the
-// safe kernel with no shim under it.
-//
-// Two consequences of taking exact arrays that the raw types hid:
-//
-//   * **`PQuantizationFunc` had to split.** One raw type served both
-//     `pfQuantization4x4` (one block) and `pfQuantizationFour4x4` (four), because
-//     `*mut i16` says nothing about length. The kernels are `quant_4x4` over
-//     `[i16; 16]` and `quant_four_4x4` over `[i16; 64]`, so the slots get one type
-//     each. A raw pointer that serves two lengths is a type that was not saying
-//     what it meant.
-//   * **The odd lengths are the reach, not the block.** `hadamard_quant_2x2` and
-//     its `Skip` twin read `rs[0]`, `rs[16]`, `rs[32]`, `rs[48]` — so their span is
-//     49, not 64 — and `hadamard_t4_dc` reads block 15's DC at index 240, so its
-//     span is 241. Those are the numbers the T7 differential test already pinned.
-//
-// The plane-taking slots (`PDctFunc` above, and the IDCT/copy slots) stay raw:
-// they pair an `SMbCache` operand with a *picture* one, which is F104's double
-// gate and the plane family's half.
-// ---------------------------------------------------------------------------
+// The odd lengths below are the reach, not the block: `hadamard_quant_2x2` and
+// its `Skip` twin read `rs[0]`, `rs[16]`, `rs[32]`, `rs[48]` — so their span is
+// 49, not 64 — and `hadamard_t4_dc` reads block 15's DC at index 240, so its
+// span is 241.
 pub type PCalculateSingleCtrFunc = fn(pDct: &[i16; 16]) -> i32;
 pub type PScanFunc = fn(pLevel: &mut [i16; 16], pDct: &[i16; 16]);
 pub type PQuantization4x4Func = fn(pDct: &mut [i16; 16], pFF: &[i16; 8], pMF: &[i16; 8]);
@@ -272,14 +231,7 @@ pub type PQuantizationHadamardFunc =
 pub type PTransformHadamard4x4Func = fn(pLumaDc: &mut [i16; 16], pDct: &[i16; 241]);
 pub type PGetNoneZeroCountFunc = fn(pLevel: &[i16; 16]) -> i32;
 
-/// The 4x4 block at coefficient offset `off` — the safe form of `pRes.add(off)`
-/// where the callee reads one block.
-///
-/// **S28 does not object.** The rule is about *raw* cursors: a raw taken through a
-/// sub-slice carries a tag that dies the moment the kernel walks past the slice, and
-/// these kernels used to walk. A safe borrow is taken afresh per block and lives
-/// exactly as long as the call it is made for, and the kernel's own signature says
-/// it never reads outside.
+/// The 4x4 block at coefficient offset `off`, where the callee reads one block.
 #[inline]
 pub fn blk4x4(a: &[i16], off: usize) -> &[i16; 16] {
     a[off..off + 16].try_into().expect("a 4x4 block is 16 coefficients")
@@ -292,21 +244,21 @@ pub fn blk4x4_mut(a: &mut [i16], off: usize) -> &mut [i16; 16] {
 }
 
 /// [`blk_four4x4_mut`], shared — the reconstruction kernels only read their
-/// coefficients (T9.C2).
+/// coefficients.
 #[inline]
 pub fn blk_four4x4(a: &[i16], off: usize) -> &[i16; 64] {
     a[off..off + 64].try_into().expect("four 4x4 blocks are 64 coefficients")
 }
 
 /// The whole macroblock's 256 luma coefficients at `off` — `WelsIDctT4RecOnMb`'s
-/// span, which it walks as four quadrants of 64 (T9.C2).
+/// span, which it walks as four quadrants of 64.
 #[inline]
 pub fn blk_mb256(a: &[i16], off: usize) -> &[i16; 256] {
     a[off..off + 256].try_into().expect("a macroblock's luma is 256 coefficients")
 }
 
-/// The four 4x4 blocks at coefficient offset `off` — `pRes.add(off)` where the
-/// callee reads a quadrant.
+/// The four 4x4 blocks at coefficient offset `off`, where the callee reads a
+/// quadrant.
 #[inline]
 pub fn blk_four4x4_mut(a: &mut [i16], off: usize) -> &mut [i16; 64] {
     (&mut a[off..off + 64]).try_into().expect("four 4x4 blocks are 64 coefficients")
@@ -335,27 +287,12 @@ pub fn hadamard_dc_span(a: &[i16], off: usize) -> &[i16; 241] {
 // Encoder Function Pointer Table (SWelsFuncPtrList)
 // ============================================================================
 
-// ---------------------------------------------------------------------------
-// Safe kernels (plan §Phase 2, recipe R2). These are the implementations; the
-// `Wels*_c` functions below are strangler shims (R7) that build views from the
-// raw pointers and call in here, so no call site and no dispatch-table
-// installer changes in this phase.
-//
-// Every block dimension in this family is a compile-time constant, so the
-// coefficient signatures are fixed arrays and the shim spans are derivable
-// from the signature alone (T2's situation, not T3's). The two pixel-reading
-// kernels (the forward DCTs) reach forward only from their own (0, 0) — no
-// `-1` column, no `-stride` row — so their spans need no padding knowledge
-// either.
-//
-// Arithmetic parity (rule R-e, findings F8/F9): every kernel reproduces the
-// raw port's integer widths and operations exactly. The DCT and Hadamard
-// intermediates are `i32` here as they were there; on all in-contract inputs
-// the values stay far inside `i32` (the per-kernel bounds are derived in the
-// doc comments below), so none of these kernels can panic in a debug build.
-// The `as i16` narrowings are the C++'s own implicit `int -> int16_t`
-// conversions, kept where the C++ has them.
-// ---------------------------------------------------------------------------
+// The two pixel-reading kernels (the forward DCTs) reach forward only from their
+// own (0, 0) — no `-1` column, no `-stride` row. The DCT and Hadamard
+// intermediates are `i32`; on all in-contract inputs the values stay far inside
+// `i32` (the per-kernel bounds are derived in the doc comments below), so none of
+// these kernels can panic in a debug build. The `as i16` narrowings are the C++'s
+// own implicit `int -> int16_t` conversions, kept where the C++ has them.
 
 use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_4x4, copy_4x8, copy_8x16, copy_8x4, copy_8x8};
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut, SampleCursor};
@@ -378,7 +315,7 @@ pub fn dct_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 16], pix1: &A, 
 
     for row in 0..4usize {
         let i = row << 2;
-        // S9.0b: `row_n` by value, because the source operand may be a shared
+        // `row_n` by value, because the source operand may be a shared
         // interior-mutable plane and a shared view cannot lend a slice into cells.
         let r1 = pix1.row_n::<4>(row as isize, 0);
         let r2 = pix2.row_n::<4>(row as isize, 0);
@@ -437,8 +374,7 @@ pub fn dct_four_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 64], pix1:
 /// contract this family actually needs is weaker and worth stating once:
 /// for any **non-negative** `ff` and `mf` up to `i16::MAX`,
 /// `(ff + |v|) * mf <= 65534 * 32767 < i32::MAX`, so the product cannot
-/// overflow. A negative `mf` could (the differential tests bound their inputs
-/// accordingly), and no table contains one.
+/// overflow. A negative `mf` could, and no table contains one.
 #[inline(always)]
 fn quant_one(v: i16, ff: i32, mf: i32) -> i16 {
     let sign = (v as i32) >> 31;
@@ -509,7 +445,7 @@ pub fn quant_four_4x4_max(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8], max
 /// The four chroma DC coefficients a 2x2 Hadamard reads, at raster positions
 /// 0, 16, 32 and 48 of the chroma coefficient group — index 48 is the reach,
 /// which is why the parameter is `[i16; 49]` and not `[i16; 64]`: 49 elements
-/// is exactly the span the kernel touches, and the shim materializes no more.
+/// is exactly the span the kernel touches.
 #[inline(always)]
 fn hadamard_2x2_butterfly(rs: &[i16; 49]) -> [i32; 4] {
     let (r0, r16, r32, r48) = (rs[0] as i32, rs[16] as i32, rs[32] as i32, rs[48] as i32);
@@ -679,13 +615,6 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
     16 - level.iter().filter(|&&v| v == 0).count() as i32
 }
 
-// **T5.AB2: the seven safe copy kernels and `copy_rows` moved to
-// `common/copy_mb.rs`** — the C++ defines them in `codec/common/src/copy_mb.cpp`
-// and both codecs include `copy_mb.h`, so `common/` is their home (F22). The
-// decoder's error-concealment module had translated the same C++ functions a
-// second time as raw row loops and could not reach these while they lived here.
-// No call site in this file changed; the `use` below is the whole of the edit.
-
 // ============================================================================
 // Forward Discrete Cosine Transform (FDCT)
 // ============================================================================
@@ -710,9 +639,6 @@ pub fn WelsDctT4_c(
     pPixel1: &crate::encoder::rec_view::RecCursor<'_>,
     pPixel2: &crate::encoder::rec_view::RecCursor<'_>,
 ) {
-    // S9.0: an adapter and nothing else now. It was three `from_raw_parts` calls
-    // reconstituting exactly what the caller already had before it was flattened
-    // to a pointer and a stride.
     let dct: &mut [i16; 16] = (&mut pDct[..16]).try_into().unwrap();
     dct_4x4(dct, pPixel1, pPixel2);
 }
@@ -731,7 +657,6 @@ pub fn WelsDctFourT4_c(
     pPixel1: &crate::encoder::rec_view::RecCursor<'_>,
     pPixel2: &crate::encoder::rec_view::RecCursor<'_>,
 ) {
-    // S9.0, as `WelsDctT4_c` above.
     let dct: &mut [i16; 64] = (&mut pDct[..64]).try_into().unwrap();
     dct_four_4x4(dct, pPixel1, pPixel2);
 }
@@ -761,7 +686,7 @@ pub fn WelsDctFourT4_c(
 ///
 /// Unlike its two neighbours this one is **not** installed in an `SWelsFuncPtrList`
 /// slot and the encoder never calls it; its only caller in the workspace is
-/// `tests/kernels_differential_phase2.rs` (F103).
+/// `tests/kernels_differential_phase2.rs`.
 #[inline]
 pub fn WelsScan4x4Dc(pLevel: &mut [i16; 16], pDct: &[i16; 16]) {
     scan_4x4_dc_ac(pLevel, pDct);
@@ -864,10 +789,6 @@ pub fn WelsCopy16x16_c(
 /// Initializes the encoder function pointer table dynamically based on CPU feature flags.
 pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
 
-    // **S9.1**: the `unsafe` block that wrapped this whole body is gone. It was
-    // vestigial — `pFuncList` has been `&mut SWelsFuncPtrList` since the table flip,
-    // so `&mut *pFuncList` is a plain reborrow and nothing else in the body was ever
-    // unsafe. The allow and its tag retire with it.
     let f = &mut *pFuncList;
 
     // Baseline C fallback functions
@@ -884,12 +805,6 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
     f.pfQuantizationHadamard2x2Skip = hadamard_quant_2x2_skip;
     f.pfTransformHadamard4x4Dc = hadamard_t4_dc;
 
-    // S10.2's closures came off with the slots' `Option`s. They were there because
-    // a *generic* kernel's `fn` item fixes its lifetimes and will not coerce to a
-    // higher-ranked slot type — true of `common/mc.rs`'s four, but never of these
-    // two: `WelsDctT4_c` takes `&RecCursor<'_>` concretely. Naming them also makes
-    // `Default` and this installer the *same* symbol rather than two closures that
-    // merely call the same kernel.
     f.pfDctT4 = WelsDctT4_c;
     f.pfDctFourT4 = WelsDctFourT4_c;
 
@@ -914,18 +829,16 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
 mod tests {
     use super::*;
     
-    /// **S9.0b's referee.** The DCT kernels are generic over [`SampleCursor`] now,
-    /// and the source operand reaches them as a `RecCursor` over a shared
-    /// interior-mutable plane rather than as a `PlaneCursor` over a slice — because
-    /// the source picture is written in-fork by `VaaBackgroundMbDataUpdate` (F117).
-    /// Two storages, one kernel: this pins that they read identically.
+    /// The DCT kernels are generic over [`SampleCursor`], and the source operand
+    /// reaches them as a `RecCursor` over a shared interior-mutable plane rather
+    /// than as a `PlaneCursor` over a slice — because the source picture is
+    /// written in-fork by `VaaBackgroundMbDataUpdate`. Two storages, one kernel:
+    /// this pins that they read identically.
     ///
-    /// **The control is in the test rather than in a session log** (the probe rule:
-    /// see a deliberately-broken variant red before trusting a pass). The second
-    /// assertion biases the shared cursor by one sample and requires the outputs to
-    /// *differ* — if the kernel ignored its source operand, or if both arms silently
-    /// read the same cursor, the equality above would pass for the wrong reason and
-    /// this line would fail.
+    /// The second assertion biases the shared cursor by one sample and requires
+    /// the outputs to *differ* — if the kernel ignored its source operand, or if
+    /// both arms silently read the same cursor, the equality above would pass for
+    /// the wrong reason and this line would fail.
     #[test]
     fn dct_reads_a_shared_source_plane_exactly_as_a_slice_cursor_does() {
         use crate::encoder::rec_view::shared_plane_for_test;
@@ -950,7 +863,7 @@ mod tests {
             "a RecCursor source and a PlaneCursor source over the same bytes disagree"
         );
 
-        // control, seen red by construction
+        // control
         let mut biased = [0i16; 64];
         dct_four_4x4(&mut biased, &shared.cursor(1, 0), &predc);
         assert_ne!(
@@ -1039,18 +952,7 @@ mod tests {
         let count = get_none_zero_count(&level);
         assert_eq!(count, 3);
     }
-
-    // **`test_init_encoding_funcs` stood here and is deleted, not repaired.** It
-    // asserted `pfDctT4.is_some()` and `pfQuantization4x4.is_some()` after this
-    // installer ran. Both slots are plain `fn` since the `Option` sweep, so the
-    // question cannot be asked; and the equality against `SWelsFuncPtrList::default()`
-    // that briefly replaced it was ceremony — `Default` names the same kernels this
-    // installer names, so the test compared the constructor with itself. What a wrong
-    // kernel here would actually break is the encoded bitstream, and the diffharness
-    // sweeps (583 configurations, both profiles) are what say it does not.
 }
 
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
-// used to live in this module disagreed with cpu_core.h and with each other --
-// WELS_CPU_NEON alone had seven distinct values across eight modules.
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_LASX, WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MMXEXT, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3};

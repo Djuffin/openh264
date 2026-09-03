@@ -1,24 +1,21 @@
 #![forbid(unsafe_code)]
 
-//! A slot arena addressed by copyable handles — the safe replacement for taxonomy
-//! class **T4**, multi-alias object graphs (plan §1.2, contract §2.2.3).
+//! A slot arena addressed by copyable handles.
 //!
 //! One decoder `SPicture` is reachable through up to nine locations at once (the DPB
 //! pool, both ref lists, `pDec`, `pECRefPic`, the per-picture `pRefPic` graph — which
 //! has *cycles* —, `SDeblockingFilter::pRefPics`, …). None of those aliases owns it;
-//! they are all "which picture", spelled as an address. Spelled as a handle instead:
-//! one owner, `Copy` handles, and the cyclic `pRefPic` graph becomes plain data,
-//! because a handle does not own what it names.
+//! they are all "which picture". One owner, `Copy` handles, and the cyclic `pRefPic`
+//! graph becomes plain data, because a handle does not own what it names.
 //!
-//! **Identity is handle equality**, and as of T5.N2 the decoder's picture identity
-//! runs through it: `picture.rs`'s `same_picture` compares the slot each picture was
-//! allocated into (plan P3). The comparisons it serves are boundary strength's "same
-//! reference picture?" (`deblocking.rs`), error concealment's four self-copy guards,
-//! and `manage_dec_ref.rs`'s EC prefetch overlap test.
+//! **Identity is handle equality**: `picture.rs`'s `same_picture` compares the slot
+//! each picture was allocated into. The comparisons it serves are boundary strength's
+//! "same reference picture?" (`deblocking.rs`), error concealment's four self-copy
+//! guards, and `manage_dec_ref.rs`'s EC prefetch overlap test.
 //!
 //! This is generalised over `T` rather than written against `Picture`: the encoder
-//! needs the same shape for its own picture pool (Phase 6.1/6.2). `PicId` is an alias
-//! over [`Id`] (`pic_queue.rs`, T5.N1).
+//! needs the same shape for its own picture pool. `PicId` is an alias over [`Id`]
+//! (`pic_queue.rs`).
 
 use std::num::NonZeroU32;
 
@@ -28,7 +25,7 @@ use std::num::NonZeroU32;
 
 /// A handle to a slot in a [`Pool`].
 ///
-/// # Staleness (plan §10 **D1**, decided: debug-only generations)
+/// # Staleness
 ///
 /// Recycling can hand out a slot that an old handle still names, exactly as the C++
 /// can hand out a `SPicture*` to memory a new picture now occupies. That hazard is
@@ -39,17 +36,15 @@ use std::num::NonZeroU32;
 ///
 /// **Equality never consults the generation**, in either profile: a handle names a
 /// slot, and two handles to one slot are equal — a debug build that answered
-/// differently would be a debug/release semantic split, which is the class of
-/// divergence finding F1 was made of.
+/// differently would be a debug/release semantic split.
 ///
 /// # Representation
 ///
 /// The field holds **`slot + 1`**, so `Id` has a niche and `Option<Id>` is one word
-/// with no separate discriminant — which is the representation the raw `*mut
-/// SPicture` it replaced already had. The consumers that make this worth spelling
+/// with no separate discriminant. The consumers that make this worth spelling
 /// out are the reference-id arrays deblocking fills and compares per macroblock
 /// (`[[Option<PicId>; 16]; 2]`, `deblocking.rs`): a niche halves them and makes `==`
-/// one comparison instead of two. Plan §7.4's fast-by-construction clause.
+/// one comparison instead of two.
 #[derive(Clone, Copy, Debug)]
 pub struct Id {
     /// `slot + 1`. Never read directly — [`Id::index`] subtracts the bias.
@@ -199,8 +194,7 @@ impl<T> Pool<T> {
     /// Two slots mutably at once.
     ///
     /// # Panics
-    /// If `a == b`. Two `&mut` to one picture is not a case the C++ has either — it
-    /// is a port bug (plan P13), not a situation to recover from.
+    /// If `a == b`.
     pub fn pair_mut(&mut self, a: Id, b: Id) -> (&mut T, &mut T) {
         self.check(a);
         self.check(b);
@@ -215,17 +209,7 @@ impl<T> Pool<T> {
     /// One slot mutably, plus read access to every *other* slot.
     ///
     /// This is the split the decoder needs constantly: the current picture as `&mut`
-    /// while one or more reference pictures are read (B-slice MC reads two at once,
-    /// plan P1). The C++ expresses it with several live `SPicture*`; here the borrow
-    /// checker proves the disjointness that the C only assumes.
-    ///
-    /// **Deviation from plan §2.2.3**, which sketched
-    /// `cur_and_refs(cur, refs: &[PicId]) -> (&mut T, RefViews)`. The reference *list*
-    /// turned out to carry no weight: its only job was to reject `cur ∈ refs`, which
-    /// [`PoolRest::get`] does anyway at the moment of access, and taking it would
-    /// force either an allocation or an arbitrary fixed capacity in a per-macroblock
-    /// path. Splitting the slot span instead is allocation-free and handles any
-    /// access pattern. Recorded in the plan.
+    /// while one or more reference pictures are read (B-slice MC reads two at once).
     pub fn mut_and_rest(&mut self, cur: Id) -> (&mut T, PoolRest<'_, T>) {
         self.check(cur);
         let index = cur.index();
@@ -246,10 +230,9 @@ impl<T> Pool<T> {
     /// Appends slots to the end of the pool.
     ///
     /// **This is the one place the "never grows or shrinks" contract above is
-    /// relaxed** (Phase 8b session C, T8b.C3). `WelsRequestMem`'s third arm resizes
-    /// the decoder's picture pool in place when a stream changes its reference-frame
-    /// count without changing resolution (`decoder.cpp:493-509`), and the port
-    /// answered `dsOutOfMemory` and stopped decoding — F80/F87.
+    /// relaxed.** `WelsRequestMem`'s third arm resizes the decoder's picture pool in
+    /// place when a stream changes its reference-frame count without changing
+    /// resolution (`decoder.cpp:493-509`).
     ///
     /// Existing slots keep their index **and their generation**, so every outstanding
     /// handle stays valid. That is the faithful reading of `IncreasePicBuff`
@@ -262,11 +245,9 @@ impl<T> Pool<T> {
             // Past every generation now live. `grow` after `reorder_and_shrink`
             // **reuses indices the shrink dropped**, and a slot dropped at generation
             // 0 and re-created at generation 0 would accept a handle taken before the
-            // shrink — the one confusion the counter exists to prevent.
-            // `a_dropped_slot_reused_by_a_later_grow_rejects_the_old_handle` is that
-            // case. Derived rather than stored: `Pool` sits inside structs whose size
-            // `abi_guard.rs` pins per profile, and a pool of sixteen slots makes this
-            // a sixteen-element max on a path that runs once per sequence.
+            // shrink — the one confusion the counter exists to prevent. Derived
+            // rather than stored: a pool of sixteen slots makes this a sixteen-element
+            // max on a path that runs once per sequence.
             let fresh = self
                 .generations
                 .iter()
@@ -296,13 +277,10 @@ impl<T> Pool<T> {
     /// silently naming another picture. A slot that keeps its own value
     /// (`order[i] == i`) keeps its generation and its handles.
     ///
-    /// **This is stricter than the C++ and deliberately so.** There, identity is the
-    /// `SPicture*`, so a pointer held elsewhere follows its picture across the
-    /// reorder for free — and points into freed memory if the picture was dropped.
-    /// Here identity is the slot, so a caller that keeps an [`Id`] across this call
-    /// must re-derive it; the generation check is what turns "silently the wrong
-    /// picture" into a test failure. `DecreasePicBuff` re-derives the one id the C++
-    /// deliberately preserves and clears the rest, which is why nothing faults.
+    /// **This is stricter than the C++ and deliberately so.** Here identity is the
+    /// slot, so a caller that keeps an [`Id`] across this call must re-derive it.
+    /// `DecreasePicBuff` re-derives the one id the C++ deliberately preserves and
+    /// clears the rest, which is why nothing faults.
     ///
     /// # Panics
     /// If `order` is longer than the pool, names an index out of range, or names one
@@ -380,7 +358,7 @@ pub struct PoolRest<'a, T> {
 // copyable and are not being copied: the fields above are two shared slices and an
 // index, and copying them is copying *borrows*. A `PoolRest` that is not `Copy`
 // forces every signature it is threaded through to take it by reference, which grows
-// a second lifetime across the whole macroblock tree (W3's settled fact 3).
+// a second lifetime across the whole macroblock tree.
 impl<T> Clone for PoolRest<'_, T> {
     #[inline]
     fn clone(&self) -> Self {
@@ -393,12 +371,8 @@ impl<T> Copy for PoolRest<'_, T> {}
 impl<'a, T> PoolRest<'a, T> {
     /// The slot `id` names.
     ///
-    /// **The borrow is the view's, not this call's** (T5.AB3): the rest is two
-    /// shared slices with lifetime `'a`, so a result may outlive the `&self` that
-    /// asked for it. `PoolRest` is `Copy`, so a caller that destructures it out of
-    /// an enum holds a *local* — and with the elided lifetime the answer died with
-    /// that local, which is what kept `PicRefs::classify` from handing back a
-    /// reference at all.
+    /// **The borrow is the view's, not this call's**: the rest is two shared slices
+    /// with lifetime `'a`, so a result may outlive the `&self` that asked for it.
     ///
     /// # Panics
     /// If `id` names the slot that is held mutably, or is out of range, or — debug
@@ -547,10 +521,7 @@ mod tests {
         p.id(2);
     }
 
-    // --- grow / reorder_and_shrink (T8b.C3) --------------------------------
-    //
-    // The generation contract across a resize, which is what `safe/pool.rs`'s
-    // "never grows or shrinks" doc used to make unnecessary. `replace`'s analogue.
+    // --- grow / reorder_and_shrink -----------------------------------------
 
     #[test]
     fn grow_appends_and_keeps_every_old_handle() {
@@ -595,7 +566,7 @@ mod tests {
     /// re-derive around, and the reason it clears every `pRefPic` entry.
     // `#[cfg]` rather than `#[ignore]`, matching
     // `debug_builds_catch_a_handle_to_a_recycled_slot` below: generations do not
-    // exist in a release build, and plan §1.4 pins the ignored set at 20.
+    // exist in a release build.
     #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "stale handle")]

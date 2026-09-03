@@ -1,11 +1,4 @@
 #![forbid(unsafe_code)]
-// **Sealed at S11.26.** The last unsafe thing in this file was the per-macroblock
-// window mint in `DeblockingFilterSliceAvcbase` — a `&mut [SMB]` conjured from a
-// shared `&SDqLayer`, claiming `[0 ..= cur]` exclusively while writing one field
-// of one record. The claim now lives in the signature: the walkers take the
-// window from their caller, and the per-macroblock tree takes `MbSplit` — the
-// current record exclusively, its two raster predecessors shared — so a
-// neighbour write is unrepresentable here, not merely absent.
 // Copyright (c) 2009-2013, Cisco Systems
 // All rights reserved.
 //
@@ -58,10 +51,7 @@
 pub const MB_WIDTH_LUMA: usize = 16;
 pub const MB_WIDTH_CHROMA: usize = 8;
 
-// `wels_common_basis.h:123-124`. These were declared here swapped (LEFT 0x02, TOP
-// 0x01). Nothing in this module reads them — in C++ they appear only inside the
-// `HAVE_NEON && SINGLE_REF_FRAME` boundary-flag argument to DeblockingBSCalcEnc_neon,
-// which this port does not dispatch — but the values were still wrong.
+// `wels_common_basis.h:123-124`.
 pub const LEFT_MB_POS: i32 = 0x01;
 pub const TOP_MB_POS: i32 = 0x02;
 
@@ -97,7 +87,7 @@ pub fn IS_INTRA(mb_type: u32) -> bool {
 // `g_kuiAlphaTable`/`g_kiBetaTable`/`g_kiTc0Table` are `static const` **file-local**
 // in both codecs and are deliberately different sizes: `codec/encoder/core/src/
 // deblocking.cpp:72-92` declares `[52 + 12]`, `codec/decoder/core/src/deblocking.cpp:
-// 144-166` declares `[52 + 24]`. Two definitions here is correct.
+// 144-166` declares `[52 + 24]`.
 pub static g_kuiAlphaTable: [u8; 52 + 12] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6, 7, 8, 9, 10, 12, 13, 15, 17, 20,
     22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 71, 80, 90, 101, 113, 127, 144, 162, 182, 203, 226,
@@ -203,10 +193,6 @@ use crate::safe::mb_grid::{MbSplit, MbWindow};
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct TagDeblockingFilter {
-    // `pCsData: [*mut u8; 3]` stood here — three raw roots into the reconstruction
-    // picture, re-advanced per macroblock by both drivers. T9.C2 replaced them with
-    // `mb_cursors`, which derives the same three addresses from the seam's view and
-    // the macroblock's own coordinates.
     pub iCsStride: [i32; 3],       // Reconstruction buffer row pitch in bytes
     pub iMbStride: i16,            // Picture width in macroblocks
     pub iSliceAlphaC0Offset: i8,   // Slice alpha offset parameter
@@ -234,63 +220,13 @@ impl Default for TagDeblockingFilter {
     }
 }
 
-// `TagMB` was declared here: a field-for-field second copy of `SMB` -- five raw
-// pointers included -- with no reference anywhere in the crate and the real type
-// re-exported on the next line. A census that matches on names could not see it
-// (F43's class, under a different name), and T6.C1 would have left it declaring
-// fields no live struct has. **S18: deleted, not converted.**
 pub use crate::encoder::svc_encode_slice::SMB;
 pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
-// `pub type PMb = *mut SMB` stood here — zero users anywhere in the tree
-// (`grep -rn '\bPMb\b' src tests benches` → the definition alone). S18, with
-// the E3 grid conversion that retired the spelling it aliased.
-
-// Function Pointer Typedefs
-//
-// The encoder's four edge-kernel typedefs (`PLumaDeblockingLT4Func`,
-// `PLumaDeblockingEQ4Func`, `PChromaDeblockingLT4Func`,
-// `PChromaDeblockingEQ4Func`) stood here, duplicating
-// `common/deblocking_common.rs`'s set name for name. They typed the eight
-// `DeblockingFunc` kernel slots, which F139 measured write-only — installed by
-// `DeblockingInit`, read by nothing, because the eight `FilteringEdge*`
-// dispatchers call the safe kernels directly since T9.C2. Slots, installs and
-// typedefs deleted together, S18 (session F step 0); the decoder's own copies
-// and the common shims are untouched.
-
-// `uiBS` carries its real C++ type end-to-end: `uint8_t uiBS[2][4][4]`
-// (`deblocking.cpp:629`) — two 4x4 planes, `[dir][edge][blk]`, dir 0 = vertical
-// edges, dir 1 = horizontal. It was previously `*mut [[u8; 4]; 4]` — one plane —
-// with the second plane reached through 32-byte `from_raw_parts_mut` casts, which
-// is exactly the size relationship whose collapse caused the F1 release segfault
-// (`phase0_findings.md`). The F1 surgery (Phase 2 T6) made the type say it.
-// `PDeblockingBSCalc` stood here — the slot type whose first parameter was
-// the table that contained it. Session F de-virtualized the pair: the one
-// thing `DeblockingBSCalc_c` reached through the table was `pfSetNZCZero`
-// (single unconditional install, `WelsNonZeroCount_c`), which it now calls
-// directly, and the slot itself had a single unconditional install
-// (`DeblockingInit`) and one reader — F118's constant-after-init argument —
-// so `DeblockingMbAvcbase` calls `DeblockingBSCalc_c` directly and the slot,
-// its install and the typedef are deleted together (F139's shape rule: the
-// demotion to write-only and the deletion happen in one commit).
 
 /// The per-frame slice-walk dispatch — the one deblocking slot that is
 /// genuinely two-valued at runtime (`DeblockingFilterSliceAvcbase` when the
 /// parallel-deblocking conditions hold, `..Null` otherwise, re-stamped every
-/// frame by `PreprocessSliceCoding`). De-virtualized in session F: the table
-/// parameter is gone — the walkers reach nothing through it any more.
-// **S10.14: the layer is shared, not raw.** Both targets only *read* the layer —
-// the reconstruction writes go through `pRecView`'s cells and the macroblock
-// records through `mb_window` — and a shared layer borrow is what this file's two
-// probes certify is lawful while sibling workers write. The raw was carrying the
-// fork's price for a body that needs a `&`.
-// **S11.26: the slot names deblocking's real inputs, and the grid arrives as a
-// window instead of being minted inside.** The old `&SDqLayer` was one parameter
-// doing four jobs — the map, the geometry, the seam view *and* the record grid —
-// and the grid's job needed a conjured `&mut` out of the shared layer
-// (`mb_window`'s claim). The window is now the caller's statement of what the
-// slice may touch; the other three arrive as the disjoint pieces they are, so
-// the one caller that owns the layer (`PerformDeblockingFilter`) can pass all
-// of them from a single destructured `&mut SDqLayer` with no unsafe at all.
+/// frame by `PreprocessSliceCoding`).
 pub type PDeblockingFilterSlice = extern "C" fn(
     view: &RecPicView,
     pSliceCtx: &crate::encoder::slice_multi_threading::SSliceCtx,
@@ -299,23 +235,10 @@ pub type PDeblockingFilterSlice = extern "C" fn(
     pMbs: &mut MbWindow<'_, SMB>,
 );
 
-// `PSetNoneZeroCountZeroFunc` (T6.C1's safe slot type) stood here — deleted
-// with the `pfSetNZCZero` slot and `WelsBlockFuncInit` when session F made the
-// one reader call `WelsNonZeroCount_c` directly (F118).
-
 /// Function pointer dispatch table for deblocking routines.
-///
-/// Eight kernel slots (`pfLumaDeblocking{LT4,EQ4}{Ver,Hor}`,
-/// `pfChromaDeblocking{LT4,EQ4}{Ver,Hor}`) are deleted (F139, S18): installed
-/// by `DeblockingInit` and read by nothing — the `FilteringEdge*` dispatchers
-/// call the safe kernels directly since T9.C2. Read grep at deletion (session
-/// F step 0): each name's every mention was its field, its `Default`, and its
-/// one install; zero reads in src/ or tests/.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct tagDeblockingFunc {
-    // `pfDeblockingBSCalc` stood here — deleted with its typedef (above) when
-    // `DeblockingMbAvcbase` went direct on F118's constancy (session F).
     pub pfDeblockingFilterSlice: Option<PDeblockingFilterSlice>,
 }
 
@@ -488,8 +411,6 @@ pub fn DeblockingBSInsideMBAvsbase(
 }
 
 /// Computes internal boundary strength for normal partitioned Inter macroblocks.
-///
-/// **T6.C1**: took `pCurMb: *mut SMB` and read one field of it. It takes the field.
 #[inline(always)]
 pub fn DeblockingBSInsideMBNormal(
     sMv: &[SMVUnitXY; MB_BLOCK4x4_NUM],
@@ -551,16 +472,8 @@ pub fn DeblockingBSMarginalMBAvcbase(pCurMb: &SMB, pNeighMb: &SMB, iEdge: usize)
 /// through `uint32_t` punning (`*(uint32_t*)uiBS[0][0]`); a 4-byte row
 /// assignment is the same store with the type kept.
 ///
-/// The left/top record reads are in-split by the guards' own construction:
-/// under the fork the flags come from the same-slice `pOverallMbMap` checks
-/// (`uiFilterIdc == 1`, F142's rewrite), and single-threaded callers split a
-/// whole-grid window. A flag set with the neighbour absent from the split is a
-/// bug, and [`MbSplit`]'s panic names it (F77).
-///
-/// **S11.26**: `&mut MbSplit`, not `&mut MbWindow` — the `&mut` exists for one
-/// write, the current record's `iNonZeroCount` normalisation below, and the
-/// split is the type that says so: everything else this body can reach is a
-/// shared predecessor.
+/// A flag set with the neighbour absent from the split is a bug, and
+/// [`MbSplit`]'s panic names it.
 pub fn DeblockingBSCalc_c(
     mbs: &mut MbSplit<'_, SMB>,
     uiBS: &mut [[[u8; 4]; 4]; 2],
@@ -593,12 +506,7 @@ pub fn DeblockingBSCalc_c(
     }
 
     if uiCurMbType != MB_TYPE_SKIP {
-        // deblocking.cpp:615 — one argument. `pfSetNZCZero` had one writer
-        // (`WelsBlockFuncInit`, unconditionally this function) and this was
-        // its one reader, so the call is direct (F118) and the slot is
-        // deleted with its installer; the old `pFunc.is_null()` tolerance
-        // guarded a table pointer that no longer exists (the one live caller
-        // always passed the context's non-null list).
+        // deblocking.cpp:615
         WelsNonZeroCount_c(&mut mbs.cur_mut().iNonZeroCount);
         if uiCurMbType == MB_TYPE_16x16 {
             DeblockingBSInsideMBAvsbase(&mbs.cur().iNonZeroCount, uiBS, 1);
@@ -615,41 +523,7 @@ pub fn DeblockingBSCalc_c(
     }
 }
 
-// ============================================================================
-// Edge filtering — the same kernels the decoder uses (T9 straggler, G-2)
-// ============================================================================
-//
-// This module used to carry its own copies of the eight `Deblock*V_c`/`*H_c`
-// ABI wrappers, their four inner kernels, and `WelsNonZeroCount_c`, duplicating
-// `common/deblocking_common.rs` line for line. T6 converted that module and the
-// decoder picked the conversion up by re-exporting it; the encoder kept the
-// duplicates, so half the family stayed raw on the encoder's mainline path
-// until T9's straggler sweep found it.
-//
-// The eight wrappers are now the common module's shims, re-exported rather than
-// re-implemented. That is a deduplication, not a unification of two things that
-// merely share a name: the bodies were proven byte-for-byte equivalent over
-// `ALPHAS` x `BETAS` x three strides x V/H before this commit
-// (`encoder_deblock_*_kernels_match_the_common_safe_ones`, commit A), and the
-// signatures are identical. The name-collision discipline that keeps the three
-// `WelsI4x4LumaPredV_c`s apart says never unify functions that *differ*; these
-// do not.
-//
-// The common module's availability argument already speaks for this caller — it
-// names `encoder/deblocking.rs`'s `bLeftBsValid`/`bTopBsValid` beside the
-// decoder's gate — so the contracts move across unchanged.
-//
-// `DeblockingInit` below installs these names exactly as before; no dispatch
-// table changes here (that is Phase 4a's).
-// The eight-shim re-export (`pub use crate::common::deblocking_common::{
-// DeblockLuma*_c, DeblockChroma*_c}`) stood here for `DeblockingInit`'s
-// installs alone; it went with the write-only slots (F139, S18, session F
-// step 0). The decoder reaches the common shims through its own re-export.
-
-/// C++: `WelsNonZeroCount_c` — the encoder's copy, installed into `pfSetNZCZero`.
-/// The common module's shim still takes a raw pointer (the decoder's callers hold
-/// one), so this stays a distinct function; it is the safe kernel's one-line
-/// forwarder since T6.C1 took the raw pointer out of the slot.
+/// C++: `WelsNonZeroCount_c` — the encoder's copy.
 pub fn WelsNonZeroCount_c(pNonZeroCount: &mut [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM]) {
     crate::common::deblocking_common::nonzero_count(pNonZeroCount);
 }
@@ -661,11 +535,8 @@ pub fn WelsNonZeroCount_c(pNonZeroCount: &mut [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM])
 
 /// This macroblock's three reconstruction cursors.
 ///
-/// **T9.C2.** `SDeblockingFilter` used to carry `pCsData: [*mut u8; 3]`, three
-/// raw plane roots that the slice and frame drivers re-advanced per macroblock;
-/// the arithmetic is here instead, against the seam's view, and the drivers carry
-/// nothing. Luma is 16 samples per macroblock and chroma 8, which is the whole
-/// content of the `<< 4` and `<< 3` the drivers used to do.
+/// Luma is 16 samples per macroblock and chroma 8, which is the whole
+/// content of the `<< 4` and `<< 3`.
 fn mb_cursors<'a>(
     view: &'a RecPicView,
     iMbX: i32,
@@ -680,13 +551,7 @@ fn mb_cursors<'a>(
     )
 }
 
-/// The eight directional edge dispatchers — **safe since T9.C2**.
-///
-/// Each was `(pPix: *mut u8, iStride: i32)` into the reconstruction plane and a
-/// `pfDeblocking` slot call. The destination is the seam's cursor now, and the
-/// kernel is called directly: `DeblockingInit` installs all ten slots
-/// unconditionally and nothing rewrites them, so a fixed-size site may bypass the
-/// slot byte-identically (F118).
+/// The eight directional edge dispatchers.
 ///
 /// `iStride` stays a parameter even though the cursor carries it, because it is
 /// not addressing here — it is the kernels' `step_x`/`step_y`, the linear
@@ -844,8 +709,6 @@ fn FilteringEdgeChromaIntraV(
 pub fn DeblockingInterMb(
     view: &RecPicView,
     map: &[AtomicU16],
-    // S11.26: shared — this body reads the current record and the two
-    // predecessors' QPs; its writes are pixels, through the seam view.
     mbs: &MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
     uiBS: &[[[u8; 4]; 4]; 2],
@@ -860,14 +723,6 @@ pub fn DeblockingInterMb(
     let iMbY = mbs.cur().iMbY as i32;
     let kiMbXY = mbs.cur().iMbXY;
 
-    // **Round 5 (F132, T9.E4)**: the `[1]` guards used to read the NEIGHBOUR's
-    // `SMB.uiSliceIdc` — under MT a record another worker can hold `&mut` over,
-    // the race both fork probes stopped on. `pOverallMbMap` holds the same
-    // answer per macroblock (record == map wherever the record is final, and
-    // cross-partition both readings refuse the edge under every interleaving —
-    // T9.E3's proof), so the guard asks the map and no foreign `SMB` record is
-    // touched by deblocking at all. The current macroblock's own record read
-    // stays: it is this worker's.
     let bLeftBsValid = [
         iMbX > 0,
         iMbX > 0
@@ -884,10 +739,6 @@ pub fn DeblockingInterMb(
     let iLeftFlag = bLeftBsValid[pFilter.uiFilterIdc as usize];
     let iTopFlag = bTopBsValid[pFilter.uiFilterIdc as usize];
 
-    // **T9.C2**: the three raw roots `pCsData[i]`, advanced to this macroblock by
-    // the slice driver, are the seam's three cursors at the same coordinates.
-    // Deblocking is the family F108 measured running *inside* the fork, so this is
-    // the last per-macroblock raw route into the reconstruction picture.
     let (mut pDestY, mut pDestCb, mut pDestCr) = mb_cursors(view, iMbX, iMbY);
 
     if iLeftFlag {
@@ -1037,8 +888,6 @@ pub fn FilteringEdgeLumaHV(
     let iMbX = mbs.cur().iMbX as i32;
     let iMbY = mbs.cur().iMbY as i32;
 
-    // Round 5 (F132, T9.E4): the neighbour's record read becomes the map load —
-    // see DeblockingInterMb for the whole story.
     let kiMbXY = mbs.cur().iMbXY;
     let bLeftBsValid = [
         iMbX > 0,
@@ -1116,8 +965,6 @@ pub fn FilteringEdgeChromaHV(
     let iMbX = mbs.cur().iMbX as i32;
     let iMbY = mbs.cur().iMbY as i32;
 
-    // Round 5 (F132, T9.E4): the neighbour's record read becomes the map load —
-    // see DeblockingInterMb for the whole story.
     let kiMbXY = mbs.cur().iMbXY;
     let bLeftBsValid = [
         iMbX > 0,
@@ -1205,18 +1052,11 @@ pub fn DeblockingIntraMb(
 pub fn DeblockingMbAvcbase(
     view: &RecPicView,
     map: &[AtomicU16],
-    // **S11.26: the split, not the window.** The walkers hold the window and
-    // hand each macroblock down as [`MbWindow::split_cur`]'s answer: one
-    // exclusive record, two shared predecessors. This tree can no longer
-    // express a write to a neighbour — the overclaim that kept the grid from
-    // being carved per worker is unrepresentable below this line.
     mbs: &mut MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
 ) {
     // deblocking.cpp:629 — `uint8_t uiBS[2][4][4]`, two 4x4 planes (vertical and
-    // horizontal edges). Since the F1 surgery the callees take exactly this
-    // type, so the 16-vs-32-byte relationship that caused the release segfault
-    // is carried by the signatures instead of by five raw casts.
+    // horizontal edges).
     let mut uiBS: [[[u8; 4]; 4]; 2] = [[[0; 4]; 4]; 2];
     let uiCurMbType = mbs.cur().uiMbType;
     let iMbStride = pFilter.iMbStride as isize;
@@ -1224,8 +1064,6 @@ pub fn DeblockingMbAvcbase(
     let iMbX = mbs.cur().iMbX as i32;
     let iMbY = mbs.cur().iMbY as i32;
 
-    // Round 5 (F132, T9.E4): the neighbour's record read becomes the map load —
-    // see DeblockingInterMb for the whole story.
     let kiMbXY = mbs.cur().iMbXY;
     let bLeftBsValid = [
         iMbX > 0,
@@ -1248,10 +1086,6 @@ pub fn DeblockingMbAvcbase(
             DeblockingIntraMb(view, map, mbs, pFilter);
         }
         _ => {
-            // Direct since session F (F118): `pfDeblockingBSCalc` had one
-            // unconditional install (`DeblockingInit`) and this one reader,
-            // so the slot — and with it the interior-table aggregate pointer
-            // that used to be minted here — is deleted.
             DeblockingBSCalc_c(
                 mbs,
                 &mut uiBS,
@@ -1268,14 +1102,10 @@ pub fn DeblockingMbAvcbase(
 // Frame and Slice Level Traversal
 // ============================================================================
 
-// layer_rec_view: the S63 seam, G's); the record walk itself is the safe window
 pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     if (*pCurDq).pDecPic.is_none() {
         return;
     }
-    // S11.2c: the slice's three values are read out as scalars (S10.5a''s
-    // pattern) so the bank borrow ends here — the rest of this body splits the
-    // layer's own disjoint fields, which a live slice borrow would block.
     let (kuiDisableDeblockingFilterIdc, kiSliceAlphaC0Offset, kiSliceBetaOffset) = {
         let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, 0) else {
             return;
@@ -1293,32 +1123,6 @@ pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     let mut pFilter = SDeblockingFilter::default();
     pFilter.uiFilterIdc = if kuiDisableDeblockingFilterIdc != 0 { 1 } else { 0 };
 
-    // **T9.C4**: this resolved the reconstruction picture to its plane roots with
-    // `layer_dec_pic_mut(..).planes()` — a whole-picture `&mut` retag, and F108
-    // measured that under multi-threading this filter runs *inside* the fork, so
-    // two workers took it at once. The layer already carries those three roots
-    // and their three strides: `WelsInitCurrentLayer` stamps `pCsData`/`iCsStride`
-    // from the same `planes()` call, before anything spawns. Same numbers, same
-    // addresses, one derivation instead of two.
-    //
-    // The guard is the old `None` arm's two conditions — the layer's handle
-    // (tested at the top of this function) and a bound reference list — plus a
-    // null root, which the old spelling would have carried into a null deref.
-    // **T9.C2**: the three roots and the per-macroblock advance are gone with
-    // `pCsData` — `mb_cursors` derives each macroblock's three cursors from the
-    // seam view and the macroblock's own `(iMbX, iMbY)`, which is the same
-    // arithmetic one level down and cannot drift out of step with the loop.
-    // **S10.8: the `pRefList.is_null()` guard is gone, subsumed by the one below.**
-    // `WelsInitCurrentLayer` stamps `pRefList` and then `pRecView`, and `pRecView`
-    // is only ever *set*, never cleared — so a null `pRefList` means the stamp has
-    // never run, and `pRecView` is `None` in exactly that state. Every case this
-    // returned on, the next guard returns on. It went with the field.
-    // **S6.A1**: the field, not [`layer_rec_view`]. That accessor's `'a` binds to
-    // the layer now that it takes `&'a SDqLayer`, so its result borrows the *whole*
-    // layer — which cannot coexist with the `&mut pCurDq.sMbDataP` window below.
-    // This function holds `&mut SDqLayer`, so it may split the two disjoint fields
-    // itself; the accessor's body is this exact expression, so which address is
-    // read does not change.
     let Some(view) = pCurDq.pRecView.as_ref() else {
         return;
     };
@@ -1330,54 +1134,28 @@ pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     pFilter.iSliceBetaOffset = kiSliceBetaOffset;
     pFilter.iMbStride = kiMbWidth as i16;
 
-    // Round 5 (F132): the guards' neighbour reads answer "is this edge inside
-    // my slice", and the slice map already holds that answer per macroblock.
-    // A shared borrow of the field alone — atomics are read through `&`, and
-    // the only in-fork map writer (`AddSliceBoundary`) stores element-wise.
     let map: &[AtomicU16] = &pCurDq.sSliceEncCtx.pOverallMbMap;
 
     // The whole grid as one window: this walk is the single-threaded frame
-    // filter (F108's verified claim), the one deblocking path where the guards'
-    // `[0]` mode legitimately reads a neighbour record across a slice boundary
-    // — so its window is the grid, and the same accessors that panic on a
-    // cross-slice read under the fork answer freely here.
+    // filter, the one deblocking path where the guards' `[0]` mode legitimately
+    // reads a neighbour record across a slice boundary — so its window is the
+    // grid.
     let mut mbs = crate::safe::mb_grid::MbWindow::whole(&mut pCurDq.sMbDataP, 0);
     for iMbY in 0..kiMbHeight as usize {
         for iMbX in 0..kiMbWidth as usize {
             mbs.set_cur(iMbY * kiMbWidth as usize + iMbX);
-            // S11.26: each macroblock goes down as the split — the record
-            // exclusively, its two predecessors shared, from one borrow.
             DeblockingMbAvcbase(view, map, &mut mbs.split_cur(), &mut pFilter);
         }
     }
 }
 
-// `GetCurrentSliceNum` — svc_encode_slice.cpp. This module used to declare a copy
-// that returned a hardcoded `1`, and `WelsDeblockingFilterMbAvcbase`'s slice loop
-// below reads it (`deblocking.cpp:754`), so deblocking only ever filtered slice 0.
-// Indistinguishable from correct at one slice per frame; wrong for every other
-// slice mode.
+// `GetCurrentSliceNum` — svc_encode_slice.cpp.
 pub use crate::encoder::svc_encode_slice::GetCurrentSliceNum;
 
-// `WelsGetNextMbOfSlice` — svc_enc_slice_segment.cpp:556, and `deblocking.cpp:733`
-// calls that one. This module used to declare a truncated copy that returned
-// `kiMbXY + 1` bounded only by the frame, ignoring `sSliceEncCtx` and
-// `pOverallMbMap` entirely. It agrees with the real one for SM_SINGLE_SLICE and
-// walks straight across slice boundaries for every other slice mode.
+// `WelsGetNextMbOfSlice` — svc_enc_slice_segment.cpp:556.
 pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 
-/// The per-slice walker — safe since **S11.26**, and the window parameter is
-/// the whole story. This body used to mint a `&mut [SMB]` out of its *shared*
-/// `&SDqLayer` per macroblock (`mb_window`, the audited S11.4 block), asserting
-/// exclusive ownership the signature could not show. It now walks the window
-/// its caller handed it: `PerformDeblockingFilter` passes the whole grid off a
-/// destructured `&mut SDqLayer`; the two fork sites pass the coded slice's own
-/// run — the exact records `uiFilterIdc == 1` confines this walk to, since MT
-/// validation rewrites `iLoopFilterDisableIdc` 0 → 2 (`encoder_ext.rs:1506`)
-/// and single-slice clears the parallel flag. The old `kiFirstWindowMb` branch
-/// (window from 0 under `uiFilterIdc == 0`) is gone with the mint: the one
-/// walker that legitimately crosses slices is `DeblockingFilterFrameAvcbase`,
-/// which owns the layer and never dispatches through this slot.
+/// The per-slice walker.
 pub extern "C" fn DeblockingFilterSliceAvcbase(
     view: &RecPicView,
     pSliceCtx: &crate::encoder::slice_multi_threading::SSliceCtx,
@@ -1410,17 +1188,13 @@ pub extern "C" fn DeblockingFilterSliceAvcbase(
     pFilter.iSliceBetaOffset = sSliceHeaderExt.sSliceHeader.iSliceBetaOffset;
     pFilter.iMbStride = kiMbWidth as i16;
 
-    // Round 5 (F132): this walker is the one that runs *inside* the fork
-    // (uiFilterIdc == 1 under MT), so the map is exactly what its guards must
-    // read instead of the neighbour records.
     let map: &[AtomicU16] = &pSliceCtx.pOverallMbMap;
 
     let mut iNextMbIdx = sSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
 
     loop {
         let iCurMbIdx = iNextMbIdx;
-        // A walk step outside the caller's window panics with the coordinates
-        // (F77) — that is the old mint's `# Safety` sentence, now checked.
+        // A walk step outside the caller's window panics with the coordinates.
         pMbs.set_cur(iCurMbIdx as usize);
         DeblockingMbAvcbase(view, map, &mut pMbs.split_cur(), &mut pFilter);
 
@@ -1442,28 +1216,15 @@ pub extern "C" fn DeblockingFilterSliceAvcbaseNull(
 }
 
 pub extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) {
-    // T9.H4: `if pEnc.is_null() { return; }` stood here. A `&mut
-    // sWelsEncCtx` cannot be null and every caller now holds one, so the
-    // guard is not merely dead — it is inexpressible. Nothing replaces it.
-    // S11.26: safe throughout — the raw layer cursor and the raw slice walk
-    // are gone with the slot's new parameter list. The old `current_layer`
-    // answered null before any layer is stamped and this body dereferenced it
-    // unconditionally; the `expect` states that same precondition instead of
-    // deferring it to a fault.
     let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pEnc);
 
     if pCurDq.iLoopFilterDisableIdc == 0 {
         DeblockingFilterFrameAvcbase(pCurDq);
     } else if pCurDq.iLoopFilterDisableIdc == 2 {
         let iSliceCount = GetCurrentSliceNum(&*pCurDq);
-        // **The layer's disjoint fields, split once** — the grid becomes one
+        // The layer's disjoint fields, split once — the grid becomes one
         // whole window and each slice comes out of the banks, all from a single
-        // `&mut SDqLayer`. This is the shape the slot's parameter list exists
-        // for: `slice_in_layer_mut` takes the whole layer and so could not
-        // coexist with the window, so its two-step resolution
-        // (`ppSliceInLayer` → bank/offset) is inlined over the destructured
-        // fields; the guards are that accessor's own, minus the bank bound
-        // `get_mut` already asks.
+        // `&mut SDqLayer`.
         let SDqLayer {
             sMbDataP,
             sSliceEncCtx,
@@ -1499,15 +1260,7 @@ pub extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) {
 // Architecture and Dispatch Table Initialization
 // ============================================================================
 
-// `WelsBlockFuncInit` stood here — `pfSetNZCZero`'s one writer. The slot's
-// one reader (`DeblockingBSCalc_c`) calls `WelsNonZeroCount_c` directly since
-// session F (F118), so slot, installer and the `PSetNoneZeroCountZeroFunc`
-// typedef are deleted together.
-
 pub fn DeblockingInit(pFunc: &mut DeblockingFunc, _iCpu: i32) {
-    // The eight kernel-slot installs stood here (write-only, F139, deleted in
-    // step 0), then the `pfDeblockingBSCalc` install (direct since T9.F3,
-    // F118). What remains is the one genuinely dispatched slot.
     pFunc.pfDeblockingFilterSlice = Some(DeblockingFilterSliceAvcbase);
 }
 
@@ -1564,7 +1317,5 @@ mod tests {
     }
 }
 
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
-// used to live in this module disagreed with cpu_core.h and with each other --
-// WELS_CPU_NEON alone had seven distinct values across eight modules.
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSSE3};

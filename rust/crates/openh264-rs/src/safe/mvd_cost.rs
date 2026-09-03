@@ -8,10 +8,8 @@
 //! `COST_MVD` indexes the table with a **signed** motion-vector difference:
 //! `p[iMvdX] + p[iMvdY]`, either operand of either sign. The C++ therefore parks
 //! the pointer in the *middle* of a table row and lets the reads run in both
-//! directions from it, and the port carried that as a raw `*mut u16` through
-//! `SWelsMD`, `SWelsME` and the whole motion-search tree. A `&[u16]` cannot stand
-//! in for such a pointer on its own — a slice's index 0 is its first element, and
-//! there is no negative side of it.
+//! directions from it. A `&[u16]` cannot stand in for such a pointer on its own —
+//! a slice's index 0 is its first element, and there is no negative side of it.
 //!
 //! What can stand in is the pair: the table, plus the index of the element the
 //! pointer pointed at. That is this type, and `at(mvd)` is `p[mvd]`.
@@ -19,16 +17,13 @@
 //! # Why the whole table and not the row
 //!
 //! `table` is the **entire** `pMvdCostTable` allocation, never the single QP row
-//! the cursor sits in, and that is deliberate rather than lazy. The raw pointer
-//! could stray outside its own row and still land inside the allocation, reading
-//! whatever the neighbouring row holds; the encoder is byte-exact against the C++,
-//! so a read like that has to keep reading the same value it read before. Bounding
-//! the slice to the row would turn such a read into a panic — a behavioural change
-//! that no differential sweep could have predicted, because it would fire on the
-//! first stream that produced the straying MVD rather than on the ones already
-//! measured. With the whole table, an index that leaves its row lands exactly where
-//! the pointer landed, and only an index that leaves the *allocation* panics — which
-//! is the case that was undefined behaviour before this type existed.
+//! the cursor sits in. The raw pointer could stray outside its own row and still
+//! land inside the allocation, reading whatever the neighbouring row holds; the
+//! encoder is byte-exact against the C++, so a read like that has to keep reading
+//! the same value it read before. Bounding the slice to the row would turn such a
+//! read into a panic. With the whole table, an index that leaves its row lands
+//! exactly where the pointer landed, and only an index that leaves the
+//! *allocation* panics.
 //!
 //! # On `safe/`'s detached-cursor policy
 //!
@@ -42,14 +37,11 @@
 
 /// A position in the encoder's MVD-cost table, indexed by a **signed** motion-vector
 /// difference.
-///
-/// `Copy`, because the raw pointer it replaces was copied freely — into `SWelsME`
-/// per search block, out of `SWelsMD` per macroblock, down the search tree by value.
 #[derive(Copy, Clone)]
 pub struct MvdCostCursor<'a> {
     /// The whole table, not one QP row — see the module header.
     table: &'a [u16],
-    /// Index of the entry the raw cursor pointed at: `at(0)`.
+    /// Index of the entry the cursor points at: `at(0)`.
     at: usize,
 }
 
@@ -68,25 +60,18 @@ impl<'a> MvdCostCursor<'a> {
     }
 
     /// The table's **origin** — the entry a zero MVD indexes, `iMvdCostTableSize`
-    /// in. Successor to `sWelsEncCtx::mvd_cost_origin`, which returned the same
-    /// address as a `*mut u16` (**S5.C4b**).
+    /// in.
     ///
     /// Callers derive `table` *field-precisely* — `&(*pEncCtx).pMvdCostTable[..]`,
-    /// never a `&self` accessor — and that is not a stylistic preference. A
-    /// whole-context shared borrow retags the whole context, and inside the fork
-    /// that races any worker's concurrent write to an inline context field; a
-    /// two-thread Miri probe shows each half of this directly (F228). The accessor
-    /// this replaces got away with the whole-context borrow because it died on the
-    /// next line — it handed back a pointer. The cursor is a borrow, held across
-    /// the entire macroblock loop, so it takes the field and nothing else.
+    /// never a `&self` accessor. A whole-context shared borrow retags the whole
+    /// context, and inside the fork that races any worker's concurrent write to an
+    /// inline context field. The cursor is a borrow, held across the entire
+    /// macroblock loop, so it takes the field and nothing else.
     ///
     /// Holding it that long is lawful because the table is written exactly once, by
-    /// `MvdCostInit` inside `WelsInitEncoderExt`, before any slice worker exists —
-    /// and because the `&[u16]` lands in the `Vec`'s *heap buffer*, a different
-    /// allocation from the context, which no retag through `pEncCtx` can reach.
+    /// `MvdCostInit` inside `WelsInitEncoderExt`, before any slice worker exists.
     ///
-    /// An unsized table answers [`none`](Self::none), which is the null the raw
-    /// accessor answered with and the same question `WelsInitInterMDStruc` asks.
+    /// An unsized table answers [`none`](Self::none).
     pub fn origin(table: &'a [u16], iMvdCostTableSize: i32) -> Self {
         if table.is_empty() {
             return Self::none();
@@ -96,7 +81,7 @@ impl<'a> MvdCostCursor<'a> {
         Self { table, at }
     }
 
-    /// True for [`none`](Self::none) — the null test, spelled safely.
+    /// True for [`none`](Self::none) — the null test.
     #[inline(always)]
     pub const fn is_none(self) -> bool {
         self.table.is_empty()
@@ -104,9 +89,7 @@ impl<'a> MvdCostCursor<'a> {
 
     /// `p[mvd]` — the read every `COST_MVD` is made of.
     ///
-    /// Panics if the index leaves the table. That is the case the raw pointer
-    /// dereferenced out of bounds, so a panic here is strictly louder than what
-    /// stood before, never quieter.
+    /// Panics if the index leaves the table.
     #[inline(always)]
     pub fn at(self, mvd: i32) -> u16 {
         self.table[self.at.wrapping_add_signed(mvd as isize)]
@@ -139,7 +122,7 @@ mod tests {
         assert_eq!(c.at(0), 32);
         assert_eq!(c.at(-4), 28);
         assert_eq!(c.at(4), 36);
-        // `offset` composes, as the pointer arithmetic it replaces did.
+        // `offset` composes.
         assert_eq!(c.offset(-3).at(1), 30);
         assert_eq!(c.offset(8).offset(-8).at(0), 32);
     }

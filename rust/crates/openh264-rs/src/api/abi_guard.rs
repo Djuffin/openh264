@@ -5,26 +5,16 @@
 //! pointers straight into [`crate::api::codec_api`], so a field reordering or a width
 //! change here is silent memory corruption, not a compile error.
 //!
-//! This module exists because the encoder port once declared `SFrameBSInfo`,
-//! `SLayerBSInfo`, `SSourcePicture` and `SEncParamExt` a *second* time in `lib.rs`,
-//! where a local item shadowed the `pub use` re-export. The duplicates were
-//! 3104/24/72/864 bytes against the correct 7192/56/80/924, so every encoder write
-//! landed at the wrong offset in the caller's struct.
-//!
-//! # Where the numbers come from (T8.C4)
+//! # Where the numbers come from
 //!
 //! **Every number below is copied from `rust/tools/abi_sizes.txt`**, which is the
 //! output of `rust/tools/abi_sizes.c` — a C program compiled against the upstream
 //! headers that prints `sizeof`/`_Alignof` for each type and `offsetof` for each
-//! pinned field. Before T8.C4 this file said the numbers "were extracted from the C
-//! headers with a sizeof/offsetof dump on darwin/arm64", and that dump was not in the
-//! tree; a pin and a struct could only be compared by reading both. Now they can be
-//! compared by running `rust/tools/abi_sizes.sh --check`, which also rebuilds the
-//! dumper as C++ and diffs the two front ends' answers.
+//! pinned field. Running `rust/tools/abi_sizes.sh --check` rebuilds the dumper as
+//! C++ and diffs the two front ends' answers.
 //!
-//! **A pin that disagrees with the port is a finding, not a number to adjust.** The
-//! header is the contract; if this file stops compiling, the question is which side is
-//! wrong, and the answer is in the header.
+//! The header is the contract; if this file stops compiling, the question is which
+//! side is wrong, and the answer is in the header.
 //!
 //! # Coverage: 51 types
 //!
@@ -37,19 +27,8 @@
 //! nothing at all** — `grep -rn` over `codec/` finds only their own declarations, in
 //! no signature, no field and no option payload — and the port does not declare them
 //! either. There is nothing to pin and nothing to diverge.
-//!
-//! Before T8.C4 this file pinned **11** structs by size and **9** enums inline, and
-//! carried no alignment pin except `SFrameBSInfo`'s. The seven boundary structs
-//! session B named unpinned — `SBufferInfo`, `SDecoderCapability`,
-//! `SDecoderStatistics`, `SParserBsInfo`, `SSysMEMBuffer`, `SVideoProperty`,
-//! `SVuiSarInfo` — are pinned first below, with every field's offset, because they
-//! are the ones a decoder consumer touches on every call.
 
 #![allow(non_snake_case, non_camel_case_types)]
-
-// T8.C7. This module is pure `const` assertion and has never contained an `unsafe`
-// token; the deny is here so that it cannot acquire one silently, which is the only
-// way a layout pin could ever start lying.
 #![forbid(unsafe_code)]
 
 use crate::api::codec_api::*;
@@ -61,10 +40,10 @@ macro_rules! assert_size {
     };
 }
 
-/// Alignment is half of a layout and it was unpinned for every type but one. A
-/// struct can keep its size and change its alignment (a `#[repr(C, packed)]` slip,
-/// or a field whose Rust type is more aligned than the C one) and every size pin
-/// still passes while a caller's array of them walks off its stride.
+/// Alignment is half of a layout. A struct can keep its size and change its
+/// alignment (a `#[repr(C, packed)]` slip, or a field whose Rust type is more
+/// aligned than the C one) and every size pin still passes while a caller's array
+/// of them walks off its stride.
 macro_rules! assert_align {
     ($t:ty, $n:expr) => {
         const _: () = assert!(align_of::<$t>() == $n, concat!(stringify!($t), " align"));
@@ -82,10 +61,8 @@ macro_rules! assert_offset {
     };
 }
 
-
 // ===========================================================================
-// The seven session B named unpinned — every one of them a struct a decoder
-// consumer passes or reads on the call path, and none of them pinned at all.
+// Structs a decoder consumer passes or reads on the call path.
 // ===========================================================================
 
 assert_size!(SBufferInfo, 72);
@@ -377,8 +354,7 @@ mod tests {
     use super::*;
 
     /// The const asserts above already fail the build on a mismatch; this test
-    /// exists so `cargo test` reports the module by name, and so the count is a
-    /// number a session can quote.
+    /// exists so `cargo test` reports the module by name.
     #[test]
     fn abi_layout_matches_c_headers() {
         assert_eq!(size_of::<SFrameBSInfo>(), 7192);
@@ -386,7 +362,6 @@ mod tests {
         assert_eq!(size_of::<SSourcePicture>(), 80);
         assert_eq!(size_of::<SEncParamExt>(), 924);
         assert_eq!(core::mem::offset_of!(SFrameBSInfo, eFrameType), 7176);
-        // The seven T8.C4 added, by the numbers in `rust/tools/abi_sizes.txt`.
         assert_eq!(size_of::<SBufferInfo>(), 72);
         assert_eq!(size_of::<SSysMEMBuffer>(), 20);
         assert_eq!(size_of::<SDecoderCapability>(), 36);

@@ -1,29 +1,4 @@
-//! Differential tests for the Phase 2 kernel conversions (plan §Phase 2, recipe R2).
-//!
-//! While a family is being converted this file holds one entry per kernel, driving the
-//! **old** raw-pointer implementation and the **new** safe one over the same random
-//! inputs and asserting they agree bit for bit — not on the nominal block, but on
-//! **every byte of the destination surface**. Comparing whole buffers is the point: a
-//! kernel that writes one byte past its block is finding F1's defect class, and a
-//! block-shaped assertion is blind to exactly that.
-//!
-//! Those entries are **deliberately short-lived**. A family's commit A adds them while
-//! the old code is untouched; the family's commit B replaces the old body with a shim
-//! onto the safe kernel, at which point the comparison is tautological and the entry is
-//! deleted in that same commit. What survives is only tests that pin a *property*.
-//!
-//! This file lives outside `src/`, so unlike everything under `src/safe/` it may use
-//! `unsafe` — it has to, because the old side *is* raw-pointer code. Running it under
-//! Miri therefore also checks those raw accesses for UB, which is how F7 was found
-//! (`rust/docs/phase1_findings.md`).
-//!
-//! ## Converted so far
-//!
-//! * `decoder/decode_mb_aux.rs` — all four kernels. `ba13bdbd` proved them against the
-//!   raw ones across six strides (the minimum legal, three non-multiples of 16, and two
-//!   real picture strides) with the 4x4 pair driven at the full `i16` coefficient range;
-//!   the shim commit then deleted those equivalences. The entry that survives below is
-//!   a property, not a comparison.
+//! Differential tests for the kernel conversions.
 
 mod common;
 
@@ -31,10 +6,9 @@ use common::prng::Prng;
 use openh264_rs::decoder::decode_mb_aux as dec_aux;
 use openh264_rs::safe::plane::PlaneCursorMut;
 
-/// Sample sizes are cut hard under Miri, which runs ~100x slower and would otherwise
-/// turn a phase-exit gate into an hour. The *shapes* are identical either way — every
-/// stride, every boundary case — only the PRNG sample counts shrink, and the full-size
-/// run happens on every `cargo test`.
+/// Sample sizes are cut hard under Miri, which runs ~100x slower. The *shapes* are
+/// identical either way — every stride, every boundary case — only the PRNG sample
+/// counts shrink, and the full-size run happens on every `cargo test`.
 fn scale(n: usize) -> usize {
     if cfg!(miri) { (n / 100).max(2) } else { n }
 }
@@ -60,9 +34,7 @@ fn surface(rng: &mut Prng, stride: usize, bw: usize, bh: usize) -> (Vec<u8>, usi
 /// `IdctFourResAddPred_c`'s skip test is `nzc[n] != 0 || pRs[k << 4] != 0`, and the
 /// second half of that disjunction is the whole reason 16x16 intra macroblocks decode
 /// correctly. A conversion that dropped it would still pass every random-input
-/// comparison in which some `nzc` happened to be non-zero, so it gets its own entry —
-/// and because it states a property rather than an equivalence, it outlives the
-/// family's shim commit.
+/// comparison in which some `nzc` happened to be non-zero, so it gets its own entry.
 #[test]
 fn idct_four_res_add_pred_transforms_a_dc_only_block_with_zero_nzc() {
     let mut rng = Prng::new(0x2DC7_0004);
@@ -104,26 +76,8 @@ fn idct_four_res_add_pred_transforms_a_dc_only_block_with_zero_nzc() {
 }
 
 // ===========================================================================
-// T4 — `common/mc.rs`, motion compensation
+// `common/mc.rs`, motion compensation
 // ===========================================================================
-//
-// `46053993` proved all 24 safe kernels against the raw ones — every luma block
-// shape plus the encoder's `+1` half-pel shapes, every chroma shape, three strides
-// per surface, random unaligned anchors in both, **exhaustive** sweeps of the
-// selectors (all 16 `(iMvX & 3, iMvY & 3)` pairs for `McLuma_c`, all 64 `(& 7)`
-// pairs for the chroma pair, each from a positive and a negative vector), and every
-// byte of the destination compared rather than the nominal block. The shim commit
-// then deleted those equivalences, because both sides now run the same code.
-//
-// What survives is the one thing the shims add that the kernels do not: **span
-// arithmetic**. Each shim turns `pSrc` and `pDst` into slices whose lengths it
-// derives from the kernel's read reach, and its `# Safety` contract states that
-// derivation as the caller's obligation. The test below is the assertion that the
-// contract is neither too small nor too large.
-
-// `openh264_rs::common::mc` is no longer imported here: D-cov-1 (T9.B4) deleted both
-// tests that named it. The module's two surviving raw entry points are dormant
-// screen-content shims and its safe kernels are exercised by `mc.rs`'s own tests.
 
 /// `(left, top, right, bottom)`: the kernel reads `x` in `-left .. width + right`
 /// and `y` in `-top .. height + bottom`, relative to `pSrc`. An independent
@@ -246,48 +200,10 @@ fn probe_span(
     }
 }
 
-// **D-cov-1 (T9.B4): `mc_shims_stay_inside_the_spans_they_declare` deleted with its
-// subjects.** It drove every `common/mc.rs` shim against allocations sized to exactly
-// the span the shim declares — a contract test of the shims' own span arithmetic, and
-// nothing else. The 26 shims it drove have no `src/` caller (the last four lost theirs
-// at T9.B29) and are gone; the safe kernels underneath carry their bounds in
-// `PlaneCursor`, so there is no span arithmetic left to pin. This file's own header
-// states the doctrine: a shim test dies with the shim.
-//
-// `McLuma_c` and `McChroma_c` survive as `SCREEN_CONTENT(dormant)` — their only
-// callers are `SvcMdSCDMbEnc`'s three, unreachable without
-// `iUsageType == SCREEN_CONTENT_REAL_TIME` (F125) — and they retire in Phase 10 with
-// the rest of that family. The helpers this test shared with the sad / intra-pred /
-// vaa span tests below (`copy_width`, `strides`, `sizes`, `src_span`, `block_span`,
-// `probe_span`, the `Reach` constants) all stay: they have other callers.
-
-
 // ===========================================================================
-// T5 — `common/sad_common.rs` + `common/intra_pred_common.rs`
+// `common/sad_common.rs` + `common/intra_pred_common.rs`
 // ===========================================================================
-//
-// **This family is half-landed.** `intra_pred_common`'s two predictors are behind
-// shims; `sad_common`'s fourteen SAD kernels were swapped and then **unswapped**,
-// because the swap cost the encoder +16.8% median and breached §7.4's 10% ceiling
-// (`perf_baseline.md` §Phase 2 T5). So the SAD entries below are commit-A entries
-// again — a live differential against raw code that is still the code that runs —
-// while the intra entries are shim properties. When the SAD swap re-lands, the
-// differential goes and the span property stays.
-//
-// `56a3dbf9` proved all sixteen safe kernels against the raw ones — every SAD shape,
-// every stride pair from the minimum legal to 240, random unaligned anchors on both
-// surfaces, and a real independently-noised margin around the four-point kernels'
-// blocks so their arms read neighbours rather than the block's own edge. Five
-// mutations were run against those entries and all five died. The shim commit deleted
-// them, because both sides now run the same code.
-//
-// What survives is what the shims add: **span arithmetic**, and the count of `int32_t`
-// the four-point kernels write. Two of the four shim shapes here have a reach the
-// pointer does not sit inside — `WelsI16x16LumaPredV_c` reads *only* above `pRef` —
-// which is a shape T4 never had, and it is the one that most needs pinning.
 
-// `intra_pred_common as ipc` was imported here for the two shim-span entries
-// retired in T9.C2; the module has no raw surface left to drive.
 use openh264_rs::common::sad_common as sad;
 use openh264_rs::safe::plane::PlaneCursor;
 use openh264_rs::encoder::rec_view::RecCursor;
@@ -338,25 +254,13 @@ fn safe_sad_four(w: usize, h: usize, c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>,
     }
 }
 
-// **Session F: `sad_kernels_match_the_raw_ones`, the `SAD_SHIMS`/`FOUR_SHIMS`
-// tables and `sad_shims_stay_inside_the_spans_they_declare` are retired with
-// the raw kernels they drove.** This file's own charter rules it: when the old
-// side dies, the comparison entry dies in the same commit, and what survives
-// pins a *property*. Two properties survive, both re-anchored on the safe
-// kernels below: the span discipline the old span test's comment prescribed
-// for exactly this moment ("the shim-contract spans are `(h-1)*stride + w`:
-// restore them in the commit that re-lands the swap"), and the
-// four-distinct-right-points check that already called itself "the entry that
-// outlives it".
-
 /// The safe SAD kernels' declared reach, proven by exact-span allocations: an
 /// over-read panics at the slice, and agreement with the same content in a
 /// padded surface proves the values depend on nothing outside the span.
 /// `sample_sad` reads `(h-1)*stride + w` from its anchor; `sample_sad_four`'s
 /// reference side reads one row and one column beyond the block on every side.
 /// The four-point arms are also checked to be four *distinct* points scoring
-/// inside their own block bound — the halves of the retired raw span test that
-/// were properties of the family rather than of the deleted shims.
+/// inside their own block bound.
 #[test]
 fn sad_kernels_stay_inside_the_spans_they_declare() {
     let mut rng = Prng::new(0x5AD0_0501);
@@ -429,33 +333,8 @@ fn sad_kernels_stay_inside_the_spans_they_declare() {
     }
 }
 
-// **The two `common/intra_pred_common.rs` shim-span entries were retired here
-// (T9.C2)**, with `i16x16_luma_pred_shims_stay_inside_the_spans_they_declare`.
-//
-// They probed `WelsI16x16LumaPredV_c` and `WelsI16x16LumaPredH_c` — the file's
-// only two raw wrappers — against exactly-sized reference allocations, to prove
-// the spans their `# Safety` contracts declared were tight in both directions.
-// T9.C2 deleted both wrappers: the encoder's prediction tables are safe over
-// `RecCursor` now, so the adapters moved to `encoder/get_intra_predictor.rs` and
-// `common/intra_pred_common.rs` reached `#![deny(unsafe_code)]` with nothing raw
-// left to bound. See the T9.C2 tombstone further down for the full accounting of
-// which property each retired probe held and what holds it now.
-//
-// The two safe kernels keep their unit coverage in `common/intra_pred_common.rs`,
-// rewritten in the same commit to drive them over a `PaddedPlane` instead of
-// through the wrappers.
-
 // ---------------------------------------------------------------------------
-// T8 — `processing/vaacalc.rs` + `processing/adaptive_quantization.rs`
-//
-// The five `VAACalc*` whole-picture walkers and the 16x16 variance probe. Their
-// old-vs-new entries went with the shim commit, as the recipe intends: the shims
-// call the safe kernels, so a comparison would be comparing a function with itself.
-//
-// What survives is the span arithmetic, which is the only thing the shims add that
-// the kernels do not. `vaa_span` and `mb_span` are the whole contract — get either
-// wrong and the shim either reads outside the caller's plane (UB, and Miri says so)
-// or claims less than the walk needs (a panic inside the safe kernel).
+// `processing/vaacalc.rs` + `processing/adaptive_quantization.rs`
 // ---------------------------------------------------------------------------
 
 use openh264_rs::processing::adaptive_quantization as aq;
@@ -520,9 +399,8 @@ fn noise_i32(rng: &mut Prng, len: usize) -> Vec<i32> {
     (0..len).map(|_| rng.next_u32() as i32).collect()
 }
 
-/// The per-quadrant form of [`noise_i32`] — **T9.X**: the safe VAA kernels type
-/// `pSad8x8`/`pSd8x8` as one `[i32; 4]` per macroblock rather than a flat run, which
-/// is the shape that made the raw entry points retirable.
+/// The per-quadrant form of [`noise_i32`]: the safe VAA kernels type
+/// `pSad8x8`/`pSd8x8` as one `[i32; 4]` per macroblock rather than a flat run.
 fn noise_quads_i32(rng: &mut Prng, len: usize) -> Vec<[i32; 4]> {
     (0..len)
         .map(|_| std::array::from_fn(|_| rng.next_u32() as i32))
@@ -539,7 +417,7 @@ fn noise_quads_u8(rng: &mut Prng, len: usize) -> Vec<[u8; 4]> {
 /// **Span size.** Every plane is allocated to exactly `vaa_span`, so a shim that
 /// claims one byte more is UB that Miri reports at the `from_raw_parts`, and one that
 /// claims less panics inside the safe walk. The output arrays carry a noise tail that
-/// neither may touch — the F1 defect class in the shape this family can have it.
+/// neither may touch.
 ///
 /// All five walkers run, because they compute the same span from the same helper but
 /// each writes a different set of output arrays, and an over-run of `pMad8x8` is not
@@ -571,13 +449,6 @@ fn vaa_shims_stay_inside_the_spans_they_declare() {
         let tail_sqdiff = sqdiff[mbs..].to_vec();
         let tail_mad = mad[mbs..].to_vec();
 
-        // **T9.X — the property survives the retirement of the raw entry points.**
-        // It used to say "a shim that claims one byte more is UB Miri reports at the
-        // `from_raw_parts`". The safe walkers cannot claim a byte more — the slice
-        // says how many there are — but they can still write the wrong *number* of
-        // entries, and the noise tail beyond `mbs` is exactly what catches that. The
-        // span property moved from the pointer to the slice; the assertion did not
-        // move at all.
         let frame = vaa::vaa_calc_sad(&cur, &refp, w, h, stride, &mut sad);
         assert_eq!(&sad[mbs..], &tail_sad[..], "Sad wrote past the last MB, {at}");
         assert_eq!(
@@ -611,9 +482,7 @@ fn vaa_shims_stay_inside_the_spans_they_declare() {
     }
 }
 
-/// **Span anchor**, which sizing does not pin. Session C's span property test passed
-/// six mutations and survived one that shifted the whole read down a row while
-/// keeping the length right, so size and anchor get separate assertions.
+/// **Span anchor**, which sizing does not pin.
 ///
 /// Here every 8x8 quadrant of every macroblock is given its own distinct constant
 /// difference, and each has to come back at its own index and nowhere else. A walk
@@ -663,12 +532,6 @@ fn vaa_shim_reads_each_quadrant_where_its_contract_says_it_does() {
     }
 }
 
-// `sample_variance_shim_stays_inside_the_spans_it_declares` stood here — the
-// span instrument for `SampleVariance16x16_c`'s two `from_raw_parts` claims.
-// **S11.43, deleted with its subject**: the shim's last production caller now
-// drives `sample_variance_16x16` directly, and the property the probe pinned —
-// two independently-sized spans — is the kernel's two slice parameters.
-
 /// The two extremes of the variance probe's input domain, which the random sweep
 /// never reaches and which are where the C++'s integer widths would bite if they
 /// could.
@@ -676,8 +539,7 @@ fn vaa_shim_reads_each_quadrant_where_its_contract_says_it_does() {
 /// A 16x16 block holds 256 samples of at most 255, so the `uint16_t` sums top out at
 /// **65280** and the `uint32_t` squares at **16 646 400** — both short of wrapping.
 /// The `wrapping_add`s the port carries are therefore unreachable, and this is the
-/// test that says so. It is also why the file's header no longer claims the
-/// difference sum can wrap: it has exactly the same bound as the other one.
+/// test that says so.
 #[test]
 fn sample_variance_16x16_accumulators_cannot_wrap() {
     for (refv, srcv) in [(255u8, 0u8), (0, 255), (255, 255), (0, 0)] {
@@ -692,54 +554,14 @@ fn sample_variance_16x16_accumulators_cannot_wrap() {
 }
 
 // ===========================================================================
-// T6 — `common/deblocking_common.rs`, in-loop deblocking
+// `common/deblocking_common.rs`, in-loop deblocking
 // ===========================================================================
-//
-// `bbb9348e` proved the six safe edge filters and `nonzero_count` against the
-// raw kernels — all twelve V/H ABI wrappers, three amplitude tiers so every
-// branch of the conditional filters executed, tc sweeps including the
-// gate-closing negatives, three strides per shape, random anchors, every byte
-// of every touched buffer compared, and three mutations (tc gate off-by-one,
-// wrong write tap, step-axis swap) all killed. The shim commit deleted those
-// equivalences, because both sides now run the same code.
-//
-// What survives is what the shims add: **span arithmetic**. Each shim
-// materialises the slice its `# Safety` contract declares —
-// `[-reach_back*step_x, reach_fwd*step_x + (lines-1)*step_y]` around the edge
-// anchor — and the test below re-derives those spans independently and probes
-// each shim with allocations of exactly that size. Deblocking needs one more
-// assertion than `mc.rs` did, because its writes are *conditional*: a shim
-// whose body silently stopped filtering would pass a pure in-bounds probe. The
-// probe therefore drives a crafted 90-vs-110 step edge under maximal
-// `alpha`/`beta`/`tc`, on which every line provably filters, and asserts both
-// that the filter fired and that **no byte outside the declared touch set
-// moved** — which pins the shim's anchor placement separately from its span
-// size (T5's lesson: sizing a span does not pin where it starts).
 
 use openh264_rs::common::deblocking_common as deb;
 
-
-
-
-
 // ===========================================================================
-// T6 — border expansion (`common/expand_pic.rs`)
+// border expansion (`common/expand_pic.rs`)
 // ===========================================================================
-//
-// `2fe283e4` proved `expand_picture` against both raw variants over full
-// allocations — every byte compared, minimum-legal and slack strides, exact
-// and over-tall row counts, odd sizes; corner-swap and first-row-skip
-// mutations died. The shim commit deleted that equivalence, because both
-// sides now ran the same code.
-//
-// What stood here after that was a probe of `ExpandPictureLuma_c` /
-// `ExpandPictureChroma_c`, which took a **mid-allocation** pointer and walked
-// backwards to the allocation start (`expand_shim_span`). Those three items had
-// no caller anywhere in `src/` — both codecs' pictures own their planes and hand
-// `expand_picture` the allocation directly — and the probe's golden was
-// `expand_picture` itself, so the equivalence it asserted was between a function
-// and its own callee. T9.B2 deleted all three (S18, F104's census found them) and
-// this is what the probe was really pinning, run against the kernel:
 //
 // * **Every padding byte is written and none is read**: two allocations whose
 //   inputs differ only outside the picture rectangle must converge byte for byte.
@@ -803,29 +625,17 @@ fn expand_picture_writes_every_padding_byte_and_reads_none() {
 }
 
 // ===========================================================================
-// T7 — `encoder/encode_mb_aux.rs`, the forward transform / quant / scan family
+// `encoder/encode_mb_aux.rs`, the forward transform / quant / scan family
 // ===========================================================================
 //
-// `f233d506` proved all 21 safe kernels against the raw ones: exhaustive QP x
-// {inter, intra} table sweeps for the quantizers and the 2x2 Hadamard (R-d's
-// rule — a random sweep blurs exactly the lane-indexing mistakes a conversion
-// makes), full-range `i16` coefficients everywhere they are in-bounds (for
-// non-negative table factors `(ff + |v|) * mf <= 65534 * 32767 < i32::MAX`,
-// derived at `encode_mb_aux::quant_one`; a negative `mf` could overflow and
-// no table contains one), whole-destination compares, and sources asserted
-// untouched. Three mutations (zigzag swap, quant lane index, DCT butterfly)
-// were run against the entries and all three died. The shim commit deleted
-// the equivalences, because both sides now run the same code.
-//
-// What survives is what the shims add: **span arithmetic**. Two spans in this
-// family are exact reaches over strided reads — the 2x2 Hadamard's
-// `[i16; 49]` (DC raster positions 0/16/32/48 of the chroma group) and the
-// DC-Hadamard's `[i16; 241]` (block 15's DC at index 240 of the 256-element
-// luma buffer) — and the probes below hand each shim an allocation of
-// exactly that size (an over-claim is UB Miri reports; an under-claim panics
+// Two spans in this family are exact reaches over strided reads — the 2x2
+// Hadamard's `[i16; 49]` (DC raster positions 0/16/32/48 of the chroma group)
+// and the DC-Hadamard's `[i16; 241]` (block 15's DC at index 240 of the
+// 256-element luma buffer) — and the probes below hand each shim an allocation
+// of exactly that size (an over-claim is UB Miri reports; an under-claim panics
 // in the safe kernel), with a **golden direct run** of the safe kernel at
-// the contract's own geometry pinning the anchor (session E's probe lesson),
-// and untouched-byte assertions pinning the touch set.
+// the contract's own geometry pinning the anchor, and untouched-byte
+// assertions pinning the touch set.
 
 use openh264_rs::encoder::encode_mb_aux as ema;
 
@@ -846,15 +656,6 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         let b2 = rng.bytes(3 * s2 + 4);
         let (k1, k2) = (b1.clone(), b2.clone());
         let mut dct = [0i16; 16];
-        // S9.0: the shim takes cursors and shared slices now, so "moved a source
-        // byte" is unrepresentable rather than merely asserted — the assertion below
-        // stays as the record of what it used to be able to get wrong.
-        // S9.0b: the shim's first operand is a `RecCursor` now — the source picture
-        // is written in-fork (F117), so it lives behind the shared seam. The shim is
-        // `dct_4x4` plus a `try_into`, and the kernel is generic over the cursor, so this
-        // exercises the same code with the storage a test can hand-build. The
-        // `RecCursor` half of the generic is refereed by the twin test in
-        // `encode_mb_aux`'s own module.
         ema::dct_4x4(
             (&mut dct[..16]).try_into().unwrap(),
             &PlaneCursor::new(&b1, 0, s1),
@@ -870,15 +671,6 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         let b2 = rng.bytes(7 * s2 + 8);
         let (k1, k2) = (b1.clone(), b2.clone());
         let mut dct = [0i16; 64];
-        // S9.0: the shim takes cursors and shared slices now, so "moved a source
-        // byte" is unrepresentable rather than merely asserted — the assertion below
-        // stays as the record of what it used to be able to get wrong.
-        // S9.0b: the shim's first operand is a `RecCursor` now — the source picture
-        // is written in-fork (F117), so it lives behind the shared seam. The shim is
-        // `dct_four_4x4` plus a `try_into`, and the kernel is generic over the cursor, so this
-        // exercises the same code with the storage a test can hand-build. The
-        // `RecCursor` half of the generic is refereed by the twin test in
-        // `encode_mb_aux`'s own module.
         ema::dct_four_4x4(
             (&mut dct[..64]).try_into().unwrap(),
             &PlaneCursor::new(&b1, 0, s1),
@@ -890,14 +682,9 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         assert_eq!((b1, b2), (k1, k2), "DctFourT4 shim moved a source byte");
     }
 
-    // --- Quantizers. **T9.D8 deleted the shims these rows used to compare
-    // against**: the slots hold the safe kernels directly now, so a
-    // "shim vs direct" assertion has nothing on its left-hand side. What is kept
-    // is what was never tautological — the relations *between* the kernels, which
-    // the walking cursors used to hide: `quant_four_4x4` is `quant_4x4` on each
-    // quadrant, and `quant_four_4x4_max` is `quant_four_4x4` plus a per-quadrant
-    // maximum. (F106's rule: a differential test whose two sides became the same
-    // code is deleted, not re-pinned.)
+    // --- Quantizers. The relations *between* the kernels: `quant_four_4x4` is
+    // `quant_4x4` on each quadrant, and `quant_four_4x4_max` is `quant_four_4x4`
+    // plus a per-quadrant maximum.
     let ff = &ema::g_kiQuantInterFF[26];
     let mf = &ema::g_kiQuantMF[26];
     for _ in 0..scale(20) {
@@ -942,14 +729,12 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         let base: [i16; 49] = coeffs(&mut rng);
         let (ff, mf) = (ema::g_kiQuantInterFF[30][0] << 1, ema::g_kiQuantMF[30][0] >> 1);
 
-        // The skip variant's read-only contract is now the `&[i16; 49]` parameter's
-        // job rather than an assertion's. **The two kernels are deliberately not
-        // cross-asserted**: `skip` thresholds on `(1<<16 - 1) / mf - ff` in `i32`
-        // while the full kernel truncates each butterfly output to `i16` before
-        // quantising, so "skip says nothing survives" and "the full kernel counted
-        // zero" agree on every input the encoder produces but are not the same
-        // predicate. An assertion that they are is a test asserting its author's
-        // guess — this one did, and failed on the first random input.
+        // **The two kernels are deliberately not cross-asserted**: `skip`
+        // thresholds on `(1<<16 - 1) / mf - ff` in `i32` while the full kernel
+        // truncates each butterfly output to `i16` before quantising, so "skip says
+        // nothing survives" and "the full kernel counted zero" agree on every input
+        // the encoder produces but are not the same predicate. An assertion that
+        // they are is a test asserting its author's guess.
         let _ = ema::hadamard_quant_2x2_skip(&base, ff, mf);
 
         let mut g = base;
@@ -1023,10 +808,6 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
     // --- The seven copies: exact spans both sides ((H-1)*stride + W), every
     // block byte equal to its source row (write-every-byte), bytes outside
     // the block untouched, source untouched.
-    // S9.0c: the slot is `fn(&RecCursor, &RecCursor)` now — both operands cell-based,
-    // because the background path copies picture-to-picture in-fork (F117) and the
-    // mode-decision path copies an owned scratch into a picture plane. Test buffers
-    // reach the same type through `RecCursor::over_owned`, which is safe.
     type BlockCopy = fn(&RecCursor<'_>, &RecCursor<'_>);
     let kernels: &[(&str, usize, usize, BlockCopy)] = &[
         ("Copy4x4", 4, 4, ema::WelsCopy4x4_c),
@@ -1072,18 +853,8 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
 }
 
 // ===========================================================================
-// T7 — `encoder/decode_mb_aux.rs` (+ the five raw bodies in
-// `svc_encode_mb.rs`): the encoder's recon IDCT and dequantisation family
+// `encoder/decode_mb_aux.rs`: the encoder's recon IDCT and dequantisation family
 // ===========================================================================
-//
-// `fc92dab0` proved all nine leaf kernels of the C++ `decode_mb_aux.cpp`
-// against the raw ones: whole destination surfaces compared, sources
-// asserted untouched, inputs per R-e (full `i16` range where the raw port is
-// total, table MF factors, qp 0..12 for the gated luma-DC dequant, `+-2047`
-// for `ihadamard_4x4_dc` per finding F11), one vertical-pass sign mutation
-// killed. The shim commit deleted the equivalences; what survives is the
-// span arithmetic, probed below with a golden direct run per shim and
-// exact-span allocations.
 
 use openh264_rs::encoder::decode_mb_aux as eda;
 use openh264_rs::encoder::svc_encode_mb::g_kuiDequantCoeff;
@@ -1104,10 +875,7 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
         let base: [i16; 64] = coeffs(&mut rng);
         let sub: &[i16; 16] = (&base[..16]).try_into().unwrap();
 
-        // **T9.D10 deleted the three dequantisation shims** these rows compared
-        // against; what is left is the relation between the two survivors, which was
-        // never tautological — `dequant_four_4x4` is `dequant_4x4` on each of the four
-        // blocks. (F106's rule, as in T9.D8.)
+        // `dequant_four_4x4` is `dequant_4x4` on each of the four blocks.
         let mut g = base;
         eda::dequant_four_4x4(&mut g, mf_row);
         for k in 0..4 {
@@ -1168,10 +936,8 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
         let dct: [i16; N] = core::array::from_fn(|_| rng.range_i32(-32768, 32767) as i16);
         let m_dct = dct;
 
-        // **S9.1**: the `_c` shim this used to compare against is deleted — it was a
-        // wrapper over the very kernel on the other side of the assertion, kept alive
-        // only by this call. What was ever more than a tautology stays: the sources
-        // must not move, and nothing outside each row's block may be written.
+        // The sources must not move, and nothing outside each row's block may be
+        // written.
         direct(
             &mut PlaneCursorMut::new(&mut rec, 0, rs),
             &PlaneCursor::new(&pred, 0, ps),
@@ -1206,20 +972,11 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
             probe_rec::<16>("IDctRecI16x16Dc", &mut rng, 16, 16, rs, ps, eda::idct_rec_i16x16_dc);
         }
     }
-
-    // S9.1: the null-tolerance guard went with the shims. A null cursor is not
-    // representable, so there is nothing left to tolerate.
 }
 
 // ===========================================================================
-// T7 — `encoder/sample.rs`, the SATD family
+// `encoder/sample.rs`, the SATD family
 // ===========================================================================
-//
-// These entries were live raw-vs-safe differentials while the family was
-// parked (no commit B before Phase 4a, D-perf-2's tripwire projection).
-// Session F retired the raw `WelsSampleSatd*_c` bodies with the transitional
-// raw tables, so the comparison died with its old side — this file's own
-// charter — and the safe span property below is what survives.
 
 use openh264_rs::encoder::sample as satd;
 
@@ -1239,8 +996,7 @@ const SATD_SHAPES: &[(&str, usize, usize, SafeSatd)] = &[
 /// each surface — exact-span allocations prove it is not under-claimed (an
 /// over-read panics at the slice), and agreement with the same kernel run on
 /// a padded copy of the same content proves the values do not depend on
-/// anything outside the span. The raw kernels are deliberately absent here:
-/// on exact spans their trailing pointer bump is F10's UB.
+/// anything outside the span.
 #[test]
 fn satd_kernels_stay_inside_the_spans_they_declare() {
     let mut rng = Prng::new(0x5A7D_59A9);
@@ -1268,71 +1024,11 @@ fn satd_kernels_stay_inside_the_spans_they_declare() {
 }
 
 // ===========================================================================
-// T9.C2 — the encoder intra-pred shim-span probes were retired here.
-//
-// This section held `safe_i4x4`/`safe_chroma`/`safe_i16x16`, `probe_intra` and
-// `encoder_intra_pred_shims_stay_inside_the_spans_they_declare`. Every one of
-// them existed to interrogate a **raw shim's hand-written span contract**: the
-// twenty-eight `unsafe extern "C" fn(*mut u8, *mut u8, i32)` wrappers and the
-// three helpers (`pred`, `top_row`, `reference`) they called. T9.C2 deleted all
-// thirty-one, so the probes have no subject left — D-cov-1's shape, and F130's.
-//
-// The three properties they pinned, and what holds each now:
-//
-//   1. **Span tightness** — the reference allocation was sized to exactly
-//      `ref_span`'s claim, so an over-claim was an out-of-bounds read Miri would
-//      report. There is no longer a hand-written span to over-claim: the kernels
-//      take a `RecCursor`, which bounds-checks every access against the whole
-//      plane allocation, so an over-reach is a panic rather than UB. What the
-//      probe could see and the bounds check cannot — an over-reach that stays
-//      *inside* the plane but outside the mode's availability — was never this
-//      probe's job either; it is
-//      `reach_table_agrees_with_the_availability_tables`', and that test stands
-//      unchanged in `encoder/get_intra_predictor.rs`. `ref_span` and the
-//      `REACH_*` constants stay for it.
-//
-//   2. **Anchor** — the shim's output had to equal the safe kernel called at the
-//      contract's own geometry, which killed an anchor off by a row or a column.
-//      The shim *is* the safe kernel now, so the comparison is vacuous. The
-//      geometry itself is still pinned, by the encoder-side unit tests that read
-//      their expectations through the cursor (`i4x4_v_and_h_replicate_their_edge`
-//      and its siblings) and, end to end, by the 583-row differential sweep — a
-//      one-column anchor slip in `WelsI4x4LumaPredV_c` was planted in T9.C2f and
-//      failed **210 of 210** `st` rows.
-//
-//   3. **Destination extent** — eight bytes of noise slack on each side of the
-//      packed block, compared byte for byte, so a kernel writing one byte past
-//      its block failed. The destination is `&mut [u8; N]` now: writing past it
-//      does not compile.
-//
-// The two `common/intra_pred_common.rs` entries above went the same way and for
-// the same reason; their kernels keep unit coverage in that module, rewritten in
-// T9.C2f to drive the safe API over a `PaddedPlane`.
-// ===========================================================================
-// T9 straggler — `encoder/deblocking.rs`'s duplicate deblocking kernels (G-2)
-//
-// T6 converted the deblocking family in `common/deblocking_common.rs`, and the
-// *decoder* installs those shims (`decoder/deblocking.rs:200` re-exports the
-// module wholesale). The **encoder** does not: `encoder/deblocking.rs` carries
-// its own copies of the same eight ABI wrappers over its own four inner
-// kernels, and its own `DeblockingInit` installs them — so half the family was
-// still live raw code on the encoder's mainline path. T9's straggler sweep
-// found it.
-//
-// These entries prove the encoder's raw bodies against the safe kernels that
-// already exist, which is what licenses the swap: the two sets differ only in
-// local variable names, comments and one `*const`/`*mut` on `pTc`, and this
-// says so by measurement rather than by reading. Entry shapes are T6's own,
-// recovered from `bbb9348e` — the same three amplitude tiers (deblocking is
-// *conditional*, and full-range noise almost never passes the gates), the same
-// tc pool including the values that gate whole lines off, the same
-// whole-buffer comparison.
-//
-// They go with the swap, as always.
+// `encoder/deblocking.rs`'s duplicate deblocking kernels
 // ===========================================================================
 
 /// Alpha values from the ends and middle of `g_kuiAlphaTable` (0..=255), beta
-/// values from `g_kiBetaTable` (0..=18). T6's set, recovered with the entries.
+/// values from `g_kiBetaTable` (0..=18).
 const ALPHAS: &[i32] = &[0, 1, 4, 20, 128, 255];
 const BETAS: &[i32] = &[0, 2, 6, 18];
 
@@ -1388,44 +1084,8 @@ fn steps(stride: usize, vertical_taps: bool) -> (isize, isize) {
 
 use openh264_rs::encoder::deblocking as encdeb;
 
-// **Session F step 0: `encoder_deblocking_table_installs_the_common_shims`
-// deleted with the eight slots it guarded.** F139 measured the encoder's eight
-// `DeblockingFunc` kernel slots write-only — installed by `DeblockingInit`,
-// read by nothing, because the `FilteringEdge*` dispatchers call the safe
-// kernels directly since T9.C2 — and this test's whole property was "the
-// installs aim at the common shims". With the slots gone there is no install
-// left to misdirect and no reader a misdirection could reach; the property is
-// void, not merely stale — D-cov-1's `mc_table_slots_match_the_direct_calls`
-// reasoning, one block below.
-//
-// **S4.D4: the decoder's half went the same way, and the sentence that stood
-// here was the reason to check.** It read "the decoder-side behavioural
-// assert-map (`deblocking_table_slots_match_the_direct_calls`) stays: it drives
-// the *common* table, which the decoder still dispatches through." Measured at
-// deletion, it does not: a whole-tree grep for a call through any of the twelve
-// `pf(Luma|Chroma)Deblocking*` slots returns **nothing** in `src/`, and the
-// decoder's own filter has called the safe kernels directly since T9.C2
-// (`decoder/deblocking.rs`, `deblock_luma_lt4` and its siblings). The only
-// remaining mention on the decoder side was a comment in `decoder_context.rs`
-// quoting the C++'s `pFilter->pLoopf->pfLumaDeblockingLT4Ver`. So the common
-// table was in exactly the state F139 found the encoder's in — installed by
-// `DeblockingInit`, asserted by tests, read by nothing — and the twelve raw
-// shims under it existed only to be its contents and these tests' subjects.
-
 /// `encoder/deblocking.rs`'s `WelsNonZeroCount_c` against the safe kernel it
-/// duplicates. **S4.D4 removed the third copy**: `common`'s raw shim went with
-/// the deblocking table, its `pfSetNZCZero` slot having been retired by F118, so
-/// what remains is the encoder's (safe since T9) and `common::nonzero_count`.
-///
-/// **This test had a third arm until T4b.3c**, over `decoder/decode_slice.rs`'s
-/// copy — the one that never got Phase 2's conversion and was still a hand-written
-/// `if *p != 0 { *p = 1 }` loop. T4b.3c deleted `sBlockFunc`, the table that
-/// installed it, and pointed its single reader at the `common` shim; the copy went
-/// with the table. The arm is dropped rather than the test, because the duplicate
-/// it guarded no longer exists — and it is worth recording that **this test is what
-/// proved the deletion safe**, having asserted the two bodies byte-equal over 50
-/// random 24-entry inputs since Phase 2. It also caught the deletion, by failing to
-/// compile.
+/// duplicates.
 #[test]
 fn nonzero_count_duplicates_agree() {
     let mut rng = Prng::new(0x0E0F_0003);
@@ -1438,53 +1098,4 @@ fn nonzero_count_duplicates_agree() {
         assert_eq!(a, c, "encoder copy disagrees with the safe kernel");
     }
 }
-
-// ============================================================================
-// Phase 4a — dispatch assert-maps
-// ============================================================================
-//
-// Plan §5's own mitigation for de-virtualization: *every replaced pointer
-// provably pointed at exactly one function per config*. These tests are how
-// that is proven, and they are written **before** the table they describe is
-// deleted, not after.
-//
-// The claim splits in two, and the split is forced rather than stylistic:
-//
-//   1. The installer ignores its CPU-flag argument, so there is one function
-//      per slot rather than a family selected at run time. Proven by address
-//      equality across flag values, inside the library, where both addresses
-//      come from the same instantiation — `common::mc::tests`,
-//      `init_mc_func_ignores_the_cpu_flag`.
-//   2. That one function is the one the direct call sites now name. Proven
-//      **behaviourally**, here.
-//
-// Half 2 cannot be an address comparison. `#[inline(always)]` functions are
-// instantiated in whatever codegen unit takes their address, so this crate's
-// `mc::McLuma_c as usize` is a local copy, not the pointer `InitMcFunc` stored;
-// four of the six MC shims are `#[inline(always)]` and the assert fails on all
-// four. `encoder_deblocking_table_installs_the_common_shims` above only works
-// cross-crate because its kernels happen to carry no inline attribute. Driving
-// both sides over the same inputs and comparing every written byte is immune to
-// that, and it is the property the call sites actually depend on.
-
-// **D-cov-1 (T9.B4): `mc_table_slots_match_the_direct_calls` deleted.** Phase 4a's
-// dispatch assert-map, driving `SMcFunc`'s six installed slots against the symbols the
-// de-virtualized call sites name. It is spent, not merely stale: the slots hold the
-// safe kernels themselves now (`mc_luma`, `mc_chroma`, `mc_hor_ver20`/`_02`/`_22`,
-// `pixel_avg`), so "the slot and the direct call agree" has become "`mc_luma ==
-// mc_luma`". The mistake it existed to catch — a slot re-pointed at a
-// different-but-plausible function — is now a type error at `InitMcFunc`, because the
-// three slot types name the safe signatures and nothing else has them.
-//
-// `init_mc_func_ignores_the_cpu_flag` and its neighbour (both in `common/mc.rs`)
-// stay: the flag-invariance half is still a real property of `InitMcFunc`, and it is
-// what `encoder_context.rs`'s construction assertion leans on. F124 was right that
-// this test is Phase 4a's mitigation rather than Phase 2's span discipline, and it is
-// retired here with its own reason.
-//
-// **The all-None-then-all-Some half is gone with the `Option`s**, and nothing took
-// its place. `SMcFunc`'s six slots are plain `fn` now, so a default table cannot be
-// uninstalled and there is no before-state to compare against; a successor comparing
-// `InitMcFunc`'s table against `SMcFunc::default()` would be that file's constructor
-// checked against itself.
 

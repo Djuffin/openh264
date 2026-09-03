@@ -1,41 +1,8 @@
 #![deny(unsafe_code)]
-// Phase 5 W6 (family 4, T5.W2). Fourteen `unsafe fn` and two raw-pointer typedefs
-// went, in three moves and no new design:
-//
-//   * **The engine and the out-parameters became borrows.** Ten functions took a
-//     raw `pDecEngine` and eight took raw `u32`/`i32` out-parameters (the pointer
-//     spellings are deliberately not written here: this file's raw-pointer count is
-//     zero now, and S16 counts prose), every one guarded by a null test no caller could
-//     trip — verified by grep over all 74 call sites, which pass
-//     `addr_of_mut!((*pCtx).sCabacDecEngine)` or a `&mut` local and never a null.
-//     The guards are deleted rather than wrapped in `Option`, because absence is
-//     not a state a caller can express here; `fmo.rs`'s `Option<&T>` was the
-//     opposite case and kept its test.
-//   * **`pBinCtx` became `&mut SWelsCabacCtx`, or `&mut [SWelsCabacCtx]` where the
-//     body indexes it.** `DecodeUnaryBinCabac` walks `pBinCtx[0]` and
-//     `pBinCtx[iCtxOffset]`; `DecodeUEGMvCabac` walks `g_kMvdBinPos2Ctx`, whose
-//     largest entry is 3. Those two take a slice of exactly the length the index
-//     can reach, and the callers hand it over; the other two take one context.
-//   * **The two context accessors moved to `decoder_context.rs`.** `cabac_ctx_base`
-//     and `cabac_rbsp_window` reach through `pCtx` to a context field and derive
-//     from it, which is what a context accessor is — T5.V3's move of
-//     `slice_bit_reader` out of `bit_stream.rs`, one module over and for the same
-//     reason. They retire with family 15 and the view struct.
-//
-// What is *not* here is the reason the callers still hold raw pointers: the borrows
-// are created at each call and die with it (S25 — no borrow outlives one
-// expression), so `parse_mb_syn_cabac.rs`'s `pCabacDecEngine` and its
-// `cabac_ctx_base(pCtx).add(N)` locals stay raw and stay family 7's.
 
 //! Rust translation of OpenH264 CABAC Decoder Engine (`cabac_decoder.h` and `cabac_decoder.cpp`).
 //!
-//! # The read-extent audit (T3.2 step 0)
-//!
-//! [`phase3_findings.md`](../../../docs/phase3_findings.md) **§F16** happened because a
-//! readable extent was derived from *one half* of the reader and then claimed for all
-//! of it — "covers every read the family can make, at any position, for any operation"
-//! was a quantifier over a set nobody had enumerated. This module's extent claim is
-//! therefore **per site**, and the enumeration is the deliverable.
+//! # The read-extent audit
 //!
 //! ## Every buffer access the engine can issue
 //!
@@ -59,8 +26,8 @@
 //!
 //! ### 2. [`Read32BitsCabac`] — the 4/3/2/1 end ladder. Max index `len - 1`.
 //!
-//! This is F16's named suspect and the audit's answer is that **it never reads past the
-//! RBSP**, because its own selector is measured against `pBuffEnd`:
+//! **It never reads past the RBSP**, because its own selector is measured against
+//! `pBuffEnd`:
 //!
 //! | `iLeftBytes` | loads | largest index |
 //! |---|---|---|
@@ -83,8 +50,7 @@
 //!
 //! ### 3. [`RestoreCabacDecEngineToBS`] — **no load**.
 //!
-//! Position only, stated explicitly because the claim is per-site and "reads nothing"
-//! is one of the answers. See its own doc comment for why the rewind cannot underflow.
+//! Position only. See its own doc comment for why the rewind cannot underflow.
 //!
 //! ## Where the two numbers come from
 //!
@@ -92,9 +58,7 @@
 //! The readable extent past it is **derived from the owning [`RawDataBuffer`] at call
 //! time** (`window_from`), one owner. `window.len() >= len + 4` structurally
 //! (`WelsDecodeBs` sizes every payload with four bytes to spare), which covers site
-//! 1's `len + 2`. The staleness hazard this paragraph used to carry — a stored
-//! `avail` going stale when `ExpandBsBuffer` grew the buffer, F16's second instance —
-//! closed at T3.3: there is no stored extent left to go stale.
+//! 1's `len + 2`.
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -662,18 +626,12 @@ pub struct SWelsCabacCtx {
     pub uiMPS: u8,
 }
 
-// T5.W2: the `PWelsCabacCtx` pointer typedef sat here. With the eight
-// decoding functions taking `&mut SWelsCabacCtx` (or `&mut [SWelsCabacCtx]`) it has
-// no user left in the crate — S18's shape, found at the definition — and the same is
-// true of `PWelsCabacDecEngine` below. Both are deleted, which is what takes this
-// module's raw-pointer count to zero.
-
 /// The decoder context's four CABAC model tables — `sWelsCabacContexts`'s own type,
 /// named here so `WelsCabacGlobalInit` and `WelsCabacContextInit` can take the field
-/// by reference instead of reaching it through the context pointer (T5.W2).
+/// by reference.
 pub type CabacModelTables = [[[SWelsCabacCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX as usize + 1]; 4];
 
-/// The arithmetic-decoding engine state — a **detached position**, per plan §2.1.3.
+/// The arithmetic-decoding engine state — a **detached position**.
 ///
 /// The C++ carries a pointer triple (`pBuffStart`/`pBuffCurr`/`pBuffEnd`) alongside
 /// the arithmetic registers. All three are gone:
@@ -686,8 +644,7 @@ pub type CabacModelTables = [[[SWelsCabacCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX a
 /// | `pBuffEnd` | — | `buf.len()` of the RBSP window ([`BsReader::rbsp_window`]) |
 ///
 /// Field order is deliberate: `uiRange` and `uiOffset` stay adjacent so the pair load
-/// the release build already emits for them (`ldp x9, x11, [x0]`) survives the
-/// conversion.
+/// the release build already emits for them (`ldp x9, x11, [x0]`) survives.
 ///
 /// `WelsMalloczHelper` zeroes this at allocation (`decoder_core.rs:3591`), and a zeroed
 /// engine is inert rather than null-pointered: `pos = 0` with an empty window takes the
@@ -755,18 +712,16 @@ pub fn WelsCabacContextInit(
         }
         let qp_idx = iQp as usize;
         let model_idx = iIdx;
-        // The C++ `memcpy` of `WELS_CONTEXT_COUNT` contexts, with the count now the
-        // array's own length on both sides rather than a third number beside them.
+        // The C++ `memcpy` of `WELS_CONTEXT_COUNT` contexts.
         *active = contexts[model_idx][qp_idx];
     }
 }
 
 // 2. Decoding engine initialization
-//
 /// Primes the engine from the CAVLC cursor's position — **audit site 1**, the only
 /// place in this module that reads past the RBSP (`len + 2`, needing `avail >= len+3`).
 ///
-/// # The rewind cannot underflow, and here is why it cannot *today*
+/// # The rewind cannot underflow
 ///
 /// `curr = pos - remaining_bytes` with `remaining_bytes ∈ [0, 4]` (derived in the
 /// module docs from `left_bits ∈ [-16, 15]`). Every path into this function has primed
@@ -808,11 +763,10 @@ pub fn InitCabacDecEngineFromBS(
         let curr = iCurr as usize;
 
         // The wider window — this is the one site that needs the readable extent past
-        // the RBSP, and it is derived from the owning buffer at call time (F16's
-        // rule). The guard above bounds `curr <= len - 2`, so `curr + 5 <= len + 3 <=
-        // window.len()`; the `get` is therefore unreachable-None, and routes a
-        // violated contract to the error path instead of past the end of the
-        // allocation (F4/F16's shape).
+        // the RBSP, and it is derived from the owning buffer at call time. The guard
+        // above bounds `curr <= len - 2`, so `curr + 5 <= len + 3 <= window.len()`;
+        // the `get` is therefore unreachable-None, and routes a violated contract to
+        // the error path instead of past the end of the allocation.
         let buf = raw.window_from(pBsAux.start);
         let b = match buf.get(curr..curr + 5) {
             Some(b) => b,
@@ -837,8 +791,7 @@ pub fn InitCabacDecEngineFromBS(
 ///
 /// The C++ wrote four fields into `SBitStringAux` and re-stored `pStartBuf` from
 /// `pBuffStart`, which was a no-op restore of the base it had been given. What actually
-/// moves is the position, and it is now the single `usize` assignment plan §2.2.2
-/// predicted.
+/// moves is the position.
 ///
 /// # The rewind cannot underflow either
 ///
@@ -860,14 +813,6 @@ pub fn RestoreCabacDecEngineToBS(pDecEngine: &mut SWelsCabacDecEngine, pBsAux: &
     }
 }
 
-// T5.W2: `cabac_ctx_base` and `cabac_rbsp_window` moved to `decoder_context.rs`.
-// Both reach through `pCtx` to a context field and derive from it — `pCabacCtx` for
-// the first, `sRawData` + `slice_bit_reader` for the second — which is what a context
-// accessor *is*, and is why neither could convert while it lived here. This is
-// T5.V3's move of `slice_bit_reader` out of `bit_stream.rs`, one module over and for
-// the same reason: they retire with family 15's accessors and the view struct, not
-// with the arithmetic decoder.
-
 // 3. Actual decoding
 /// The refill — **audit site 2**, the 4/3/2/1 end ladder, bounded by `len - 1`.
 ///
@@ -880,7 +825,7 @@ pub fn RestoreCabacDecEngineToBS(pDecEngine: &mut SWelsCabacDecEngine, pBsAux: &
 /// `win.len()` after init on a truncated stream, and `win.len() - pos` in `usize` would
 /// wrap to a huge positive and select the 4-byte arm.
 ///
-/// # Why the arms are `first_chunk`, and why the order is inverted (S1 step 3)
+/// # Why the arms are `first_chunk`, and why the order is inverted
 ///
 /// Written the obvious way — `match tail.len() { 3 => …, 2 => …, 1 => …, _ => … }` with
 /// `tail[i]` indexing inside each arm — the release build **re-checked the length in
@@ -889,8 +834,8 @@ pub fn RestoreCabacDecEngineToBS(pDecEngine: &mut SWelsCabacDecEngine, pBsAux: &
 /// 2 or 3" into the arm but not "therefore >= 4".
 ///
 /// `first_chunk::<N>()` states the width as a *type* instead of leaving it to be
-/// re-derived, which is the exact-span trim (S9) at four-byte scale: the `Some` arm
-/// carries a `&[u8; N]`, so the load folds and the checks vanish. Testing `>= 4` first
+/// re-derived: the `Some` arm carries a `&[u8; N]`, so the load folds and the checks
+/// vanish. Testing `>= 4` first
 /// puts the common case at the top of the chain; the four widths are a disjoint
 /// partition, so the order is free. The final `else` is `tail.len() == 1` — `0` was
 /// rejected by the guard above — and its `tail[0]` folds on that fact.
@@ -898,7 +843,7 @@ pub fn RestoreCabacDecEngineToBS(pDecEngine: &mut SWelsCabacDecEngine, pBsAux: &
 /// `#[inline(always)]`: the raw pointer version was inlined into `DecodeBinCabac` by
 /// the cost model alone. Adding a slice parameter tipped it over, and the call cost
 /// `DecodeBinCabac` a stack frame *on every bin*, refill or not. This pins the
-/// reference's shape rather than leaving it to a heuristic (S8).
+/// reference's shape rather than leaving it to a heuristic.
 #[inline(always)]
 pub fn Read32BitsCabac(
     win: &[u8],
@@ -1076,9 +1021,7 @@ pub fn DecodeTerminateCabac(
 // 4. Unary parsing
 /// `pBinCtx` is a **slice** because this function indexes it: the C++ walks
 /// `pBinCtx[0]` for the first bin and `pBinCtx[iCtxOffset]` for every bin after it,
-/// so the caller hands over exactly the `iCtxOffset + 1` contexts that names, and the
-/// index is bounds-checked instead of being a `.offset()` the type could not see
-/// (T5.W2).
+/// so the caller hands over exactly the `iCtxOffset + 1` contexts that names.
 pub fn DecodeUnaryBinCabac(
     win: &[u8],
     pDecEngine: &mut SWelsCabacDecEngine,
@@ -1211,7 +1154,7 @@ pub fn DecodeUEGLevelCabac(
 
 /// `pBinCtx` is a **slice** for [`DecodeUnaryBinCabac`]'s reason: the bin index walks
 /// `g_kMvdBinPos2Ctx`, whose largest entry is 3, so the caller hands over the four
-/// contexts the table can name (T5.W2).
+/// contexts the table can name.
 pub fn DecodeUEGMvCabac(
     win: &[u8],
     pDecEngine: &mut SWelsCabacDecEngine,
@@ -1294,21 +1237,16 @@ mod tests {
             0,
             26,
         );
-        // T5.W2: the `memcpy` is an array assignment now, so the test can say what it
-        // was always asserting by omission — that the active contexts *are* the model
-        // row the two indices select. Nothing here was reachable before: the previous
-        // body called both functions through `pCtx` and checked only the flag.
+        // The active contexts *are* the model row the two indices select.
         assert_eq!(ctx.pCabacCtx, ctx.sWelsCabacContexts[0][26]);
     }
 
     // -----------------------------------------------------------------------
     // The CAVLC↔CABAC handoff.
     //
-    // Both readers now live in one position space, and the whole handoff is a
-    // `usize` in each direction. The plan (§T3.2) calls a round-trip test at a
-    // known bit offset "cheap and permanent"; this is it. It is the only place
-    // the two cursors' agreement is asserted directly rather than inferred from
-    // a decoded frame, and it runs in both profiles.
+    // Both readers live in one position space, and the whole handoff is a
+    // `usize` in each direction. It is the only place the two cursors'
+    // agreement is asserted directly rather than inferred from a decoded frame.
     // -----------------------------------------------------------------------
 
     use crate::decoder::bit_stream::{DecInitBits, READER_SLOP};

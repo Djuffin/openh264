@@ -46,10 +46,6 @@ fn test_decoder_error_concealment_modes() {
     }
 }
 
-// ============================================================================
-// F41's covering test
-// ============================================================================
-
 /// Decodes `data` and returns the OR of every `DecodeFrame2` state, optionally
 /// switching the concealment mode through `SetOption` after `Initialize`.
 ///
@@ -97,22 +93,15 @@ unsafe fn decode_states(data: &[u8], init_ec: ERROR_CON_IDC, switch_to: Option<E
     }
 }
 
-/// **F41 — the block the api writes and the block the decoder reads are one
-/// block, and it is the context's.**
+/// **The block the api writes and the block the decoder reads are one block, and it
+/// is the context's.**
 ///
 /// The C++ context owns its `SDecodingParam`: `InitDecoderCtx` allocates it
 /// (`welsDecoderExt.cpp:426`), `DecoderConfigParam` copies the caller's values in,
 /// and `SetOption(DECODER_OPTION_ERROR_CON_IDC)` writes
-/// `pDecContext->pParam->eEcActiveIdc` (`:535`). The port had invented a
-/// `CWelsDecoderImpl::param` with no counterpart in the reference and pointed
-/// `pCtx->pParam` at it — an alias into an object with its own lifetime, rewritten
-/// on every `Initialize` before the existing-context test, and read by the
-/// teardown's `bParseOnly` arm. T8.A5 gives the block to the context.
+/// `pDecContext->pParam->eEcActiveIdc` (`:535`).
 ///
-/// **What this test pins is the property the move could break**: after the move
-/// there are two candidate blocks a careless `SetOption` could write — the api's
-/// (now deleted) and the context's — and only one of them is read by the decoder.
-/// So it *switches concealment off after `Initialize`* on a stream that conceals,
+/// It *switches concealment off after `Initialize`* on a stream that conceals,
 /// and asserts the decoder noticed:
 ///
 /// * initialised with `ERROR_CON_SLICE_COPY`, `BA_MW_D_IDR_LOST.264` comes back
@@ -121,14 +110,7 @@ unsafe fn decode_states(data: &[u8], init_ec: ERROR_CON_IDC, switch_to: Option<E
 ///   not, and reports `dsBitstreamError` instead.
 ///
 /// A `SetOption` writing anything but the block the decoder reads leaves the first
-/// state on the second run, and the assertion fires — measured at T8.A5 by making
-/// the option write a scratch copy of the context's block:
-///
-/// ```text
-/// assertion `left == right` failed: concealment still ran after
-/// SetOption(ERROR_CON_IDC = DISABLE): the api wrote one parameter block and the
-/// decoder read another — F41
-/// ```
+/// state on the second run, and the assertion fires.
 #[test]
 fn test_error_con_idc_set_after_initialize_reaches_the_decoder() {
     let mut repo_root = std::path::PathBuf::from("../../../");

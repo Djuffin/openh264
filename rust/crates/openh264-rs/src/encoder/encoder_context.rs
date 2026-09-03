@@ -21,8 +21,7 @@ pub const MAX_TEMPORAL_LEVEL: usize = MAX_TEMPORAL_LAYER_NUM;
 /// `wels_const.h:113` — `(1<<(MAX_TEMPORAL_LEVEL-1))` = 8.
 pub const MAX_GOP_SIZE: usize = 1 << (MAX_TEMPORAL_LEVEL - 1);
 /// `wels_const.h:115` — `(MAX_GOP_SIZE>>1)` = 4. The trailing C++ comment says
-/// "16 in standard", which is what this port had hard-coded; the encoder's own
-/// limit is 4.
+/// "16 in standard"; the encoder's own limit is 4.
 pub const MAX_SHORT_REF_COUNT: usize = MAX_GOP_SIZE >> 1;
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const MAX_QUALITY_LEVEL: usize = MAX_QUALITY_LAYER_NUM;
@@ -45,12 +44,9 @@ pub const I16_PRED_DC_A: usize = 7;
 pub const I4_PRED_A: usize = 14;
 pub const C_PRED_A: usize = 7;
 /// Last variant of `EStaticBlockIdc` (`IWelsVP.h:148`) — value **3**, matching the
-/// `EStaticBlockIdc` enum in `wels_preprocess.rs`. This was 5 here, which over-sized
-/// `SWelsFuncPtrList::pfMotionSearch[BLOCK_STATIC_IDC_ALL]`.
+/// `EStaticBlockIdc` enum in `wels_preprocess.rs`.
 pub const BLOCK_STATIC_IDC_ALL: usize = 3;
-/// `wels_const.h:147` — last variant of the block-size enum, value 7. This was 8 here,
-/// which would have over-sized `SScreenBlockFeatureStorage::uiSadCostThreshold` and the
-/// `SSampleDealingFunc` / `SWelsFuncPtrList` function-pointer tables.
+/// `wels_const.h:147` — last variant of the block-size enum, value 7.
 pub const BLOCK_SIZE_ALL: usize = 7;
 /// `wels_const.h:131` — `MAX_DEPENDENCY_LAYER`.
 pub const MAX_DQ_LAYER_NUM: usize = MAX_DEPENDENCY_LAYER;
@@ -83,11 +79,6 @@ pub use crate::EVideoFrameType;
 // Core Supporting Structures
 // ============================================================================
 
-// **T8.B6: `SLogContext` was declared here and in `decoder/decoder_context.rs`**
-// — the census's `type SLogContext x2` — and this copy typed all three of its
-// members `*mut c_void`, so the callback the encoder was supposed to reach was an
-// erased pointer nothing could have called even if something had tried. One
-// declaration now, in `common::wels_trace`, where `utils.h` puts it.
 pub use crate::common::wels_trace::SLogContext;
 
 /// `SMVUnitXY` — codec/encoder/core/inc/wels_common_basis.h:50. 4 bytes.
@@ -120,7 +111,7 @@ impl SMVUnitXY {
 }
 
 /// `SCropOffset` — codec/encoder/core/inc/wels_common_basis.h:105.
-/// The fields are `int16_t` in C++; this copy had them as i32.
+/// The fields are `int16_t` in C++.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SCropOffset {
@@ -155,108 +146,36 @@ impl Default for SDCTCoeff {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SPicData {
-    // `pEncMb`, `pRefMb` and `pCsMb` — three `[*mut u8; 3]` cursor triples — stood
-    // here, with `pDecMb` between the first two.
-    //
-    // **`pDecMb` went first, S18/T9.C4**, proved redundant rather than assumed so:
-    // `WelsMdIntraInit` stamped it from `pDecPic.planes()` and stamped `pCsMb` from
-    // `(*pCurLayer).pCsData` — two derivations of *one* address, because
-    // `WelsInitCurrentLayer` fills `pCsData` from that same `planes()` call. A
-    // `debug_assert_eq!` of the two, in both branches of the stamp, was carried
-    // through a whole `gates.sh family` (583 rows x both profiles) and never fired;
-    // planting `.wrapping_add(1)` on one side aborted every row of the first preset,
-    // so the assertion had teeth.
-    //
-    // **The other nine went in S4.C2**, on the argument this field pair was added to
-    // make: every one of them was `root + ((iMbX + iMbY * stride) << shift)`, so a
-    // reader holding the pair and the picture never needed the pointer. They are
-    // resolved at use now — `svc_encode_slice::{enc_mb, cs_mb, ref_mb}` — which
-    // deletes both the storage and the *roving*: the stamps recomputed the triples
-    // at a row or slice start and otherwise **walked** them a macroblock at a time,
-    // and a walked cursor is only correct while the walk's guard holds. The guard
-    // did hold (the walk ran exactly when the previous macroblock was this one's
-    // left neighbour, making `previous + 16` and the absolute form the same
-    // address), which is why this conversion is byte-identical — but it was an
-    // invariant spread across two functions and nine assignments, and now it is
-    // three expressions.
-    /// The macroblock this cache is on, in macroblocks — **T9.B30, and the port's
-    /// own field**, not the C++'s. It was carried beside the twelve pointers; it is
-    /// what remains of them.
-    ///
-    /// Every one of the twelve pointers above is the same function of this pair and a
-    /// picture: `plane(i) + ((iMbX + iMbY * stride) << (4 for luma, 3 for chroma))`,
-    /// which is exactly how `WelsMdIntraInit`/`WelsMdInterInit` stamp them. A reader
-    /// that has the pair and the picture does not need the pointer, and a coordinate
-    /// is the one form of this information no retag can invalidate (S54's value half,
-    /// F112's rule for the arena's roots).
+    /// The macroblock this cache is on, in macroblocks.
     ///
     /// It is carried here rather than fetched from `SMB` because three of the readers
     /// have neither an `SMB` nor a slice in scope — `WelsMdI16x16`, `WelsMdIntraChroma`
-    /// and (for its chroma half) `WelsMdIntraSecondaryModesEnc` — and threading a
-    /// fourth parameter through their dispatch slots would be a bigger change than
-    /// the eight bytes this costs.
+    /// and (for its chroma half) `WelsMdIntraSecondaryModesEnc`.
     pub iMbX: i32,
     pub iMbY: i32,
 }
 
 impl SPicData {
-    /// **The offset the twelve deleted pointers were.** This macroblock's origin as
-    /// a byte offset into a plane of `stride` — `((iMbX + iMbY * stride) << 4)` for
-    /// luma and `<< 3` for chroma, which is exactly how `WelsMdIntraInit` and
-    /// `WelsMdInterInit` computed each cursor before stamping it (S4.C2).
+    /// This macroblock's origin as a byte offset into a plane of `stride` —
+    /// `((iMbX + iMbY * stride) << 4)` for luma and `<< 3` for chroma.
     ///
-    /// **Chroma reads stride index 1 for both chroma planes**, not 2 — the stamps
-    /// computed one `iOffsetUV` from `stride(1)` and applied it to planes 1 *and* 2,
-    /// so a caller passing `stride(2)` for plane 2 would be wrong on any picture
-    /// whose chroma strides differ. **The rule lives on this doc comment, and its
-    /// callers are why**: `WelsMdInterInit`'s three surviving raw resolutions
-    /// (`svc_mode_decision.rs`, `pRefLuma`/`pRefCb`/`pRefCr`) pass `stride(1)` for
-    /// planes 1 and 2 by hand, and they are the only callers left that can get it
-    /// wrong. Every view-based resolver is immune by construction — `AllocPicture`
-    /// builds planes 1 and 2 with one `kuiChromaStride` and each plane carries it.
-    ///
-    /// **S12.6 deleted `stride_idx`**, a two-line helper stating the same rule. Its
-    /// only caller was `mb_cursor`, which went with it; a rule with no consumer is
-    /// documentation, and this is where the documentation belongs.
+    /// **Chroma reads stride index 1 for both chroma planes**, not 2 — a caller
+    /// passing `stride(2)` for plane 2 would be wrong on any picture whose chroma
+    /// strides differ. Every view-based resolver is immune by construction —
+    /// `AllocPicture` builds planes 1 and 2 with one `kuiChromaStride` and each
+    /// plane carries it.
     #[inline]
     pub fn mb_offset(&self, stride: i32, plane: usize) -> isize {
         let shift = if plane == 0 { 4 } else { 3 };
         ((self.iMbX + self.iMbY * stride) as isize) << shift
     }
 
-    // **S12.6 deleted `mb_cursor`** — S4.C2's raw macroblock cursor, `roots[plane]`
-    // offset by `mb_offset`. Its safe successors below, `mb_cursor_ro` and
-    // `mb_cursor_rec`, took every caller during S9.0; by S12 the only two mentions
-    // left in the tree were comments saying so. Deleting it compiles clean across
-    // all targets, and takes with it the last consumer of `stride_idx` and the
-    // `&[*mut u8; 3]` parameter that was the crate's only raw-root-triple signature.
-    // F291's shape, found by S12's posture sweep rather than by the cascade tool,
-    // which works at function granularity and reported "kept 0 of 0" throughout.
-
-
-    /// The macroblock cursor, taken from a **picture view** — S9.0, and the safe
-    /// replacement for the raw `mb_cursor` that S12.6 deleted above.
+    /// The macroblock cursor, taken from a **picture view**.
     ///
     /// It hands back a [`RecCursor`](crate::encoder::rec_view::RecCursor), not a
     /// `PlaneCursor`: the source picture is written in-fork by
-    /// `VaaBackgroundMbDataUpdate` (F117), so its planes live behind the shared seam
-    /// and no `&[u8]` may span them. See `RoPicView`'s note for why S9.0a's
-    /// slice-based form was wrong.
-    ///
-    /// **Byte-identical to the raw form, and the arithmetic is why.**
-    /// `mb_offset` is `((iMbX + iMbY * stride) << shift)`, which expands to
-    /// `(iMbX << shift) + (iMbY << shift) * stride` — exactly `x + y * stride` for
-    /// the `(x, y)` that [`luma_origin`](Self::luma_origin) and
-    /// [`chroma_origin`](Self::chroma_origin) give. The raw root is the plane's
-    /// *padded origin*, and `RoPlane::cursor` anchors from that same origin, so the
-    /// two name one address.
-    ///
-    /// **On the chroma stride rule** (stated on [`mb_offset`](Self::mb_offset)): the
-    /// raw form resolved both chroma planes through `strides[1]`, while a view's
-    /// plane carries its own. They agree by construction — `AllocPicture` builds
-    /// planes 1 and 2 with one `kuiChromaStride` (`picture.rs:262-273`) and
-    /// `iLineSize` is read back off those same planes — so this cannot be the
-    /// divergence the rule exists to prevent.
+    /// `VaaBackgroundMbDataUpdate`, so its planes live behind the shared seam
+    /// and no `&[u8]` may span them.
     #[inline]
     pub fn mb_cursor_ro<'a>(
         &self,
@@ -268,8 +187,7 @@ impl SPicData {
     }
 
     /// The macroblock cursor over the **reconstruction** view — the write half's
-    /// counterpart to [`mb_cursor_ro`](Self::mb_cursor_ro), with the same geometry
-    /// argument. `pCsData`'s raw roots stand for exactly these bytes.
+    /// counterpart to [`mb_cursor_ro`](Self::mb_cursor_ro).
     #[inline]
     pub fn mb_cursor_rec<'a>(
         &self,
@@ -358,9 +276,9 @@ impl Default for SParaSetOffsetVariable {
 
 /// `TagParaSetOffset` — `codec/encoder/core/inc/wels_common_basis.h:79`. 1180 bytes.
 ///
-/// This was a `[i32; 32]` placeholder (128 bytes). `eSpsPpsIdStrategy` is **not** a
-/// member: `wels_common_basis.h:89` guards it with `#if _DEBUG`, which this build
-/// does not set — the C++ `sizeof` of 1180 confirms it is absent.
+/// `eSpsPpsIdStrategy` is **not** a member: `wels_common_basis.h:89` guards it with
+/// `#if _DEBUG`, which this build does not set — the C++ `sizeof` of 1180 confirms
+/// it is absent.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SParaSetOffset {
@@ -394,10 +312,6 @@ impl Default for SParaSetOffset {
 }
 
 /// `TagDqIdc` — `codec/encoder/core/inc/dq_map.h:50`. 4 bytes.
-///
-/// This port previously declared `{ uiDId, uiQId, uiTId }`, which is neither the
-/// field set nor the size of the C++ struct; `InitDqLayers` writes `iPpsId`,
-/// `iSpsId` and `uiSpatialId`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SDqIdc {
@@ -412,8 +326,7 @@ pub use crate::encoder::svc_encode_slice::{SMB, SSlice};
 
 pub use crate::encoder::svc_encode_slice::SWelsSvcRc;
 
-// The real ports (svc_mode_decision.cpp:236 and :257) live in svc_mode_decision.rs;
-// this module used to carry stubs that took *mut c_void and returned false.
+// The real ports (svc_mode_decision.cpp:236 and :257) live in svc_mode_decision.rs.
 use crate::encoder::svc_mode_decision::{
     WelsMdInterJudgeBGDPskip, WelsMdInterJudgeBGDPskipFalse, WelsMdUpdateBGDInfo,
     WelsMdUpdateBGDInfoNULL,
@@ -448,21 +361,14 @@ pub use crate::encoder::wels_func_ptr_def::{EntropyCoder, SWelsFuncPtrList};
 
 /// Reference picture lists for each spatial dependency/quality layer in SVC.
 ///
-/// **Not `#[repr(C)]` and not `Copy` since T6.F1**, and `Box`-built with a real
-/// constructor: `pRef` *is* this layer's reconstruction pool, so the struct owns its
-/// pictures and a `WelsMallocz`'d shell would be UB at the pool's first drop (S21).
-/// It is reached only through `sWelsEncCtx::ppRefPicListExt`, a raw pointer field in
-/// the zeroed context — T3.6's precedent, the same argument `SDqLayer` was rebuilt
-/// on in session D.
-///
-/// The two lists and `pNextBuffer` are **handles into `pRef`**, not addresses.
+/// `pRef` *is* this layer's reconstruction pool, so the struct owns its pictures.
+/// The two lists and `pNextBuffer` are **handles into `pRef`**.
 #[derive(Debug)]
 pub struct SRefList {
     pub pShortRefList: [Option<RecPicId>; 1 + MAX_SHORT_REF_COUNT],
     pub pLongRefList: [Option<RecPicId>; 1 + MAX_REF_PIC_COUNT],
     pub pNextBuffer: Option<RecPicId>,
-    /// The pool. Was `[*mut SPicture; 1 + MAX_REF_PIC_COUNT]`, allocated one picture
-    /// at a time by `RequestMemorySvc` and freed one at a time by `FreeMemorySvc`.
+    /// The pool.
     pub pRef: RecPicPool,
     pub uiShortRefCount: u8,
     pub uiLongRefCount: u8,
@@ -470,12 +376,7 @@ pub struct SRefList {
 
 impl SRefList {
     /// An empty reference list for one dependency layer. `RequestMemorySvc` fills
-    /// [`pRef`](Self::pRef) immediately after and points `pNextBuffer` at slot 0,
-    /// exactly as the C++ does over its `WelsMallocz`'d block.
-    ///
-    /// **F56**: every field's zero is written out. The C++ takes this from
-    /// `WelsMallocz`, so the lists are null and both counts are 0 — and `None` is
-    /// that null, ruled rather than inherited from a zero image.
+    /// [`pRef`](Self::pRef) immediately after and points `pNextBuffer` at slot 0.
     pub fn new() -> Box<SRefList> {
         Box::new(SRefList {
             pShortRefList: [None; 1 + MAX_SHORT_REF_COUNT],
@@ -565,37 +466,24 @@ impl Default for SSpatialPicIndex {
 
 /// Stride and coordinate lookup tables across spatial dependency layers.
 ///
-/// **T6.H1 — the arena is owned, and the four tables are offsets into it.**
+/// `AllocStrideTables` carves four regions: the decoder-side 4x4 block offsets, the
+/// encoder-side ones, and the two macroblock coordinate tables.
 ///
-/// `AllocStrideTables` takes *one* block from the allocator (`tag!("pBase")`) and
-/// carves four regions out of it: the decoder-side 4x4 block offsets, the
-/// encoder-side ones, and the two macroblock coordinate tables. The C++ stores a
-/// pointer per layer into that one block, and so did this port; the block itself
-/// was reachable only as `pStrideDecBlockOffset[0][1]`, which is how
-/// `WelsUninitEncoderExt` used to free it.
-///
-/// It is an arena, so it converts as an arena — but a **typed** one since S11.46:
-/// two owned `Vec`s, one per element type, and the per-layer fields become
-/// *indices* into them rather than byte offsets into a byte block.
-///
-/// The reason a typed split is possible where the C++'s one block was not: the two
-/// element types never interleave. Every block-offset region is exactly 24 `i32`s
+/// Every block-offset region is exactly 24 `i32`s
 /// (`kiUnit1Size`), and the two coordinate tables are `i16` runs of one entry per
 /// macroblock — so `blocks` holds the dec-side regions followed by the enc-side
-/// ones, in the arena's own order, and `coords` holds the X table followed by the
-/// Y table. What the byte arena bought and a *per-field* split would have lost is
-/// still bought: two layers can share one region — when a spatial layer is absent
+/// ones, and `coords` holds the X table followed by the
+/// Y table. Two layers can share one region — when a spatial layer is absent
 /// from the temporal map, `AllocStrideTables` assigns it the matching layer's
 /// table — and copying an **index** reproduces that exactly as copying an offset
-/// did. `None` is the null the field used to hold: "this layer has no table".
+/// did. `None` is "this layer has no table".
 pub struct SStrideTables {
     /// The 24-entry block-offset regions: dec-side first, then enc-side, in the
-    /// order `AllocStrideTables` carves them. Zero-filled, as `WelsMallocz` left
-    /// the block.
+    /// order `AllocStrideTables` carves them. Zero-filled.
     blocks: Vec<[i32; 24]>,
     /// The two macroblock coordinate tables: X's regions, then Y's.
     coords: Vec<i16>,
-    /// Per-layer **indices into `blocks`** (was: byte offsets into the arena).
+    /// Per-layer **indices into `blocks`**.
     pub pStrideDecBlockOffset: [[Option<u32>; 2]; MAX_DEPENDENCY_LAYER],
     pub pStrideEncBlockOffset: [Option<u32>; MAX_DEPENDENCY_LAYER],
     /// Per-layer **element indices into `coords`**.
@@ -604,9 +492,7 @@ pub struct SStrideTables {
 }
 
 impl SStrideTables {
-    /// The tables with both stores sized and no layer wired yet —
-    /// `WelsMallocz(iNeedAllocSize)` plus the memset the struct itself got, with
-    /// the one size split into the two counts it was always the sum of.
+    /// The tables with both stores sized and no layer wired yet.
     pub fn new(kiBlockCount: usize, kiCoordLen: usize) -> Self {
         Self {
             blocks: vec![[0i32; 24]; kiBlockCount],
@@ -618,15 +504,14 @@ impl SStrideTables {
         }
     }
 
-    /// A coordinate-table region as the `&mut [i16]` it is — the arena fill's
-    /// write half (S11.38; S11.46 made it an ordinary reslice).
+    /// A coordinate-table region as the `&mut [i16]` it is.
     #[inline]
     pub fn i16_region_mut(&mut self, kuiOff: u32, kiLen: usize) -> &mut [i16] {
         &mut self.coords[kuiOff as usize..][..kiLen]
     }
 
     /// A block-offset region as the `&mut [i32; 24]` it is — the write twin of
-    /// [`EncBlockOffsets`](Self::EncBlockOffsets), for the fills (S11.38).
+    /// [`EncBlockOffsets`](Self::EncBlockOffsets).
     #[inline]
     pub fn i32_block24_mut(&mut self, kuiIdx: u32) -> &mut [i32; 24] {
         &mut self.blocks[kuiIdx as usize]
@@ -634,24 +519,18 @@ impl SStrideTables {
 
     /// The enc-side block offsets of layer `kiDid` — 16 luma + 8 chroma.
     ///
-    /// **`&self`, and T9.C4 is why.** These tables are filled once by
-    /// `WelsGetEncBlockStrideOffset` at `InitDqLayers` and read-only for the rest
-    /// of the encode — but the accessors took `&mut self` all the way down to
-    /// `Vec::as_mut_ptr`, so every worker of the fork retagged the whole
-    /// `Option<Box<SStrideTables>>` field to read a lookup table, and Miri
-    /// reported exactly that as a data race. Shared reads do not race, so the read
-    /// path is `&self`; S11.46 removed the raw cursor underneath it as well.
+    /// These tables are filled once by `WelsGetEncBlockStrideOffset` at
+    /// `InitDqLayers` and read-only for the rest of the encode.
     ///
-    /// The region holds **24** `i32`s, which is not a guess: it is what
+    /// The region holds **24** `i32`s: it is what
     /// `WelsGetEncBlockStrideOffset`'s own contract states and what
-    /// `AllocStrideTables` reserves. Since S11.46 it is also what the storage's
-    /// element type says.
+    /// `AllocStrideTables` reserves.
     #[inline]
     pub fn EncBlockOffsets(&self, kiDid: usize) -> Option<&[i32; 24]> {
         self.blocks.get(self.pStrideEncBlockOffset[kiDid]? as usize)
     }
 
-    /// [`EncBlockOffsets`](Self::EncBlockOffsets)' dec-side twin (S11.28).
+    /// [`EncBlockOffsets`](Self::EncBlockOffsets)' dec-side twin.
     /// `kiTid0` is the C++'s `kbBaseTemporalFlag` — 1 for the base temporal layer.
     #[inline]
     pub fn DecBlockOffsets(&self, kiDid: usize, kiTid0: usize) -> Option<&[i32; 24]> {
@@ -660,7 +539,7 @@ impl SStrideTables {
 
     /// The macroblock X/Y coordinate tables of layer `kiDid` **as slices** — one
     /// `i16` per macroblock, written by `AllocStrideTables` from the same
-    /// `iMbWidth * iMbHeight` the caller passes (S11.2d).
+    /// `iMbWidth * iMbHeight` the caller passes.
     #[inline]
     pub fn MbIndexXY(&self, kiDid: usize, kiMbNum: usize) -> Option<(&[i16], &[i16])> {
         let (x, y) = (self.pMbIndexX[kiDid]? as usize, self.pMbIndexY[kiDid]? as usize);
@@ -668,173 +547,23 @@ impl SStrideTables {
     }
 }
 
-// `ctx_stride_dec_block_offset`, `ctx_stride_enc_block_offset` and
-// `ctx_mb_index_x` stood here — the context-level cursor family for the stride
-// arena, made `&sWelsEncCtx` by H2 so the fork's lawful read need not be spelled
-// through a raw context.
-//
-// **S11.46, deleted with the cursors they wrapped.** Their doc named the reason
-// the return stayed `*const`: "`SStrideTables` stores byte *offsets* into one
-// flat `Vec<i32>` and records no region lengths, so a slice API cannot be formed
-// here without inventing a bound the C++ never had. That is J's, named in the
-// log." J's item is closed — the store is typed, the lengths are its element
-// types, and every production consumer already read through the slice accessors
-// (`EncBlockOffsets`, `DecBlockOffsets`, `MbIndexXY`), which take `&self` and so
-// keep the whole in-fork argument above intact.
-
-
-/// The dispatch table **as a raw pointer, read out of the `Box`'s slot** — the
-/// one derivation A6 could not flip, at its **two** callers.
-///
-/// **Why it survives.** Both callers write through the table
-/// (`ParasetStrategy` reaches `pParametersetStrategy` `&mut`;
-/// `CWelsH264SVCEncoder::SetOption`'s rate-control arm re-points `pfRc`), and
-/// both hold the context as a **raw**. [`func_list_mut`](sWelsEncCtx::func_list_mut)
-/// needs `&mut self`, so calling it from either body means a whole-context `&mut`
-/// retag taken through a raw root — the shape S63 forbids and both of the
-/// session's prohibition checks count. Neither body is fork-reachable, so the
-/// retag would in fact be harmless; the rule is deliberately not
-/// case-by-case, because F208 is what happens when a whole-context retag is
-/// argued site by site. Reading the slot as a pointer *value* (F71) forms no
-/// reference to the context at all, which is what the old accessor did at all
-/// 121 sites and what these two keep.
-///
-/// Everything else uses [`sWelsEncCtx::func_list`] /
-/// [`sWelsEncCtx::func_list_mut`]. (`ctx_ref_list_raw`, which survived A3 for the
-/// neighbouring provenance reason, is gone — S11.39 deleted the stored field its
-/// answer had to outlive.)
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-// (`ctx_func_list_raw`'s body stood here. **S11.44, deleted: no callers** —
-// the two bodies its doc named hold the context as references now and reach
-// the table through `func_list`/`func_list_mut` or the paraset splitters.)
-
-/// The encoder output block **as a raw pointer, read out of the `Box`'s slot** —
-/// F71's spelling, minted for the two fork-reachable bodies whose `pOut` arm is
-/// main-thread-only by measurement (F217): `slice_bs_buffer` and `slice_writer`.
-/// Their context parameter is a raw, so a `&mut`-shaped route would be a
-/// whole-context retag through a raw root (prohibition 2); the slot read carries
-/// the block's own provenance instead.
-///
-/// Null exactly where the field is `None`: before init, after teardown.
-///
-/// # Safety
-/// `pCtx` must point to a live encoder context.
-// (`ctx_out_raw`'s body stood here. **S11.44, deleted: no callers** — the two
-// fork-reachable bodies it was minted for, `slice_bs_buffer` and
-// `slice_writer`, died with the bitstream seam; the main thread reaches `pOut`
-// by `as_deref`.)
-
-// `ctx_src_pool_raw` stood here — the spatial pool as a pointer into the vpp
-// box's own allocation, F71's spelling, "F211's *provenance* category rather
-// than debt: the answer is **stored** in `SDqLayer::pSrcPool` and read by the
-// fork for a whole frame".
-//
-// **S11.39, deleted: both halves of that premise had expired.** S10.7 removed
-// the stored field, and `WelsInitCurrentLayer` — the last production caller —
-// now borrows the pool per statement through the `Box` (`ctx_vpp_mut`), because
-// what it takes from each borrow is `PicPlanes` by value and views whose roots
-// `SharedCells::from_parts` captures from the plane `Vec` headers, never from
-// the reaching chain. The derivation itself lives on in one place: the Miri
-// control `a_pointer_into_the_box_does_not_survive_with_vpp`, where being
-// popped by a `Box` move is the property under test.
-
-// `ctx_vpp_raw` stood here — the preprocess object as `&mut` off a slot read,
-// "the route every body uses that needs the vpp and the context at once", held
-// against `SDqLayer::pSrcPool`'s stored raw into this allocation.
-//
-// **S11.39, deleted: it had no callers left.** S11.24 moved its nine sites onto
-// [`with_vpp`]/[`ctx_vpp_mut`] (ownership the compiler can see, instead of a
-// provenance argument re-made per site), and the stored raw it defended against
-// died with `SDqLayer::pSrcPool` at S10.7. The refused shape it documented —
-// a pointer into the box's allocation surviving a `Box` move — is pinned by the
-// Miri control `a_pointer_into_the_box_does_not_survive_with_vpp`.
-
-/// The preprocess object as a **shared** reference off the same slot read — the
-/// only route an **in-fork** body may take, and the reader half of the pair.
-///
-/// **This split is not stylistic; the MT probes are what forced it.** S3.B1's
-/// first draft let `ctx_pic_ref` and `WelsSliceHeaderExtInit` — both fork-reachable
-/// (F217 names them) — reach the object through [`ctx_vpp_raw`]. A `&mut` retag is
-/// a *write* as far as the data-race model is concerned, so N workers each taking
-/// one is S63's violation with no read of the object needed to make it real:
-///
-/// ```text
-/// Data race detected between (1) retag write on thread `unnamed-2`
-///   and (2) retag write of type CWelsPreProcess on thread `unnamed-3`
-/// ```
-///
-/// The encode shards cannot see this — they are single-threaded — and both byte
-/// sweeps were 583/583 through it. `fork_join_encodes_a_frame_whose_slice_boundary_is_mid_row`
-/// is what refused it, which is plan §4.7's whole argument in one failure.
-///
-/// Shared retags coexist with each other and with the `pSrcPool` reads (F208's
-/// direction is `&mut`-shaped derivations, and there are none here), so this is the
-/// route for every fork-reachable read.
-///
+/// The preprocess object as a **shared** reference — the only route an
+/// **in-fork** body may take, and the reader half of the pair.
 #[inline]
 pub fn ctx_vpp_ref(
     pCtx: &sWelsEncCtx,
 ) -> &crate::encoder::wels_preprocess::CWelsPreProcess {
-    // **S11.2f: the slot read retires for the *shared* half.** F71's spelling —
-    // reading the `Box`'s slot as a pointer value — exists so a derivation
-    // survives later `&mut` retags of the context, and so that no worker
-    // autorefs a field every worker shares. Neither applies to a shared borrow:
-    // N workers may hold `&pCtx.pVpp` at once (that is what makes `sWelsEncCtx:
-    // Sync` useful), and this is the same `as_deref()` S10.13 established for
-    // `pSliceThreading`. The `&mut` half (`ctx_vpp_raw`) keeps its raw.
     pCtx.pVpp
         .as_deref()
         .expect("the preprocessor is built by WelsInitEncoderExt")
 }
 
-/// The preprocess object **lifted out of the context for the duration of one
-/// call**, so the receiver and the context argument are disjoint by construction
-/// — S11.24's retirement of [`ctx_vpp_raw`]'s `&mut` half.
-///
-/// **What this replaces is a provenance argument, not a borrow.** Every one of
-/// the nine `ctx_vpp_raw` sites had the same shape:
-///
-/// ```text
-/// ctx_vpp_raw(pCtx).BuildSpatialPicList(pCtx, pSrcPic, &mut iSpatialNum)
-/// //               ^ &mut CWelsPreProcess  ^ &mut sWelsEncCtx
-/// ```
-///
-/// — a `&mut` to the boxed object held beside a `&mut` to the context that owns
-/// its slot. That is *sound*, and F71's spelling is exactly why: reading the slot
-/// as a pointer *value* gives the answer the heap block's own provenance, so the
-/// context retag on the next argument cannot pop it. But soundness by that route
-/// is a fact about how the pointer was derived, re-argued in a doc comment at
-/// each site and checkable only by Miri. `Option::take` moves the box out, so
-/// during the call the object is *not* reachable through `pCtx` — the same two
-/// references, disjoint as a matter of ownership the compiler can see.
-///
-/// The move is a pointer write each way and this runs once per frame per layer,
-/// which is why the cost was never the question — F279's was: it pays here
-/// because the raw is the *last* blocker in four of its callers.
-///
-/// **Restoring is the closure's job, not the caller's.** Six of the nine sites
-/// sit above an early `return` on the call's result, and a `take` those paths
-/// skip would leave the slot `None` for the next frame. Taking the closure means
-/// there is no path that returns without the store below it.
-///
-/// **Re-entry would break this and does not happen.** If any callee read
-/// `pCtx.pVpp` it would see `None` where the raw form saw the object; across the
-/// 106 functions reachable from the five methods called this way, the slot is not
-/// mentioned outside one comment. An unwind through the closure drops the object
-/// and leaves the slot empty, which matters only if a caught panic were followed
-/// by reuse of the context — the `expect`s here are bug reports, not states.
 /// The preprocess object as an exclusive reference — the `&mut` twin of
 /// [`ctx_vpp_ref`], for the sites that want the object **without** the context
 /// beside it.
 ///
-/// Two of `ctx_vpp_raw`'s nine callers only ever reached the spatial pool
-/// (`m_pSpatialPicPool`) and passed no context to anything; for those the raw was
-/// never expressing disjointness, just the absence of this accessor. Where the
-/// context *is* wanted at the same time, [`with_vpp`] is the route — a `&mut`
-/// off the field cannot coexist with one to its owner, and that refusal is
-/// correct rather than something to spell around.
+/// Where the context *is* wanted at the same time, [`with_vpp`] is the route — a
+/// `&mut` off the field cannot coexist with one to its owner.
 #[inline]
 pub fn ctx_vpp_mut(
     pCtx: &mut sWelsEncCtx,
@@ -858,79 +587,15 @@ pub fn with_vpp<R>(
     r
 }
 
-/// The coding parameters **as a raw pointer, read out of the `Box`'s slot** — the
-/// root the twenty-six per-layer *cursors* are taken from.
+/// Dependency layer `kiDid` **as a shared reference**.
 ///
-/// **Why the cursors could not come off `param_mut`, and Miri is what said so.**
-/// `sSpatialLayers[d]` / `sDependencyLayers[d]` are held as raw cursors across
-/// calls that reach the parameters again — `InitDqLayers` derives two and then
-/// calls `WelsGenerateNewSps`, which re-derives the same layer; `RequestMemorySvc`
-/// holds one across `AcquireLayersNals`. Under `ctx_param` that worked, because
-/// the accessor read the slot as a *value* and every `addr_of_mut!` off it
-/// inherited the block's own tag. [`param_mut`](sWelsEncCtx::param_mut) is a real
-/// `&mut`: **each call is a fresh `Unique` retag over the whole 0x4d0-byte
-/// block**, so the second call pops the first call's cursors, and the read that
-/// follows is through a dead tag. A7's first Miri run refused exactly that, at
-/// `encoder_ext.rs:1269` and again at `:808`; no byte gate saw either.
-///
-/// So the cursors keep F71's spelling and this is where it lives. Everything that
-/// merely reads or writes a field goes through [`param`](sWelsEncCtx::param) /
-/// [`param_mut`](sWelsEncCtx::param_mut) — 230 of A7's 258 sites do.
-///
-/// **Single-threaded only.** Every caller is init, per-frame bookkeeping or the
-/// C-API surface; the fork reads parameters through `param` and writes none.
-///
-/// # Safety
-/// `pCtx`'s parameter block must be built (`WelsInitEncoderExt`); the return is
-/// null before that, exactly as the raw field was.
-// (`ctx_param_raw`'s body stood here. **S11.44, deleted: no callers** — the
-// twenty-six per-layer cursors its doc defended became per-use `param()`/
-// `param_mut()` derivations across S11.39–S11.43, and the held-across-a-call
-// shape the F71 spelling existed for no longer occurs.)
-
-// `ctx_ref_list_raw` stood here — dependency layer `kiDid`'s reference list as
-// a slot-read raw, "the one derivation A3 left raw", kept because its answer
-// was stored in `SDqLayer::pRefList` and read by the fork for a whole frame, so
-// it had to carry the list's own provenance.
-//
-// **S11.39, deleted: the accessor's own exit clause fired** — "until the field
-// it feeds is gone", and S10.8 deleted `SDqLayer::pRefList` (the fork resolves
-// the picture per call through [`sWelsEncCtx::ref_list`] on the layer's own id,
-// `layer_ref_pic`). The last caller, `WelsInitCurrentLayer`, consumed the raw
-// only to build the frame's views, whose plane roots `SharedCells::from_parts`
-// captures from the plane `Vec` headers — no stored value derives from the
-// reaching chain, so `ref_list_mut` per statement is the same provenance story
-// with the compiler holding it.
-
-// **S12.12 deleted `ctx_dq_layer`** — T6.H8's raw resolver for `ppDqLayerList[did]`,
-// and the encoder's last `fork-shared(S63)` production item. Its `ptr::read` of the
-// `Box` slot was F71's spelling: the value carried the heap block's own provenance
-// rather than a child of a context retag, which is what let two forked workers
-// resolve one layer at once. Its safe twin `dq_layer_ref` sits below.
-//
-// The argument stopped having a subject. `current_layer`, its only non-test caller,
-// was deleted dead in the same checkpoint, and the three that remained were its own
-// instruments — which retire with the accessor they watch, S40's rule read
-// backwards, as `tools/unsafe_instrument_floor.txt` has said since S11.51.
-
-/// Dependency layer `kiDid` **as a shared reference** — [`ctx_dq_layer`]'s safe
-/// twin, on `layer_pps_ref`'s template.
-///
-/// `None` exactly where the raw answered null: an index past the list, or an
-/// unbuilt slot. The raw's slot-*read* spelling exists so a worker's kept
-/// pointer survives later retags of the context (F71); a body that only reads
-/// the layer through a borrow it holds needs none of that, which is the same
-/// distinction S10.13 drew for `SliceJobHandle::new`.
+/// `None`: an index past the list, or an unbuilt slot.
 #[inline]
 pub fn dq_layer_ref(pCtx: &sWelsEncCtx, kiDid: usize) -> Option<&SDqLayer> {
     pCtx.ppDqLayerList.get(kiDid)?.as_deref()
 }
 
 /// [`dq_layer_ref`] for the single-threaded writers.
-///
-/// **Single-threaded by construction**: a `&mut sWelsEncCtx` cannot exist while
-/// the fork is live, which is the type-level form of the restriction the raw
-/// only stated in a comment (S10.3b's rule, S10.3d's measurement).
 #[inline]
 pub fn dq_layer_mut(pCtx: &mut sWelsEncCtx, kiDid: usize) -> Option<&mut SDqLayer> {
     pCtx.ppDqLayerList.get_mut(kiDid)?.as_deref_mut()
@@ -939,80 +604,31 @@ pub fn dq_layer_mut(pCtx: &mut sWelsEncCtx, kiDid: usize) -> Option<&mut SDqLaye
 /// The long-term-reference state of dependency layer `kiDid` — `pLtr[did]`, which is
 /// how all consumers spell it.
 ///
-/// **T9.H3 (F196/F197) — the real reference, and a safe `fn`.** Until this session
-/// the raw return was load-bearing at seventy-five sites that used the LTR state
-/// and the context in the same breath; every one of those coexistences is
-/// borrow-lawful now (raw roots and scalars derived first, re-borrows after the
-/// calls that re-derive the same state, two callees narrowed), so the borrow
-/// checker referees every caller. The root accessor `ctx_ltr` went with the raw:
-/// its last caller reads `pLtr.first()` directly.
-///
 /// # Panics
-/// If `kiDid` is not a layer the array holds — the old `debug_assert` made
-/// unconditional. The old empty-array `null` return was never survivable: every
-/// caller dereferenced the answer.
+/// If `kiDid` is not a layer the array holds.
 #[inline]
 pub fn ctx_ltr_at(pCtx: &mut sWelsEncCtx, kiDid: usize) -> &mut SLTRState {
     &mut pCtx.pLtr[kiDid]
 }
 
-/// [`ctx_ltr_at`]'s shared twin — S11.12.
+/// [`ctx_ltr_at`]'s shared twin.
 ///
-/// The `&mut` form exists for the bodies that write LTR state; the readers were
-/// taking it only because it was the one that existed, which forced their whole
-/// enclosing signature to `&mut sWelsEncCtx` and so forced *their* callers to
-/// resolve the layer through a raw. Same panic on a bad index, same element.
+/// The `&mut` form exists for the bodies that write LTR state. Same panic on a
+/// bad index, same element.
 #[inline]
 pub fn ctx_ltr_at_ref(pCtx: &sWelsEncCtx, kiDid: usize) -> &SLTRState {
     &pCtx.pLtr[kiDid]
 }
 
-/// `pCtx->pDqIdcMap`, as the slice it is — T6.H3, **converted at T9.H2 (step 4)**.
-///
-/// This answered the root as `*mut SDqIdc` and both production callers immediately
-/// wrote `.add(did)`; S54's rule says an accessor every caller offsets and
-/// dereferences is an accessor returning the element. It returns the slice, the two
-/// callers index it, and **neither holds anything any more** — which is the part
-/// worth stating, because the held cursor was the whole reason this accessor needed
-/// F71's `addr_of!` spelling and a row in the sibling-derivation test. `InitParaSet`
-/// used to carry `pDqIdc` across `GenerateNewSps` and `InitPps` and write through it
-/// afterwards; it now writes in two tight scopes and the binding is gone. The
-/// sibling property is not asserted for this accessor any longer because a
-/// reference API cannot have it.
-///
-/// Empty answers an empty slice where this answered null — the callers' `is_null()`
-/// guards were never here (both index unconditionally, as the C++ does), and an
-/// out-of-range layer id is now a bounded panic instead of a walk off a `Vec`
-/// buffer.
-///
-/// The other four of the brief's five stay raw for reasons measured at their
-/// callers — see F193, and the notes on [`sWelsEncCtx::frame_bs`] /
-/// [`sWelsEncCtx::frame_bs_cur`].
+/// `pCtx->pDqIdcMap`, as the slice it is.
 #[inline]
 pub fn ctx_dq_idc_map(pCtx: &mut sWelsEncCtx) -> &mut [SDqIdc] {
     &mut pCtx.pDqIdcMap
 }
 
-/// The three parameter-set arrays **at once, as disjoint borrows** — T9.H2, and the
-/// answer to the shape that blocked X2's ~36.
+/// The three parameter-set arrays **at once, as disjoint borrows**.
 ///
-/// `LoadPrevious` (`paraset_strategy.rs`) writes all three in one call, and its call
-/// site supplied them as three separate `ctx_*_array(*ppCtx)` raws. Converting those
-/// to slices one accessor at a time is impossible — three `&mut` out of one context
-/// through three separate calls is what the borrow checker exists to refuse, and it
-/// is what the charter recorded as "`LoadPrevious`'s four-simultaneous-`&mut`
-/// projections shape, S63's forbidden retag exactly".
-///
-/// **The shape was never the problem; the call count was.** Rust permits
-/// `(&mut s.a, &mut s.b, &mut s.c)` from one `&mut s` inside a single body — the
-/// three fields are disjoint and the compiler can see it. What it cannot see is
-/// three accessor calls each claiming the whole context. So this is one call, and
-/// the block dissolves.
-///
-/// The three are `Vec`s on the context, so the returned slices borrow the *context*
-/// (not the buffers' provenance, which is what the raw spellings deliberately
-/// answered). That is the right trade here: the caller wants to write them, the
-/// borrow is short, and no cursor outlives it.
+/// `LoadPrevious` (`paraset_strategy.rs`) writes all three in one call.
 #[inline]
 pub fn ctx_paraset_arrays(
     pCtx: &mut sWelsEncCtx,
@@ -1020,44 +636,9 @@ pub fn ctx_paraset_arrays(
     (&mut pCtx.pSpsArray, &mut pCtx.pSubsetArray, &mut pCtx.pPPSArray)
 }
 
-// (`ctx_mb_index_y` stood here — deleted with its family at S11.46.)
-
-// ---------------------------------------------------------------------------
-// **The safe accessor layer** — stage A of the safe-conversion plan.
-//
-// Everything the god-struct used to hand out through a raw accessor is handed
-// out here instead, by a **safe method**, and on one design:
-//
-// * **Readers take `&self`, and they are what everyone calls — the fork
-//   included.** An in-fork site spells the call `(*pCtx).name()` inside the
-//   `unsafe` block it already has: a per-call *shared* reborrow, used in the
-//   expression and never stored (S37). N workers may hold shared reborrows of
-//   one context at once, which is precisely why this is the only path the fork
-//   is allowed. S63 forbids the `&mut` one at any duration — a reference
-//   argument is strongly protected for the whole call (F192), so "briefly" buys
-//   nothing. The fields workers actually write are already atomics or `Cell`s
-//   behind the audited seam (D-mt-3's two `unsafe impl`s), and a shared
-//   reference reaches those.
-// * **Writers take `&mut self`, and they are single-threaded only.** The rule is
-//   grep-checkable and is checked at every checkpoint: a `*_mut` accessor may
-//   not appear in a body whose context parameter is `*mut sWelsEncCtx`.
-//   `rust/tools/phase9_forksplit.py --list` classifies those bodies; every body
-//   that already takes `&mut sWelsEncCtx` was adjudicated single-threaded by the
-//   Phase 9 flip, which is what made that flip legal in the first place.
-//
-// Where a return **stays raw** it is because the value crosses a boundary that
-// cannot carry a lifetime — F193's `SLayerBSInfo::pBsBuf`, or a raw struct field
-// a later stage converts. Those accessors are still *safe fns*: forming a raw
-// pointer needs no `unsafe`, only dereferencing one does, and the dereference
-// belongs to whoever owns the far end. That is the whole of what "the accessor
-// became safe" claims for them, and it is worth being exact about, because it is
-// the difference between this layer's `unsafe` and the next layer's.
-// ---------------------------------------------------------------------------
 /// The five disjoint borrows [`sWelsEncCtx::ltr_family_mut`] hands out.
 ///
-/// One owner per field, so the compiler grants all five at once — which is the
-/// whole point: the raw roots this replaces existed only because two whole-context
-/// accessor calls could not coexist.
+/// One owner per field, so the compiler grants all five at once.
 pub struct LtrFamilyMut<'a> {
     /// One dependency layer's parameter slot — `sDependencyLayers[kiDid]`.
     pub param_layer: &'a mut crate::encoder::param_svc::SSpatialLayerInternal,
@@ -1072,11 +653,9 @@ pub struct LtrFamilyMut<'a> {
 }
 
 impl sWelsEncCtx {
-    /// The **MVD cost table** — T6.H9, `pCtx->pMvdCostTable`.
+    /// The **MVD cost table** — `pCtx->pMvdCostTable`.
     ///
-    /// Empty before `WelsInitEncoderExt` sizes it, which is the state the raw
-    /// accessor answered with a null and its callers asked about with
-    /// `is_null()`; the question is `is_empty()` now and it is the same question.
+    /// Empty before `WelsInitEncoderExt` sizes it.
     #[inline]
     pub fn mvd_cost_table(&self) -> &[u16] {
         &self.pMvdCostTable
@@ -1090,38 +669,18 @@ impl sWelsEncCtx {
         &mut self.pMvdCostTable
     }
 
-    // `mvd_cost_origin(&self) -> *mut u16` stood here. **S5.C4b** retired it: its
-    // two callers now take `svc_encode_slice::ctx_mvd_cost_origin`, which answers
-    // with a `MvdCostCursor` instead of a raw pointer and reaches the table through
-    // a *field* projection rather than a whole-context `&self` — read that function's
-    // header for why the difference matters under the fork. The `debug_assert` this
-    // carried moved with the body; nothing else here had a second reader.
-
-    /// The **rate controller's per-layer array** — T6.H6, `pCtx->pWelsSvcRc`.
+    /// The **rate controller's per-layer array** — `pCtx->pWelsSvcRc`.
     ///
-    /// The raw root answered null on an empty `Vec` and its two callers asked
-    /// `is_null()` before indexing; both ask `is_empty()` now. See
-    /// [`rc_at`](Self::rc_at) for the per-layer entry, which is how the other
-    /// sixty consumers spell it.
+    /// See [`rc_at`](Self::rc_at) for the per-layer entry.
     #[inline]
     pub fn rc(&self) -> &[SWelsSvcRc] {
         &self.pWelsSvcRc
     }
 
-    /// Dependency layer `kiDid`'s **reference list** — `ppRefPicListExt[did]`,
-    /// T6.H7.
+    /// Dependency layer `kiDid`'s **reference list** — `ppRefPicListExt[did]`.
     ///
-    /// **`Option`, because the absence is a state and sixteen callers already
-    /// asked about it.** The raw accessor answered null both past the configured
-    /// layers and before `InitDqLayers` fills the slot, and more than half its
-    /// production sites opened with `if pRefList.is_null()`. Those guards become
-    /// `let Some(..) else`, which is the same branch with the question asked in
-    /// the type; the sites that never asked say `.expect` and name the assumption
-    /// they were making silently.
-    ///
-    /// In-fork this is the only path — `ctx_ref_pic`/`ctx_pic_ref` resolve a
-    /// picture through it and read, which is what a shared reborrow is for. The
-    /// writers are all reference-list management, and all single-threaded.
+    /// `None` both past the configured layers and before `InitDqLayers` fills the
+    /// slot.
     #[inline]
     pub fn ref_list(&self, kiDid: usize) -> Option<&SRefList> {
         self.ppRefPicListExt.get(kiDid)?.as_deref()
@@ -1129,31 +688,19 @@ impl sWelsEncCtx {
 
     /// [`ref_list`](Self::ref_list) for the reference-list managers.
     ///
-    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut).
+    /// **Single-threaded only.**
     #[inline]
     pub fn ref_list_mut(&mut self, kiDid: usize) -> Option<&mut SRefList> {
         self.ppRefPicListExt.get_mut(kiDid)?.as_deref_mut()
     }
 
-    /// The **parameter-set arrays** — `pSpsArray`, `pSubsetArray`, `pPPSArray`
-    /// (T6.H2), as the slices they have been since `RequestMemorySvc` stopped
-    /// calling `WelsMallocz`.
+    /// The **parameter-set arrays** — `pSpsArray`, `pSubsetArray`, `pPPSArray`.
     ///
-    /// The raw roots answered null on an empty `Vec` and every consumer offset
-    /// them with `.add(id)`; the slices are indexed, and the two `is_null()`
-    /// guards ask `is_empty()`. **Empty is a real state** for `pSubsetArray` —
-    /// the configuration may need no subset SPS — so the question those guards
-    /// asked is the question they still ask.
+    /// **Empty is a real state** for `pSubsetArray` — the configuration may need
+    /// no subset SPS.
     ///
-    /// **Readers for the fork, writers for init.** The arrays are filled by
-    /// `RequestMemorySvc` and by the parameter-set strategy, both single-threaded;
-    /// nothing in the fork writes them, and a whole-tree grep for a write through
-    /// `layer_sps` / `layer_pps` / `layer_subset_sps`'s answers returns nothing.
-    /// The three `layer_*` accessors keep raw returns because their far end is
-    /// `SDqLayer::sLayerInfo`, stage C's; they derive them from these readers.
-    ///
-    /// [`paraset_arrays`](Self::paraset_arrays) answers all three at once, which
-    /// is what `LoadPrevious` needs (T9.H2).
+    /// The arrays are filled by `RequestMemorySvc` and by the parameter-set
+    /// strategy, both single-threaded.
     #[inline]
     pub fn sps_array(&self) -> &[SWelsSPS] {
         &self.pSpsArray
@@ -1190,17 +737,7 @@ impl sWelsEncCtx {
     }
 
     /// A dependency layer's **reference list and its long-term-reference state,
-    /// from one borrow** — §4.6's combined accessor, and the shape
-    /// `ref_list_mgr_svc.rs` wants at nine of its bodies.
-    ///
-    /// The two live in different fields of the context, so the compiler can see
-    /// they are disjoint once they are projected inside a single body — which is
-    /// exactly the block `ctx_paraset_arrays` dissolved for `LoadPrevious`
-    /// (T9.H2): "the shape was never the problem; the call count was". Two
-    /// accessor calls each claim the whole context; one call projects both.
-    ///
-    /// The file's own T9.H3 note asks for the same order this enforces — every
-    /// raw root derived first, the reference-shaped borrows last and together.
+    /// from one borrow**.
     #[inline]
     pub fn ref_list_and_ltr_mut(
         &mut self,
@@ -1214,23 +751,14 @@ impl sWelsEncCtx {
     }
 
     /// The **preprocess object and a dependency layer's reference list, from one
-    /// borrow** — §4.6's combined accessor, and what retires `ctx_vpp_raw` from
-    /// `ref_list_mgr_svc.rs` (S10.5a).
+    /// borrow**.
     ///
-    /// Three bodies there hand the preprocess a `&SRefList` while holding it
-    /// `&mut`: `UpdateOriginalPicInfoFromCtx`, `UpdateSrcPicList` and
-    /// `UpdateSrcPicListLosslessScreenRefSelectionWithLtr`. Their comments describe
-    /// the workaround they used — "the vpp is *taken* (S3.B1) so the shared borrow
-    /// of the list and the `&mut` receiver are borrows of two different owners" —
-    /// which is a `ctx_vpp_raw` slot read standing in for a disjointness the
-    /// compiler could have granted. `pVpp` and `ppRefPicListExt` **are** two
-    /// different fields; projecting them together says so directly.
+    /// Three bodies in `ref_list_mgr_svc.rs` hand the preprocess a `&SRefList`
+    /// while holding it `&mut`: `UpdateOriginalPicInfoFromCtx`, `UpdateSrcPicList`
+    /// and `UpdateSrcPicListLosslessScreenRefSelectionWithLtr`.
     ///
-    /// This is the safe half of the pair `ctx_vpp_raw` / `ctx_vpp` documents. It
-    /// is **single-threaded only**, exactly as `ctx_vpp_raw` is: an in-fork body
-    /// must still take the shared `ctx_vpp` route, because a `&mut` retag of the
-    /// preprocess object from N workers is S63's violation with no read needed to
-    /// make it real.
+    /// **Single-threaded only** — an in-fork body must take the shared
+    /// [`ctx_vpp_ref`] route.
     #[inline]
     pub fn vpp_and_ref_list_mut(
         &mut self,
@@ -1247,15 +775,13 @@ impl sWelsEncCtx {
     }
 
     /// The **video-analysis block, one layer's rate-control state, and that layer's
-    /// reference list, from one borrow** — §4.6's combined accessor, widened by one
-    /// field for S10.9.
+    /// reference list, from one borrow**.
     ///
     /// `AnalyzePictureComplexity` hands `CComplexityAnalysis::Process` three things
     /// that live in three different fields of the context: the VAA block's own
     /// `sVaaCalcInfo` and `pVaaBackgroundMbFlag`, the rate controller's two GOM
-    /// arrays, and — since the `uiRefMbType` raw left
-    /// `SComplexityAnalysisParam` — the *reference picture's* per-macroblock type
-    /// array. Three owners, one call.
+    /// arrays, and the *reference picture's* per-macroblock type array. Three
+    /// owners, one call.
     #[inline]
     pub fn vaa_rc_and_ref_list_mut(
         &mut self,
@@ -1277,8 +803,7 @@ impl sWelsEncCtx {
     /// The two halves are wanted at the same instant, not in sequence: `row_mut` on
     /// the extension's store and `pic(..).plane(0)` on the list both have to be live
     /// when the screen scene-change plugin is called, and the plugin itself is a
-    /// third owner (the preprocessor, taken out of the context by `with_vpp`). Two
-    /// whole-context accessors could not do that; one projection of two fields can.
+    /// third owner (the preprocessor, taken out of the context by `with_vpp`).
     #[inline]
     pub fn vaa_ext_and_ref_list_mut(
         &mut self,
@@ -1291,34 +816,15 @@ impl sWelsEncCtx {
         )
     }
 
-    /// Every field the three LTR bodies touch, **from one borrow** — §4.6's
-    /// combined accessor taken to its natural end, and what retires
-    /// `ctx_param_raw` and two `addr_of_mut!` roots from this family (S10.5a).
-    ///
-    /// **The shape this dissolves is F239's.** `DeleteInvalidLTR`,
-    /// `HandleLTRMarkFeedback` and `LTRMarkProcess` each opened with
-    ///
-    /// ```text
-    /// let pParamInternal = addr_of_mut!((*ctx_param_raw(pCtx)).sDependencyLayers[uiDid]);
-    /// let bRefOfCurTidIsLtr = addr_of_mut!(pCtx.bRefOfCurTidIsLtr);
-    /// let (pVaa, pRefList, pLtr) = pCtx.vaa_ref_list_and_ltr_mut(uiDid);
-    /// ```
-    ///
-    /// — field-precise raw cursors **held across** a later whole-context reborrow,
-    /// which is the derivation F239 records as popped and sweep-invisible. Those
-    /// bodies carry a T9.H3 comment explaining the ordering they adopted to
-    /// survive it ("every raw root first, the reference-shaped borrows last"): a
-    /// hand-maintained rule that exists only because two accessors each claim the
-    /// whole context. One accessor projecting all five fields needs no ordering
-    /// rule, and the compiler — not a comment — is what keeps it true.
+    /// Every field the three LTR bodies — `DeleteInvalidLTR`,
+    /// `HandleLTRMarkFeedback` and `LTRMarkProcess` — touch, **from one borrow**.
     ///
     /// A named struct rather than a five-tuple because the three callers want
     /// different subsets, and `_` on a tuple position says nothing about which
     /// field was skipped.
     ///
     /// `param_layer` is one dependency layer's slot, not the whole parameter
-    /// block: the bodies write `bEncCurFrmAsIdrFlag` and read `iFrameNum`, and
-    /// narrowing here is the safe spelling of the `addr_of_mut!` it replaces.
+    /// block: the bodies write `bEncCurFrmAsIdrFlag` and read `iFrameNum`.
     #[inline]
     pub fn ltr_family_mut(&mut self, kiDid: usize) -> LtrFamilyMut<'_> {
         let sWelsEncCtx {
@@ -1337,17 +843,12 @@ impl sWelsEncCtx {
     }
 
     /// [`ref_list_and_ltr_mut`](Self::ref_list_and_ltr_mut) **plus the
-    /// video-analysis block** — the same combined-accessor move, one field wider.
+    /// video-analysis block**.
     ///
     /// Two LTR bodies (`HandleLTRMarkFeedback`, `LTRMarkProcess`) stamp
     /// `SVAAFrameInfo::uiValidLongTermPicIdx` / `uiMarkLongTermPicIdx` from
     /// inside the loop that walks the reference list, so the VAA write and the
-    /// list borrow are genuinely wanted at once. Under the raw accessor the two
-    /// never met the borrow checker: `ctx_vaa` read the `Box`'s slot as a
-    /// *value*, so the pointer it handed out survived every later retag of the
-    /// context (F71). [`vaa_mut`](Self::vaa_mut) is a real `&mut`, so it does
-    /// not — which is the conversion working, not a regression, and this is
-    /// §4.6's second remedy for it.
+    /// list borrow are genuinely wanted at once.
     #[inline]
     pub fn vaa_ref_list_and_ltr_mut(
         &mut self,
@@ -1362,15 +863,12 @@ impl sWelsEncCtx {
     }
 
     /// The **coding parameters and the three parameter-set arrays, from one
-    /// borrow** — §4.6's combined accessor for `paraset_strategy.rs`.
+    /// borrow** — for `paraset_strategy.rs`.
     ///
     /// `WelsGenerateNewSps` and `FindExistingSps` build an SPS from a layer's
     /// configuration *into* the SPS array, and `WelsInitSps` writes
     /// `uiLevelIdc` back into that configuration on the way — so the parameter
-    /// block and the arrays are mutably live in the same statement. Four fields,
-    /// one owner; `ctx_paraset_arrays` is the same move one field narrower, and
-    /// T9.H2's ruling on it applies here verbatim: "the shape was never the
-    /// problem; the call count was".
+    /// block and the arrays are mutably live in the same statement.
     #[inline]
     pub fn param_and_paraset_arrays_mut(
         &mut self,
@@ -1387,14 +885,11 @@ impl sWelsEncCtx {
     }
 
     /// The **coding parameters and one layer's rate-control state, from one
-    /// borrow** — §4.6's combined accessor, and the one A7 could not do without.
+    /// borrow**.
     ///
     /// Nine bodies in `rc.rs` have the same shape: bind the layer's
     /// `sSpatialLayers[did]` / `sDependencyLayers[did]` config, then write the
-    /// layer's rate-control state from it. Under the raw accessor the config
-    /// borrow was of the *parameter block's* allocation and the rate controller's
-    /// `&mut` was of the context, so the two never met; `param` borrows the
-    /// context, so they do. Two fields, one owner, one call.
+    /// layer's rate-control state from it.
     #[inline]
     pub fn param_and_rc_at_mut(
         &mut self,
@@ -1410,13 +905,11 @@ impl sWelsEncCtx {
     }
 
     /// The **video-analysis block and one layer's rate-control state, from one
-    /// borrow** — §4.6's combined accessor for `AnalyzePictureComplexity`.
+    /// borrow** — for `AnalyzePictureComplexity`.
     ///
     /// The complexity plugin is handed `&pVaa->sVaaCalcInfo` and the rate
     /// controller's two GOM arrays `&mut` **in the same call**, and the block it
-    /// reads back into is `pVaa->sComplexityAnalysisParam`. Three fields, two
-    /// owners, one statement — the raw accessors never had to say so, and two
-    /// separate `&mut` accessor calls each claim the whole context.
+    /// reads back into is `pVaa->sComplexityAnalysisParam`.
     #[inline]
     pub fn vaa_and_rc_at_mut(
         &mut self,
@@ -1426,54 +919,31 @@ impl sWelsEncCtx {
         (pVaa.as_deref_mut().map(VaaBlock::base_mut), &mut pWelsSvcRc[kiDid])
     }
 
-    /// The rate-control state of spatial layer `kiDid` — `pWelsSvcRc[did]`, which
-    /// is how all sixty consumers spell it. See [`rc`](Self::rc) for the array.
-    ///
-    /// **The reader/writer split is the whole of A2, and it fell out measured
-    /// rather than argued.** Every body that *writes* rate-control state through
-    /// this accessor takes the context by `&mut sWelsEncCtx` — thirty-one of
-    /// them, all single-threaded — and every body the forksplit puts **in-fork**
-    /// reads and writes nothing: `WelsRcMbInitGom`, `WelsRcMbInfoUpdateGom`,
-    /// `RcCalculateMbQp`, `RcCalculateGomQp`, `RcGomTargetBits`,
-    /// `RcJudgeBaseUsability` and the `Disable` pair keep their mutable state in
-    /// `SSlice::sSlicingOverRc`, which is per-slice and not shared. That is
-    /// F132's audited design showing up as a clean split, and it is why the fork
-    /// needs no interior mutability here.
+    /// The rate-control state of spatial layer `kiDid` — `pWelsSvcRc[did]`.
+    /// See [`rc`](Self::rc) for the array.
     ///
     /// # Panics
-    /// If `kiDid` is not a layer the array holds. The raw accessor's empty-array
-    /// `null` return was never survivable — every consumer dereferenced the
-    /// answer, and the two that guarded first asked [`rc`](Self::rc) whether the
-    /// array was empty, which they still do. Same ruling as `ctx_ltr_at`'s
-    /// (T9.H3).
+    /// If `kiDid` is not a layer the array holds.
     #[inline]
     pub fn rc_at(&self, kiDid: usize) -> &SWelsSvcRc {
         &self.pWelsSvcRc[kiDid]
     }
 
-    /// [`rc_at`](Self::rc_at) for the thirty-one single-threaded writers.
+    /// [`rc_at`](Self::rc_at) for the single-threaded writers.
     ///
-    /// **Single-threaded only** — the prohibition this session checks at every
-    /// checkpoint is that no body taking `*mut sWelsEncCtx` calls this.
+    /// **Single-threaded only.**
     #[inline]
     pub fn rc_at_mut(&mut self, kiDid: usize) -> &mut SWelsSvcRc {
         &mut self.pWelsSvcRc[kiDid]
     }
 
-    /// The rate controller **and** the current DQ layer, from one `&mut` — §4.6's
-    /// combined-accessor family (`vaa_rc_and_ref_list_mut`'s shape).
+    /// The rate controller **and** the current DQ layer, from one `&mut`.
     ///
     /// The three `rc.rs` slice-initialisation bodies need both at once:
     /// `rc_at_mut` for the layer-indexed controller and the layer for its slice
-    /// bank. Taken separately they are two `&mut` borrows of one context and the
-    /// borrow checker refuses — which is what kept those bodies resolving the
-    /// layer through the raw `current_layer`. Destructured here they are borrows
-    /// of **disjoint fields** (`pWelsSvcRc` against `iCurDqLayer`/
-    /// `ppDqLayerList`), so the compiler grants both, and the raw goes.
+    /// bank.
     ///
-    /// **Single-threaded only**, as `rc_at_mut`: a `&mut sWelsEncCtx` cannot
-    /// exist while the fork is live, which is the type-level statement of the
-    /// restriction the raw only described.
+    /// **Single-threaded only.**
     #[inline]
     pub fn rc_and_current_layer_mut(
         &mut self,
@@ -1488,19 +958,11 @@ impl sWelsEncCtx {
 
     /// The frame bitstream's **write cursor** — `pFrameBs + iPosBsBuffer`. See
     /// [`frame_bs`](Self::frame_bs), including why the return is **permanently
-    /// raw** (F193: nine of its sites store the answer into
-    /// `SLayerBSInfo::pBsBuf`, `codec_app_def.h:640`).
-    ///
-    /// **T9.G5 — this took the position as a parameter, and it was
-    /// `ctx_frame_bs_at`.** It never varied: all 18 production callers passed
-    /// `(*pCtx).iPosBsBuffer`. S54 — a two-argument accessor whose second argument
-    /// is always a field of the first is a one-argument accessor written 18 times.
-    /// The write position is not a parameter; it is the invariant, and it lives
-    /// here where the bounds assert can name it.
+    /// raw** (nine of its sites store the answer into `SLayerBSInfo::pBsBuf`,
+    /// `codec_app_def.h:640`).
     ///
     /// `wrapping_add` rather than `.add`: the same address, computed without an
-    /// in-bounds claim, so the accessor is safe and the claim stays in the
-    /// `debug_assert` that always made it.
+    /// in-bounds claim, and the claim stays in the `debug_assert` below.
     #[inline]
     pub fn frame_bs_cur(&self) -> *mut u8 {
         let root = self.frame_bs();
@@ -1515,32 +977,17 @@ impl sWelsEncCtx {
         root.wrapping_add(kiPos as usize)
     }
 
-    /// The **frame bitstream buffer's root** — T6.H4.
+    /// The **frame bitstream buffer's root**.
     ///
-    /// **A permanent raw return, and the reason is the C ABI — F193**, measured
-    /// at the callers rather than assumed. Of the production call sites, three
-    /// store the answer into `SLayerBSInfo::pBsBuf`, and that field is
-    /// `codec_app_def.h:640` — `unsigned char* pBsBuf`, a public member of a
-    /// struct this library hands to the application. The value crosses the
+    /// **A permanent raw return, and the reason is the C ABI.** Of the production
+    /// call sites, three store the answer into `SLayerBSInfo::pBsBuf`, and that
+    /// field is `codec_app_def.h:640` — `unsigned char* pBsBuf`, a public member
+    /// of a struct this library hands to the application. The value crosses the
     /// boundary, so it cannot become a slice, a reference, or anything else
-    /// carrying a lifetime, in this stage or any later one. A session that
-    /// reaches for "make the accessors return slices" should stop at this note
-    /// rather than pay S54's cost again to learn it. Same for
-    /// [`frame_bs_cur`](Self::frame_bs_cur).
+    /// carrying a lifetime. Same for [`frame_bs_cur`](Self::frame_bs_cur).
     ///
-    /// What *did* convert is the `unsafe`: the derivation is `Vec::as_ptr`
-    /// through a shared borrow — character for character what the raw accessor's
-    /// `addr_of!` spelling reached — so this reads the `Vec` header and hands out
-    /// the buffer's own provenance, and repeated calls are **siblings**, none
-    /// popping another. That property is load-bearing (`SLayerBSInfo::pBsBuf`
-    /// keeps a cursor live while the NAL writers derive more from the same
-    /// buffer at `iPosBsBuffer`) and `frame_bs_cursors_are_siblings` is it as a
-    /// Miri test. `&self` rather than `&mut self` for the same reason: the
-    /// walking derivations coexist, and a shared borrow says so.
-    ///
-    /// Empty answers null, which is what the field held before `RequestMemorySvc`
-    /// ran — `Vec::as_ptr` on an empty `Vec` answers a dangling *non-null*
-    /// address, so this branch is load-bearing, not defensive.
+    /// Empty answers null — `Vec::as_ptr` on an empty `Vec` answers a dangling
+    /// *non-null* address, so this branch is load-bearing, not defensive.
     #[inline]
     pub fn frame_bs(&self) -> *mut u8 {
         if self.pFrameBs.is_empty() {
@@ -1550,13 +997,9 @@ impl sWelsEncCtx {
     }
 
     /// The frame bitstream **from the write cursor to the end**, as a slice —
-    /// S11.17, [`frame_bs_cur`](Self::frame_bs_cur)'s safe twin.
+    /// [`frame_bs_cur`](Self::frame_bs_cur)'s safe twin.
     ///
-    /// `pFrameBs` is an owned `Vec<u8>` (T3.6), so the cursor form's pointer
-    /// plus its separately-passed `iFrameBsSize - iPosBsBuffer` length are one
-    /// borrow of the tail — the same bytes, with the extent carried instead of
-    /// recomputed at each call. `None` where the raw answered null: no buffer,
-    /// or a cursor past its end.
+    /// `None`: no buffer, or a cursor past its end.
     #[inline]
     pub fn frame_bs_tail_mut(&mut self) -> Option<&mut [u8]> {
         let kiPos = self.iPosBsBuffer;
@@ -1566,21 +1009,13 @@ impl sWelsEncCtx {
         Some(&mut self.pFrameBs[kiPos as usize..])
     }
 
-    /// The encoder's **coding parameters** — T6.H1, `pCtx->pSvcParam`, and the
-    /// most-reached field on the struct: 258 textual sites when A7 opened.
+    /// The encoder's **coding parameters** — `pCtx->pSvcParam`.
     ///
-    /// **Three accessors, because the sites ask two different questions.** Some
-    /// 220 of them dereference the answer unconditionally, exactly as the C++
-    /// does; 35 open with `if ctx_param(..).is_null()`, which is asking whether
-    /// `WelsInitEncoderExt` has run. So the unconditional readers get a plain
-    /// reference and [`param_opt`](Self::param_opt) keeps the guards' shape —
-    /// A2's ruling for `rc_at`, at ten times the call count.
+    /// The unconditional readers get a plain reference and
+    /// [`param_opt`](Self::param_opt) keeps the guards' shape.
     ///
     /// # Panics
-    /// If the parameter block is not built. Every caller of this accessor
-    /// dereferenced the raw one without asking, so the panic replaces a null
-    /// dereference, not a branch; the callers that *do* ask keep asking, through
-    /// [`param_opt`](Self::param_opt).
+    /// If the parameter block is not built.
     #[inline]
     pub fn param(&self) -> &SWelsSvcCodingParam {
         self.pSvcParam
@@ -1591,12 +1026,7 @@ impl sWelsEncCtx {
     /// [`param`](Self::param) for the writers: init, `SetOption`, and the
     /// per-layer bookkeeping in `ref_list_mgr_svc.rs` / `encoder_context.rs`.
     ///
-    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut). A7's
-    /// classification found no diagonal here either: every body that writes
-    /// through the parameters holds the context by `&mut sWelsEncCtx` or is on
-    /// the C-API/init path, and every one of the fork-reachable bodies —
-    /// `RcCalculateMbQp`, `RcJudgeBaseUsability`, `WelsRcMbInitDisable` and
-    /// `svc_encode_slice.rs`'s slice bodies — only reads.
+    /// **Single-threaded only.**
     ///
     /// # Panics
     /// As [`param`](Self::param).
@@ -1607,35 +1037,25 @@ impl sWelsEncCtx {
             .expect("the coding parameters are built by WelsInitEncoderExt")
     }
 
-    /// [`param`](Self::param) **as the question the thirty-five guards ask** —
-    /// "has `WelsInitEncoderExt` built the parameters yet?". The raw accessor
-    /// answered null and they asked `is_null()`; this is the same branch with
-    /// the question in the type.
+    /// [`param`](Self::param) **as the question the guards ask** —
+    /// "has `WelsInitEncoderExt` built the parameters yet?".
     #[inline]
     pub fn param_opt(&self) -> Option<&SWelsSvcCodingParam> {
         self.pSvcParam.as_deref()
     }
 
-    /// The **encoder output block** — S3.B1, `pCtx->pOut`, and the frame's NAL
+    /// The **encoder output block** — `pCtx->pOut`, and the frame's NAL
     /// bookkeeping: the `sNalList` the writers load and unload, `iNalIndex`,
     /// `iLayerBsIndex`, and the `sBsWrite` cursor. The field is
     /// [`pOut`](Self::pOut), `Box`-built by `WelsInitEncoderExt` and dropped at
     /// teardown.
     ///
-    /// **Three accessors, because the sites ask two different questions.** 56 of
-    /// them dereference the answer unconditionally — until now spelled
-    /// `pCtx.pOut.as_deref().expect(..)` at the field itself, which is the shape a
-    /// missing accessor leaves behind; 2 ask whether the block is there at all
-    /// (`WelsUninitEncoderExt`'s `let Some(pOut) = .. else`, and the C-API's
-    /// `match` in `wels_encoder_ext.rs`). So the unconditional readers get a plain
-    /// reference and [`out_opt`](Self::out_opt) keeps the two guards' shape — the
-    /// same ruling [`param`](Self::param) took, at a fifth the call count.
+    /// The unconditional readers get a plain reference and
+    /// [`out_opt`](Self::out_opt) keeps the guards' shape.
     ///
     /// # Panics
     /// If the output block is not built, which is to say `WelsInitEncoderExt` has
-    /// not run. Every caller of this accessor dereferenced the `Box` without
-    /// asking, so the panic replaces a null dereference, not a branch; the two
-    /// callers that *do* ask keep asking, through [`out_opt`](Self::out_opt).
+    /// not run.
     #[inline]
     pub fn out(&self) -> &SWelsEncoderOutput {
         self.pOut
@@ -1647,12 +1067,7 @@ impl sWelsEncCtx {
     /// `encoder_ext.rs` and `wels_encoder_ext.rs`, and the per-frame resets of
     /// `iNalIndex` / `iLayerBsIndex` / `sBsWrite`.
     ///
-    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut). A `&mut
-    /// sWelsEncCtx` cannot exist while the fork is live (every worker holds
-    /// `&sWelsEncCtx`), so this accessor is unavailable in exactly the place a
-    /// `&mut SWelsEncoderOutput` would be a race. That is the same measurement
-    /// [`pOut`](Self::pOut)'s own note records from the other side: the two
-    /// fork-reachable readers reach the block only on their main-thread-only arm.
+    /// **Single-threaded only.**
     ///
     /// # Panics
     /// As [`out`](Self::out).
@@ -1663,7 +1078,7 @@ impl sWelsEncCtx {
             .expect("the encoder output block is built by WelsInitEncoderExt")
     }
 
-    /// [`out`](Self::out) **as the question the two guards ask** — "has the
+    /// [`out`](Self::out) **as the question the guards ask** — "has the
     /// output block been built yet, or has teardown already taken it?". Teardown
     /// is why the question is real: `WelsUninitEncoderExt` drops the `Box` while
     /// the context is still addressable, and the C-API's status query can arrive
@@ -1673,30 +1088,16 @@ impl sWelsEncCtx {
         self.pOut.as_deref()
     }
 
-    /// The encoder's **kernel dispatch table** — T6.I1, `pCtx->pFuncList`, and
+    /// The encoder's **kernel dispatch table** — `pCtx->pFuncList`, and
     /// never absent: the context owns the `Box` from its constructor on, which is
-    /// why this is a plain `&` where `vaa` and `ref_list` are `Option`s. The
-    /// twenty-six `if let Some(..) = ctx_func_list(..).as_ref()` guards A6 found
-    /// were asking about a null a `Box` cannot hold.
+    /// why this is a plain `&` where `vaa` and `ref_list` are `Option`s.
     ///
-    /// **F212's flip, and F191's objection answered by taking it.** F191 ruled
-    /// that this accessor "cannot take a shared projection at all", because the
-    /// table is re-written at frame cadence (`SetFastCodingFunc` /
-    /// `SetNormalCodingFunc`) and a reader could hold one across the re-write.
-    /// Measured: the re-write is **two fields** (`pfIntraFineMd`,
+    /// The table is re-written at frame cadence (`SetFastCodingFunc` /
+    /// `SetNormalCodingFunc`): **two fields** (`pfIntraFineMd`,
     /// `sSampleDealingFuncs.pfMdCost`) in one body with one caller
-    /// (`PreprocessSliceCoding`), which already derived exactly the `&mut` that
-    /// [`func_list_mut`](Self::func_list_mut) is. So under the flip "a reader
-    /// holds one across the re-write" stops being a hazard and becomes a
-    /// **compile error** wherever the context is a reference — borrowck refuses
-    /// precisely what F191 was worried about. The dispatch *enums* F191 prefers
-    /// are a different debt and the plan schedules them at C1.
-    ///
-    /// Where the context is a raw — the fork — borrowck referees nothing and
-    /// F208's rule applies as it does to every other reader here: the call is a
-    /// shared reborrow of the **whole** context, used in the expression and never
-    /// stored across a `&mut`-shaped derivation into it. The fork never writes
-    /// this table, so a shared projection is all it has ever needed.
+    /// (`PreprocessSliceCoding`), which derives the `&mut` that
+    /// [`func_list_mut`](Self::func_list_mut) is. The fork never writes this
+    /// table.
     #[inline]
     pub fn func_list(&self) -> &SWelsFuncPtrList {
         &self.pFuncList
@@ -1707,25 +1108,15 @@ impl sWelsEncCtx {
     /// `SetOption` for `pfRc`, `PreprocessSliceCoding` for the two frame-cadence
     /// fields, and the parameter-set strategy's own `as_mut` callers.
     ///
-    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut). It is the
-    /// half of the flip that makes F191's hazard unrepresentable: no `&` to the
-    /// table can be live across a call that needs this.
+    /// **Single-threaded only.**
     #[inline]
     pub fn func_list_mut(&mut self) -> &mut SWelsFuncPtrList {
         &mut self.pFuncList
     }
 
-    /// The frame's **video-analysis block** — T6.H10, `pCtx->pVaa`.
+    /// The frame's **video-analysis block** — `pCtx->pVaa`.
     ///
-    /// **`Option`, because the absence is a state the callers already asked
-    /// about.** The raw accessor answered null before the preprocessor builds
-    /// one, and a dozen consumers opened with `if !ctx_vaa(..).is_null()` while
-    /// it was raw; those
-    /// guards are `let Some(..) else` / `.is_some()` now, which is the same
-    /// branch with the question asked in the type.
-    ///
-    /// In-fork this is the only path — the workers read the analysis the
-    /// preprocessor wrote and never write it back. The writers are the
+    /// `None` before the preprocessor builds one. The writers are the
     /// preprocessor and the reference-list managers, all single-threaded.
     #[inline]
     pub fn vaa(&self) -> Option<&SVAAFrameInfo> {
@@ -1734,50 +1125,34 @@ impl sWelsEncCtx {
 
     /// [`vaa`](Self::vaa) for the preprocessor and the reference-list managers.
     ///
-    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut).
+    /// **Single-threaded only.**
     #[inline]
     pub fn vaa_mut(&mut self) -> Option<&mut SVAAFrameInfo> {
         self.pVaa.as_deref_mut().map(VaaBlock::base_mut)
     }
 
-    /// [`vaa`](Self::vaa) for the 30 readers that **do not ask** — the analysis
+    /// [`vaa`](Self::vaa) for the readers that **do not ask** — the analysis
     /// consumers that run after the preprocessor has built the block and
     /// dereference it exactly as the C++ dereferenced `pCtx->pVaa`.
     ///
-    /// **Why this is a fourth name and not the plain one.** [`vaa`](Self::vaa)
-    /// and [`vaa_mut`](Self::vaa_mut) keep the `Option` and keep their names,
-    /// because the split here is not lopsided the way [`param`](Self::param)'s
-    /// is: 12 sites genuinely ask through this accessor and 6 more through
-    /// [`vaa_mut`](Self::vaa_mut) (`is_none()` / `is_some()` early-outs in
-    /// `ref_list_mgr_svc.rs` and `wels_preprocess.rs`, `is_some_and` in the IDR
-    /// decision, `if let Some(..)` around the preprocessor's own analysis calls),
-    /// and those guards are the *phase* question — has the preprocessor run for
-    /// this frame?
-    /// So the `Option` form stays where its callers can see it and the
+    /// The `Option` form stays where its callers can see it — those guards are
+    /// the *phase* question, has the preprocessor run for this frame? — and the
     /// unconditional readers take the `_expect` name instead.
     ///
     /// # Panics
-    /// If the analysis block is not built for this frame. Every caller of this
-    /// accessor dereferenced the answer without asking, so the panic replaces a
-    /// null dereference, not a branch; the twelve callers that *do* ask keep
-    /// asking, through [`vaa`](Self::vaa).
+    /// If the analysis block is not built for this frame.
     #[inline]
     pub fn vaa_expect(&self) -> &SVAAFrameInfo {
         self.vaa().expect("the frame's video-analysis block")
     }
 
-    /// [`vaa_expect`](Self::vaa_expect) for the ten writers — the reference-list
+    /// [`vaa_expect`](Self::vaa_expect) for the writers — the reference-list
     /// managers and the preprocessor's own post-analysis stamping.
     ///
-    /// **Single-threaded only** — see [`rc_at_mut`](Self::rc_at_mut). A `&mut
-    /// sWelsEncCtx` cannot exist while the fork is live, so this accessor is
-    /// unavailable in exactly the place a `&mut SVAAFrameInfo` would be a race;
-    /// in-fork the workers read the analysis the preprocessor wrote and never
-    /// write it back, which is [`vaa`](Self::vaa)'s own note.
+    /// **Single-threaded only.**
     ///
     /// # Panics
-    /// As [`vaa_expect`](Self::vaa_expect); the six asking callers keep
-    /// [`vaa_mut`](Self::vaa_mut).
+    /// As [`vaa_expect`](Self::vaa_expect).
     #[inline]
     pub fn vaa_expect_mut(&mut self) -> &mut SVAAFrameInfo {
         self.vaa_mut().expect("the frame's video-analysis block")
@@ -1785,13 +1160,10 @@ impl sWelsEncCtx {
 
     /// [`vaa`](Self::vaa) **as a raw pointer**, null when the block is absent.
     ///
-    /// **The return stays raw, and the far end is why.** The one production
-    /// caller hands it to `SWelsFuncPtrList::pfSetScrollingMv`, whose type
-    /// (`PSetScrollingMv`, `wels_func_ptr_def.rs:131`) takes `*mut
-    /// SVAAFrameInfo` — a C1 alias, so a reference here would have nothing to be
-    /// passed as. The accessor itself is a safe fn: forming the pointer needs no
-    /// `unsafe`, only dereferencing it does, and that belongs to the far end.
-    /// It is also the root [`vaa_ext`](Self::vaa_ext) casts.
+    /// The one production caller hands it to
+    /// `SWelsFuncPtrList::pfSetScrollingMv`, whose type (`PSetScrollingMv`,
+    /// `wels_func_ptr_def.rs:131`) takes `*mut SVAAFrameInfo`, so a reference
+    /// here would have nothing to be passed as.
     #[inline]
     pub fn vaa_ptr(&self) -> *mut SVAAFrameInfo {
         match self.vaa() {
@@ -1801,26 +1173,11 @@ impl sWelsEncCtx {
     }
 
 
-    /// The screen-content frame complexity — **the one read the dormant cast is
-    /// made for, named once so it is not six separate claims** (S10.5a').
+    /// The screen-content frame complexity.
     ///
-    /// This is [`vaa_ext`](Self::vaa_ext)'s own rationale applied one level down.
-    /// That accessor exists because "the cast is not fifteen separate claims"; the
-    /// *read through* it was still spelled out at six sites in `rc.rs`, each
-    /// carrying its own `allow(unsafe_code)` and — wrongly — a
-    /// `port-raw(Phase 9)` tag. The operation they perform is not Phase 9's: it is
-    /// the `SVAAFrameInfoExt` downcast, which read past the end of an
-    /// `SVAAFrameInfo` while the port never installed `RequestMemoryVaaScreen`
-    /// (F177). Six bodies were therefore counted as convertible when the thing
-    /// blocking them belonged to Phase 10.
-    ///
-    /// So the claim is made here, once, and the six callers are safe. **P10.1.B3**
-    /// made the read real: under `SCREEN_CONTENT_REAL_TIME` the block is the
-    /// `Screen` arm and this answers its `iFrameComplexity` — which is 0 until
-    /// P10.2 ports the screen complexity plugin that writes it (defined on both
-    /// sides: `WELS_DIV_ROUND64` guards the zero divisor as upstream's macro does).
-    /// For camera content it is 0, which is what the six rate-control readers
-    /// already treat as "no screen complexity measured".
+    /// Under `SCREEN_CONTENT_REAL_TIME` the block is the `Screen` arm and this
+    /// answers its `iFrameComplexity`. For camera content it is 0, which is what
+    /// the rate-control readers treat as "no screen complexity measured".
     #[inline]
     pub fn vaa_ext_screen_frame_complexity(&self) -> i64 {
         self.vaa_ext_ref()
@@ -1828,28 +1185,13 @@ impl sWelsEncCtx {
     }
 
 
-    /// The screen-content extension of the video-analysis block, **safely** —
-    /// S11.3's replacement for the `static_cast<SVAAFrameInfoExt*>(pCtx->pVaa)`
-    /// downcast (decision D-scope-6), answering the [`VaaBlock::Screen`] arm
-    /// (P10.1, D-scc-1).
+    /// The screen-content extension of the video-analysis block, answering the
+    /// [`VaaBlock::Screen`] arm.
     ///
-    /// Upstream's cast is sound because `RequestMemorySvc` allocates an
-    /// `SVAAFrameInfoExt` under `SCREEN_CONTENT_REAL_TIME` and a plain
-    /// `SVAAFrameInfo` otherwise (`encoder_ext.cpp:1707-1718`); the two arms of
-    /// [`VaaBlock`] are those two allocations, and this is `Some` exactly when the
-    /// C++ cast would have read an extension rather than past the end of the base
-    /// block. `None` is therefore camera content, and every consumer keeps its
-    /// shape — the reads, the branches, the arithmetic are line-for-line what
-    /// upstream does, behind `if let Some(ext)`: the screen reference strategies
-    /// (`ref_list_mgr_svc.rs`), the scroll/static P-skip and block-static
-    /// stamping (`svc_mode_decision.rs`), the preprocessor's screen reference
-    /// selection and complexity block (`wels_preprocess.rs`), and the rate
-    /// control's screen complexity reads through
-    /// [`vaa_ext_screen_frame_complexity`](Self::vaa_ext_screen_frame_complexity).
-    ///
-    /// P10.1.B3 landed `RequestMemoryVaaScreen`, so the `Screen` arm is built
-    /// under screen usage and this answers `Some` there; camera content still
-    /// answers `None` on every path. Nothing at the call sites moved for it.
+    /// `RequestMemorySvc` allocates an `SVAAFrameInfoExt` under
+    /// `SCREEN_CONTENT_REAL_TIME` and a plain `SVAAFrameInfo` otherwise
+    /// (`encoder_ext.cpp:1707-1718`); the two arms of [`VaaBlock`] are those two
+    /// allocations. `None` is therefore camera content.
     #[inline]
     pub fn vaa_ext_ref(&self) -> Option<&SVAAFrameInfoExt> {
         self.pVaa.as_deref().and_then(VaaBlock::ext)
@@ -1857,9 +1199,7 @@ impl sWelsEncCtx {
 
     /// [`vaa_ext_ref`](Self::vaa_ext_ref) for the extension's writers —
     /// `AnalyzePictureComplexity`'s screen arm and `DetectSceneChangeScreen`'s
-    /// best-reference stamping. **Single-threaded only**, as
-    /// [`vaa_mut`](Self::vaa_mut): the slice workers read the extension and never
-    /// write it (D-scc-5).
+    /// best-reference stamping. **Single-threaded only.**
     #[inline]
     pub fn vaa_ext_ref_mut(&mut self) -> Option<&mut SVAAFrameInfoExt> {
         self.pVaa.as_deref_mut().and_then(VaaBlock::ext_mut)
@@ -1870,82 +1210,34 @@ impl sWelsEncCtx {
 #[repr(C)]
 pub struct sWelsEncCtx {
     pub sLogCtx: SLogContext,
-    /// The encoder's coding parameters — **T6.H11, owned, and the ownership read is
-    /// the reason it is owned rather than left raw.**
-    ///
-    /// The brief's open question was whether this is the decoder's F41 shape — the
-    /// context aliasing a block the api object owns and outlives — in which case it
-    /// would stay raw and go to Phase 8. It is not. `WelsInitEncoderExt` calls
-    /// `AllocCodingParam` to take a block **from the context's own `pMemAlign`**, and
-    /// then *copies* the caller's parameters into it by value
-    /// (`*pCtx.param_mut() = *pCodingParam`); `WelsUninitEncoderExt` frees it.
-    /// The api object never hands the context a pointer to anything it owns — the
-    /// only other writers in the tree are unit-test fixtures. The context is the sole
-    /// owner, and now says so.
+    /// The encoder's coding parameters.
     ///
     /// Resolve it with [`sWelsEncCtx::param`]. `None` before `WelsInitEncoderExt` runs.
     pub pSvcParam: Option<Box<SWelsSvcCodingParam>>,
     pub iMvRange: i32,
-    /// The motion-vector-difference cost table — **T6.H9, and plan item P11 landing.**
-    /// 52 QP rows of `iMvdCostTableStride` entries each, plus F57's overshoot. Root:
+    /// The motion-vector-difference cost table.
+    /// 52 QP rows of `iMvdCostTableStride` entries each. Root:
     /// [`sWelsEncCtx::mvd_cost_table`]; the **origin** every consumer actually wants
     /// (the zero-MVD entry, `iMvdCostTableSize` into the table, so that a negative MVD
     /// is a negative offset) is [`sWelsEncCtx::mvd_cost_origin`].
     pub pMvdCostTable: Vec<u16>,
     pub iMvdCostTableSize: i32,
     pub iMvdCostTableStride: i32,
-    // encoder_context.h:129-136 carries five per-macroblock scratch arrays here --
-    // `pMvUnitBlock4x4`, `pRefIndexBlock4x4`, `pNonZeroCountBlocks`,
-    // `pIntra4x4PredModeBlocks` and `pSadCostMb` (above). **T6.C1** moved all five
-    // into `SMB` as inline arrays, so the context neither allocates them, wires
-    // them, nor frees them; the two parity banks the first two carried are
-    // unnecessary once every macroblock owns its row.
-    /// **T6.H1 — owned.** `RequestMemorySvc` used to `WelsMallocz` this and
-    /// `WelsUninitEncoderExt` to free it, together with the one block hanging off it.
-    /// `None` is the null the raw pointer held before `AllocStrideTables` runs, and
-    /// the drop that replaces both frees is the context's own — see the field's
-    /// accessors, [`ctx_stride_enc_block_offset`] and its three siblings.
+    /// `None` before `AllocStrideTables` runs.
     pub pStrideTab: Option<Box<SStrideTables>>,
-    /// **T6.I1 — owned.** The kernel dispatch table, `WelsMallocz`'d at
-    /// `WelsInitEncoderExt` and `WelsFree`'d in the teardown cascade until this
-    /// session; the context owns the `Box` and it drops with the context.
+    /// The kernel dispatch table.
     ///
     /// A plain `Box`, not an `Option<Box<_>>` like [`pSvcParam`](Self::pSvcParam):
     /// the table has no "not built yet" state worth modelling. Its `Default` is
-    /// every slot `None`, which is bit-for-bit the image `WelsMallocz` produced,
-    /// so the context is born with the same table the C++ memsets and
-    /// `InitFunctionPointers` writes over it exactly as before. Every null check
-    /// on the *field* dies with the null; the checks on raw table *parameters*
-    /// stay, because the survivors still take one. Root: [`sWelsEncCtx::func_list`].
+    /// every slot `None`, and `InitFunctionPointers` writes over it.
+    /// Root: [`sWelsEncCtx::func_list`].
     pub pFuncList: Box<SWelsFuncPtrList>,
-    /// **S3.B1 — owned.** The slice-threading block, `Box`-built by
-    /// `RequestMtResource` and dropped by `ReleaseMtResource`; `None` is the null
-    /// that meant "single-threaded encoder". The fork reads it through
-    /// [`ctx_slice_threading_raw`](crate::encoder::slice_multi_threading::ctx_slice_threading_raw)
-    /// — a slot read (F71), so worker cursors carry the block's own provenance.
+    /// The slice-threading block, `Box`-built by
+    /// `RequestMtResource` and dropped by `ReleaseMtResource`; `None` is
+    /// "single-threaded encoder".
     pub pSliceThreading: Option<Box<SSliceThreading>>,
-    // `pTaskManage: *mut c_void` stood here — an `IWelsTaskManage*` in C++, erased to
-    // `c_void` because the port could not name the type from this module. It held the
-    // one reference to the process-wide thread pool. Deleted at T7.B4; the encoder
-    // forks with `std::thread::scope`, and a scope has no object to own.
-    // It is also one of the twelve `!Sync` reasons F67 counted, so the count is
-    // eleven now — see the finding's disposition.
-    /// `IWelsReferenceStrategy*` in C++ (`encoder_context.h`); **T4b.2b** made it
-    /// the strategy's *identity* instead of a pointer to an object carrying only a
-    /// back-pointer to this very struct. See [`RefStrategyKind`].
-    ///
-    /// **S20**: this is `#[repr(C)]` and the member sits between two 8-byte-aligned
-    /// pointers, so the 7 bytes of padding that realign `pEncPic` exactly replace the
-    /// 7 bytes the pointer loses — the change that introduced this field moved
-    /// neither `assert_size!(sWelsEncCtx, ...)` nor any of the fifteen
-    /// `assert_ctx_offset!` pins.
-    ///
-    /// The numbers this note used to quote are gone: session H's owned members are
-    /// `Vec`s at 16 bytes over the pointer each, so every pin after the first of them
-    /// has moved, and they are the port's own measured offsets rather than C++
-    /// `offsetof` values. What the pins still catch is a field added, dropped or
-    /// re-widened without anyone noticing — which is why they are re-measured in the
-    /// commit that moves them and never deleted.
+    /// `IWelsReferenceStrategy*` in C++ (`encoder_context.h`) — the strategy's
+    /// *identity*. See [`RefStrategyKind`].
     pub eRefStrategy: crate::encoder::ref_list_mgr_svc::RefStrategyKind,
     /// The source picture being encoded — a slot of `pVpp`'s spatial pool.
     pub pEncPic: Option<SrcPicId>,
@@ -1953,39 +1245,23 @@ pub struct sWelsEncCtx {
     /// **the current dependency layer's** `SRefList` (`ppRefPicListExt[uiDependencyId]`).
     pub pDecPic: Option<RecPicId>,
     pub pRefPic: Option<RecPicId>,
-    /// The layer the encoder is working on, as a **position in `ppDqLayerList`** —
-    /// T6.G2. It was a raw `SDqLayer` alias into the list two lines down.
+    /// The layer the encoder is working on, as a **position in `ppDqLayerList`**.
     ///
     /// The list is built once by `InitDqLayers`, freed once by `FreeDqLayer`, and
-    /// nothing permutes it (S34, re-grepped), so a position is a stable identity and
-    /// an index is faithful where the address was. Every one of the ~150 consumers
-    /// resolves it through [`current_layer`](crate::encoder::svc_encode_slice::current_layer),
-    /// which answers the same raw layer cursor this field used to hold — the
-    /// cursor idiom downstream is unchanged.
+    /// nothing permutes it, so a position is a stable identity.
     ///
-    /// **`None` is "no layer is current" and is why the constructor had to land
-    /// first**: `LayerIdx` is a plain `u8` with no niche, so the all-zero image of
-    /// this field is `Some(LayerIdx(0))` — the base layer — and a zeroed shell
-    /// would have silently produced a context that already had one (F56/S21).
+    /// **`None` is "no layer is current"**.
     pub iCurDqLayer: Option<crate::encoder::svc_encode_slice::LayerIdx>,
-    /// **T6.H8 — owned.** One DQ layer per dependency layer. As with
-    /// [`ppRefPicListExt`](Self::ppRefPicListExt), the `SDqLayer`s have been
-    /// `Box`-built since T6.D3 and the list is simply their owner now; `None` is the
-    /// null a slot held before `InitDqLayers` filled it. Resolve a layer with
-    /// [`ctx_dq_layer`], or the *current* one with
-    /// [`current_layer`](crate::encoder::svc_encode_slice::current_layer).
+    /// One DQ layer per dependency layer. `None` before `InitDqLayers` fills the
+    /// slot.
     pub ppDqLayerList: Vec<Option<Box<SDqLayer>>>,
-    /// **T6.H7 — owned.** One reference list per dependency layer. The array was a
-    /// `WelsMallocz`'d block of pointers; the `SRefList`s themselves have been
-    /// `Box`-built since T6.F1, so the list is simply their owner now. `None` is the
-    /// null a slot held between `RequestMemorySvc` sizing the array and
-    /// `InitDqLayers` filling it. Resolve a layer's list with
+    /// One reference list per dependency layer. `None` between `RequestMemorySvc`
+    /// sizing the array and `InitDqLayers` filling it. Resolve a layer's list with
     /// [`sWelsEncCtx::ref_list`] / [`sWelsEncCtx::ref_list_mut`].
     pub ppRefPicListExt: Vec<Option<Box<SRefList>>>,
     pub pRefList0: [Option<RecPicId>; 16],
-    /// **T6.H5 — owned.** One long-term-reference state per dependency layer,
-    /// `WelsMallocz`'d and then `ResetLtrState`'d entry by entry. Root:
-    /// [`ctx_ltr`]; the per-layer entry: [`ctx_ltr_at`].
+    /// One long-term-reference state per dependency layer, `ResetLtrState`'d entry
+    /// by entry. The per-layer entry: [`ctx_ltr_at`].
     pub pLtr: Vec<SLTRState>,
     pub bCurFrameMarkedAsSceneLtr: bool,
     pub eSliceType: EWelsSliceType,
@@ -1996,10 +1272,8 @@ pub struct sWelsEncCtx {
     pub uiDependencyId: u8,
     pub uiTemporalId: u8,
     pub bNeedPrefixNalFlag: bool,
-    /// **T6.H6 — owned, and it took the rate controller's own allocations with it.**
     /// One state per spatial layer; each holds the five arrays `RcInitLayerMemory`
-    /// used to carve from a `CMemoryAlign` block. Root: [`ctx_rc`]; per-layer:
-    /// [`sWelsEncCtx::rc_at`].
+    /// fills. Per-layer: [`sWelsEncCtx::rc_at`].
     pub pWelsSvcRc: Vec<SWelsSvcRc>,
     pub bCheckWindowStatusRefreshFlag: bool,
     pub iCheckWindowStartTs: i64,
@@ -2008,75 +1282,57 @@ pub struct sWelsEncCtx {
     pub iCheckWindowIntervalShift: i32,
     pub bCheckWindowShiftResetFlag: bool,
     pub iGlobalQp: i32,
-    /// The video-analysis block for the frame in flight — **T6.H10, owned.** It has
-    /// been `Box`-built and has owned its seven per-frame arrays since T6.F3; this is
-    /// the last step, giving the `Box` an owner so `Create`/`Destroy` are `new`/`Drop`.
+    /// The video-analysis block for the frame in flight.
     /// `None` before the preprocessor runs. Resolve it with [`sWelsEncCtx::vaa`].
     ///
-    /// **P10.1 (D-scc-1): a [`VaaBlock`]**, `Base` for camera content and `Screen`
+    /// **A [`VaaBlock`]**, `Base` for camera content and `Screen`
     /// for `SCREEN_CONTENT_REAL_TIME` — the two allocations of
     /// `encoder_ext.cpp:1707-1718`. The enum sits inside the `Box` so this stays one
     /// word; [`vaa_ext_ref`](sWelsEncCtx::vaa_ext_ref) is the `Screen` arm.
     pub pVaa: Option<Box<VaaBlock>>,
-    /// **S3.B1 — owned.** The preprocess object, `Box`-built by
-    /// [`CWelsPreProcess::CreatePreProcess`] and dropped by the teardown; `None` is
-    /// the null the raw held before init and after `FreeMemorySvc`. The methods
+    /// The preprocess object, `Box`-built by
+    /// [`CWelsPreProcess::CreatePreProcess`] and dropped by the teardown; `None`
+    /// before init and after `FreeMemorySvc`. The methods
     /// that take both `&mut self` (the vpp) and `&mut sWelsEncCtx` are called
     /// through the `Option::take` dance — the box moves out for the call and back
-    /// after, which is a pointer move and leaves no aliasing for either referee.
-    /// In-fork bodies read it via `(*pCtx).pVpp.as_deref()` — a *field*-scoped
-    /// shared borrow, narrower than any accessor retag (F208).
+    /// after.
     pub pVpp: Option<Box<crate::encoder::wels_preprocess::CWelsPreProcess>>,
-    /// **T6.H2 — owned.** `RequestMemorySvc` sized this from the strategy's
-    /// `GetNeededSpsNum` and `WelsMallocz`'d it; the length is the same number and
-    /// the entries are the same zeros. Reach its root with [`ctx_sps_array`]; the
+    /// `RequestMemorySvc` sizes this from the strategy's `GetNeededSpsNum`; the
     /// **active** entry is [`iSps`](Self::iSps) below.
     pub pSpsArray: Vec<SWelsSPS>,
-    /// The **active** SPS, as its position in `pSpsArray` — T6.G3. It was a pointer
-    /// into that array, aimed at the head by `WelsInitEncoderExt` and never re-aimed,
-    /// which is what `Some(SpsId(0))` says without a second address to keep true.
+    /// The **active** SPS, as its position in `pSpsArray`.
     /// Resolve it with [`ctx_sps`](crate::encoder::svc_encode_slice::ctx_sps).
     pub iSps: Option<SpsId>,
-    /// **T6.H2 — owned**; see [`pSpsArray`](Self::pSpsArray). Root: [`ctx_pps_array`].
+    /// See [`pSpsArray`](Self::pSpsArray).
     pub pPPSArray: Vec<SWelsPPS>,
     /// The **active** PPS, as its position in `pPPSArray` — see [`iSps`](Self::iSps).
     /// Resolve it with [`ctx_pps`](crate::encoder::svc_encode_slice::ctx_pps).
     pub iPps: Option<PpsId>,
-    /// **T6.H2 — owned**; see [`pSpsArray`](Self::pSpsArray). Root: [`ctx_subset_array`].
+    /// See [`pSpsArray`](Self::pSpsArray).
     ///
-    /// **Empty is the null the raw pointer held**: `RequestMemorySvc` allocated
-    /// nothing at all when `GetNeededSubsetSpsNum()` answered 0 (simulcast AVC, and
-    /// every single-layer configuration), and every consumer tests for it.
+    /// **Empty**: `RequestMemorySvc` allocates nothing at all when
+    /// `GetNeededSubsetSpsNum()` answers 0 (simulcast AVC, and every single-layer
+    /// configuration), and every consumer tests for it.
     pub pSubsetArray: Vec<SSubsetSps>,
-    // **`pSubsetSps` stood here and is deleted, not converted** (T6.G3). The C++
-    // declares it (`encoder_context.h`) and this port transcribed it; neither ever
-    // read it, and neither ever wrote it. `WelsInitCurrentLayer` aims
-    // `pCurDq->sLayerInfo.pSubsetSpsP` at `pSubsetArray[iCurSpsId]` and every subset
-    // consumer goes through the layer. A field that is only ever a declaration is
-    // not an alias to convert; it is a line to remove.
 
     pub iSpsNum: i32,
     pub iSubsetSpsNum: i32,
     pub iPpsNum: i32,
-    /// **S3.B1 — owned.** The encoder output block, `Box`-built at init
-    /// (`new_boxed`) and dropped at teardown; `None` is the raw's null. The two
-    /// fork-reachable readers (`slice_bs_buffer`, `slice_writer`) resolve it
-    /// through [`ctx_out_raw`] on their **main-thread-only** arm — F217's probe is
-    /// the measurement that the arm never runs in-fork.
+    /// The encoder output block, `Box`-built at init (`new_boxed`) and dropped at
+    /// teardown.
     pub pOut: Option<Box<SWelsEncoderOutput>>,
-    /// The frame's output bitstream — **T6.H4, and the encoder's one arena of
-    /// bytes.** Every NAL the frame emits is written into it at `iPosBsBuffer`, and
+    /// The frame's output bitstream — the encoder's one arena of
+    /// bytes. Every NAL the frame emits is written into it at `iPosBsBuffer`, and
     /// `SLayerBSInfo::pBsBuf` holds cursors into it that outlive the call that made
     /// them. Root: [`sWelsEncCtx::frame_bs`]; the write cursor:
     /// [`sWelsEncCtx::frame_bs_cur`].
     ///
-    /// **A recorded deviation.** The C++ takes this block with `WelsMalloc`, not
+    /// **A deviation.** The C++ takes this block with `WelsMalloc`, not
     /// `WelsMallocz` — it is the one member of `RequestMemorySvc`'s set that starts
     /// *uninitialized*. The `Vec` is zero-filled, because a safe container has no
-    /// uninitialized alternative; that is sound because every read of this buffer
-    /// sits behind a write cursor (`iPosBsBuffer` only ever advances past bytes a NAL
-    /// writer has just written, and `pOut->iNalLen` bounds every read back), so no
-    /// consumer can observe the difference between "uninitialized" and "zero".
+    /// uninitialized alternative; every read of this buffer sits behind a write
+    /// cursor (`iPosBsBuffer` only ever advances past bytes a NAL writer has just
+    /// written, and `pOut->iNalLen` bounds every read back).
     pub pFrameBs: Vec<u8>,
     pub iFrameBsSize: i32,
     pub iPosBsBuffer: i32,
@@ -2085,34 +1341,17 @@ pub struct sWelsEncCtx {
     pub bRefOfCurTidIsLtr: [[bool; MAX_TEMPORAL_LEVEL]; MAX_DEPENDENCY_LAYER],
     pub iMaxSliceCount: i32,
     pub iActiveThreadsNum: i16,
-    /// **T6.H3 — owned.** One row per dependency layer, `WelsMallocz`'d at
-    /// `RequestMemorySvc` and freed in the cascade; `SDqIdc` is four bytes of POD and
-    /// its derived `Default` *is* the memset image. Root: [`ctx_dq_idc_map`].
+    /// One row per dependency layer. Root: [`ctx_dq_idc_map`].
     pub pDqIdcMap: Vec<SDqIdc>,
     /// The C++ declares a companion `SParaSetOffset*` beside this one, pointing
-    /// either here or at the caller's vector. **T6.I0 deleted that pointer**: in
-    /// the whole port it was declared, null-initialised, and listed in the
-    /// equality instrument — never read, never assigned anywhere. This field,
-    /// held by value, is the vector.
+    /// either here or at the caller's vector. This field, held by value, is the
+    /// vector.
     pub sPSOVector: SParaSetOffset,
-    // **`pMemAlign: *mut CMemoryAlign` stood here — T7.C6.** The C++'s aligned
-    // allocator, `WelsInitEncoderExt`'s first allocation and `WelsUninitEncoderExt`'s
-    // last free. Phase 6 took 45 of its call sites to 15 and Phase 7 took the last
-    // 15 to zero (T7.C4 the slice bitstreams, T7.C5 the two MT buffer arrays, T7.C6
-    // the two unreachable screen-content functions), so what was left was a heap
-    // object the encoder constructed, carried through every allocation signature in
-    // the crate, and destroyed — with **no reader anywhere**, including the two dead
-    // `let pMa = (*pCtx).pMemAlign;` bindings the preprocessor still had. Deleted with
-    // the field, the constructor, the free and the parameter chain.
     pub uiStartTimestamp: i64,
     pub sEncoderStatistics: [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics; MAX_DEPENDENCY_LAYER],
     pub iStatisticsLogInterval: i32,
     pub iLastStatisticsLogTs: i64,
     pub iEncoderError: i32,
-    // `mutexEncoderError: *mut c_void` stood here, guarding `FinishTask`'s
-    // `iEncoderError |= m_eTaskResult` from the worker threads. Results travel back
-    // through the join now and the calling thread ORs them, so the field has no
-    // writer left. Deleted at T7.B4 — F67's twelve `!Sync` reasons are ten.
     pub bDeliveryFlag: bool,
     pub sWelsCabacContexts: [[[SStateCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
     pub uiLastTimestamp: i64,
@@ -2123,59 +1362,27 @@ impl sWelsEncCtx {
     /// The encoder context's **allocation zero**, spelled out — `WelsInitEncoderExt`'s
     /// `WelsMalloc` + `memset(0)` in a form that survives a field changing type.
     ///
-    /// # Why a constructor at all, when the shell it replaces was correct
-    ///
-    /// `mem::zeroed()` is not a construction, it is a *bet*: that every field's
-    /// all-zero bit pattern is a value that field is allowed to hold. The bet is
-    /// currently sound and has been audited field by field (S21) — three of the
-    /// enums below carry their zero variant *because* of that audit, and
-    /// `ref_strategy_zero_is_the_default_arm` is the assertion that keeps one of them
-    /// honest. But it is a bet that has to be re-won on every field that changes
-    /// type, silently, by whoever changes it, and Phase 6 sessions G and H change
-    /// almost every field in this struct. `Option<LayerIdx>` — the very next step —
-    /// has **no niche**: `LayerIdx` is a plain `u8`, so all-zero is `Some(LayerIdx(0))`,
-    /// which is layer zero, not "no layer". The shell would keep compiling and
-    /// keep producing a context whose current layer is silently the base layer.
-    ///
-    /// So the constructor lands **before** anything owns and before any field flips
-    /// (F56/S21: zeros are ruled, not defaulted). What it buys is spent in steps 2
-    /// and 3 and in session H; what it costs is this comment.
-    ///
-    /// # What it is not
-    ///
     /// It is **not** an "init". `WelsInitEncoderExt` does the initialization, in the
     /// order the C++ does it, and every non-zero starting value the encoder has lives
-    /// there. Session F's `SPicture` lesson applies here in reverse: there,
-    /// `with_planes` had to reproduce the *memset*, not `Default`, because the live
-    /// value of `eSliceType` was `P_SLICE` and `Default` said `UNKNOWN_SLICE`. Here
-    /// the memset **is** the semantics, so nothing may be imported into `new()` that
-    /// the zeroed shell did not have. `ctx_new_reproduces_the_zeroed_shell` is that
-    /// rule as a test, and it is meant to read zero differences.
+    /// there.
     ///
     /// # The zeros, and what each one means
     ///
     /// Grouped by who is responsible for making the field non-zero. Four groups:
     /// the log sink (the caller's, before anything else runs), the members
-    /// `RequestMemorySvc` allocates (session H turns these into owned containers,
-    /// and null is "not allocated yet"), the per-frame state `WelsInitCurrentLayer`
-    /// and the frame loop restamp every frame (zero is "no frame has run"), and the
-    /// parameter-set bookkeeping `InitDqLayers` fills.
+    /// `RequestMemorySvc` allocates (null is "not allocated yet"), the per-frame
+    /// state `WelsInitCurrentLayer` and the frame loop restamp every frame (zero is
+    /// "no frame has run"), and the parameter-set bookkeeping `InitDqLayers` fills.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             // The caller's log sink, stamped in by `WelsInitEncoderExt` before
-            // anything can log. **T8.B6/T8.B10**: this used to be three `*mut
-            // c_void`s and "no sink installed" was three nulls; it is typed now —
-            // `pfLog: WelsTraceCallback`, `None` when nothing is installed — and
-            // the level travels with it. The one member that is still a pointer is
-            // `pLogCtx`, which is the *caller's* opaque context and C-ABI by
+            // anything can log. `pfLog: WelsTraceCallback` is `None` when nothing
+            // is installed; `pLogCtx` is the *caller's* opaque context and C-ABI by
             // definition.
             sLogCtx: SLogContext::default(),
 
             // ---- allocated by RequestMemorySvc; null == not allocated yet -------
-            // (Session H's list. Every one of these is freed by FreeMemorySvc, and
-            // null is the value that makes the paired free a no-op — which is why
-            // the C++ can call it on a half-built context after an early failure.)
             pSvcParam: None,
             iMvRange: 0,                    // set by InitMvRange from the level limit
             pMvdCostTable: Vec::new(),
@@ -2185,22 +1392,19 @@ impl sWelsEncCtx {
             pFuncList: Box::new(SWelsFuncPtrList::default()),
             pSliceThreading: None,
 
-            // `TemporalLayer`, the zero discriminant, is the variant the old
-            // `CreateReferenceStrategy` factory's `_ =>` arm produced — asserted in
-            // `ref_list_mgr_svc::tests::ref_strategy_zero_is_the_default_arm`.
+            // `TemporalLayer`, the zero discriminant.
             eRefStrategy: crate::encoder::ref_list_mgr_svc::RefStrategyKind::TemporalLayer,
 
             // ---- per-frame picture handles; None == no picture bound ------------
-            // These are pool handles, not pointers, since T6.F1. `None` is the whole
-            // reason the handles have a niche: it is a *state*, "the frame loop has
-            // not picked a picture yet", and the encoder tests for it.
+            // These are pool handles, not pointers. `None` is a *state*, "the frame
+            // loop has not picked a picture yet", and the encoder tests for it.
             pEncPic: None,
             pDecPic: None,
             pRefPic: None,
 
             // No layer is current until `WelsInitCurrentLayer` / `WelsSwapDqLayers`
             // names one, which cannot happen before `ppDqLayerList` below is
-            // allocated. `None`, not `Some(LayerIdx(0))` — see the field.
+            // allocated.
             iCurDqLayer: None,
             ppDqLayerList: Vec::new(),
             ppRefPicListExt: Vec::new(),
@@ -2243,10 +1447,10 @@ impl sWelsEncCtx {
             pVpp: None,
 
             // ---- parameter sets: the arrays, their aliases, their counts --------
-            // The three `Array` members are allocations (H's); the three singular
-            // ones are *aliases into them* that `WelsInitEncoderExt` aims at the
-            // heads — step 3 of this session makes them ids. The three counts are
-            // `InitDqLayers`'s, and zero is the honest starting length.
+            // The three `Array` members are allocations; the three singular ones
+            // are *aliases into them* that `WelsInitEncoderExt` aims at the heads.
+            // The three counts are `InitDqLayers`'s, and zero is the honest
+            // starting length.
             pSpsArray: Vec::new(),
             iSps: None,
             pPPSArray: Vec::new(),
@@ -2263,9 +1467,7 @@ impl sWelsEncCtx {
             iPosBsBuffer: 0,                // the write cursor into it, rewound per AU
 
             // The spatial pool's per-layer index map. `SSpatialPicIndex::default()`
-            // is `{ pSrc: None, iDid: 0 }`, which *is* this struct's zero image —
-            // spelled through `Default` rather than repeated, because that impl is
-            // itself the statement that the two agree.
+            // is `{ pSrc: None, iDid: 0 }`.
             sSpatialIndexMap: [SSpatialPicIndex::default(); MAX_DEPENDENCY_LAYER],
             iSliceBufferSize: [0; MAX_DEPENDENCY_LAYER],
             // "Is the reference for this (did, tid) a long-term one?" — false until a
@@ -2276,8 +1478,7 @@ impl sWelsEncCtx {
 
             pDqIdcMap: Vec::new(),
 
-            // `sPSOVector` is held **by value**, and it is the only one: the C++'s
-            // companion pointer is deleted at T6.I0 (see the field's doc comment).
+            // `sPSOVector` is held **by value**.
             // `SParaSetOffset::default()` is all-zero throughout (its own impl,
             // field for field), which is the id-strategy's "no id has been handed
             // out yet".
@@ -2302,16 +1503,15 @@ impl sWelsEncCtx {
             sWelsCabacContexts: [[[SStateCtx::new(0); WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
             uiLastTimestamp: 0,
 
-            // Phase 7's. One dynamic bitstream buffer per thread, allocated on the
-            // first slice that needs one.
+            // One dynamic bitstream buffer per thread, allocated on the first slice
+            // that needs one.
             pDynamicBsBuffer: std::array::from_fn(|_| Vec::new()),
         }
     }
 }
 
 impl Default for sWelsEncCtx {
-    /// The zeroed shell, by way of [`new`](Self::new) — same bytes, ruled rather
-    /// than bet on.
+    /// The zeroed shell, by way of [`new`](Self::new).
     fn default() -> Self {
         Self::new()
     }
@@ -2322,10 +1522,7 @@ impl Default for sWelsEncCtx {
 // ============================================================================
 
 /// Initializes input source picture geometry, color planes, and line strides.
-///
 pub fn InitPic(
-    // S11.19: a reference. The only caller (this file's own test) already
-    // passes `&mut src_pic`, and the null disjunct retires with the raw (T9.H).
     pSrcPic: &mut SSourcePicture,
     kiColorspace: i32,
     kiWidth: i32,
@@ -2437,27 +1634,9 @@ pub fn InitFunctionPointers(
     pEncCtx: &mut sWelsEncCtx,
     _uiCpuFlag: u32,
 ) -> i32 {
-    // A third arm testing the table for null was here; T6.I1 made it an owned
-    // `Box`, so there is no null to test.
-    // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
-    // **A7: the `pParam` argument is gone** — T9.G6's note above this call in
-    // `encoder_ext.rs` said the argument was hoisted because "the call takes the
-    // context retag and this argument reads through the same context", which is
-    // F192's shape written out. The callee holds the context, so it derives the
-    // parameters itself and there is no second route left to hoist.
     if pEncCtx.param_opt().is_none() {
         return ENC_RETURN_SUCCESS;
     }
-    // **T6.I2.** One `&mut` for the whole function, derived from the owner once —
-    // rule 6's shape. The alternative, a fresh `&mut *pFuncList` at each of the
-    // fourteen calls below, is the shape that compiles and is UB: each one pops
-    // the raw the next call re-uses. The survivors that still take `*mut` get a
-    // reborrow (`&mut *fl`) rather than the binding, so `fl` outlives them.
-    // §4.6, reorder: the one context read this body makes below — the complexity
-    // mode, for `WelsInitSCDPskipFunc`'s argument — is lifted above the table's
-    // `&mut`. Under the raw accessor the two coexisted silently; under the flip
-    // the compiler asks, and the answer is a scalar copied one statement earlier.
     let kiComplexityMode = pEncCtx.param().iComplexityMode as i32;
     let kbEnableBackgroundDetection = pEncCtx.param().bEnableBackgroundDetection;
     let kbEnableSceneChangeDetect = pEncCtx.param().bEnableSceneChangeDetect;
@@ -2470,12 +1649,8 @@ pub fn InitFunctionPointers(
         == crate::api::codec_api::EUsageType::SCREEN_CONTENT_REAL_TIME;
     let fl: &mut SWelsFuncPtrList = pEncCtx.func_list_mut();
 
-    // `encoder.cpp:193` installed `sExpandPicFunc` here. T4b.3b deleted the table:
-    // the call it fed now names its two kernels directly. The history is worth one
-    // line, because this call was *missing* before Phase 4a found it, and with it
-    // every slot stayed `None` and `WelsUpdateRefList`'s `ExpandReferencingPicture`
-    // expanded nothing -- a bug that a table of optional function pointers can
-    // have and a direct call cannot.
+    // `encoder.cpp:193` installed `sExpandPicFunc` here. The call it fed now names
+    // its two kernels directly.
 
     /* Intra_Prediction_fn */
     crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(&mut *fl, _uiCpuFlag);
@@ -2507,11 +1682,7 @@ pub fn InitFunctionPointers(
 
     // C++ does NOT set pfInterMd here. It is assigned per-slice in
     // svc_encode_slice.cpp:733/736 to WelsMdInterMbEnhancelayer or WelsMdInterMb
-    // depending on kbBaseAvail && kbHighestSpatial. This line used to assign
-    // WelsMdSpatialelInterMbIlfmdNoilp, which is a different function with a
-    // different signature (its last parameter is Mb_Type, not SMbCache*) -- the
-    // mem::transmute around it was what let that through. WelsMdInterMb is not
-    // ported yet, so the assignment belongs with that work, not here.
+    // depending on kbBaseAvail && kbHighestSpatial.
 
     crate::encoder::deblocking::DeblockingInit(&mut fl.pfDeblocking, _uiCpuFlag as i32);
 
@@ -2519,9 +1690,6 @@ pub fn InitFunctionPointers(
         &mut fl.pfRc,
         kiRCMode,
     );
-
-    // `WelsBlockFuncInit(&mut fl.pfSetNZCZero, ..)` stood here — the slot and
-    // its installer went when `DeblockingBSCalc_c` went direct (session F).
 
     crate::encoder::md::InitFillNeighborCacheInterFunc(
         &mut *fl,
@@ -2535,8 +1703,7 @@ pub fn InitFunctionPointers(
     //
     // The assignment drops whatever was installed before, which is the only way this
     // can be reached twice: `WelsUninitEncoderExt` runs between two inits and takes
-    // the field. **S23**: the object caches `eSpsPpsIdStrategy` as a
-    // `ParasetIdKind`, and it cannot lag the live parameter — see the type's doc.
+    // the field.
     fl.pParametersetStrategy =
         crate::encoder::paraset_strategy::CreateParametersetStrategy(
             keSpsPpsIdStrategy,
@@ -2556,10 +1723,6 @@ pub fn InitFunctionPointers(
 /// The SSE2/SSE4.2 `CavlcParamCal` variants are x86-only and this target reports
 /// no CPU features (`WelsCPUFeatureDetect` returns 0), so only the `_c` kernel is
 /// ever assigned.
-///
-/// **T4b.1**: the four entropy slots this function used to fill from one `if` are
-/// one [`EntropyCoder`] now, so the `if` *is* the assignment. What is left of the
-/// C++ shape is `pfCavlcParamCal`, which is CPU dispatch and Phase 4a's kind.
 fn InitCoeffFunc(
     pFuncList: &mut SWelsFuncPtrList,
     _uiCpuFlag: u32,
@@ -2570,31 +1733,14 @@ fn InitCoeffFunc(
 }
 
 /// Increments the H.264 slice header `frame_num` syntax element for spatial layer `kiDidx`.
-///
 pub fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
-    // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
-    // S11.7: guard and read in one — `ctx_sps_ref` answers `None` exactly where
-    // the raw answered null (S10.5b), so the separate test and the deref below
-    // collapse into a single binding, and the scalar is read out before any
-    // later `&mut` on the context.
     if pEncCtx.param_opt().is_none() {
         return;
     }
     let Some(kpSps) = crate::encoder::svc_encode_slice::ctx_sps_ref(pEncCtx) else {
         return;
     };
-    // T9.G4: the `ctx_sps` read below is hoisted above the cursor rather than left
-    // inside the branch. `uiLog2MaxFrameNum` is a sequence-parameter constant and
-    // `ctx_sps` is null-guarded above, so reading it unconditionally is pure — and
-    // it is the whole-context call this body used to make with a cursor live.
     let max_frame_num_minus1 = (1 << kpSps.uiLog2MaxFrameNum) - 1;
-    // S11.7: `param_mut()` is the same place. The raw existed to hold a
-    // field-precise cursor while the body also touched the context — a borrow
-    // *width* question (S10.3c), not an aliasing one: the layer's parameter
-    // record and the context's other fields are disjoint, and every read this
-    // body makes of the context is a scalar taken before the write below.
-    // §4.6, reorder: the scalar comes out before the parameter record's `&mut`.
     let kbLastNalWasRef =
         pEncCtx.eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST;
     let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
@@ -2616,31 +1762,14 @@ pub fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
 }
 
 /// Rolls back the `frame_num` counter if a reference frame encoding attempt fails.
-///
 pub fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
-    // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
-    // S11.7: guard and read in one — `ctx_sps_ref` answers `None` exactly where
-    // the raw answered null (S10.5b), so the separate test and the deref below
-    // collapse into a single binding, and the scalar is read out before any
-    // later `&mut` on the context.
     if pEncCtx.param_opt().is_none() {
         return;
     }
     let Some(kpSps) = crate::encoder::svc_encode_slice::ctx_sps_ref(pEncCtx) else {
         return;
     };
-    // T9.G4: the `ctx_sps` read below is hoisted above the cursor rather than left
-    // inside the branch. `uiLog2MaxFrameNum` is a sequence-parameter constant and
-    // `ctx_sps` is null-guarded above, so reading it unconditionally is pure — and
-    // it is the whole-context call this body used to make with a cursor live.
     let max_frame_num_minus1 = (1 << kpSps.uiLog2MaxFrameNum) - 1;
-    // S11.7: `param_mut()` is the same place. The raw existed to hold a
-    // field-precise cursor while the body also touched the context — a borrow
-    // *width* question (S10.3c), not an aliasing one: the layer's parameter
-    // record and the context's other fields are disjoint, and every read this
-    // body makes of the context is a scalar taken before the write below.
-    // §4.6, reorder: the scalar comes out before the parameter record's `&mut`.
     let kbLastNalWasRef =
         pEncCtx.eLastNalPriority[kiDidx as usize] != EWelsNalRefIdc::NRI_PRI_LOWEST;
     let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
@@ -2664,59 +1793,31 @@ pub fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
 /// # Safety
 /// `pEncCtx` must be non-null and contain a valid `pOut`.
 pub fn InitBitStream(pEncCtx: &mut sWelsEncCtx) {
-    // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
-    // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
-    // remaining conditions are unchanged.
     let Some(pOut) = pEncCtx.pOut.as_deref_mut() else {
         return;
     };
     pOut.iNalIndex = 0;
     pOut.iLayerBsIndex = 0;
 
-    // Was `InitBits(&…sBsWrite, …pBsBuffer, …uiSize)`. The buffer and its length stay
-    // where they were; the writer is a position, and resetting it is all `InitBits`
-    // did that still means anything. Its `kpBuf: *const u8` parameter — stored as
-    // `pStartBuf: *mut u8` and written through — is deleted rather than amended
-    // (`phase2_findings.md` F13, third site).
     pOut.sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
     pEncCtx.iPosBsBuffer = 0;
 }
 
 /// Configures slice types, NAL headers, and Picture Order Count (POC) for the frame.
-///
 pub fn InitFrameCoding(
     pEncCtx: &mut sWelsEncCtx,
     keFrameType: EVideoFrameType,
     kiDidx: i32,
 ) {
-    // T9.H4: the `is_null()` disjunct that opened this guard is gone — a
-    // `&mut sWelsEncCtx` cannot be null, and every caller now holds one. The
-    // remaining conditions are unchanged.
-    // S11.7: guard and read in one — `ctx_sps_ref` answers `None` exactly where
-    // the raw answered null (S10.5b), so the separate test and the deref below
-    // collapse into a single binding, and the scalar is read out before any
-    // later `&mut` on the context.
     if pEncCtx.param_opt().is_none() {
         return;
     }
     let Some(kpSps) = crate::encoder::svc_encode_slice::ctx_sps_ref(pEncCtx) else {
         return;
     };
-    // T9.G4, with `UpdateFrameNum`'s: `iLog2MaxPocLsb` is hoisted above the cursor
-    // (a sequence constant, and `ctx_sps` is null-guarded above), and the cursor is
-    // derived **per branch** rather than once at the top. The three branches are
-    // exclusive and each one's last use of it precedes its `UpdateFrameNum` call, so
-    // nothing here was unsound; deriving per branch is what makes that visible to a
-    // reader and to the detector, and it is what the borrow checker will need when
-    // this body takes `&mut`.
     let max_poc_boundary = (1 << kpSps.iLog2MaxPocLsb) - 2;
 
     if keFrameType == EVideoFrameType::videoFrameTypeP {
-        // S11.7: `param_mut()` is the same place. The raw existed to hold a
-        // field-precise cursor while the body also wrote the context — a borrow
-        // *width* question (S10.3c), not an aliasing one: the layer's parameter
-        // record and the context's own fields are disjoint, so the two write
-        // groups simply do not overlap once each borrow ends at its group.
         let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
         (*pParamInternal).iFrameIndex += 1;
 
@@ -2732,31 +1833,17 @@ pub fn InitFrameCoding(
         pEncCtx.eSliceType = EWelsSliceType::P_SLICE;
         pEncCtx.eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGH;
     } else if keFrameType == EVideoFrameType::videoFrameTypeIDR {
-        // S11.7: `param_mut()` is the same place. The raw existed to hold a
-        // field-precise cursor while the body also wrote the context — a borrow
-        // *width* question (S10.3c), not an aliasing one: the layer's parameter
-        // record and the context's own fields are disjoint, so the two write
-        // groups simply do not overlap once each borrow ends at its group.
         let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
         pParamInternal.iFrameNum = 0;
         pParamInternal.iPOC = 0;
         pParamInternal.bEncCurFrmAsIdrFlag = false;
         pParamInternal.iFrameIndex = 0;
-        // S11.7: `iCodingIndex` stood below the three context writes. It is a
-        // write to a *different object* than they are, so hoisting it here ends
-        // the parameter borrow before the context's begins — byte-neutral, and
-        // the four parameter writes now read as the group they always were.
         pParamInternal.iCodingIndex = 0;
 
         pEncCtx.eNalType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
         pEncCtx.eSliceType = EWelsSliceType::I_SLICE;
         pEncCtx.eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGHEST;
     } else if keFrameType == EVideoFrameType::videoFrameTypeI {
-        // S11.7: `param_mut()` is the same place. The raw existed to hold a
-        // field-precise cursor while the body also wrote the context — a borrow
-        // *width* question (S10.3c), not an aliasing one: the layer's parameter
-        // record and the context's own fields are disjoint, so the two write
-        // groups simply do not overlap once each borrow ends at its group.
         let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
         if (*pParamInternal).iPOC < max_poc_boundary {
             (*pParamInternal).iPOC += 2;
@@ -2773,32 +1860,20 @@ pub fn InitFrameCoding(
 }
 
 /// Evaluates VAA scene change analysis, LTR feedback, and rate control constraints to classify frame coding type.
-///
 pub fn DecideFrameType(
     pEncCtx: &mut sWelsEncCtx,
     kiSpatialNum: i8,
     kiDidx: i32,
     bSkipFrameFlag: bool,
 ) -> EVideoFrameType {
-    // T9.H: the `pEncCtx.is_null()` disjunct is gone — a `&mut sWelsEncCtx`
-    // cannot be null and every caller now holds one. The rest is unchanged.
     if pEncCtx.param_opt().is_none() {
         return EVideoFrameType::videoFrameTypeInvalid;
     }
-    // A7, §4.6 reorder: every parameter field this body reads is a scalar, so they
-    // come out first and the block's `&mut` is over by the time the video-analysis
-    // and reference-list readers are called. `pParamInternal` stays a raw cursor
-    // (F71's asymmetry: `addr_of_mut!` inherits the parent's tag rather than
-    // minting a child, so a later shared reader cannot pop it) and no `param`
-    // call follows it in this body.
     let kiUsageType = pEncCtx.param().iUsageType;
     let kbSceneChangeDetect = pEncCtx.param().bEnableSceneChangeDetect;
     let kiSpatialLayerNum = pEncCtx.param().iSpatialLayerNum;
     let kbEnableLtr = pEncCtx.param().bEnableLongTermReference;
     let kiLTRRefNum = pEncCtx.param().iLTRRefNum;
-    // S11.19: `param_mut()`, as in `UpdateFrameNum` (S11.7) — the record and
-    // the context's other fields are disjoint, and every context read this body
-    // makes is a scalar taken above.
     let kbEncCurFrmAsIdrFlag =
         pEncCtx.param().sDependencyLayers[kiDidx as usize].bEncCurFrmAsIdrFlag;
     let kiFrameIndex = pEncCtx.param().sDependencyLayers[kiDidx as usize].iFrameIndex;
@@ -2887,19 +1962,6 @@ pub fn DecideFrameType(
     iFrameType
 }
 
-/// Zeroes `iSize` bytes at `pDst`.
-///
-/// **Was a three-slot dispatch** (`pfSetMemZeroSize8`, `pfSetMemZeroSize64`,
-/// `pfSetMemZeroSize64Aligned16`, type `PSetMemoryZero = fn(*mut c_void, i32)`),
-/// installed with this one `_c` body and nothing else on any target the port
-/// builds for — the C++ installs SIMD variants there. The slots, the fn type and
-/// the `extern "C"` thunk are deleted (S18, Phase 6 session B); the seven call
-/// sites call this directly, and each already had this exact fallback in its
-/// `else` arm.
-///
-/// **S11.44, deleted: no callers** — the seven call sites its doc counted have
-/// each become a `fill(0)` over the storage they own.
-
 // ============================================================================
 // Unit Tests
 // ============================================================================
@@ -2908,19 +1970,6 @@ pub fn DecideFrameType(
 mod tests {
     use super::*;
 
-    /// **What survives S40's arena test, when the arena is typed.**
-    ///
-    /// The original asked whether four raw cursors carved out of one `Vec<i32>`
-    /// stayed usable after later derivations — `root()`'s retag-stability, red
-    /// under Miri if spelled `as_mut_slice().as_mut_ptr()`. S11.46 removed every
-    /// cursor in the family, so that question no longer has a subject: `blocks`
-    /// and `coords` hand out borrows and the compiler referees their overlap.
-    ///
-    /// Two properties it checked are *not* about cursors, and they are what this
-    /// keeps: **two layers naming one region** (a layer absent from the temporal
-    /// map is given the matching layer's table — the aliasing the one-arena
-    /// design exists to preserve, and the reason per-field `Vec`s were refused),
-    /// and **`None` answering where the C++ read null**.
     #[test]
     fn stride_tables_share_regions_and_answer_none_off_the_end() {
         // Two block-offset regions, then two coordinate ones — the shape
@@ -2952,26 +2001,7 @@ mod tests {
         assert!(tab.EncBlockOffsets(3).is_none());
     }
 
-    /// **S40 for the whole family, so that "every new root accessor has the test" is
-    /// a fact rather than an argument from shared spelling.**
-    ///
-    /// `frame_bs_cursors_are_siblings` and the two stride-table tests below cover the
-    /// two accessors whose cursors are demonstrably *held* across later derivations.
-    /// The other fifteen this session added share their spelling — `&mut` over the
-    /// container field, then the address out of the container's own header — and
-    /// sharing a spelling is exactly the assumption S40 says an accessor may not
-    /// survive on. So each of them is asked the same question here: derive twice,
-    /// then write through the **first** cursor and read it back through the second.
-    ///
-    /// Red-proofed as a family: spelling `ctx_sps_array`'s root
-    /// `arr.as_mut_slice().as_mut_ptr()` fails this test under Miri with "attempting
-    /// a write access using <548144> ... but that tag does not exist in the borrow
-    /// stack", and passes without Miri — the same failure every other arm has under
-    /// the same substitution, since they share the spelling. It is one test rather
-    /// than nineteen because the property is one property; each arm names its
-    /// accessor in the assertion message so a failure says which.
     #[test]
-    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn every_container_accessor_hands_out_sibling_cursors() {
         let mut ctx = Box::new(sWelsEncCtx::new());
@@ -2994,122 +2024,23 @@ mod tests {
 
         let p: *mut sWelsEncCtx = &mut *ctx;
 
-        // **The `siblings!` macro stood here and S12.12 deleted it with its last
-        // row.** Each arm derived a cursor twice, wrote through the first and read
-        // back through the second, so a spelling that popped either tag failed. It
-        // ran out of subjects one accessor at a time — the retirement notes below
-        // are that history — and `ctx_dq_layer`, the last, went with the resolver
-        // that called it. `rustc` said so directly: `unused macro definition`.
-        //
-        // What survives is the `held` interleave at the bottom, which is the same
-        // property posed across accessors rather than within one: take every raw
-        // cursor the context still hands out, hold them all at once, then read
-        // through each. Two rows left, `vaa_ptr` and `frame_bs`.
-
-        // **T9.H12, amended by T9.H3: the `&mut`-taking, raw-returning middle
-        // state is gone from this family.** When this comment was written,
-        // `ctx_dq_idc_map`, `ctx_ltr` and `ctx_ltr_at` took `&mut sWelsEncCtx`
-        // and still answered raws, so their rows asserted that a cursor survives
-        // a whole-context entry retag — F163's allocation argument (the `Vec`
-        // buffers are separate allocations). H2 converted `ctx_dq_idc_map` to a
-        // real slice and H3 converted `ctx_ltr_at` to a real reference (deleting
-        // `ctx_ltr` outright), so those rows are gone the way `ctx_dq_idc_map`'s
-        // went. The accessors below are in-fork and stay raw under S63.
-        // The three parameter-set arrays had rows here until A4. They are slices
-        // now (`sps_array`, `subset_array`, `pps_array`), so they join the
-        // references below: no sibling property to assert, the borrow checker
-        // referees the coexistences Miri used to.
-        // `ctx_dq_idc_map` had a row here until T9.H2 step 4. It returns
-        // `&mut [SDqIdc]` now, so it has no sibling property to assert — two
-        // derivations cannot coexist, and the borrow checker says so at the call
-        // rather than Miri saying so at run time. That is the trade the conversion
-        // makes and it is the direction the phase is going.
-        // `ctx_ltr` and `ctx_ltr_at` had rows here until T9.H3. The root is
-        // deleted; the layer accessor returns `&mut SLTRState` now, so — as with
-        // `ctx_dq_idc_map` above — it has no sibling property to assert: two
-        // derivations cannot coexist, and the borrow checker says so at the call.
-        // `ctx_rc` and `ctx_mvd_cost_table` had rows here until A1 of the
-        // safe-conversion plan, and `ctx_rc_at` until A2. All three return
-        // references now (`rc`, `mvd_cost_table`, `rc_at`/`rc_at_mut`), so — as
-        // with `ctx_dq_idc_map` and `ctx_ltr_at` above — there is no sibling
-        // property left to assert: two derivations cannot coexist and the borrow
-        // checker says so at the call rather than Miri saying so at run time.
-        // The whole rate-control branch of this family is references now.
-        // `mvd_cost_origin` had a row here until S5.C4b, and it leaves for the
-        // reason `ctx_param` and `ctx_ref_list` did: the accessor is gone, and its
-        // successor (`svc_encode_slice::ctx_mvd_cost_origin`) answers with a
-        // `MvdCostCursor` rather than a `*mut u16`. There is no raw sibling left to
-        // assert stability of — the far end this row existed to serve,
-        // `SWelsMD::pMvdCost`, is a borrow now, so the coexistence it measured is
-        // the borrow checker's to referee.
-        // `ctx_vaa` had a row here until A5. `vaa`/`vaa_mut` are references now,
-        // refereed by the borrow checker like the rows above, and what stays raw —
-        // `vaa_ptr`, the root `pfSetScrollingMv` needs and `vaa_ext` casts — is
-        // derived through `&self`, so the row's write half would be UB rather
-        // than a weaker assertion. Its read half survives in the interleaved
-        // `held` list below, which takes a `vaa_ptr` cursor alongside every other
-        // and reads through it after all of them exist.
-        // `ctx_param` had a row here until A7. `param`/`param_mut` are references
-        // now, refereed by the borrow checker like every other row this list has
-        // lost: two derivations cannot coexist, and the compiler says so at the
-        // call rather than Miri saying so at run time.
-        // `ctx_ref_list` had a row here until A3 — `ref_list` returns
-        // `Option<&SRefList>` now, so it joins the references above: no sibling
-        // property to assert, and the borrow checker referees the coexistences
-        // that Miri used to.
-        // `ctx_dq_layer` had the last row here until S12.12, and it leaves for a
-        // different reason from every entry above: not that its successor returns a
-        // reference, but that the accessor itself is **gone**. Its one non-test
-        // caller, `current_layer`, had no callers of its own — F240's
-        // `current_layer_ref`/`_mut` had taken all of them — so the raw resolver and
-        // the sibling property it asserted retired together. `dq_layer_ref` answers
-        // with `Option<&SDqLayer>`, which the borrow checker referees.
-        //
-        // **This list is now empty of rows.** It was the instrument for a family of
-        // raw context accessors that no longer exists; what it measured — that two
-        // derivations can coexist without popping each other — is a question only a
-        // raw accessor can pose.
-
-        // The rate controller's own five hung off `ctx_rc_at` here, one level
-        // down — the only accessors in the family that reached through another
-        // accessor. Four are retired and the fifth is a slice, so what is left is
-        // the fixture the peers above still need.
         unsafe {
             let rc = (*p).rc_at_mut(0);
             rc.iGomSize = 4;
             crate::encoder::rc::RcInitLayerMemory(rc, 2);
         }
-        // T9.X: `rc_temporal_over` and `rc_gom_complexity` were retired (S18 — the
-        // first onto direct `Vec` indexing at its ten callers, the second for having
-        // no production caller at all). **A1 retires the last two the same way.**
-        // `rc_gom_fg_blocks` had no production caller either — this test was its
-        // only one, which is S18's own criterion — and `rc_gom_sad` is
-        // `SWelsSvcRc::gom_sad`, a slice, at both of its in-fork readers.
-
         // And the whole set once more, interleaved: every cursor taken first, then
         // every one used — which is the frame loop's actual shape, and the case a
         // per-accessor test cannot reach.
         let held: Vec<*mut u8> = unsafe {
             vec![
-                // `ctx_dq_idc_map` left this list at T9.H2 step 4, and `ctx_ltr`
-                // at T9.H3 (deleted with the raw family) — a real reference
-                // cannot be *held* alongside the others, which is the point.
-                // `mvd_cost_origin` left at S5.C4b for exactly that reason: its
-                // successor answers with a `MvdCostCursor`, and a borrow is not
-                // something this list can hold beside three raw cursors.
-                // `ctx_dq_layer` held a cursor here until S12.12, when the
-                // accessor was deleted with its last caller. `dq_layer_ref` is a
-                // borrow and a borrow is not something this list can hold beside
-                // raw cursors — the same reason `mvd_cost_origin` left at S5.C4b.
                 (*p).vaa_ptr().cast(), (*p).frame_bs().cast(),
             ]
         };
         // `frame_bs` is null here (no bitstream in this fixture), which is itself
         // the assertion that empty still answers null after everything above. It is
         // the **last** entry, and the two counts below are derived from the vector
-        // rather than written twice — the literal `10`/`take(10)` pair went stale the
-        // moment `ctx_dq_idc_map` left this list at T9.H2 step 4, and an index
-        // computed from `held.len()` cannot.
+        // rather than written twice.
         let last = held.len() - 1;
         assert!(held[last].is_null(), "no frame bitstream was installed");
         for (i, q) in held.iter().enumerate().take(last) {
@@ -3118,26 +2049,15 @@ mod tests {
         }
     }
 
-    /// **S40 for the frame bitstream — the one buffer whose cursors are *stored*.**
-    ///
     /// `SLayerBSInfo::pBsBuf` keeps a cursor into `pFrameBs` for the life of a
-    /// layer's bitstream info, while the NAL writers keep deriving more from the same
-    /// buffer at `iPosBsBuffer`: nineteen derivations across the tree, sixteen of
-    /// them walking. So this is the accessor where the retag-stable spelling is not
-    /// a precaution but the whole conversion — the first cursor is live across every
-    /// later one by construction, not by accident.
-    ///
-    /// Red-proofed with `ctx_frame_bs` spelled `buf.as_mut_slice().as_mut_ptr()`:
-    /// under Miri the read back through `stored` fails with "attempting a read
-    /// access using <565587> ... but that tag does not exist in the borrow stack",
-    /// and without Miri it passes.
+    /// layer's bitstream info, while the NAL writers keep deriving more from the
+    /// same buffer at `iPosBsBuffer`.
     #[test]
-    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn frame_bs_cursors_are_siblings() {
         let mut ctx = Box::new(sWelsEncCtx::new());
         let p: *mut sWelsEncCtx = &mut *ctx;
-        // Before `RequestMemorySvc`, both answer the null the raw field held.
+        // Before `RequestMemorySvc`, both answer null.
         assert!(unsafe { (*p).frame_bs() }.is_null());
         assert!(unsafe { (*p).frame_bs_cur() }.is_null());
 
@@ -3150,11 +2070,8 @@ mod tests {
         let stored = unsafe { (*p).frame_bs() };
 
         // The frame loop then walks: derive at the cursor, write, advance, repeat.
-        // T9.G5: the walk drives `iPosBsBuffer`, because that is what the accessor
-        // reads now and what the production loop has always advanced. The position
-        // is set through `p` rather than through `ctx`, so the one raw binding above
-        // stays live across the whole walk — which is the sibling property this test
-        // exists for, and one fewer mint besides.
+        // The position is set through `p` rather than through `ctx`, so the one raw
+        // binding above stays live across the whole walk.
         for i in 0..8i32 {
             unsafe {
                 (*p).iPosBsBuffer = i;
@@ -3175,36 +2092,9 @@ mod tests {
         assert_eq!(ctx.pFrameBs.len(), ctx.iFrameBsSize as usize);
     }
 
-    /// The same property through the context's four accessors, which is how every
-    /// consumer outside `AllocStrideTables` reaches the tables.
     use crate::encoder::wels_preprocess::CWelsPreProcess;
 
-    // **F192's two probes stood here and are retired by their own fix (T9.H2).**
-    //
-    // They minted F167's shape — an owner `Box<sWelsEncCtx>`, the root raw via
-    // `addr_of_mut!`, `CWelsPreProcess::m_pEncCtx` set the way `CreatePreProcess`
-    // set it, the object reached through `pCtx.pVpp`, and a driver taking
-    // `&mut sWelsEncCtx` — and Miri refused the `&mut` form in one line while
-    // passing the shared one. The trace is quoted in F192.
-    //
-    // **`m_pEncCtx` no longer exists**, so neither probe has a subject: nothing in
-    // this encoder stores a second route to the context any more, and a test cannot
-    // exercise a field that is not declared. Deleting them with the field is the
-    // honest bookkeeping — a test kept alive past its subject is a claim of coverage
-    // nobody is providing. What guards the shape from here is that there is nothing
-    // left to guard: reintroducing it means declaring a new stored context pointer,
-    // which is a design change and not an accident.
-
     /// The context-level read path, before and after the tables exist.
-    ///
-    /// **What this was**: the sibling-derivation instrument for
-    /// `ctx_stride_enc_block_offset`'s cursor family — three raw calls, two naming
-    /// one region, checking the first answer stayed usable after the third. S11.46
-    /// deleted the family; the question it asked is now the borrow checker's.
-    ///
-    /// **What it keeps**: the `None`-before-`AllocStrideTables` state that every
-    /// `is_null()` guard in the port was written to ask about, and the two-layers-
-    /// one-region read through the context.
     #[test]
     fn ctx_stride_tables_answer_none_before_alloc_and_share_regions_after() {
         let mut ctx = Box::new(sWelsEncCtx::new());
@@ -3253,17 +2143,9 @@ mod tests {
     }
 
 
-    /// **The temporary instrument for T6.G1**: `sWelsEncCtx::new()` reproduces the
-    /// zeroed shell it replaces, byte for byte, and every difference is
-    /// attributed to a *named field* before it is accepted.
-    ///
-    /// It is meant to read **zero differences**. A constructor whose whole claim is
-    /// "same bytes, ruled instead of bet on" has to prove the first half, and the
-    /// only proof that catches a field the author quietly gave a live starting value
-    /// is a comparison against the thing being replaced. The freedom the constructor
-    /// buys is spent in later steps — where fields change *type* and the shell stops
-    /// being reproducible at all — and this test dies at the first such step rather
-    /// than being weakened to keep passing.
+    /// `sWelsEncCtx::new()` reproduces the zeroed shell it replaces, byte for
+    /// byte, and every difference is attributed to a *named field* before it is
+    /// accepted. It is meant to read **zero differences**.
     ///
     /// # Why the comparison is per field and not one `memcmp`
     ///
@@ -3275,10 +2157,9 @@ mod tests {
     /// names the field when they differ, and reports the residue separately so the
     /// coverage is visible rather than assumed.
     ///
-    /// # F64 — the ten fields that cannot be compared as bytes at all
+    /// # The ten fields that cannot be compared as bytes at all
     ///
-    /// The first draft *was* a field-extent walk and Miri failed it anyway, at
-    /// `pEncPic`: **`None` writes the discriminant and leaves the payload
+    /// **`None` writes the discriminant and leaves the payload
     /// undefined**, so `None` of an `Option<SrcPicId>` is four defined bytes (the
     /// `NonZeroU32` niche, zero) followed by four *uninitialized* ones (`pool::Id`'s
     /// generation counter, which exists only under `debug_assertions`). The shell
@@ -3289,12 +2170,11 @@ mod tests {
     /// `TagVideoEncoderStatistics` has 4 before `iStatisticsTs` and 4 of tail, none
     /// of which a struct literal writes.
     ///
-    /// **And the *niche* is not what makes it happen** — that took a second reading,
-    /// paid for by the `exit` battery. `iCurDqLayer`, `iSps` and `iPps` are
+    /// **And the *niche* is not what makes it happen.** `iCurDqLayer`, `iSps` and
+    /// `iPps` are
     /// `Option`s over plain integer newtypes with **no** niche: a tag byte plus a
     /// payload. `None` writes the tag and leaves the payload undefined exactly as the
-    /// handles do. The first cut of this list said "niche-carrying" and excluded only
-    /// the handles, which is the same mistake one level down: it is not the niche,
+    /// handles do. It is not the niche,
     /// it is that **an `Option`'s `None` defines only its discriminant**.
     ///
     /// So the honest statement is narrower than "byte-identical", and it is the
@@ -3303,8 +2183,7 @@ mod tests {
     /// reproduces the *values*, which is all anything reads. Nothing reads a `None`'s
     /// payload — that is read when a `Some` is unwrapped, and there is no `Some`
     /// here — and nothing reads padding at all. The ten are excluded **by name** and
-    /// asserted **by value**; excluding them silently would have been the failure
-    /// this test exists to prevent, one level up.
+    /// asserted **by value**.
     ///
     /// The general rule this leaves behind: *a field-wise constructor cannot be
     /// proved byte-equal to a memset image, only value-equal, and the difference is
@@ -3312,18 +2191,12 @@ mod tests {
     /// `Option` field, and all padding.
     ///
     /// **A field added to this struct as an `Option` belongs on the `BY_VALUE` list**,
-    /// and the test will say so under Miri if it is not — which is how each of these
-    /// four rounds was found.
+    /// and the test will say so under Miri if it is not.
     ///
-    /// # T6.H2: the shell stopped being a value, and the test grew a third tier
+    /// # The owned members, and the third tier
     ///
-    /// Session H makes members of this struct **own** their memory, and the first
-    /// `Vec` field ends the sentence "`new()` reproduces the memset image" as
-    /// literally as it was written — because the memset image of a `Vec` is a null
-    /// `Unique`, which is **not a `Vec`**. `mem::zeroed::<sWelsEncCtx>()` was itself
-    /// undefined behaviour the moment `pSpsArray` changed type; it kept compiling and
-    /// kept passing, which is exactly the failure mode this test exists to catch, one
-    /// level up again. Measured, not argued — the old line under Miri reads:
+    /// The memset image of a `Vec` is a null `Unique`, which is **not a `Vec`**, so
+    /// `mem::zeroed::<sWelsEncCtx>()` is itself undefined behaviour:
     ///
     /// ```text
     /// error: Undefined Behavior: constructing invalid value of type sWelsEncCtx:
@@ -3331,11 +2204,11 @@ mod tests {
     ///   but expected something greater or equal to 1
     /// ```
     ///
-    /// So the shell is held as **raw bytes** now — `MaybeUninit::zeroed`, never
+    /// So the shell is held as **raw bytes** — `MaybeUninit::zeroed`, never
     /// `assume_init`ed — and there are three tiers:
     ///
     /// * **tier 1**, byte for byte: every field whose bytes are fully defined in both.
-    /// * **tier 2**, by value: the F64 fields, where the *shell* value is recovered
+    /// * **tier 2**, by value: the `Option` and padded fields, where the *shell* value is recovered
     ///   by `ptr::read` out of the zero image (sound precisely because their all-zero
     ///   bit pattern **is** a value of their type — an `Option`'s `None`, a zeroed
     ///   POD) and only `new()`'s undefined bytes are the problem.
@@ -3348,7 +2221,6 @@ mod tests {
     /// Tier 3 is the one that shrinks this test's reach, so it is named and counted
     /// in the output rather than left to be inferred from what is missing.
     #[test]
-    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn ctx_new_reproduces_the_zeroed_shell() {
         use std::mem::{offset_of, size_of, size_of_val};
@@ -3386,8 +2258,6 @@ mod tests {
         iEncoderError, bDeliveryFlag, sWelsCabacContexts,
         uiLastTimestamp, pDynamicBsBuffer,
         ];
-        // 68 until T7.B4 took `pTaskManage` and `mutexEncoderError` out with the pool,
-        // 66 until T7.C6 took `pMemAlign`.
         assert_eq!(extents.len(), 65, "a field was added or removed without updating this list");
 
         let b = shell.as_ptr().cast::<u8>();
@@ -3404,27 +2274,19 @@ mod tests {
         }
 
         // ---- tier 3: the owned containers -------------------------------------
-        // The zeroed shell has no image of these. `RequestMemorySvc` used to
-        // `WelsMallocz` each of them and `FreeMemorySvc` to free it; `new()` builds
-        // the empty container, which is the null the raw pointer held, and which
-        // `ctx_sps_array` and its siblings answer as null so that every downstream
-        // `is_null()` guard still asks its question.
+        // The zeroed shell has no image of these; `new()` builds the empty
+        // container.
         const OWNED: [&str; 12] = [
             "pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs", "pLtr",
             "pWelsSvcRc", "ppRefPicListExt", "ppDqLayerList", "pMvdCostTable",
-            // **T7.C5.** `pDynamicBsBuffer` joined this tier when it became
-            // `[Vec<u8>; MAX_THREADS_NUM]`. It is the only member here that is an
-            // *array* of owned containers, so the claim below is per element: four
-            // empty `Vec`s, which is what the four null pointers held and what
-            // `RequestMemorySvc` still leaves when the encoder is not built for
-            // dynamic slicing under CABAC.
+            // `pDynamicBsBuffer` is the only member here that is an *array* of
+            // owned containers, so the claim below is per element: four empty
+            // `Vec`s.
             "pDynamicBsBuffer",
-            // **T6.I1.** `pFuncList` joined this tier when it became a `Box`. It is
-            // the one owned field whose empty state is not "no elements" — a `Box`
-            // is always inhabited — so what tier 3 asserts for it is the *content*:
-            // the table `new()` builds is the uninstalled table, which is the image
-            // `WelsMallocz` used to hand back. That is the whole behavioural claim
-            // of T6.I1, and it is asserted below rather than assumed.
+            // `pFuncList` is the one owned field whose empty state is not "no
+            // elements" — a `Box` is always inhabited — so what tier 3 asserts for
+            // it is the *content*: the table `new()` builds is the uninstalled
+            // table.
             "pFuncList",
         ];
         // `pVaa` is `Option<Box<_>>`: its `None` is the null pointer and defines all
@@ -3450,40 +2312,13 @@ mod tests {
         // and a trailing plain slot, each of the three predictor arrays, the two
         // embedded POD sub-tables, both enum discriminants, and the owned box.
         // Field for field the claim is `SWelsFuncPtrList::default()`'s own
-        // definition; the three `init_fills_*` tests pin what gets written on top.
+        // definition.
         let fl = &*built.pFuncList;
-        // **The leading and trailing plain slots have dropped out of this audit,
-        // and there is nothing to put in their place.** Twenty-nine slots on this
-        // table lost their `Option` because every one is written unconditionally
-        // by an installer `InitFunctionPointers` calls before any frame — so
-        // `None` was a state no dispatch could observe, while forty-one call sites
-        // nonetheless spelled the dispatch `if let Some(f) = ..` and would have
-        // skipped the call. `Default` names the kernel instead, which leaves this
-        // test no uninstalled state to assert: `fl` *is* what
-        // `SWelsFuncPtrList::default()` built, so any comparison against it would
-        // be the constructor checked against itself. The remaining members below
-        // still have a real `None`, and they still carry the claim.
         assert!(fl.pfGetLumaI16x16Pred.iter().all(Option::is_none), "new(): no I16x16 predictors");
         assert!(fl.pfGetLumaI4x4Pred.iter().all(Option::is_none), "new(): no I4x4 predictors");
         assert!(fl.pfGetChromaPred.iter().all(Option::is_none), "new(): no chroma predictors");
         assert!(fl.pfMotionSearch.iter().all(Option::is_none), "new(): no motion search");
         assert!(fl.sMeFuncs.pfSearchMethod.iter().all(Option::is_none), "new(): no search method");
-        // **`sMcFuncs.pMcLumaFunc.is_none()` stood here, and nothing can take its
-        // place.** `SMcFunc`'s six slots dropped their `Option`s — nothing in
-        // `src/` dispatches through them and `InitMcFunc` runs at codec-open time
-        // on both sides, so the uninstalled image was never observable — which
-        // makes `Default` the installer and the old claim false.
-        //
-        // An equality against `SMcFunc::default()` stood here briefly and was
-        // wrong in **release only**: those six slots hold non-capturing closures
-        // (the mc kernels are generic over the cursor type, so a named path will
-        // not coerce), and a closure is reified per codegen unit exactly as an
-        // `#[inline]` fn is — this module's `SMcFunc::default()` and the one baked
-        // into `SWelsFuncPtrList::default()` are different addresses for the same
-        // closure. Debug happened to merge them; the release sweep did not. The
-        // "embedded POD sub-table" kind this line stood for is still covered by
-        // the `sSampleDealingFuncs` assertion below, which has a real `None` to
-        // test; for `sMcFuncs` the claim is the type's now, not this test's.
         assert!(
             fl.sSampleDealingFuncs.pfSampleSad.iter().all(Option::is_none)
                 && fl.sSampleDealingFuncs.pfMdCost == crate::encoder::md::CostFamily::Unset
@@ -3494,9 +2329,7 @@ mod tests {
             fl.pfDeblocking.pfDeblockingFilterSlice.is_none(),
             "new(): no deblocking kernels"
         );
-        // The two discriminants whose zero *is* a declared variant — which is what
-        // made the old memset-image constructor sound, and is now stated by
-        // `Default` writing the variant out.
+        // The two discriminants whose zero *is* a declared variant.
         assert_eq!(fl.eEntropyCoder, EntropyCoder::Cavlc, "new(): the memset's entropy coder");
         assert_eq!(
             fl.pfRc.eInstalledMode,
@@ -3505,7 +2338,7 @@ mod tests {
         );
         assert!(fl.pParametersetStrategy.is_none(), "new(): no paraset strategy is installed yet");
 
-        // ---- tier 2: the F64 fields, excluded by name and asserted by value ----
+        // ---- tier 2: excluded by name and asserted by value --------------------
         const BY_VALUE: [&str; 10] = [
             // `Option` with a niche: `None` leaves pool::Id's generation half undefined
             "pEncPic", "pDecPic", "pRefPic", "pRefList0", "sSpatialIndexMap",
@@ -3633,9 +2466,8 @@ mod tests {
         );
 
         // Coverage, so "zero differences" cannot be true by comparing nothing. The
-        // rest is inter-field `repr(C)` padding plus the seven F64 fields; both are
-        // reported rather than asserted at a number, because both move whenever a
-        // field's width does — and every step after this one moves a field's width.
+        // rest is inter-field `repr(C)` padding plus the by-value fields; both are
+        // reported rather than asserted at a number.
         let total = size_of::<sWelsEncCtx>();
         assert!(compared > 0 && compared + excluded + owned <= total);
         println!(
@@ -3653,9 +2485,7 @@ mod tests {
     #[test]
     fn test_update_and_loadback_framenum() {
         let param = SWelsSvcCodingParam::default();
-        // Only the fields this test exercises; SWelsSPS is now the full
-        // parameter_sets.h:43 struct rather than the four-field copy that used to
-        // live in this module.
+        // Only the fields this test exercises.
         let sps = SWelsSPS {
             uiLog2MaxFrameNum: 4,
             iLog2MaxPocLsb: 4,
@@ -3664,14 +2494,12 @@ mod tests {
             ..Default::default()
         };
         let mut ctx = sWelsEncCtx::new();
-        // **T6.H11**: the context *owns* its parameters, so the fixture hands them
-        // over rather than lending them — and the read-back below goes through the
-        // context, which is where the writes land. Aliasing a stack local here was
-        // the fixture standing in for an ownership the live path never had.
+        // The context *owns* its parameters, so the fixture hands them over rather
+        // than lending them — and the read-back below goes through the context,
+        // which is where the writes land.
         ctx.pSvcParam = Some(Box::new(param));
-        // T6.G3: the context names its SPS by position, so the test stands up the
-        // one-entry array the position indexes into — `RequestMemorySvc`'s job on the
-        // live path.
+        // The context names its SPS by position, so the test stands up the
+        // one-entry array the position indexes into.
         ctx.pSpsArray = vec![sps];
         ctx.iSpsNum = 1;
         ctx.iSps = Some(SpsId(0));
@@ -3694,7 +2522,7 @@ mod tests {
         let mut ctx = sWelsEncCtx::new();
         param.sDependencyLayers[0].bEncCurFrmAsIdrFlag = true;
         ctx.pSvcParam = Some(Box::new(param.clone()));
-        // T6.H10: the context owns the block, so the fixture hands it one.
+        // The context owns the block, so the fixture hands it one.
         ctx.pVaa = Some(Box::new(VaaBlock::Base(SVAAFrameInfo::default())));
 
         let ft = DecideFrameType(&mut ctx, 1, 0, false);
@@ -3703,11 +2531,9 @@ mod tests {
 
     #[test]
     fn test_init_function_pointers() {
-        // S5.E2b: every call this made is a safe `fn` now.
         let param = SWelsSvcCodingParam::default();
         let mut ctx = sWelsEncCtx::default();
-        // T6.I1: the context brings its own table, so the fixture no longer
-        // aims the field at a stack one — it reads the context's back out.
+        // The context brings its own table; the fixture reads it back out.
         ctx.pSvcParam = Some(Box::new(param.clone()));
 
         let ret = InitFunctionPointers(&mut ctx, 0);
@@ -3715,33 +2541,20 @@ mod tests {
 
         // Each assertion reads the table back through its owner rather than
         // binding a reference to it once. That is not stylistic: the
-        // `InitCoeffFunc` call below *writes* the table, and a `&` held across
-        // it is the exact shape this session's step-1 checker exists to reject.
-        // **`pfDctFourT4.is_some()` stood here, and nothing can replace it in
-        // kind.** The slot is a plain `fn` now, so the question cannot be asked —
-        // and, more to the point, no slot `WelsInitEncodingFuncs` writes can
-        // witness its own call any more: `Default` installs the same kernel, so
-        // the value is identical whether the installer ran or not. An address
-        // comparison against `Default` would be either vacuous or, for the
-        // `#[inline]` kernels, wrong for a codegen-unit reason.
+        // `InitCoeffFunc` call below *writes* the table.
         //
-        // What this line was really standing in for is that `InitFunctionPointers`
-        // walks its installer chain at all, and the installers whose slots are
-        // still `Option` can say so. The predictor table is one: `new()` asserts
-        // it is all-`None` above, and `WelsInitIntraPredFuncs` is the first call
-        // in the chain.
+        // The predictor table is the one installer whose slots are still `Option`:
+        // `new()` asserts it is all-`None` above, and `WelsInitIntraPredFuncs` is
+        // the first call in the chain.
         assert!(
             ctx.pFuncList.pfGetLumaI16x16Pred.iter().any(Option::is_some),
             "InitFunctionPointers must walk its installer chain"
         );
         // pfInterMd is deliberately NOT asserted: C++ InitFunctionPointers
         // (encoder.cpp) never sets it. It is assigned per-slice in
-        // svc_encode_slice.cpp:733/736. This assertion passed only because the
-        // port assigned the wrong function here behind a mem::transmute.
-        // The four entropy slots this used to assert `is_some()` on are one
-        // `EntropyCoder` since T4b.1, and "installed" is no longer a state it
-        // can be in. What is still worth asserting is that the flag reached
-        // it: `param` defaults to `iEntropyCodingModeFlag == 0`. The other
+        // svc_encode_slice.cpp:733/736.
+        // What is worth asserting is that the flag reached the entropy coder:
+        // `param` defaults to `iEntropyCodingModeFlag == 0`. The other
         // arm goes through `InitCoeffFunc` rather than a second
         // `InitFunctionPointers`, which would allocate a second parameter-set
         // strategy over the first.
@@ -3753,9 +2566,7 @@ mod tests {
     }
 }
 
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`. The copies that
-// used to live in this module disagreed with cpu_core.h and with each other --
-// WELS_CPU_NEON alone had seven distinct values across eight modules.
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3};
 
 
@@ -3773,31 +2584,15 @@ mod with_vpp_provenance {
     use crate::encoder::rec_view::RoPicView;
     use crate::encoder::wels_preprocess::CWelsPreProcess;
 
-    /// **S11.25 — the probe that replaces a thirty-minute one.**
-    ///
     /// [`with_vpp`] moves the preprocessor's `Box` out of the context and stores
-    /// it back, which is the shape S3.B1 tried and Miri refused. That refusal was
-    /// recorded on `ctx_vpp_raw` with a precise mechanism: `SDqLayer::pSrcPool`
-    /// held `addr_of_mut!((*pVpp).m_pSpatialPicPool)` — a pointer **into the
-    /// box's own allocation** — across the frame, and moving the `Box` retags
-    /// that allocation as `Unique`, popping the stored pointer.
+    /// it back. `SDqLayer::pEncView` is an `RoPicView` built in
+    /// `WelsInitCurrentLayer` off a picture *in* the pool; its captured pointers
+    /// are `root_ptr_shared()` into each plane's `buf: Vec<u8>`, and a `Vec`'s
+    /// buffer is a **separate allocation**, so retagging the `CWelsPreProcess`
+    /// block does not touch those stacks.
     ///
-    /// **S10.7 deleted `pSrcPool`.** What stands in its place is
-    /// `SDqLayer::pEncView`, an `RoPicView` built in `WelsInitCurrentLayer` off a
-    /// picture *in* the pool. Its captured pointers are `root_ptr_shared()` into
-    /// each plane's `buf: Vec<u8>`, and a `Vec`'s buffer is a **separate
-    /// allocation** — Stacked Borrows is per-allocation, so retagging the
-    /// `CWelsPreProcess` block should not touch those stacks.
-    ///
-    /// That is an argument, and this is the check. The frame's ordering is
-    /// reproduced in miniature: stamp the view, run `with_vpp`, then read through
-    /// the view. Under Miri a popped tag fails here; without Miri it is still a
-    /// value assertion that the bytes are the ones written.
-    ///
-    /// **It is deliberately not a full encode.** `fork_join_encodes_*` covers this
-    /// shape too, but it costs ~985s per probe (F273) because it encodes a frame;
-    /// the question here is one retag against one captured pointer, and a probe
-    /// should be sized to its question.
+    /// The frame's ordering is reproduced in miniature: stamp the view, run
+    /// `with_vpp`, then read through the view.
     #[test]
     fn with_vpp_does_not_pop_a_view_built_off_the_spatial_pool() {
         let mut ctx = sWelsEncCtx::new();
@@ -3838,17 +2633,9 @@ mod with_vpp_provenance {
         assert!(ctx.pVpp.is_some(), "with_vpp restores the box");
     }
 
-    /// **The control, and it must be seen red.** A green probe proves nothing
-    /// unless the same probe fails on the shape it is meant to reject, so this
-    /// reconstructs S3.B1's derivation exactly: a pointer taken *into the box's
+    /// The control for the probe above: a pointer taken *into the box's
     /// own allocation* (`m_pSpatialPicPool`, a field of `CWelsPreProcess`) and
     /// read after [`with_vpp`] has moved the `Box` out and back.
-    ///
-    /// That is the pointer `SDqLayer::pSrcPool` used to hold across a frame, and
-    /// it is why Miri refused the take dance in S3.B1. Deleting the field (S10.7)
-    /// is what expired the refusal — not any change to `with_vpp`'s mechanics —
-    /// so the mechanism has to still be reproducible, or the sibling test above
-    /// is green for the wrong reason.
     ///
     /// `#[ignore]`d because Miri reports UB by aborting, which is not a failure a
     /// harness can assert on. Run it deliberately:
@@ -3863,7 +2650,6 @@ mod with_vpp_provenance {
     /// it passes and proves nothing — that is the point of the second referee.
     #[test]
     #[ignore = "Miri control: aborts on UB, so it is run deliberately, not by the harness"]
-    // unsafe-cat: instrument(test)
     #[allow(unsafe_code)]
     fn a_pointer_into_the_box_does_not_survive_with_vpp() {
         let mut ctx = sWelsEncCtx::new();
@@ -3871,12 +2657,9 @@ mod with_vpp_provenance {
         vpp.m_pSpatialPicPool = SrcPicPool::new(vec![SPicture::new(176, 144, false)]);
         ctx.pVpp = Some(Box::new(vpp));
 
-        // S3.B1's derivation, spelled out — the production resolver that answered
-        // it (`ctx_src_pool_raw`) was deleted at S11.39 when nothing stored its
-        // answer any more, so the control builds the pointer by hand: the `pVpp`
-        // slot read as a value, then `addr_of_mut!` of the pool field — a pointer
-        // *inside* the `CWelsPreProcess` allocation rather than into a plane's
-        // own `Vec`.
+        // The control builds the pointer by hand: the `pVpp` slot read as a value,
+        // then `addr_of_mut!` of the pool field — a pointer *inside* the
+        // `CWelsPreProcess` allocation rather than into a plane's own `Vec`.
         let pPool: *mut SrcPicPool = unsafe {
             let pVpp = std::ptr::read(
                 std::ptr::addr_of!(ctx.pVpp) as *const *mut CWelsPreProcess,

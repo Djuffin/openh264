@@ -45,25 +45,6 @@
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
-// **Phase 5, T5.AC6 — the lint, with the two `PPicture` survivors allowed by
-// name; T5b.1 converted both and this module allows nothing today.** What was left after session AB's keyword sweep was one family and one
-// idiom, and neither was a pointer:
-//
-//   * the **coefficient cursors** — `sTCoeff: *mut i16`, `pScanTable: *const u8`,
-//     `pSignificantMap: *mut i32` — were subranges of arrays the *callers* own
-//     (`grid.scaled_tcoeff`'s macroblock, a `g_kuiZigzagScan*` constant, a stack
-//     `[i32; 16]`), so each becomes the slice it was addressing and every `.add(i)`
-//     becomes `[i]`. `ParseSignificantCoeffCabac`'s backward walk takes F30's
-//     `wrapping_offset` with it: an index reaching -1 forms no address.
-//   * the **`get_mut(iMbXy).as_mut_ptr()` + `.add(i)` writes**, which is T5.AB1's
-//     maneuver — the accessor already hands back the macroblock's own array.
-//   * `ParseIPCMInfoCabac`'s three plane cursors, which the picture parameter
-//     already reaches as `plane_mut(i)`.
-//
-// The two exceptions were the ruled `PPicture` survivors (§0's option 3, steward at
-// `6b6dd9a3`), each with the F42 argument at the item. Neither survived T5b.1, which
-// took a third option the ruling had not reserved; T5b.9 deleted the dead import
-// they left behind.
 
 use crate::decoder::decoder_context::{PicRefs, SliceCtx};
 use std::ptr;
@@ -77,8 +58,6 @@ use super::cabac_decoder::{
     DecodeUnaryBinCabac, InitCabacDecEngineFromBS, RestoreCabacDecEngineToBS,
     SWelsCabacCtx, SWelsCabacDecEngine,
 };
-// T5.W2: both are context accessors and live in `decoder_context.rs` now.
-
 
 // ============================================================================
 // Constants, Macros & Error Codes
@@ -631,9 +610,6 @@ pub use crate::decoder::decoder_core::GetThreadCount;
 // Used by the B-slice motion-info branches ported from ParseInterBMotionInfoCabac.
 pub use crate::decoder::mv_pred::{
     SubMbType, FillSpatialDirect8x8Mv, FillTemporalDirect8x8Mv,
-    // T5.M4 (F22): the seven that used to be re-translated below. `mv_pred.cpp` is
-    // the C++'s home for each; this module calls them there, as its C++ counterpart
-    // does.
     PredMv, PredInter16x8Mv, PredInter8x16Mv, UpdateP16x16MotionInfo,
     UpdateP16x8MotionInfo, UpdateP8x16MotionInfo, Update8x8RefIdx,
 };
@@ -1427,10 +1403,6 @@ pub fn ParseIntraPredModeChromaCabac(
 ) -> i32 {
     let cabac_win = pCtx.rbsp;
     let mut uiCode: u32 = 0;
-    // T5.AA3: the array, not its base as a pointer. The two reads below are
-    // neighbour lookups — `mb_grid_ptr`'s whole reason to exist (S28's provenance
-    // clause) — and `MbArray::get` reaches every one of them with a bound. This was
-    // the helper's last production caller.
     let pMbType = &pDec.pMbType;
     let iLeftAvail = uiNeighAvail & 0x04;
     let iTopAvail = uiNeighAvail & 0x01;
@@ -1654,32 +1626,6 @@ pub fn ParseMvdInfoCabac(
     ERR_NONE
 }
 
-// ============================================================================
-// T5.M4 — F22's unification. Seven functions were re-translated here from
-// `mv_pred.cpp`, which is where the C++ declares each of them exactly once and
-// from which `parse_mb_syn_cabac.cpp` merely *calls* them (`:562`, `:592`,
-// `:797`, `:841`). The local copies are deleted; this module imports them, and a
-// local item no longer shadows the import.
-//
-//   PredMv, PredInter16x8Mv, PredInter8x16Mv   — never touch `pDec`, no guard
-//                                                question, bodies agreed
-//   UpdateP16x16MotionInfo                     — `mv_pred.rs`'s guard wins
-//   UpdateP16x8MotionInfo, UpdateP8x16MotionInfo — `mv_pred.rs`'s guard wins
-//   Update8x8RefIdx                            — **this copy won**: the C++ has
-//                                                no guard and `mv_pred.rs` had
-//                                                added one
-//
-// `UpdateP8x8RefIdxCabac` stays here, because `parse_mb_syn_cabac.cpp:141` is
-// where the C++ declares *it* and `mv_pred.cpp` is the caller.
-// ============================================================================
-
-
-/// **Survivor exception (§0's option 3, ruled by the steward at `6b6dd9a3`)**:
-/// `pDec` and `pRefs` come out of one [`PicPool::cur_and_rest`], and
-/// [`PicRefs::get`] answers the current slot from `pDec`'s own pointer (**F42**) —
-/// so the two share a tag, and a `&mut` on the picture held across a reference read
-/// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
-/// revisits (retire the F42 arm, or give the planes interior mutability).
 pub fn ParseInterPMotionInfoCabac(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -1691,8 +1637,6 @@ pub fn ParseInterPMotionInfoCabac(
     pMvdCache: &mut [[[i16; 2]; 30]; LIST_A],
     pRefIndex: &mut [[i8; 30]; LIST_A],
 ) -> i32 {
-    // T5.W9: reads only, so copied rather than borrowed — `mv_pred`'s and
-    // `parse_mb_syn_cavlc`'s case a third time (T5.W6/W8).
     let pRefCountHdr =
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
     let iDirectSpatialMvPredFlag = (*pCurDqLayer)
@@ -1704,13 +1648,6 @@ pub fn ParseInterPMotionInfoCabac(
     let mut pMvd = [0i16; 2];
     let mut iRef = [0i8; 2];
 
-    // T5.Y2: `pSps`, `iMinVmv` and `iMaxVmv` stood here — the level's vertical MV
-    // bounds, looked up through the slice header's SPS and then **never read**. The
-    // C++'s four uses are all `WELS_CHECK_SE_BOTH_WARNING (pMv[1], iMinVmv, iMaxVmv,
-    // "vertical mv")`, which is a `WelsLog` warning and nothing else
-    // (`dec_golomb.h:288`), so the port never had a consumer for them and the
-    // lookup was pure. S18's straggler class, found where the view struct needed
-    // the SPS reach and there was none.
     let bIsPending = pCtx.iThreadCount > 1;
     let mbType = *(*pDec).pMbType.get(iMbXy);
 
@@ -1743,8 +1680,6 @@ pub fn ParseInterPMotionInfoCabac(
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                 }
             }
-            // F42: resolved against the picture the bracket holds, and reduced to the
-            // one flag it is read for in the same expression.
             let pPic0 = pRefs.resolve(ppRefPic[iRef[0] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
             *pCtx.bMbRefConcealed = pCtx.bRPLRError
                 || *pCtx.bMbRefConcealed
@@ -1791,8 +1726,6 @@ pub fn ParseInterPMotionInfoCabac(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                // F42: resolved against the picture the bracket holds, and reduced to the
-                // one flag it is read for in the same expression.
                 let pPic = pRefs.resolve(ppRefPic[iRef[i as usize] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
@@ -1843,8 +1776,6 @@ pub fn ParseInterPMotionInfoCabac(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                // F42: resolved against the picture the bracket holds, and reduced to the
-                // one flag it is read for in the same expression.
                 let pPic = pRefs.resolve(ppRefPic[iRef[i as usize] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
@@ -1872,12 +1803,6 @@ pub fn ParseInterPMotionInfoCabac(
             let mut pPartW = [0i8; 4];
             let mut uiSubMbType: u32 = 0;
 
-            // T5.I1: two window borrows for the whole arm. `ParseSubMBTypeCabac`,
-            // `ParseRefIdxCabac` and `UpdateP8x8RefIdxCabac` reach the layer but
-            // neither of these arrays; the eight per-partition checks below become
-            // two.
-            // T5.W9: the window borrow that stood here was written once and read
-            // once, across two calls taking the whole layer. Re-derived per access.
             let pNoSubMbPartSizeLessThan8x8Flag = (*pCurDqLayer)
                 .grid
                 .no_sub_mb_part_size_less_than8x8_flag
@@ -1928,8 +1853,6 @@ pub fn ParseInterPMotionInfoCabac(
                         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_REF_INDEX);
                     }
                 }
-                // F42: resolved against the picture the bracket holds, and reduced to the
-                // one flag it is read for in the same expression.
                 let pPic = pRefs.resolve(ppRefPic[pRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
@@ -2019,12 +1942,6 @@ pub fn ParseInterPMotionInfoCabac(
     ERR_NONE
 }
 
-/// **Survivor exception (§0's option 3, ruled by the steward at `6b6dd9a3`)**:
-/// `pDec` and `pRefs` come out of one [`PicPool::cur_and_rest`], and
-/// [`PicRefs::get`] answers the current slot from `pDec`'s own pointer (**F42**) —
-/// so the two share a tag, and a `&mut` on the picture held across a reference read
-/// pops it. The raw alias is load-bearing here rather than vestigial. Phase 8
-/// revisits (retire the F42 arm, or give the planes interior mutability).
 pub fn ParseInterBMotionInfoCabac(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -2037,8 +1954,6 @@ pub fn ParseInterBMotionInfoCabac(
     pRefIndex: &mut [[i8; 30]; LIST_A],
     pDirect: &mut [i8; 30],
 ) -> i32 {
-    // T5.W9: reads only, so copied rather than borrowed — `mv_pred`'s and
-    // `parse_mb_syn_cavlc`'s case a third time (T5.W6/W8).
     let pRefCountHdr =
         (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
     let iDirectSpatialMvPredFlag = (*pCurDqLayer)
@@ -2290,11 +2205,6 @@ pub fn ParseInterBMotionInfoCabac(
         let mut has_direct_called = false;
         let mut directSubMbType: SubMbType = 0;
 
-        // T5.W9: T5.I1's loop-level window borrow for the flag is gone, for the
-        // reason its cavlc twin's went at T5.W8 — it was a `&mut` into one grid array
-        // held across `PredMvBDirectSpatial`/`PredBDirectTemporal`, which take the
-        // whole layer. Re-derived per write below.
-
         for i in 0..4usize {
             let err = ParseBSubMBTypeCabac(pCtx, pNeighAvail, &mut uiSubMbType);
             if err != ERR_NONE {
@@ -2343,7 +2253,6 @@ pub fn ParseInterBMotionInfoCabac(
                     }
                     has_direct_called = true;
                 }
-                // T5.W9: re-derived per access, as above.
                 (*(*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy))[i] = directSubMbType;
                 if IS_SUB_4x4((*(*pCurDqLayer).grid.sub_mb_type.get(iMbXy))[i]) {
                     pSubPartCount[i] = 4;
@@ -2355,11 +2264,6 @@ pub fn ParseInterBMotionInfoCabac(
             }
         }
 
-        // T5.I1: nothing below writes this family, and `FillSpatialDirect8x8Mv`,
-        // `FillTemporalDirect8x8Mv`, `Update8x8RefIdx` and `PredMv` reach the layer
-        // but not this array. One shared window for the three loops that follow.
-        // T5.W9: copied, not borrowed — the parse loop is done writing and the
-        // readers below reach the layer but not this array (T5.I1's own sentence).
         let pSubMbType = *(*pCurDqLayer).grid.sub_mb_type.get(iMbXy);
 
         for i in 0..4usize {
@@ -2702,21 +2606,9 @@ pub fn ParseDeltaQpCabac(pCtx: &mut SliceCtx<'_>, pCurDqLayer: &mut DqLayerState
     ERR_NONE
 }
 
-/// T5.H8: `pCbfDc: *mut u16` and `pMbType: *const u32` were parameters here, and
-/// both were shadowed four lines into the body by locals re-deriving the same two
-/// expressions the caller had just evaluated to pass them. Dead since the function
-/// was written. `pCbfDc`'s had to go with the flip — its only source is a grid
-/// array now — and `pMbType`'s went with it because it is the same dead expression
-/// at the same call.
-///
-/// T5.X1 — **take what you reach.** The layer and the picture were parameters
-/// because the caller had them, not because this function needs them: the whole
-/// reach is two scalars, one grid family and one picture family read-only. Taking
-/// exactly that is what lets `WelsDecodeMbCabacResidualHelper` hold a `&mut` into
-/// `grid.scaled_tcoeff` across this call — the two are disjoint fields, so the
-/// split borrow is the compiler's, with no new API on the grid. `mb_type` is
-/// `(*pDec).pMbType`, the **picture's** family, not `grid.mb_type`: the two paths
-/// coexist in this decoder and the residual chain reads the picture's (S24).
+/// `mb_type` is `(*pDec).pMbType`, the **picture's** family, not `grid.mb_type`:
+/// the two paths coexist in this decoder and the residual chain reads the
+/// picture's.
 pub fn ParseCbfInfoCabac(
     pNeighAvail: &SWelsNeighAvail,
     pNzcCache: &[u8; 48],
@@ -2781,10 +2673,6 @@ pub fn ParseCbfInfoCabac(
     ERR_NONE
 }
 
-/// **T5.AC6: the cursor is an index into the caller's array.** `pSignificantMap`
-/// was a `*mut i32` walked forward with `.add(1)` and zero-filled with
-/// `write_bytes` — both callers pass a stack array (`[i32; 16]` / `[i32; 64]`),
-/// so the slice carries the bound the pointer form had to be trusted for.
 pub fn ParseSignificantMapCabac(
     pSignificantMap: &mut [i32],
     iResProperty: i32,
@@ -2852,12 +2740,6 @@ pub fn ParseSignificantMapCabac(
     ERR_NONE
 }
 
-/// **T5.AC6: the backward cursor becomes an index, and F30's `wrapping_offset`
-/// becomes the loop condition.** `pCoff` walked down from `pSignificant + i` and
-/// its last decrement landed one element *before* the array — legal in C, UB by
-/// arithmetic alone in Rust, which is why the pointer form needed
-/// `wrapping_offset`. An index has no such hazard: `i` is the position and the
-/// loop already ends on it.
 pub fn ParseSignificantCoeffCabac(
     pSignificant: &mut [i32],
     iResProperty: i32,
@@ -2917,11 +2799,6 @@ pub fn ParseSignificantCoeffCabac(
                 *pCoff = -*pCoff;
             }
         }
-        // F30's note used to stand here, about `pCoff--` landing one element before
-        // the array on the last iteration and needing `wrapping_offset` so the
-        // *arithmetic* was not UB. With the position as the index there is no
-        // address to compute past the start: `i` reaches -1, the loop ends, and
-        // nothing is formed.
         i -= 1;
     }
     ERR_NONE
@@ -3111,21 +2988,12 @@ pub fn ParseIPCMInfoCabac(
     *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA_PCM;
     RestoreCabacDecEngineToBS(&mut *pCtx.sCabacDecEngine, pBsAux);
 
-    // `pEndBuf - pCurBuf` becomes `len - pos`. F4's off-by-ones are load-bearing, so
-    // the comparison keeps its exact shape.
     let iBytesLeft = pBsAux.cursor.len() as isize - pBsAux.cursor.pos() as isize;
     if iBytesLeft < 384 {
         return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_CABAC_NO_BS_TO_READ);
     }
     let iPcmStart = pBsAux.cursor.pos();
     if !pCtx.bParseOnly {
-        // **T5.AC6: the three destination cursors are row spans of the picture's own
-        // planes.** They were `data_ptr(i).add(mb_offset)` walked by a stride —
-        // `data_ptr` is the enumerated survivor, and this is one of the sites that
-        // kept it alive. The picture arrives here as an `&mut SPicture` already, so
-        // the plane is reachable directly; `origin() + mb_offset` is the index the
-        // pointer arithmetic computed, and the 384 source bytes are one slice the
-        // `iBytesLeft` test above has already bounded.
         let src = &pCtx.sRawData.window_from(pBsAux.start)[iPcmStart..];
         let mut s = 0usize;
         for (plane_idx, rows, width, stride, mb_offset) in [

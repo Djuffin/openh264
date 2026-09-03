@@ -15,13 +15,8 @@
 //! `SampleVariance16x16_c` accumulates the two sums in `uint16_t` and the two
 //! squares in `uint32_t`. Both are `u16` here with `wrapping_add`, faithfully —
 //! but **neither sum can actually reach the wrap**: a 16x16 block is 256 samples of
-//! at most 255, so both top out at 65280, 255 short of `uint16_t`'s range. (An
-//! earlier version of this note claimed the difference sum could wrap. It cannot;
-//! it has exactly the same bound as `uiCurSum`, and
-//! `sample_variance_16x16_accumulators_cannot_wrap` in
-//! `tests/kernels_differential_phase2.rs` drives both extremes to pin it.) The
-//! `wrapping_add`s stay regardless, because reproducing the C++'s declared widths
-//! is the rule, not reproducing only the widths that turn out to matter.
+//! at most 255, so both top out at 65280, 255 short of `uint16_t`'s range. The
+//! `wrapping_add`s stay regardless.
 //!
 //! The products `uiSum * uiSum` and `uiCurSum * uiCurSum` are `int` in C++ (integer
 //! promotion of `uint16_t`), and the result is stored back into a `uint16_t` field,
@@ -62,25 +57,6 @@ fn WELS_DIV_ROUND64(x: i64, y: i64) -> i64 {
     }
 }
 
-/// `SampleVariance16x16_c` — `AdaptiveQuantization.cpp:245`.
-///
-/// # Safety
-/// * `pRefY` and `pSrcY` each point at the top-left sample of a 16x16 macroblock in
-///   a luma plane whose rows are `iRefStride` / `iSrcStride` bytes apart, with at
-///   least `mb_span(stride)` = `15 * stride + 16` readable bytes from there. The
-///   reach is strictly forward — sixteen rows of sixteen samples, no row above and
-///   no column left — so this shim needs no padding constant to justify itself.
-/// * **The two strides are independent.** `CAdaptiveQuantization::Process` walks the
-///   reference and source pictures with separate strides taken from separate
-///   `SPixMap`s, and they are not equal in general; each plane's span is computed
-///   from its own.
-/// * `pMotionTexture` is writable.
-// `SampleVariance16x16_c` stood here — the raw-pointer shim over
-// [`sample_variance_16x16`]. **S11.43, deleted: its last production caller
-// (`Process`'s macroblock walk) drives the safe kernel directly**, and the
-// span-instrument test whose subject it was went with it — the property it
-// pinned (the shim's two declared spans) is the kernel's slice types now.
-
 //=================== Safe kernels =====================//
 
 /// The bytes [`sample_variance_16x16`] reads from one plane, counted from the
@@ -88,8 +64,7 @@ fn WELS_DIV_ROUND64(x: i64, y: i64) -> i64 {
 ///
 /// Sixteen rows of sixteen samples reaching forward only, so the last sample sits
 /// `15 * stride + 15` past the origin and the block needs no padding in any
-/// direction. The two shims size their slices with this and nothing else does the
-/// arithmetic; `tests/kernels_differential_phase2.rs` pins it.
+/// direction.
 pub fn mb_span(stride: usize) -> usize {
     15 * stride + 16
 }
@@ -99,15 +74,11 @@ pub fn mb_span(stride: usize) -> usize {
 /// The variance proxies for one macroblock: `uiMotionIndex` from the difference
 /// against the reference, `uiTextureIndex` from the current picture alone.
 ///
-/// **Arithmetic parity is the whole difficulty here** (plan §7.4 / the R-e rule). The
-/// C++ accumulates the two sums in `uint16_t` and the two squares in `uint32_t`, so
-/// `uiSum` and `uiCurSum` genuinely wrap at 65536 — `uiCurSum` reaches 65280 for a
-/// block of maximum-brightness samples and stops just short, while the difference sum
-/// can go over. The products then promote to `int` and truncate at the store into the
-/// `uint16_t` field. Every one of those widths is reproduced below, wrap for wrap:
-/// nothing is widened, nothing is clamped, and the `wrapping_*` calls are the ones the
-/// old port already carried. Repairing this belongs to whoever owns the C++'s
-/// arithmetic, not to a conversion.
+/// The C++ accumulates the two sums in `uint16_t` and the two squares in `uint32_t`,
+/// so `uiSum` and `uiCurSum` wrap at 65536 — `uiCurSum` reaches 65280 for a block of
+/// maximum-brightness samples and stops just short. The products then promote to
+/// `int` and truncate at the store into the `uint16_t` field. Every one of those
+/// widths is reproduced below, wrap for wrap: nothing is widened, nothing is clamped.
 pub fn sample_variance_16x16(
     refy: &[u8],
     ref_stride: usize,
@@ -160,8 +131,7 @@ impl Default for CAdaptiveQuantization {
 }
 
 impl CAdaptiveQuantization {
-    /// `CAdaptiveQuantization::Set`. Typed since Phase 6 session B (the `IWelsVP`
-    /// vtable's `void*` is gone).
+    /// `CAdaptiveQuantization::Set`.
     pub fn Set(&mut self, param: &SAdaptiveQuantizationParam) -> i32 {
         self.m_sAdaptiveQuantParam = *param;
         RET_SUCCESS
@@ -175,16 +145,13 @@ impl CAdaptiveQuantization {
 
     /// `CAdaptiveQuantization::Process` — `AdaptiveQuantization.cpp:57`. `calc` is
     /// the VAA statistics of this picture pair, handed over at the call (the C++
-    /// stored `pCalcResult` in the parameter block; take what you reach).
-    ///
-    /// S11.43: the safety section is a signature now — the planes arrive as
-    /// borrows and `calc`'s arrays bound every read.
+    /// stored `pCalcResult` in the parameter block).
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
         _pRefPixMap: &SPixMap,
-        // S11.43: the two luma planes as borrows (`ScdPlanes`' shape); the pixel
-        // maps carry geometry only.
+        // The two luma planes as borrows (`ScdPlanes`' shape); the pixel maps
+        // carry geometry only.
         planes: crate::processing::vaacalc::VaaCalcPlanes<'_>,
         calc: &SVAACalcResult,
         pMotionTexture: &mut [SMotionTextureUnit],
@@ -203,9 +170,8 @@ impl CAdaptiveQuantization {
         let iCurStride = pSrcPixMap.iStride[0];
 
         // Reuse the VAA statistics when they were computed over exactly this pair
-        // of pictures; otherwise recompute per macroblock.
-        // S10.9: the comparison is between addresses, and both sides say so now —
-        // a slice's address is the number the raw root was.
+        // of pictures; otherwise recompute per macroblock. The comparison is
+        // between addresses.
         if calc.pRefY == planes.refp.as_ptr() as usize
             && calc.pCurY == planes.cur.as_ptr() as usize
         {
@@ -238,8 +204,7 @@ impl CAdaptiveQuantization {
                 }
             }
         } else {
-            // S11.43: the row/column pointer walk is the same arithmetic on
-            // indices, each macroblock's origin bounds-checked by the reslice.
+            // Each macroblock's origin is bounds-checked by the reslice.
             let mut iMbIndex = 0usize;
             let (mut iRefRow, mut iCurRow) = (0usize, 0usize);
             for _j in 0..iMbHeight {
@@ -389,8 +354,8 @@ mod tests {
         assert_eq!(got.uiMotionIndex, 0);
     }
 
-    /// The kernel reads exactly `mb_span`, which is what the shim allocates: sixteen
-    /// rows of sixteen samples reaching forward only. A plane one byte shorter is a
+    /// The kernel reads exactly `mb_span`: sixteen rows of sixteen samples reaching
+    /// forward only. A plane one byte shorter is a
     /// panic, and this pins that the span is not over-stated either — the last byte
     /// of the allocation is the last sample of the block, so it must be read.
     #[test]

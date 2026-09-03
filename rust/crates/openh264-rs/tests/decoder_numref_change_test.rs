@@ -1,5 +1,5 @@
-//! **F80/F87's covering test** (Phase 8b session C, T8b.C3) — a mid-stream change of
-//! `num_ref_frames` at an unchanged resolution must resize the picture pool in place.
+//! A mid-stream change of `num_ref_frames` at an unchanged resolution must resize the
+//! picture pool in place.
 //!
 //! `res/num_ref_change_320x192.264` is 24 frames at `iNumRefFrame = 1` followed by 24
 //! at `iNumRefFrame = 4`, same 320x192 throughout, built with the reference encoder by
@@ -10,18 +10,14 @@
 //! changes anything (`Error_I_P.264`) changes the *resolution*, which is the second
 //! arm and `decoder_resolution_change_test.rs`'s subject.
 //!
-//! **Measured red**: before T8b.C3 the port had two of the three arms, so at the
-//! switch it answered `dsOutOfMemory` (0x4000) and then `0x10` for twelve calls,
-//! emitting **34 of the 48 frames**. The reference logs
-//! `"memory re-alloc for no resolution change (size = 320 * 192), ref list size change
-//! from 3 to 6"` and emits all 48. That is `IncreasePicBuff`; the shrinking direction
-//! is `DecreasePicBuff`, and no stream here exercises it — `safe/pool.rs`'s
+//! This exercises `IncreasePicBuff`; the shrinking direction is `DecreasePicBuff`, and
+//! no stream here exercises it — `safe/pool.rs`'s
 //! `shrink_can_reorder_the_slots_it_keeps` and the generation rows beside it are what
 //! stand behind that half.
 //!
 //! The numbers below are the C++ decoder's, from
 //! `rust/tools/ecref/ecref res/num_ref_change_320x192.264 99999999 --frames` against
-//! `libopenh264.dylib` — not from the port.
+//! `libopenh264.dylib`.
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
@@ -179,8 +175,8 @@ fn num_ref_frame_change_resizes_the_pool_and_matches_the_reference() {
     }
 
     // The frame count first: it is the assertion that fails loudest when the third
-    // arm is missing (34 of 48), and reading it before the code sequence says *what*
-    // went wrong rather than only where.
+    // arm is missing, and reading it before the code sequence says *what* went wrong
+    // rather than only where.
     assert_eq!(
         frames.len(),
         CPP_FRAME_HASHES.len(),

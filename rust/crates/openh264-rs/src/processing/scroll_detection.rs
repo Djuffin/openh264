@@ -7,7 +7,7 @@
 //! *first* available reference only (`wels_preprocess.cpp:1176-1201`, the
 //! `iScdIdx == 0` block), and hands the vector it finds to two consumers: the screen
 //! scene-change detector, which uses it to call a block `SCROLLED_STATIC`
-//! (`SceneChangeDetection.h:158-191`), and — from P10.3 — the mode decision's
+//! (`SceneChangeDetection.h:158-191`), and the mode decision's
 //! `JudgeScrollSkip` and the scrolled motion search.
 //!
 //! **What it detects.** A horizontal band of the current frame is picked, a single
@@ -21,13 +21,7 @@
 //!
 //! **`iScrollMvX` is always zero.** [`ScrollDetectionCore`] sets it so unconditionally
 //! (`ScrollDetectionFuncs.cpp:191`); the field exists because the parameter struct and
-//! the consumers carry it, not because this detector can produce one. The `X` handling
-//! in the consumers is ported all the same — it is upstream's, and a caller driving
-//! the processing library directly could set `sMaskRect` and reach the other path.
-//!
-//! **T9.X — safe.** `SPixMap` carries the geometry, as it does for every other plugin
-//! in this directory; the pixels arrive as [`ScdPlanes`] and every read is slice
-//! indexing. Nothing here dereferences `SPixMap::pPixel`.
+//! the consumers carry it, not because this detector can produce one.
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -44,12 +38,6 @@ pub const REGION_NUMBER: i32 = 9;
 
 /// A row-and-column offset into a plane, the safe form of the C++'s
 /// `pY + row * iStride + x`.
-///
-/// Every row and column this file computes is non-negative — [`ScrollDetectionCore`]'s
-/// own clamps guarantee it, and the module's proof is in that function's comment — so
-/// a negative here is a port defect in the arithmetic above it. `try_from` says that
-/// with the offset in hand, rather than wrapping into a bounds-check panic a hundred
-/// lines away.
 #[inline]
 fn at(row: i32, iStride: usize, x: i32) -> usize {
     usize::try_from(row as isize * iStride as isize + x as isize)
@@ -62,10 +50,7 @@ fn at(row: i32, iStride: usize, x: i32) -> usize {
 /// three, only with more than three transitions; four or more, always.
 ///
 /// `iColorMap` is `int32_t[8]` upstream and `u32[8]` here: `RECORD_COLOR` sets bit
-/// `v & 31` of word `v >> 5`, so the array is a 256-bit set over the byte values and
-/// the element's signedness never reaches the answer — `1 << 31` is the sign bit in
-/// C++ and simply the top bit here, and both are counted the same by the popcount
-/// loop below.
+/// `v & 31` of word `v >> 5`, so the array is a 256-bit set over the byte values.
 pub fn CheckLine(pData: &[u8], iWidth: i32) -> i32 {
     let iQualified;
     let mut iColorMap = [0u32; 8];
@@ -154,16 +139,14 @@ pub fn SelectTestLine(
 ///    pointer arithmetic has.
 /// 2. `iCmp` is seeded **1**, and the `memcmp` that would clear it runs only when
 ///    `kiWidth > 12`. So for `kiWidth <= 12` this function answers "different" even
-///    when all twelve bytes are equal. That is upstream's, recorded as a finding
-///    rather than fixed; the encoder never reaches it, because every width
-///    [`ScrollDetectionCore`] is called with is at least 24 (see
-///    [`CScrollDetection::ScrollDetectionWithoutMask`]) and the mask path refuses
-///    anything at or below [`MINIMUM_DETECT_WIDTH`].
+///    when all twelve bytes are equal. That is upstream's; the encoder never reaches
+///    it, because every width [`ScrollDetectionCore`] is called with is at least 24
+///    (see [`CScrollDetection::ScrollDetectionWithoutMask`]) and the mask path
+///    refuses anything at or below [`MINIMUM_DETECT_WIDTH`].
 ///
 /// The three `LD32` comparisons are one twelve-byte slice comparison here: `LD32` is a
 /// four-byte load and the C++ compares the loads for equality, so the twelve bytes are
-/// tested for equality either way and no endianness enters (taxonomy T7 — a wide load
-/// spelled as a wide load, not as a value).
+/// tested for equality either way and no endianness enters.
 pub fn CompareLine(pYSrc: &[u8], pYRef: &[u8], kiWidth: i32) -> i32 {
     let mut iCmp = 1;
 
@@ -181,27 +164,7 @@ pub fn CompareLine(pYSrc: &[u8], pYRef: &[u8], kiWidth: i32) -> i32 {
 ///
 /// **The reference's stride is used for both frames** (`iYStride =
 /// pRefPixMap->iStride[0]`, `:118`). The encoder's two pictures come from one pool and
-/// share a geometry, so the strides are equal; the debug assertion below is that
-/// claim, and the port keeps the C++'s single stride rather than "fixing" it into two.
-///
-/// **`pSrcPixMap` contributed only `pPixel[0]`** in the C++, which is
-/// `planes.cur` here — so the parameter is gone and the reference map, which
-/// contributes `sRect.iRectHeight` and the stride, stays.
-///
-/// **Why plain slice indexing is safe without a single added clamp.** Write `lo =
-/// iMinHeight`, `hi = iMaxHeight`. `iTestPos` is in `[lo, hi]`: [`SelectTestLine`]
-/// searches `[iOffsetY + 1, iOffsetY + 2 * (iHeight >> 1) - 1]` and refuses any row
-/// below 0 or at or above `iPicHeight`, and both bounds of that band are inside
-/// `[lo, hi]` by the definitions of `iMinHeight`/`iMaxHeight`. In the downward branch
-/// `iSearchPos <= hi` is tested, `iLowOffset <= hi - iSearchPos`, and `iCheckedLines -
-/// iLowOffset <= iTestPos - lo`; so the reference window runs
-/// `[iSearchPos - (iCheckedLines - iLowOffset), iSearchPos + iLowOffset - 1] ⊆ [lo, hi]`
-/// and the source window `[iTestPos - (iCheckedLines - iLowOffset), iTestPos +
-/// iLowOffset - 1] ⊆ [lo, hi]`. In the upward branch `iSearchPos >= lo` is tested,
-/// `iUpOffset <= iSearchPos - lo` and `iCheckedLines - iUpOffset <= hi - iTestPos`,
-/// which bound the same two windows the same way. So every row read lies in
-/// `[iMinHeight, iMaxHeight] ⊆ [0, iPicHeight - 1]`, and if the indexing below ever
-/// panics the port of *this arithmetic* is wrong — not the plane it reads.
+/// share a geometry, so the strides are equal; the debug assertion below is that claim.
 pub fn ScrollDetectionCore(
     pRefPixMap: &SPixMap,
     planes: &ScdPlanes<'_>,
@@ -237,9 +200,6 @@ pub fn ScrollDetectionCore(
     let iMaxAbs = (iTestPos - iMinHeight - 1)
         .max(iMaxHeight - iTestPos)
         .min(MAX_SCROLL_MV_Y);
-    // The C++'s `int32_t iSearchPos = 0` initializer at `:115` is dead — this
-    // assignment (`:140`) always precedes the first read — so the declaration moves
-    // here rather than carrying a value the port would have to `#[allow]` away.
     let mut iSearchPos = iTestPos;
     let mut iOffsetAbs = 0;
     while iOffsetAbs <= iMaxAbs {
@@ -309,20 +269,13 @@ pub fn ScrollDetectionCore(
 }
 
 /// `CScrollDetection` — `ScrollDetection.h:46-67`.
-///
-/// D-scc-7: the struct owns its parameter block and carries typed `Set`/`Get`/
-/// `Process`, the shape every plugin in this directory has had since the `IWelsVP`
-/// vtable was dissolved. The framework's `CheckValid` (`WelsFrameWork.cpp:221-256`) is
-/// not reproduced — the dissolved vtable never had it — but `Process`'s own validity
-/// checks are the C++'s.
 #[derive(Debug, Default)]
 pub struct CScrollDetection {
     pub m_sScrollDetectionParam: SScrollDetectionParam,
 }
 
 impl CScrollDetection {
-    /// `CScrollDetection::Set` — `ScrollDetection.cpp:56-62`. The `pParam == NULL`
-    /// refusal is spelled by the reference type.
+    /// `CScrollDetection::Set` — `ScrollDetection.cpp:56-62`.
     pub fn Set(&mut self, pParam: &SScrollDetectionParam) -> i32 {
         self.m_sScrollDetectionParam = *pParam;
         RET_SUCCESS
@@ -337,8 +290,7 @@ impl CScrollDetection {
 
     /// `CScrollDetection::Process` — `ScrollDetection.cpp:40-53`.
     ///
-    /// The C++'s two null-pixel disjuncts are the two empty-slice tests: an
-    /// unallocated plane is what `pPixel[0] == NULL` named.
+    /// The C++'s two null-pixel disjuncts are the two empty-slice tests.
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -364,12 +316,9 @@ impl CScrollDetection {
 
     /// `CScrollDetection::ScrollDetectionWithMask` — `ScrollDetection.cpp:71-89`.
     ///
-    /// **D-scc-9: ported although nothing in the encoder can reach it.** No writer of
-    /// `bMaskInfoAvailable` exists under `codec/` — the encoder's one caller zeroes the
-    /// parameter block before every `Set` (`wels_preprocess.cpp:1181`) — so this branch
-    /// is dead in practice. It is eleven statements, a consumer driving the processing
-    /// library directly can request it, and arguing the deadness costs more than the
-    /// port. The C++'s branch order is kept.
+    /// No writer of `bMaskInfoAvailable` exists under `codec/` — the encoder's one
+    /// caller zeroes the parameter block before every `Set`
+    /// (`wels_preprocess.cpp:1181`) — so this branch is dead in practice.
     fn ScrollDetectionWithMask(
         &mut self,
         _pSrcPixMap: &SPixMap,

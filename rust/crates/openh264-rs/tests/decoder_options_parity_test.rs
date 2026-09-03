@@ -1,18 +1,4 @@
-//! **`GetOption`'s referee** (Phase 8b session A, T8b.A3).
-//!
-//! Until this file the decoder had **no instrument that read an option value back**.
-//! The corpus reads frames and codes, the conformance suite reads bytes, the ABI
-//! harness reads the export list and the struct layouts — and
-//! `CWelsDecoder::GetOption` has 16 arms of which this port implemented 4, falling
-//! through `_ => {}` to `cmResultSuccess` for the other 12. *Success, with nothing
-//! written*: the caller read back whatever was already in its own `int`, and
-//! `test/api`'s `DecoderVclNal` duly reported `-2034226216`. 21 of the 44 remaining
-//! `test/api` rows were that one `_ => {}` and the two feeders behind it
-//! (`GetVclNalTemporalId`, an empty body; `uiCurIdrPicId`, declared, reset, never
-//! written).
-//!
-//! S22's rule, in its T8.C8 form: it is not enough for a module to be in every
-//! instrument's scope — each **entry point** needs an instrument that drives it.
+//! **`GetOption`'s referee**.
 //!
 //! # The goldens are the C++ decoder's
 //!
@@ -305,10 +291,10 @@ fn option_error_codes_match_the_reference() {
         assert_eq!((sar.uiSarWidth, sar.uiSarHeight), (0, 0));
 
         // `:696` and `:583` — **an id with no arm is an error, not a silent
-        // success.** This is the `_ => {}` that cost 21 gtest rows, and it is
-        // reachable with real ids rather than an out-of-range discriminant: the two
-        // switches are not the same set. The three trace ids are settable and not
-        // gettable; the ten feedback ids are gettable and not settable.
+        // success.** It is reachable with real ids rather than an out-of-range
+        // discriminant: the two switches are not the same set. The three trace ids
+        // are settable and not gettable; the ten feedback ids are gettable and not
+        // settable.
         for id in [
             DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
             DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK,

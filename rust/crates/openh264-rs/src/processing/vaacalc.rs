@@ -3,18 +3,10 @@
 //! Port of `codec/processing/src/vaacalc/` — the VAA (video analysis) statistics
 //! plugin reached through `METHOD_VAA_STATISTICS`.
 //!
-//! All five kernels are translated — as the safe walkers below; their raw
-//! `VAACalc*_c` entry points retired in T9.X. Only `pfVAACalcSad` is *reached* in the gate
-//! configuration: the other four (`pfVAACalcSadVar`, `pfVAACalcSadSsd`,
+//! The five kernels (`pfVAACalcSad`, `pfVAACalcSadVar`, `pfVAACalcSadSsd`,
 //! `pfVAACalcSadBgd`, `pfVAACalcSadSsdBgd`) are selected by
 //! `iCalcVar`/`iCalcSsd`/`iCalcBgd`, which `CWelsPreProcess::AnalyzeSpatialPic`
-//! derives from rate control, adaptive quantisation and background detection — all
-//! three off there. So `VAACalcSad_c` is the only one of the five whose performance
-//! the benches can see, and the only one whose codegen this port has to keep clean.
-//!
-//! (This note used to read "only the `pfVAACalcSad` kernel is translated", which was
-//! never true of the file and would have sent a straggler sweep looking for four
-//! kernels that were already here.)
+//! derives from rate control, adaptive quantisation and background detection.
 
 #![forbid(unsafe_code)]
 
@@ -35,38 +27,13 @@ pub struct CVAACalculation {
     pub m_sCalcParam: SVAACalcParam,
 }
 
-// The five raw entry points — `VAACalcSad_c`, `VAACalcSadVar_c`, `VAACalcSadSsd_c`,
-// `VAACalcSadBgd_c`, `VAACalcSadSsdBgd_c` — stood here. **S18, retired in T9.X**,
-// on session F's SAD precedent: the safe twins below (`vaa_calc_sad` and its four
-// siblings) had been the only production path for a session already, and the raw
-// five survived solely as the entry points of their own differential tests.
-//
-// The read grep spans tests and benches (F119), and that matters here: the brief
-// listed three callers, all of them in this file's own `mod tests`. There were
-// **nine** — the other six are in `tests/kernels_differential_phase2.rs`, which is
-// precisely the file F119 was written about. Both of its VAA properties re-anchored
-// on the safe kernels in the same commit and neither weakened: the span/tail
-// property still catches a walker that writes the wrong number of entries, and the
-// quadrant-anchor property is unchanged apart from its indexing.
-
-
 //=================== Safe kernels =====================//
 
 // The five `VAACalc*` kernels are one whole-picture walk that differs only in which
 // per-block statistics it reports, and the C++ writes that walk out five times. Here
 // it is written once: [`walk_picture`] over [`block_stats`], with three const flags
 // selecting the accumulators. The flags are compile-time so the unused arithmetic is
-// not emitted at all — which matters, because the gate configuration selects
-// `VAACalcSad_c` and only `VAACalcSad_c` (`iCalcVar`/`iCalcSsd`/`iCalcBgd` are all
-// off), so the cheapest of the five is the one whose codegen has to stay clean.
-//
-// Unlike every earlier family in this phase these kernels are **streaming**: one pass
-// per frame over an entire picture, touching each sample once. A 1080p luma plane is
-// ~2 MB against a 128 KB L1, so the walk is memory-bound end to end and per-row
-// bookkeeping hides behind the misses instead of dominating them the way it does in a
-// motion search (`perf_baseline.md` §Phase 2 T5). That is why the microbenchmark for
-// this family runs at picture size and why the large working set is the honest one
-// here — the caller's residency is the instrument's specification.
+// not emitted at all.
 
 /// The per-8x8-block statistics the five `VAACalc*` kernels choose between.
 ///
@@ -99,12 +66,6 @@ struct BlockStats {
 /// `FROM` is a const so that both call sites index a compile-time window of a
 /// compile-time-sized array: there is no bounds check in here at all, and the eight
 /// iterations are free to vectorise.
-///
-/// Passing the statistics **by value** rather than through `&mut` was tried, on the
-/// theory that `s.mad`'s read-modify-write blocked the max from becoming a vector
-/// reduction. It measured no better and slightly worse (1.52x against 1.33x at
-/// 1080p) and is therefore not here — see [`half_mb_stats`] for what the remaining
-/// `VAACalcSadBgd_c` gap actually is.
 ///
 /// **Arithmetic parity.** Every accumulator is `i32` and every operation is the
 /// C++'s, in the C++'s width; nothing is widened and no `wrapping_*` the old code
@@ -143,34 +104,17 @@ fn accumulate<const VAR: bool, const SQDIFF: bool, const BGD: bool, const FROM: 
 /// **This reads each row once, sixteen samples wide, and splits it in registers.**
 /// The C++ walks a quadrant at a time, so it reads rows 0..8 once for the top-left
 /// quadrant and *again* for the top-right; transliterating that shape costs two range
-/// checks per row per quadrant, i.e. 64 per macroblock, and a disassembly of the first
-/// version of this file showed all 64 of them surviving as `slice_index_fail` sites
-/// (the same mechanism that parked T5's SAD kernels — `perf_baseline.md` §Phase 2 T5).
-/// Reading a 16-wide row instead halves the checks to 32 per macroblock, makes each
-/// window a fixed-size `[u8; 16]` whose inner loops need no check at all, and walks
-/// the macroblock in one sequential pass instead of two overlapping ones.
+/// checks per row per quadrant, i.e. 64 per macroblock. Reading a 16-wide row
+/// instead halves the checks to 32 per macroblock, makes each window a fixed-size
+/// `[u8; 16]` whose inner loops need no check at all, and walks the macroblock in
+/// one sequential pass instead of two overlapping ones.
 ///
 /// **Why it is still bit-exact.** Regrouping only changes the order in which each
 /// quadrant's own samples are accumulated, and every accumulator is an associative,
 /// commutative `i32` sum (`mad` is a max, which is both as well). No sample moves
 /// between quadrants, and no accumulator mixes with another. The frame total is still
 /// summed in the C++'s quadrant order by [`walk_picture`], which is the one place the
-/// order could be observed at all — see F9 for why that ordering is worth preserving.
-///
-/// **Where this shape does not pay, measured.** The 16-wide read is a clear win for
-/// every flag combination except `BGD` alone, which lands at **1.44x** against the
-/// raw kernel while the others sit at 0.69-0.97x (`perf_baseline.md` §Phase 2 T8).
-/// The reason is visible in the disassembly and is not the bounds checks: the raw
-/// `VAACalcSadBgd_c` issues 16 `uabd` and 16 `umax`, this one issues 8 and 8. `BGD`'s
-/// two extra accumulators — a signed sum and a running maximum — are **per quadrant**
-/// and cannot be merged across the row the way `sad` can, so each 8-sample half fills
-/// only half a vector register and the loop vectorises at half width. Where `SQDIFF`
-/// and `VAR` are also on there is enough other arithmetic to hide it (`SsdBgd` is
-/// 0.97x), and where none of them are on the 16 samples go through one `uabd.16b`
-/// (`Sad` is 0.86x). Only the middle case loses. Recorded rather than fixed: the fix
-/// is a second, quadrant-shaped walk selected on `BGD`, which is a real option for
-/// T7's similarly-shaped kernels but is more machinery than this family's measured
-/// end-to-end cost justifies.
+/// order could be observed at all.
 #[inline(always)]
 fn half_mb_stats<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     cur: &[u8],
@@ -257,11 +201,6 @@ fn walk_picture<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
 
 /// The exact number of bytes a `VAACalc*` walk reads from each plane, counted from
 /// the origin the caller hands it.
-///
-/// **This is the only place that arithmetic lives.** The five shims size their slices
-/// with it and `tests/kernels_differential_phase2.rs` pins it by running each shim
-/// against allocations of exactly this length — too long and Miri reports the
-/// over-claim at the `from_raw_parts`, too short and the safe kernel panics.
 ///
 /// The last sample read is the bottom-right corner of the bottom-right macroblock's
 /// bottom-right quadrant. That quadrant begins `8 * stride + 8` past its macroblock's
@@ -448,8 +387,7 @@ pub struct VaaCalcPlanes<'a> {
 }
 
 impl CVAACalculation {
-    /// `CVAACalculation::Set` — copies the caller's parameter block. Typed since
-    /// Phase 6 session B (the `IWelsVP` vtable's `void*` is gone).
+    /// `CVAACalculation::Set` — copies the caller's parameter block.
     pub fn Set(&mut self, param: &SVAACalcParam) -> i32 {
         self.m_sCalcParam = *param;
         RET_SUCCESS
@@ -459,14 +397,11 @@ impl CVAACalculation {
     /// picture from `planes.cur` and the reference from `planes.refp` (the C++
     /// passes the reference as `pDstPixMap`), geometry from `src`, and writes into
     /// `result`, which the caller hands over at the call rather than storing a
-    /// pointer to it in the parameter block (take what you reach — the C++'s
-    /// `pCalcResult` was that stored pointer).
+    /// pointer to it in the parameter block (the C++'s `pCalcResult` was that
+    /// stored pointer).
     ///
-    /// **S11.43: the pixel maps carry geometry only** — the two luma planes arrive
-    /// as the slices they are (`VaaCalcPlanes`, the family's `ScdPlanes` shape),
-    /// and the null guard is the empty guard. `pCurY`/`pRefY` still record the
-    /// planes' addresses: the adaptive-quant pass compares them for identity, and
-    /// a slice's address is the same number `data_ptr` produced.
+    /// `pCurY`/`pRefY` record the planes' addresses: the adaptive-quant pass
+    /// compares them for identity.
     pub fn Process(
         &mut self,
         src: &SPixMap,
@@ -482,23 +417,6 @@ impl CVAACalculation {
         result.pCurY = planes.cur.as_ptr() as usize;
         result.pRefY = planes.refp.as_ptr() as usize;
 
-        // **T6.F3**: the five `VAACalc*_c` shims stood here, each handed the six out
-        // arrays as bare pointers and each rebuilding a slice over them with
-        // `from_raw_parts_mut` and a length it re-derived. The arrays are the VAA
-        // block's own `Vec`s now, so the safe kernels underneath those shims are
-        // called *directly* and the length is the `Vec`'s. **T9.X — and the shims are
-        // gone.** The sentence that stood here said they stayed because they were
-        // "the C-ABI-shaped subjects `tests/kernels_differential_phase2.rs` runs
-        // against the reference implementation". That harness has no C++ side —
-        // F124 corrected exactly this belief about exactly this file — so the shims
-        // were the entry points of their own tests and nothing else. Both properties
-        // now drive the safe kernels.
-        //
-        // **S11.43: and the last `from_raw_parts` is gone** — the sentence that
-        // stood here said the two planes "still arrive as raw roots"; they arrive
-        // as borrows of the pool pictures now, and `vaa_span` bounds a reslice.
-        // The exact reach the walk has, now a bounds-checked reslice of the
-        // caller's borrow rather than a claim over a raw root.
         let span = vaa_span(iPicWidth, iPicHeight, iPicStride);
         let cur = &planes.cur[..span];
         let refp = &planes.refp[..span];
@@ -598,9 +516,7 @@ mod tests {
         assert_eq!(sad8x8.iter().flatten().filter(|&&v| v != 0).count(), 1);
     }
 
-    /// A width that is not a multiple of 16 makes the walk's step quirk observable,
-    /// and this is the test that pins it now that the old-vs-new differential is
-    /// gone.
+    /// A width that is not a multiple of 16 makes the walk's step quirk observable.
     ///
     /// The C++ advances 16 bytes per macroblock and *then* by
     /// `(iPicStride << 4) - iPicWidth` at the end of the macroblock row. When the

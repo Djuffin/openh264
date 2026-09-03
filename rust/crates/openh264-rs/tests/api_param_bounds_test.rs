@@ -56,11 +56,6 @@ fn test_decoder_null_param_rejected() {
 // this configuration is REJECTED, returning cmInitParaError, because
 // iTargetBitrate is left at 0 while iRCMode defaults to RC_QUALITY_MODE, and
 // ParamValidation() rejects `iTargetBitrate <= 0` for any RC mode but RC_OFF.
-//
-// Un-ignored in Phase 3.9: ParamValidationExt runs the slice-mode switch before
-// ParamValidation, and the SM_FIXEDSLCNUM_SLICE arm now dispatches to the real
-// SliceArgumentValidationFixedSliceMode instead of a todo!(). The assertion is
-// corrected from cmResultSuccess to CM_INIT_PARA_ERROR to match upstream.
 #[test]
 fn test_encoder_very_large_slices() {
     unsafe {
@@ -100,16 +95,9 @@ fn test_encoder_very_large_slices() {
 /// rows with one macroblock corrupted, so that scroll detection predicts a large
 /// vertical displacement and the MVD-table indexing has to stay in bounds.
 ///
-/// **This test used to assert `CM_INIT_PARA_ERROR`**, on the claim that 1800 is
-/// not a multiple of 16 and `ParamValidationExt` rejects it (`encoder_ext.cpp:521`).
-/// Both were wrong: `ParamTranscode` aligns the layer size to 16 and crops
-/// (`param_svc.h:486-489`), so the `& 0x0F` check sees 1808, and upstream's own
-/// test passes on the C++ — `./codec_unittest
-/// --gtest_filter=EncoderInitTest.ScreenContentScrollMotionVectorBounds` -> `OK`,
-/// measured 2026-09-02. The port's copy had also left `iRCMode` at its default,
-/// which is the other rejection it could have seen. It passes since P10.1.B5, when
-/// the three screen-content allocations were ported; the same row left
-/// `gtest_known_failures.txt` in that commit.
+/// `ParamTranscode` aligns the layer size to 16 and crops (`param_svc.h:486-489`),
+/// so `ParamValidationExt`'s `& 0x0F` check (`encoder_ext.cpp:521`) sees 1808 and
+/// the 1800-row height is accepted.
 #[test]
 fn test_encoder_screen_content_scroll_motion_vector_bounds() {
     unsafe {
