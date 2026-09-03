@@ -379,56 +379,56 @@ pub fn WelsEncRecI16x16Y(
     pMbCache: &mut SMbCache,
 ) {
     let mut aDctT4Dc = [0i16; 16];
-    let pFuncList = (*pEncCtx).func_list();
+    let pFuncList = pEncCtx.func_list();
     let pCurDqLayer = current_layer_expect(pEncCtx);
-    let kiEncStride = (*pCurDqLayer).iEncStride[0];
-    let kiRecStride = (*pCurDqLayer).iCsStride[0];
+    let kiEncStride = pCurDqLayer.iEncStride[0];
+    let kiRecStride = pCurDqLayer.iCsStride[0];
     // The prediction scratch is an owned `[u8; 2*256+16]` on the cache.
     // Stride 16 is the scratch's own geometry.
     let pBestPred = RecCursor::over_owned(
-        &mut (*pMbCache).sMemPredMb,
-        mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf),
+        &mut pMbCache.sMemPredMb,
+        mem_pred_luma_off(pMbCache.uiMemPredLumaHalf),
         16,
     );
     let mut kpNoneZeroCountIdx = 0usize;
-    let uiQp = (*pCurMb).uiLumaQp;
+    let uiQp = pCurMb.uiLumaQp;
     let mut uiNoneZeroCountMbAc = 0u32;
 
     let pMF = &g_kiQuantMF[uiQp as usize];
     let pFF = get_quant_intra_ff(uiQp as usize);
 
     let encView = crate::encoder::svc_encode_slice::layer_enc_view_expect(&*pCurDqLayer);
-    let pEncCur = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
+    let pEncCur = pMbCache.SPicData.mb_cursor_ro(encView, 0);
     WelsDctMb(
-        &mut (*pMbCache).sCoeffLevel,
+        &mut pMbCache.sCoeffLevel,
         &pEncCur,
         &pBestPred,
-        (*pFuncList).pfDctFourT4,
+        pFuncList.pfDctFourT4,
     );
 
-    ((*pFuncList).pfTransformHadamard4x4Dc)(&mut aDctT4Dc, hadamard_dc_span(&(*pMbCache).sCoeffLevel, 0));
-    ((*pFuncList).pfQuantizationDc4x4)(&mut aDctT4Dc, pFF[0] << 1, pMF[0] >> 1);
-    ((*pFuncList).pfScan4x4)(&mut (*pMbCache).sDct.iLumaI16x16Dc, &aDctT4Dc);
+    (pFuncList.pfTransformHadamard4x4Dc)(&mut aDctT4Dc, hadamard_dc_span(&pMbCache.sCoeffLevel, 0));
+    (pFuncList.pfQuantizationDc4x4)(&mut aDctT4Dc, pFF[0] << 1, pMF[0] >> 1);
+    (pFuncList.pfScan4x4)(&mut pMbCache.sDct.iLumaI16x16Dc, &aDctT4Dc);
 
-    let uiCountI16x16Dc = ((*pFuncList).pfGetNoneZeroCount)(&(*pMbCache).sDct.iLumaI16x16Dc) as u32;
+    let uiCountI16x16Dc = (pFuncList.pfGetNoneZeroCount)(&pMbCache.sDct.iLumaI16x16Dc) as u32;
 
     for i in 0..4 {
-        ((*pFuncList).pfQuantizationFour4x4)(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, i << 6), pFF, pMF);
-        let func = (*pFuncList).pfScan4x4Ac;
+        (pFuncList.pfQuantizationFour4x4)(blk_four4x4_mut(&mut pMbCache.sCoeffLevel, i << 6), pFF, pMF);
+        let func = pFuncList.pfScan4x4Ac;
         for j in 0..4 {
             let k = (i << 2) + j;
             func(
-                &mut (*pMbCache).sDct.iLumaBlock[k],
-                blk4x4(&(*pMbCache).sCoeffLevel, k << 4),
+                &mut pMbCache.sDct.iLumaBlock[k],
+                blk4x4(&pMbCache.sCoeffLevel, k << 4),
             );
         }
     }
 
     for k in 0..16 {
-        let uiNoneZeroCount = ((*pFuncList).pfGetNoneZeroCount)(&(*pMbCache).sDct.iLumaBlock[k]) as u32;
+        let uiNoneZeroCount = (pFuncList.pfGetNoneZeroCount)(&pMbCache.sDct.iLumaBlock[k]) as u32;
         let offset = g_kuiMbCountScan4Idx[kpNoneZeroCountIdx] as usize;
         kpNoneZeroCountIdx += 1;
-        (*pCurMb).iNonZeroCount[offset] = uiNoneZeroCount as i8;
+        pCurMb.iNonZeroCount[offset] = uiNoneZeroCount as i8;
         uiNoneZeroCountMbAc += uiNoneZeroCount;
     }
 
@@ -437,7 +437,7 @@ pub fn WelsEncRecI16x16Y(
             WelsIHadamard4x4Dc(&mut aDctT4Dc);
             WelsDequantLumaDc4x4(&mut aDctT4Dc, uiQp as i32);
         } else {
-            ((*pFuncList).pfDequantizationIHadamard4x4)(
+            (pFuncList.pfDequantizationIHadamard4x4)(
                 &mut aDctT4Dc,
                 g_kuiDequantCoeff[uiQp as usize][0] >> 2,
             );
@@ -445,18 +445,18 @@ pub fn WelsEncRecI16x16Y(
     }
 
     if uiNoneZeroCountMbAc > 0 {
-        (*pCurMb).uiCbp = 15;
-        let func = (*pFuncList).pfDequantizationFour4x4;
+        pCurMb.uiCbp = 15;
+        let func = pFuncList.pfDequantizationFour4x4;
         let qp_table = &g_kuiDequantCoeff[uiQp as usize];
         for i in 0..4 {
-            func(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, i << 6), qp_table);
+            func(blk_four4x4_mut(&mut pMbCache.sCoeffLevel, i << 6), qp_table);
         }
 
         // The scanned luma DC returns to block `k`'s DC slot, `sCoeffLevel[k * 16]`,
         // in the C++'s raster-to-zigzag order.
         const KI_DC_SCAN: [usize; 16] = [0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15];
         for (k, &src) in KI_DC_SCAN.iter().enumerate() {
-            (*pMbCache).sCoeffLevel[k << 4] = aDctT4Dc[src];
+            pMbCache.sCoeffLevel[k << 4] = aDctT4Dc[src];
         }
 
         // The four `pBestPred` offsets `0 / 8 / 128 / 136` at stride 16 are the
@@ -465,26 +465,26 @@ pub fn WelsEncRecI16x16Y(
         // `QUADS` makes the two agree by construction instead of by inspection.
         const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
         let view = layer_rec_view_expect(&*pCurDqLayer);
-        let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+        let (lx, ly) = pMbCache.SPicData.luma_origin();
         let dst = view.plane(0).cursor(lx, ly);
-        let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+        let kiPredOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
         for (k, &(dx, dy)) in QUADS.iter().enumerate() {
             idct_four_t4_rec_to_view(
                 &dst.advance(dx, dy),
-                &(*pMbCache).sMemPredMb[kiPredOff + dy as usize * 16 + dx as usize..],
+                &pMbCache.sMemPredMb[kiPredOff + dy as usize * 16 + dx as usize..],
                 16,
-                blk_four4x4(&(*pMbCache).sCoeffLevel, k << 6),
+                blk_four4x4(&pMbCache.sCoeffLevel, k << 6),
             );
         }
     } else if uiCountI16x16Dc > 0 {
         // This site writes the reconstruction plane from the same
         // `pPred` / `pBestPred` pair as the four calls above.
         let view = layer_rec_view_expect(&*pCurDqLayer);
-        let (lx, ly) = (*pMbCache).SPicData.luma_origin();
-        let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+        let (lx, ly) = pMbCache.SPicData.luma_origin();
+        let kiPredOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
         idct_rec_i16x16_dc_to_view(
             &view.plane(0).cursor(lx, ly),
-            &(*pMbCache).sMemPredMb[kiPredOff..],
+            &pMbCache.sMemPredMb[kiPredOff..],
             16,
             &aDctT4Dc,
         );
@@ -492,10 +492,10 @@ pub fn WelsEncRecI16x16Y(
         // The residual-free branch: the prediction *is* the reconstruction,
         // copied straight across from `sMemPredMb`'s luma half.
         let view = layer_rec_view_expect(&*pCurDqLayer);
-        let (lx, ly) = (*pMbCache).SPicData.luma_origin();
-        let kiPredOff = mem_pred_luma_off((*pMbCache).uiMemPredLumaHalf);
+        let (lx, ly) = pMbCache.SPicData.luma_origin();
+        let kiPredOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
         copy_block_to_view::<16>(
-            &(*pMbCache).sMemPredMb[kiPredOff..kiPredOff + 256],
+            &pMbCache.sMemPredMb[kiPredOff..kiPredOff + 256],
             16,
             &view.plane(0).cursor(lx, ly),
             16,
@@ -511,21 +511,21 @@ pub fn WelsEncRecI4x4Y(
     pMbCache: &mut SMbCache,
     uiI4x4Idx: u8,
 ) {
-    let pFuncList = (*pEncCtx).func_list();
+    let pFuncList = pEncCtx.func_list();
     let pCurDqLayer = current_layer_expect(pEncCtx);
-    let iEncStride = (*pCurDqLayer).iEncStride[0];
-    let uiQp = (*pCurMb).uiLumaQp;
+    let iEncStride = pCurDqLayer.iEncStride[0];
+    let uiQp = pCurMb.uiLumaQp;
 
-    let iRecStride = (*pCurDqLayer).iCsStride[0];
+    let iRecStride = pCurDqLayer.iCsStride[0];
 
     let uiOffset = g_kuiMbCountScan4Idx[uiI4x4Idx as usize] as usize;
     // Source plane through the frame's read-only view, prediction scratch
     // through its own owned `[u8; 2*16]`. Stride 4 is the blk4 scratch's geometry.
     let encView = crate::encoder::svc_encode_slice::layer_enc_view_expect(&*pCurDqLayer);
-    let pEncMb = (*pMbCache).SPicData.mb_cursor_ro(encView, 0);
+    let pEncMb = pMbCache.SPicData.mb_cursor_ro(encView, 0);
     let pBestPred = RecCursor::over_owned(
-        &mut (*pMbCache).sMemPredBlk4,
-        best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half),
+        &mut pMbCache.sMemPredBlk4,
+        best_pred_i4x4_blk4_off(pMbCache.uiBestPredI4x4Blk4Half),
         4,
     );
     let kiBlk = uiI4x4Idx as usize;
@@ -533,36 +533,36 @@ pub fn WelsEncRecI4x4Y(
     let pMF = &g_kiQuantMF[uiQp as usize];
     let pFF = get_quant_intra_ff(uiQp as usize);
 
-    let did = (*pEncCtx).uiDependencyId as usize;
-    let tid_is_zero = if (*pEncCtx).uiTemporalId == 0 { 1 } else { 0 };
-    let tab = (*pEncCtx).pStrideTab.as_ref().expect("the stride tables are built at init");
+    let did = pEncCtx.uiDependencyId as usize;
+    let tid_is_zero = if pEncCtx.uiTemporalId == 0 { 1 } else { 0 };
+    let tab = pEncCtx.pStrideTab.as_ref().expect("the stride tables are built at init");
     let enc_block_offset =
         tab.EncBlockOffsets(did).expect("the enc block-offset table is built")[uiI4x4Idx as usize] as isize;
     let dec_block_offset =
         tab.DecBlockOffsets(did, tid_is_zero).expect("the dec block-offset table is built")[uiI4x4Idx as usize] as isize;
 
-    let func = (*pFuncList).pfDctT4;
+    let func = pFuncList.pfDctT4;
     // `advance(n, 0)` moves the centre by exactly `n` bytes — the block offset is
     // a byte offset, not a sample coordinate. The prediction scratch's stride 4
     // rides in its cursor.
     func(
-        &mut (*pMbCache).sCoeffLevel,
+        &mut pMbCache.sCoeffLevel,
         &pEncMb.advance(enc_block_offset, 0),
         &pBestPred,
     );
-    ((*pFuncList).pfQuantization4x4)(blk4x4_mut(&mut (*pMbCache).sCoeffLevel, 0), pFF, pMF);
-    ((*pFuncList).pfScan4x4)(
-        &mut (*pMbCache).sDct.iLumaBlock[kiBlk],
-        blk4x4(&(*pMbCache).sCoeffLevel, 0),
+    (pFuncList.pfQuantization4x4)(blk4x4_mut(&mut pMbCache.sCoeffLevel, 0), pFF, pMF);
+    (pFuncList.pfScan4x4)(
+        &mut pMbCache.sDct.iLumaBlock[kiBlk],
+        blk4x4(&pMbCache.sCoeffLevel, 0),
     );
 
-    let iNoneZeroCount = ((*pFuncList).pfGetNoneZeroCount)(&(*pMbCache).sDct.iLumaBlock[kiBlk]);
-    (*pCurMb).iNonZeroCount[uiOffset] = iNoneZeroCount as i8;
+    let iNoneZeroCount = (pFuncList.pfGetNoneZeroCount)(&pMbCache.sDct.iLumaBlock[kiBlk]);
+    pCurMb.iNonZeroCount[uiOffset] = iNoneZeroCount as i8;
 
     if iNoneZeroCount > 0 {
-        (*pCurMb).uiCbp |= 1 << (uiI4x4Idx >> 2);
-        ((*pFuncList).pfDequantization4x4)(
-            blk4x4_mut(&mut (*pMbCache).sCoeffLevel, 0),
+        pCurMb.uiCbp |= 1 << (uiI4x4Idx >> 2);
+        (pFuncList.pfDequantization4x4)(
+            blk4x4_mut(&mut pMbCache.sCoeffLevel, 0),
             &g_kuiDequantCoeff[uiQp as usize],
         );
         // `dec_block_offset` is a flat byte offset into a plane of `iRecStride`
@@ -571,26 +571,26 @@ pub fn WelsEncRecI4x4Y(
         // neither term can wrap into the other. Prediction is `sMemPredBlk4` at
         // stride 4 (not 16 — this is the 4x4 arena, and its rows are four bytes).
         let view = layer_rec_view_expect(&*pCurDqLayer);
-        let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+        let (lx, ly) = pMbCache.SPicData.luma_origin();
         let (dx, dy) = (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
-        let kiPredOff = best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half);
+        let kiPredOff = best_pred_i4x4_blk4_off(pMbCache.uiBestPredI4x4Blk4Half);
         idct_t4_rec_to_view(
             &view.plane(0).cursor(lx + dx, ly + dy),
-            &(*pMbCache).sMemPredBlk4[kiPredOff..],
+            &pMbCache.sMemPredBlk4[kiPredOff..],
             4,
-            blk4x4(&(*pMbCache).sCoeffLevel, 0),
+            blk4x4(&pMbCache.sCoeffLevel, 0),
         );
     } else {
         // As the `pfIDctT4` branch above: `dec_block_offset` divides by
         // `iRecStride` into the 4x4 block's `(dx, dy)` within the macroblock, and
         // the prediction is `sMemPredBlk4` at stride 4.
         let view = layer_rec_view_expect(&*pCurDqLayer);
-        let (lx, ly) = (*pMbCache).SPicData.luma_origin();
+        let (lx, ly) = pMbCache.SPicData.luma_origin();
         let (dx, dy) =
             (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
-        let kiPredOff = best_pred_i4x4_blk4_off((*pMbCache).uiBestPredI4x4Blk4Half);
+        let kiPredOff = best_pred_i4x4_blk4_off(pMbCache.uiBestPredI4x4Blk4Half);
         copy_block_to_view::<4>(
-            &(*pMbCache).sMemPredBlk4[kiPredOff..kiPredOff + 16],
+            &pMbCache.sMemPredBlk4[kiPredOff..kiPredOff + 16],
             4,
             &view.plane(0).cursor(lx + dx, ly + dy),
             4,
@@ -613,7 +613,7 @@ pub fn WelsEncInterY(
 
     let mut iSingleCtrMb = 0i32;
     let mut iSingleCtr8x8 = [0i32; 4];
-    let uiQp = (*pCurMb).uiLumaQp;
+    let uiQp = pCurMb.uiLumaQp;
     let pMF = &g_kiQuantMF[uiQp as usize];
     let pFF = &g_kiQuantInterFF[uiQp as usize];
     let mut aMax = [0i16; 16];
@@ -621,25 +621,25 @@ pub fn WelsEncInterY(
     for i in 0..4 {
         let func = pfQuantizationFour4x4Max;
         let max4: &mut [i16; 4] = (&mut aMax[i << 2..(i << 2) + 4]).try_into().expect("4");
-        func(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, i << 6), pFF, pMF, max4);
+        func(blk_four4x4_mut(&mut pMbCache.sCoeffLevel, i << 6), pFF, pMF, max4);
         iSingleCtr8x8[i] = 0;
         for j in 0..4 {
             let k = (i << 2) + j;
             let max_val = aMax[k];
             if max_val == 0 {
                 // `WelsSetMemZero_c(pBlock, 32)` — 32 bytes is one 4x4 block of i16.
-                (*pMbCache).sDct.iLumaBlock[k].fill(0);
+                pMbCache.sDct.iLumaBlock[k].fill(0);
             } else {
                 let func = pfScan4x4;
                 func(
-                    &mut (*pMbCache).sDct.iLumaBlock[k],
-                    blk4x4(&(*pMbCache).sCoeffLevel, k << 4),
+                    &mut pMbCache.sDct.iLumaBlock[k],
+                    blk4x4(&pMbCache.sCoeffLevel, k << 4),
                 );
                 if max_val > 1 {
                     iSingleCtr8x8[i] += 9;
                 } else if iSingleCtr8x8[i] < 6 {
                     let func = pfCalculateSingleCtr4x4;
-                    iSingleCtr8x8[i] += func(&(*pMbCache).sDct.iLumaBlock[k]);
+                    iSingleCtr8x8[i] += func(&pMbCache.sDct.iLumaBlock[k]);
                 }
             }
         }
@@ -647,31 +647,31 @@ pub fn WelsEncInterY(
     }
 
     // `WelsSetMemZero (pCurMb->pNonZeroCount, 16)` — the 16 luma entries only.
-    (&mut (*pCurMb).iNonZeroCount)[0..16].fill(0);
+    (&mut pCurMb.iNonZeroCount)[0..16].fill(0);
 
     if iSingleCtrMb < 6 {
         // JVT-O079 zero-residual early cutoff
         // `WelsSetMemZero_c(pRes, 768)` — 768 bytes is all 384 coefficients.
-        (*pMbCache).sCoeffLevel.fill(0);
+        pMbCache.sCoeffLevel.fill(0);
     } else {
         let mut kpNoneZeroCountIdx = 0usize;
         for i in 0..4 {
             if iSingleCtr8x8[i] >= 4 {
                 for j in 0..4 {
-                    let iNoneZeroCount = pfGetNoneZeroCount(&(*pMbCache).sDct.iLumaBlock[(i << 2) + j]);
+                    let iNoneZeroCount = pfGetNoneZeroCount(&pMbCache.sDct.iLumaBlock[(i << 2) + j]);
                     let offset = g_kuiMbCountScan4Idx[kpNoneZeroCountIdx] as usize;
                     kpNoneZeroCountIdx += 1;
-                    (*pCurMb).iNonZeroCount[offset] = iNoneZeroCount as i8;
+                    pCurMb.iNonZeroCount[offset] = iNoneZeroCount as i8;
                 }
                 let func = pfDequantizationFour4x4;
                 func(
-                    blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, i << 6),
+                    blk_four4x4_mut(&mut pMbCache.sCoeffLevel, i << 6),
                     &g_kuiDequantCoeff[uiQp as usize],
                 );
-                (*pCurMb).uiCbp |= 1 << i;
+                pCurMb.uiCbp |= 1 << i;
             } else {
                 // `WelsSetMemZero_c(pRes + i*64, 128)` — 128 bytes is one 64-coefficient quadrant.
-                (*pMbCache).sCoeffLevel[i << 6..(i << 6) + 64].fill(0);
+                pMbCache.sCoeffLevel[i << 6..(i << 6) + 64].fill(0);
                 kpNoneZeroCountIdx += 4;
             }
         }
@@ -704,8 +704,8 @@ pub fn WelsEncRecUV(
     let pfGetNoneZeroCount = pFuncList.pfGetNoneZeroCount;
     let pfDequantizationFour4x4 = pFuncList.pfDequantizationFour4x4;
 
-    let kiInterFlag = !IS_INTRA((*pCurMb).uiMbType);
-    let kiQp = (*pCurMb).uiChromaQp;
+    let kiInterFlag = !IS_INTRA(pCurMb.uiMbType);
+    let kiQp = pCurMb.uiChromaQp;
     let uiNoneZeroCountOffset = ((iUV - 1) << 1) as usize;
     let uiSubMbIdx = (16 + ((iUV - 1) << 2)) as usize;
     // `iChromaBlock` is `[[i16; 16]; 8]`, so this plane's four blocks are
@@ -724,32 +724,32 @@ pub fn WelsEncRecUV(
     let pFF = &g_kiQuantInterFF[ff_idx];
 
     let uiNoneZeroCountMbDc = pfQuantizationHadamard2x2(
-        hadamard2x2_span_mut(&mut (*pMbCache).sCoeffLevel, kiResOff),
+        hadamard2x2_span_mut(&mut pMbCache.sCoeffLevel, kiResOff),
         pFF[0] << 1,
         pMF[0] >> 1,
         &mut aDct2x2,
-        &mut (*pMbCache).sDct.iChromaDc[(iUV - 1) as usize],
+        &mut pMbCache.sDct.iChromaDc[(iUV - 1) as usize],
     );
 
     let func = pfQuantizationFour4x4Max;
-    func(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, kiResOff), pFF, pMF, &mut aMax);
+    func(blk_four4x4_mut(&mut pMbCache.sCoeffLevel, kiResOff), pFF, pMF, &mut aMax);
 
     for j in 0..4 {
         let k = kiChromaBlk + j;
         if aMax[j] == 0 {
-            (*pMbCache).sDct.iChromaBlock[k].fill(0);
+            pMbCache.sDct.iChromaBlock[k].fill(0);
         } else {
             let func = pfScan4x4Ac;
             func(
-                &mut (*pMbCache).sDct.iChromaBlock[k],
-                blk4x4(&(*pMbCache).sCoeffLevel, kiResOff + (j << 4)),
+                &mut pMbCache.sDct.iChromaBlock[k],
+                blk4x4(&pMbCache.sCoeffLevel, kiResOff + (j << 4)),
             );
             if kiInterFlag {
                 if aMax[j] > 1 {
                     iSingleCtr8x8 += 9;
                 } else if iSingleCtr8x8 < 7 {
                     let func = pfCalculateSingleCtr4x4;
-                    iSingleCtr8x8 += func(&(*pMbCache).sDct.iChromaBlock[k]);
+                    iSingleCtr8x8 += func(&pMbCache.sDct.iChromaBlock[k]);
                 }
             } else {
                 iSingleCtr8x8 = i32::MAX;
@@ -759,35 +759,35 @@ pub fn WelsEncRecUV(
 
     if iSingleCtr8x8 < 7 {
         // `WelsSetMemZero_c(pRes, 128)` — one 64-coefficient chroma group.
-        (*pMbCache).sCoeffLevel[kiResOff..kiResOff + 64].fill(0);
-        (*pCurMb).iNonZeroCount[16 + uiNoneZeroCountOffset] = 0;
-        (*pCurMb).iNonZeroCount[16 + uiNoneZeroCountOffset + 1] = 0;
-        (*pCurMb).iNonZeroCount[20 + uiNoneZeroCountOffset] = 0;
-        (*pCurMb).iNonZeroCount[20 + uiNoneZeroCountOffset + 1] = 0;
+        pMbCache.sCoeffLevel[kiResOff..kiResOff + 64].fill(0);
+        pCurMb.iNonZeroCount[16 + uiNoneZeroCountOffset] = 0;
+        pCurMb.iNonZeroCount[16 + uiNoneZeroCountOffset + 1] = 0;
+        pCurMb.iNonZeroCount[20 + uiNoneZeroCountOffset] = 0;
+        pCurMb.iNonZeroCount[20 + uiNoneZeroCountOffset + 1] = 0;
     } else {
         let mut kpNoneZeroCountIdx = uiSubMbIdx;
         for j in 0..4 {
-            let uiNoneZeroCount = pfGetNoneZeroCount(&(*pMbCache).sDct.iChromaBlock[kiChromaBlk + j]);
+            let uiNoneZeroCount = pfGetNoneZeroCount(&pMbCache.sDct.iChromaBlock[kiChromaBlk + j]);
             let offset = g_kuiMbCountScan4Idx[kpNoneZeroCountIdx] as usize;
             kpNoneZeroCountIdx += 1;
-            (*pCurMb).iNonZeroCount[offset] = uiNoneZeroCount as i8;
+            pCurMb.iNonZeroCount[offset] = uiNoneZeroCount as i8;
         }
         let func = pfDequantizationFour4x4;
         func(
-            blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, kiResOff),
-            &g_kuiDequantCoeff[(*pCurMb).uiChromaQp as usize],
+            blk_four4x4_mut(&mut pMbCache.sCoeffLevel, kiResOff),
+            &g_kuiDequantCoeff[pCurMb.uiChromaQp as usize],
         );
-        (*pCurMb).uiCbp &= 0x0F;
-        (*pCurMb).uiCbp |= 0x20;
+        pCurMb.uiCbp &= 0x0F;
+        pCurMb.uiCbp |= 0x20;
     }
 
     if uiNoneZeroCountMbDc > 0 {
         WelsDequantIHadamard2x2Dc(&mut aDct2x2, g_kuiDequantCoeff[kiQp as usize][0]);
-        if 2 != ((*pCurMb).uiCbp >> 4) {
-            (*pCurMb).uiCbp |= 0x01 << 4;
+        if 2 != (pCurMb.uiCbp >> 4) {
+            pCurMb.uiCbp |= 0x01 << 4;
         }
         for (k, &v) in aDct2x2.iter().enumerate() {
-            (*pMbCache).sCoeffLevel[kiResOff + (k << 4)] = v;
+            pMbCache.sCoeffLevel[kiResOff + (k << 4)] = v;
         }
     }
 }
@@ -803,25 +803,25 @@ pub fn WelsTryPYskip(
     pMbCache: &mut SMbCache,
 ) -> bool {
     let mut iSingleCtrMb = 0i32;
-    let kuiQp = (*pCurMb).uiLumaQp;
+    let kuiQp = pCurMb.uiLumaQp;
     let mut aMax = [0i16; 4];
     let pMF = &g_kiQuantMF[kuiQp as usize];
     let pFF = &g_kiQuantInterFF[kuiQp as usize];
 
     for i in 0..4 {
-        ((*pEncCtx).func_list().pfQuantizationFour4x4Max)(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, i << 6), pFF, pMF, &mut aMax);
+        (pEncCtx.func_list().pfQuantizationFour4x4Max)(blk_four4x4_mut(&mut pMbCache.sCoeffLevel, i << 6), pFF, pMF, &mut aMax);
 
         for j in 0..4 {
             let k = (i << 2) + j;
             if aMax[j] > 1 {
                 return false;
             } else if aMax[j] == 1 {
-                ((*pEncCtx).func_list().pfScan4x4)(
-                    &mut (*pMbCache).sDct.iLumaBlock[k],
-                    blk4x4(&(*pMbCache).sCoeffLevel, k << 4),
+                (pEncCtx.func_list().pfScan4x4)(
+                    &mut pMbCache.sDct.iLumaBlock[k],
+                    blk4x4(&pMbCache.sCoeffLevel, k << 4),
                 );
-                let func = (*pEncCtx).func_list().pfCalculateSingleCtr4x4;
-                iSingleCtrMb += func(&(*pMbCache).sDct.iLumaBlock[k]);
+                let func = pEncCtx.func_list().pfCalculateSingleCtr4x4;
+                iSingleCtrMb += func(&pMbCache.sDct.iLumaBlock[k]);
             }
             if iSingleCtrMb >= 6 {
                 return false;
@@ -852,14 +852,14 @@ pub fn WelsTryPUVskip(
     } else {
         0
     };
-    let clipped_qp = ((*pCurMb).uiLumaQp as i32 + chroma_qp_index_offset).clamp(0, 51);
+    let clipped_qp = (pCurMb.uiLumaQp as i32 + chroma_qp_index_offset).clamp(0, 51);
     let kuiQp = g_kuiChromaQpTable[clipped_qp as usize];
 
     let pMF = &g_kiQuantMF[kuiQp as usize];
     let pFF = &g_kiQuantInterFF[kuiQp as usize];
 
-    let hadamard_skip = ((*pEncCtx).func_list().pfQuantizationHadamard2x2Skip)(
-        hadamard2x2_span(&(*pMbCache).sCoeffLevel, kiResOff),
+    let hadamard_skip = (pEncCtx.func_list().pfQuantizationHadamard2x2Skip)(
+        hadamard2x2_span(&pMbCache.sCoeffLevel, kiResOff),
         pFF[0] << 1,
         pMF[0] >> 1,
     ) != 0;
@@ -871,19 +871,19 @@ pub fn WelsTryPUVskip(
         let mut iSingleCtrMb = 0i32;
         let kiChromaBlk = ((iUV - 1) << 2) as usize;
 
-        ((*pEncCtx).func_list().pfQuantizationFour4x4Max)(blk_four4x4_mut(&mut (*pMbCache).sCoeffLevel, kiResOff), pFF, pMF, &mut aMax);
+        (pEncCtx.func_list().pfQuantizationFour4x4Max)(blk_four4x4_mut(&mut pMbCache.sCoeffLevel, kiResOff), pFF, pMF, &mut aMax);
 
         for j in 0..4 {
             let k = kiChromaBlk + j;
             if aMax[j] > 1 {
                 return false;
             } else if aMax[j] == 1 {
-                ((*pEncCtx).func_list().pfScan4x4Ac)(
-                    &mut (*pMbCache).sDct.iChromaBlock[k],
-                    blk4x4(&(*pMbCache).sCoeffLevel, kiResOff + (j << 4)),
+                (pEncCtx.func_list().pfScan4x4Ac)(
+                    &mut pMbCache.sDct.iChromaBlock[k],
+                    blk4x4(&pMbCache.sCoeffLevel, kiResOff + (j << 4)),
                 );
-                let func = (*pEncCtx).func_list().pfCalculateSingleCtr4x4;
-                iSingleCtrMb += func(&(*pMbCache).sDct.iChromaBlock[k]);
+                let func = pEncCtx.func_list().pfCalculateSingleCtr4x4;
+                iSingleCtrMb += func(&pMbCache.sDct.iChromaBlock[k]);
             }
             if iSingleCtrMb >= 7 {
                 return false;

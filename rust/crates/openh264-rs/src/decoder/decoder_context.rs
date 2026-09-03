@@ -1572,16 +1572,16 @@ mod tests {
 
         {
             let pCtx = &mut *ctx;
-            (*pCtx).pPicBuff = CreatePicBuff(false, 4, 64, 64);
-            assert!((*pCtx).pPicBuff.is_some());
+            pCtx.pPicBuff = CreatePicBuff(false, 4, 64, 64);
+            assert!(pCtx.pPicBuff.is_some());
             assert_eq!(pic_pool_mut(pCtx).map(|pool| pool.capacity()), Some(4));
 
             // The field *is* the out-parameter. `take()` reads the pool and
             // leaves the context naming nothing, which is what the C's
             // `*ppPicBuf = NULL` was for.
-            let pool = (*pCtx).pPicBuff.take();
+            let pool = pCtx.pPicBuff.take();
             DestroyPicBuff(pCtx, pool);
-            assert!((*pCtx).pPicBuff.is_none());
+            assert!(pCtx.pPicBuff.is_none());
         }
     }
 }

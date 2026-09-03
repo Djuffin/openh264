@@ -292,10 +292,10 @@ pub fn PredPSkipMvFromNeighbor(
     let mut bRightTopAvail = false;
     let mut bLeftAvail = false;
 
-    let iCurXy = (*pCurDqLayer).iMbXyIndex;
-    let iCurX = (*pCurDqLayer).iMbX;
-    let iCurY = (*pCurDqLayer).iMbY;
-    let iCurSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iCurXy as usize);
+    let iCurXy = pCurDqLayer.iMbXyIndex;
+    let iCurX = pCurDqLayer.iMbX;
+    let iCurY = pCurDqLayer.iMbY;
+    let iCurSliceIdc = *pCurDqLayer.grid.slice_idc.get(iCurXy as usize);
 
     let mut iLeftXy = 0;
     let mut iTopXy = 0;
@@ -304,7 +304,7 @@ pub fn PredPSkipMvFromNeighbor(
 
     if iCurX != 0 {
         iLeftXy = iCurXy - 1;
-        let iLeftSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iLeftXy as usize);
+        let iLeftSliceIdc = *pCurDqLayer.grid.slice_idc.get(iLeftXy as usize);
         bLeftAvail = iLeftSliceIdc == iCurSliceIdc;
     } else {
         bLeftAvail = false;
@@ -312,19 +312,19 @@ pub fn PredPSkipMvFromNeighbor(
     }
 
     if iCurY != 0 {
-        iTopXy = iCurXy - (*pCurDqLayer).iMbWidth;
-        let iTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iTopXy as usize);
+        iTopXy = iCurXy - pCurDqLayer.iMbWidth;
+        let iTopSliceIdc = *pCurDqLayer.grid.slice_idc.get(iTopXy as usize);
         bTopAvail = iTopSliceIdc == iCurSliceIdc;
         if iCurX != 0 {
             iLeftTopXy = iTopXy - 1;
-            let iLeftTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iLeftTopXy as usize);
+            let iLeftTopSliceIdc = *pCurDqLayer.grid.slice_idc.get(iLeftTopXy as usize);
             bLeftTopAvail = iLeftTopSliceIdc == iCurSliceIdc;
         } else {
             bLeftTopAvail = false;
         }
-        if iCurX != ((*pCurDqLayer).iMbWidth - 1) {
+        if iCurX != (pCurDqLayer.iMbWidth - 1) {
             iRightTopXy = iTopXy + 1;
-            let iRightTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iRightTopXy as usize);
+            let iRightTopSliceIdc = *pCurDqLayer.grid.slice_idc.get(iRightTopXy as usize);
             bRightTopAvail = iRightTopSliceIdc == iCurSliceIdc;
         } else {
             bRightTopAvail = false;
@@ -339,7 +339,7 @@ pub fn PredPSkipMvFromNeighbor(
     let iLeftType = if iCurX != 0 && bLeftAvail { *pMbType.get(iLeftXy as usize) } else { 0 };
     let iTopType = if iCurY != 0 && bTopAvail { *pMbType.get(iTopXy as usize) } else { 0 };
     let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbType.get(iLeftTopXy as usize) } else { 0 };
-    let iRightTopType = if iCurX != ((*pCurDqLayer).iMbWidth - 1) && iCurY != 0 && bRightTopAvail { *pMbType.get(iRightTopXy as usize) } else { 0 };
+    let iRightTopType = if iCurX != (pCurDqLayer.iMbWidth - 1) && iCurY != 0 && bRightTopAvail { *pMbType.get(iRightTopXy as usize) } else { 0 };
 
     let mut iMvA = [0i16; 2];
     let mut iMvB = [0i16; 2];
@@ -357,8 +357,8 @@ pub fn PredPSkipMvFromNeighbor(
             iMvA = pic.pMv[0].get(iLeftXy as usize)[3];
             iLeftRef = pic.pRefIndex[0].get(iLeftXy as usize)[3];
         } else {
-            iMvA = (*pCurDqLayer).grid.mv[0].get(iLeftXy as usize)[3];
-            iLeftRef = (*pCurDqLayer).grid.ref_index[0].get(iLeftXy as usize)[3];
+            iMvA = pCurDqLayer.grid.mv[0].get(iLeftXy as usize)[3];
+            iLeftRef = pCurDqLayer.grid.ref_index[0].get(iLeftXy as usize)[3];
         }
     } else {
         iMvA = [0, 0];
@@ -375,8 +375,8 @@ pub fn PredPSkipMvFromNeighbor(
             iMvB = pic.pMv[0].get(iTopXy as usize)[12];
             iTopRef = pic.pRefIndex[0].get(iTopXy as usize)[12];
         } else {
-            iMvB = (*pCurDqLayer).grid.mv[0].get(iTopXy as usize)[12];
-            iTopRef = (*pCurDqLayer).grid.ref_index[0].get(iTopXy as usize)[12];
+            iMvB = pCurDqLayer.grid.mv[0].get(iTopXy as usize)[12];
+            iTopRef = pCurDqLayer.grid.ref_index[0].get(iTopXy as usize)[12];
         }
     } else {
         iMvB = [0, 0];
@@ -393,8 +393,8 @@ pub fn PredPSkipMvFromNeighbor(
             iMvC = pic.pMv[0].get(iRightTopXy as usize)[12];
             iRightTopRef = pic.pRefIndex[0].get(iRightTopXy as usize)[12];
         } else {
-            iMvC = (*pCurDqLayer).grid.mv[0].get(iRightTopXy as usize)[12];
-            iRightTopRef = (*pCurDqLayer).grid.ref_index[0].get(iRightTopXy as usize)[12];
+            iMvC = pCurDqLayer.grid.mv[0].get(iRightTopXy as usize)[12];
+            iRightTopRef = pCurDqLayer.grid.ref_index[0].get(iRightTopXy as usize)[12];
         }
     } else {
         iMvC = [0, 0];
@@ -407,8 +407,8 @@ pub fn PredPSkipMvFromNeighbor(
             iMvD = pic.pMv[0].get(iLeftTopXy as usize)[15];
             iLeftTopRef = pic.pRefIndex[0].get(iLeftTopXy as usize)[15];
         } else {
-            iMvD = (*pCurDqLayer).grid.mv[0].get(iLeftTopXy as usize)[15];
-            iLeftTopRef = (*pCurDqLayer).grid.ref_index[0].get(iLeftTopXy as usize)[15];
+            iMvD = pCurDqLayer.grid.mv[0].get(iLeftTopXy as usize)[15];
+            iLeftTopRef = pCurDqLayer.grid.ref_index[0].get(iLeftTopXy as usize)[15];
         }
     } else {
         iMvD = [0, 0];
@@ -566,7 +566,7 @@ pub fn GetColocatedMb(
     mbType: &mut MbType,
     subMbType: &mut SubMbType,
 ) -> i32 {
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
 
     let pMbType = GetMbType(pCurDqLayer, pDec);
     let curMbType = *pMbType.get(iMbXy);
@@ -600,10 +600,10 @@ pub fn GetColocatedMb(
     }
 
     if IS_INTRA(coloc_mbType) {
-        (*pCurDqLayer).iColocIntra.fill(1);
+        pCurDqLayer.iColocIntra.fill(1);
         return ERR_NONE;
     }
-    (*pCurDqLayer).iColocIntra.fill(0);
+    pCurDqLayer.iColocIntra.fill(0);
 
     if IS_INTER_16x16(*mbType) {
         let pMv = if IS_TYPE_L1(coloc_mbType) {
@@ -611,34 +611,34 @@ pub fn GetColocatedMb(
         } else {
             [0i16; 2]
         };
-        (*pCurDqLayer).iColocMv[LIST_0][0] = colocPic.pMv[LIST_0].get(iMbXy)[0];
-        (*pCurDqLayer).iColocMv[LIST_1][0] = pMv;
-        (*pCurDqLayer).iColocRefIndex[LIST_0][0] = colocPic.pRefIndex[LIST_0].get(iMbXy)[0];
-        (*pCurDqLayer).iColocRefIndex[LIST_1][0] = if IS_TYPE_L1(coloc_mbType) {
+        pCurDqLayer.iColocMv[LIST_0][0] = colocPic.pMv[LIST_0].get(iMbXy)[0];
+        pCurDqLayer.iColocMv[LIST_1][0] = pMv;
+        pCurDqLayer.iColocRefIndex[LIST_0][0] = colocPic.pRefIndex[LIST_0].get(iMbXy)[0];
+        pCurDqLayer.iColocRefIndex[LIST_1][0] = if IS_TYPE_L1(coloc_mbType) {
             colocPic.pRefIndex[LIST_1].get(iMbXy)[0]
         } else {
             REF_NOT_IN_LIST
         };
     } else {
         if !bDirect8x8InferenceFlag {
-            (*pCurDqLayer).iColocMv[LIST_0] = *colocPic.pMv[LIST_0].get(iMbXy);
-            (*pCurDqLayer).iColocRefIndex[LIST_0] = *colocPic.pRefIndex[LIST_0].get(iMbXy);
+            pCurDqLayer.iColocMv[LIST_0] = *colocPic.pMv[LIST_0].get(iMbXy);
+            pCurDqLayer.iColocRefIndex[LIST_0] = *colocPic.pRefIndex[LIST_0].get(iMbXy);
             if IS_TYPE_L1(coloc_mbType) {
-                (*pCurDqLayer).iColocMv[LIST_1] = *colocPic.pMv[LIST_1].get(iMbXy);
-                (*pCurDqLayer).iColocRefIndex[LIST_1] =
+                pCurDqLayer.iColocMv[LIST_1] = *colocPic.pMv[LIST_1].get(iMbXy);
+                pCurDqLayer.iColocRefIndex[LIST_1] =
                     *colocPic.pRefIndex[LIST_1].get(iMbXy);
             } else {
                 // The C casts to `uint8_t` here, so this fill is the plain value.
-                (*pCurDqLayer).iColocRefIndex[LIST_1].fill(REF_NOT_IN_LIST);
+                pCurDqLayer.iColocRefIndex[LIST_1].fill(REF_NOT_IN_LIST);
             }
         } else {
             let maxList = 1 + (if (coloc_mbType & MB_TYPE_L1) != 0 { 1 } else { 0 });
             for listIdx in 0..maxList {
                 let colocMvPtr = *colocPic.pMv[listIdx].get(iMbXy);
-                set_rect_mv(&mut (*pCurDqLayer).iColocMv[listIdx], 0, colocMvPtr[0]);
-                set_rect_mv(&mut (*pCurDqLayer).iColocMv[listIdx], 2, colocMvPtr[3]);
-                set_rect_mv(&mut (*pCurDqLayer).iColocMv[listIdx], 8, colocMvPtr[12]);
-                set_rect_mv(&mut (*pCurDqLayer).iColocMv[listIdx], 10, colocMvPtr[15]);
+                set_rect_mv(&mut pCurDqLayer.iColocMv[listIdx], 0, colocMvPtr[0]);
+                set_rect_mv(&mut pCurDqLayer.iColocMv[listIdx], 2, colocMvPtr[3]);
+                set_rect_mv(&mut pCurDqLayer.iColocMv[listIdx], 8, colocMvPtr[12]);
+                set_rect_mv(&mut pCurDqLayer.iColocMv[listIdx], 10, colocMvPtr[15]);
 
                 // C passes the raw `int8_t` into SetRectBlock's `uint32_t val`, so a
                 // negative ref index sign-extends (-1 -> 0xFFFFFFFF) and the `val *
@@ -647,13 +647,13 @@ pub fn GetColocatedMb(
                 // sign extension. (Contrast the two `(uint8_t)REF_NOT_IN_LIST` sites,
                 // where C casts to unsigned itself.)
                 let colocRefPtr = *colocPic.pRefIndex[listIdx].get(iMbXy);
-                set_rect_ref(&mut (*pCurDqLayer).iColocRefIndex[listIdx], 0, colocRefPtr[0]);
-                set_rect_ref(&mut (*pCurDqLayer).iColocRefIndex[listIdx], 2, colocRefPtr[3]);
-                set_rect_ref(&mut (*pCurDqLayer).iColocRefIndex[listIdx], 8, colocRefPtr[12]);
-                set_rect_ref(&mut (*pCurDqLayer).iColocRefIndex[listIdx], 10, colocRefPtr[15]);
+                set_rect_ref(&mut pCurDqLayer.iColocRefIndex[listIdx], 0, colocRefPtr[0]);
+                set_rect_ref(&mut pCurDqLayer.iColocRefIndex[listIdx], 2, colocRefPtr[3]);
+                set_rect_ref(&mut pCurDqLayer.iColocRefIndex[listIdx], 8, colocRefPtr[12]);
+                set_rect_ref(&mut pCurDqLayer.iColocRefIndex[listIdx], 10, colocRefPtr[15]);
             }
             if (coloc_mbType & MB_TYPE_L1) == 0 {
-                (*pCurDqLayer).iColocRefIndex[1].fill(REF_NOT_IN_LIST);
+                pCurDqLayer.iColocRefIndex[1].fill(REF_NOT_IN_LIST);
             }
         }
     }
@@ -671,7 +671,7 @@ pub fn PredMvBDirectSpatial(
     ref_idx: &mut [i8; 2],
     subMbType: &mut SubMbType,
 ) -> i32 {
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
     let pMbType = GetMbType(pCurDqLayer, Some(&*pDec));
     let curMbType = *pMbType.get(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
@@ -688,10 +688,10 @@ pub fn PredMvBDirectSpatial(
     let mut bRightTopAvail = false;
     let mut bLeftAvail = false;
 
-    let iCurXy = (*pCurDqLayer).iMbXyIndex;
-    let iCurX = (*pCurDqLayer).iMbX;
-    let iCurY = (*pCurDqLayer).iMbY;
-    let iCurSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iCurXy as usize);
+    let iCurXy = pCurDqLayer.iMbXyIndex;
+    let iCurX = pCurDqLayer.iMbX;
+    let iCurY = pCurDqLayer.iMbY;
+    let iCurSliceIdc = *pCurDqLayer.grid.slice_idc.get(iCurXy as usize);
 
     let mut iLeftXy = 0;
     let mut iTopXy = 0;
@@ -700,22 +700,22 @@ pub fn PredMvBDirectSpatial(
 
     if iCurX != 0 {
         iLeftXy = iCurXy - 1;
-        let iLeftSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iLeftXy as usize);
+        let iLeftSliceIdc = *pCurDqLayer.grid.slice_idc.get(iLeftXy as usize);
         bLeftAvail = iLeftSliceIdc == iCurSliceIdc;
     }
 
     if iCurY != 0 {
-        iTopXy = iCurXy - (*pCurDqLayer).iMbWidth;
-        let iTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iTopXy as usize);
+        iTopXy = iCurXy - pCurDqLayer.iMbWidth;
+        let iTopSliceIdc = *pCurDqLayer.grid.slice_idc.get(iTopXy as usize);
         bTopAvail = iTopSliceIdc == iCurSliceIdc;
         if iCurX != 0 {
             iLeftTopXy = iTopXy - 1;
-            let iLeftTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iLeftTopXy as usize);
+            let iLeftTopSliceIdc = *pCurDqLayer.grid.slice_idc.get(iLeftTopXy as usize);
             bLeftTopAvail = iLeftTopSliceIdc == iCurSliceIdc;
         }
-        if iCurX != ((*pCurDqLayer).iMbWidth - 1) {
+        if iCurX != (pCurDqLayer.iMbWidth - 1) {
             iRightTopXy = iTopXy + 1;
-            let iRightTopSliceIdc = *(*pCurDqLayer).grid.slice_idc.get(iRightTopXy as usize);
+            let iRightTopSliceIdc = *pCurDqLayer.grid.slice_idc.get(iRightTopXy as usize);
             bRightTopAvail = iRightTopSliceIdc == iCurSliceIdc;
         }
     }
@@ -724,7 +724,7 @@ pub fn PredMvBDirectSpatial(
     let iLeftType = if iCurX != 0 && bLeftAvail { *pMbTypePtr.get(iLeftXy as usize) } else { 0 };
     let iTopType = if iCurY != 0 && bTopAvail { *pMbTypePtr.get(iTopXy as usize) } else { 0 };
     let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbTypePtr.get(iLeftTopXy as usize) } else { 0 };
-    let iRightTopType = if iCurX != ((*pCurDqLayer).iMbWidth - 1) && iCurY != 0 && bRightTopAvail { *pMbTypePtr.get(iRightTopXy as usize) } else { 0 };
+    let iRightTopType = if iCurX != (pCurDqLayer.iMbWidth - 1) && iCurY != 0 && bRightTopAvail { *pMbTypePtr.get(iRightTopXy as usize) } else { 0 };
 
     let mut iLeftRef = [0i8; 2];
     let mut iTopRef = [0i8; 2];
@@ -738,32 +738,32 @@ pub fn PredMvBDirectSpatial(
 
     for listIdx in 0..2 {
         if bLeftAvail && IS_INTER(iLeftType) {
-            iMvA[listIdx] = (*pDec.pMv[listIdx].get(iLeftXy as usize))[3];
-            iLeftRef[listIdx] = (*pDec.pRefIndex[listIdx].get(iLeftXy as usize))[3];
+            iMvA[listIdx] = pDec.pMv[listIdx].get(iLeftXy as usize)[3];
+            iLeftRef[listIdx] = pDec.pRefIndex[listIdx].get(iLeftXy as usize)[3];
         } else {
             iMvA[listIdx] = [0, 0];
             iLeftRef[listIdx] = if !bLeftAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
         }
 
         if bTopAvail && IS_INTER(iTopType) {
-            iMvB[listIdx] = (*pDec.pMv[listIdx].get(iTopXy as usize))[12];
-            iTopRef[listIdx] = (*pDec.pRefIndex[listIdx].get(iTopXy as usize))[12];
+            iMvB[listIdx] = pDec.pMv[listIdx].get(iTopXy as usize)[12];
+            iTopRef[listIdx] = pDec.pRefIndex[listIdx].get(iTopXy as usize)[12];
         } else {
             iMvB[listIdx] = [0, 0];
             iTopRef[listIdx] = if !bTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
         }
 
         if bRightTopAvail && IS_INTER(iRightTopType) {
-            iMvC[listIdx] = (*pDec.pMv[listIdx].get(iRightTopXy as usize))[12];
-            iRightTopRef[listIdx] = (*pDec.pRefIndex[listIdx].get(iRightTopXy as usize))[12];
+            iMvC[listIdx] = pDec.pMv[listIdx].get(iRightTopXy as usize)[12];
+            iRightTopRef[listIdx] = pDec.pRefIndex[listIdx].get(iRightTopXy as usize)[12];
         } else {
             iMvC[listIdx] = [0, 0];
             iRightTopRef[listIdx] = if !bRightTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
         }
 
         if bLeftTopAvail && IS_INTER(iLeftTopType) {
-            iMvD[listIdx] = (*pDec.pMv[listIdx].get(iLeftTopXy as usize))[15];
-            iLeftTopRef[listIdx] = (*pDec.pRefIndex[listIdx].get(iLeftTopXy as usize))[15];
+            iMvD[listIdx] = pDec.pMv[listIdx].get(iLeftTopXy as usize)[15];
+            iLeftTopRef[listIdx] = pDec.pRefIndex[listIdx].get(iLeftTopXy as usize)[15];
         } else {
             iMvD[listIdx] = [0, 0];
             iLeftTopRef[listIdx] = if !bLeftTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
@@ -820,15 +820,15 @@ pub fn PredMvBDirectSpatial(
 
     if IS_INTER_16x16(mbType) {
         if iMvp[LIST_0] != [0, 0] || iMvp[LIST_1] != [0, 0] {
-            if 0 == (*pCurDqLayer).iColocIntra[0]
+            if 0 == pCurDqLayer.iColocIntra[0]
                 && !bIsLongRef
-                && (((*pCurDqLayer).iColocRefIndex[LIST_0][0] == 0
-                    && ((*pCurDqLayer).iColocMv[LIST_0][0][0] + 1) as u32 <= 2
-                    && ((*pCurDqLayer).iColocMv[LIST_0][0][1] + 1) as u32 <= 2)
-                    || ((*pCurDqLayer).iColocRefIndex[LIST_0][0] < 0
-                        && (*pCurDqLayer).iColocRefIndex[LIST_1][0] == 0
-                        && ((*pCurDqLayer).iColocMv[LIST_1][0][0] + 1) as u32 <= 2
-                        && ((*pCurDqLayer).iColocMv[LIST_1][0][1] + 1) as u32 <= 2))
+                && ((pCurDqLayer.iColocRefIndex[LIST_0][0] == 0
+                    && (pCurDqLayer.iColocMv[LIST_0][0][0] + 1) as u32 <= 2
+                    && (pCurDqLayer.iColocMv[LIST_0][0][1] + 1) as u32 <= 2)
+                    || (pCurDqLayer.iColocRefIndex[LIST_0][0] < 0
+                        && pCurDqLayer.iColocRefIndex[LIST_1][0] == 0
+                        && (pCurDqLayer.iColocMv[LIST_1][0][0] + 1) as u32 <= 2
+                        && (pCurDqLayer.iColocMv[LIST_1][0][1] + 1) as u32 <= 2))
             {
                 if 0 >= ref_idx[0] {
                     iMvp[LIST_0] = [0, 0];
@@ -849,7 +849,7 @@ pub fn PredMvBDirectSpatial(
             let mut pPartW = [0i8; 4];
             for i in 0..4 {
                 let iIdx8 = (i << 2) as i16;
-                (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy)[i as usize] = *subMbType;
+                pCurDqLayer.grid.sub_mb_type.get_mut(iMbXy)[i as usize] = *subMbType;
                 UpdateP8x8RefIdxCabac(pCurDqLayer, &mut *pDec, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
                 UpdateP8x8RefIdxCabac(pCurDqLayer, &mut *pDec, iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
                 UpdateP8x8DirectCabac(pCurDqLayer, iIdx8 as i32);
@@ -892,7 +892,7 @@ pub fn PredBDirectTemporal(
     subMbType: &mut SubMbType,
 ) -> i32 {
     let mut ret = ERR_NONE;
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
     let pMbType = GetMbType(pCurDqLayer, Some(&*pDec));
     let curMbType = *pMbType.get(iMbXy);
     let bSkipOrDirect = IS_SKIP(curMbType) || IS_DIRECT(curMbType);
@@ -907,7 +907,7 @@ pub fn PredBDirectTemporal(
     SetMbType(pCurDqLayer, Some(&mut *pDec), iMbXy, mbType);
     let pMvd = [0i16; 2];
     let ref0Count = std::cmp::min(
-        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[LIST_0],
+        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[LIST_0],
         pCtx.sRefPic.uiRefCount[LIST_0] as i32,
     );
 
@@ -917,23 +917,23 @@ pub fn PredBDirectTemporal(
         UpdateP16x16DirectCabac(pCurDqLayer);
         UpdateP16x16RefIdx(pCurDqLayer, Some(&mut *pDec), LIST_1 as i32, ref_idx[LIST_1]);
         *iMvp = [[0, 0]; 2];
-        if (*pCurDqLayer).iColocIntra[0] != 0 {
+        if pCurDqLayer.iColocIntra[0] != 0 {
             UpdateP16x16MotionOnly(pCurDqLayer, Some(&mut *pDec), LIST_0 as i32, &iMvp[LIST_0]);
             UpdateP16x16MotionOnly(pCurDqLayer, Some(&mut *pDec), LIST_1 as i32, &iMvp[LIST_1]);
             UpdateP16x16RefIdx(pCurDqLayer, Some(&mut *pDec), LIST_0 as i32, ref_idx[LIST_0]);
         } else {
             ref_idx[LIST_0] = 0;
-            let colocRefIndexL0 = (*pCurDqLayer).iColocRefIndex[LIST_0][0];
+            let colocRefIndexL0 = pCurDqLayer.iColocRefIndex[LIST_0][0];
             let colocList = if colocRefIndexL0 >= 0 {
                 ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, Some(&*pDec), colocRefIndexL0, ref0Count);
                 LIST_0
             } else {
                 LIST_1
             };
-            let mv = (*pCurDqLayer).iColocMv[colocList][0];
+            let mv = pCurDqLayer.iColocMv[colocList][0];
             UpdateP16x16RefIdx(pCurDqLayer, Some(&mut *pDec), LIST_0 as i32, ref_idx[LIST_0]);
 
-            let scale = (*pCurDqLayer).sLayerInfo.sSliceInLayer.iMvScale[LIST_0]
+            let scale = pCurDqLayer.sLayerInfo.sSliceInLayer.iMvScale[LIST_0]
                 [ref_idx[LIST_0] as usize] as i32;
             iMvp[LIST_0][0] = ((scale * (mv[0] as i32) + 128) >> 8) as i16;
             iMvp[LIST_0][1] = ((scale * (mv[1] as i32) + 128) >> 8) as i16;
@@ -951,18 +951,18 @@ pub fn PredBDirectTemporal(
             for i in 0..4 {
                 let iIdx8 = (i << 2) as i16;
                 let iScan4Idx = g_kuiScan4[iIdx8 as usize] as usize;
-                (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy)[i as usize] = *subMbType;
+                pCurDqLayer.grid.sub_mb_type.get_mut(iMbXy)[i as usize] = *subMbType;
                 let mut colocList = LIST_0;
 
                 ref_idx[LIST_1] = 0;
                 UpdateP8x8RefIdxCabac(pCurDqLayer, &mut *pDec, iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
-                if (*pCurDqLayer).iColocIntra[iScan4Idx] != 0 {
+                if pCurDqLayer.iColocIntra[iScan4Idx] != 0 {
                     ref_idx[LIST_0] = 0;
                     UpdateP8x8RefIdxCabac(pCurDqLayer, &mut *pDec, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
                     *iMvp = [[0, 0]; 2];
                 } else {
                     ref_idx[LIST_0] = 0;
-                    let colocRefIndexL0 = (*pCurDqLayer).iColocRefIndex[LIST_0][iScan4Idx];
+                    let colocRefIndexL0 = pCurDqLayer.iColocRefIndex[LIST_0][iScan4Idx];
                     if colocRefIndexL0 >= 0 {
                         ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, Some(&*pDec), colocRefIndexL0, ref0Count);
                     } else {
@@ -1040,7 +1040,7 @@ pub fn UpdateP16x16MotionInfo(
     iMVs: &[i16; 2],
 ) {
     let kiMV = *iMVs;
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
 
     for i in (0..16).step_by(4) {
         let kuiScan4Idx = g_kuiScan4[i] as usize;
@@ -1059,13 +1059,13 @@ pub fn UpdateP16x16MotionInfo(
             mv_ptr[kuiScan4IdxPlus4] = kiMV;
             mv_ptr[1 + kuiScan4IdxPlus4] = kiMV;
         } else {
-            let ref_ptr = (*pCurDqLayer).grid.ref_index[listIdx].get_mut(iMbXy);
+            let ref_ptr = pCurDqLayer.grid.ref_index[listIdx].get_mut(iMbXy);
             ref_ptr[kuiScan4Idx] = iRef;
             ref_ptr[kuiScan4Idx + 1] = iRef;
             ref_ptr[kuiScan4IdxPlus4] = iRef;
             ref_ptr[kuiScan4IdxPlus4 + 1] = iRef;
 
-            let mv_ptr = (*pCurDqLayer).grid.mv[listIdx].get_mut(iMbXy);
+            let mv_ptr = pCurDqLayer.grid.mv[listIdx].get_mut(iMbXy);
             mv_ptr[kuiScan4Idx] = kiMV;
             mv_ptr[1 + kuiScan4Idx] = kiMV;
             mv_ptr[kuiScan4IdxPlus4] = kiMV;
@@ -1081,7 +1081,7 @@ pub fn UpdateP16x16RefIdx(
     listIdx: i32,
     iRef: i8,
 ) {
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
 
     if let Some(pic) = pDec.as_deref_mut() {
         let ref_ptr = pic.pRefIndex[listIdx as usize].get_mut(iMbXy);
@@ -1104,7 +1104,7 @@ pub fn UpdateP16x16MotionOnly(
     iMVs: &[i16; 2],
 ) {
     let kiMV = *iMVs;
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
 
     for i in (0..16).step_by(4) {
         let kuiScan4Idx = g_kuiScan4[i] as usize;
@@ -1117,7 +1117,7 @@ pub fn UpdateP16x16MotionOnly(
             mv_ptr[kuiScan4IdxPlus4] = kiMV;
             mv_ptr[1 + kuiScan4IdxPlus4] = kiMV;
         } else {
-            let mv_ptr = (*pCurDqLayer).grid.mv[listIdx as usize].get_mut(iMbXy);
+            let mv_ptr = pCurDqLayer.grid.mv[listIdx as usize].get_mut(iMbXy);
             mv_ptr[kuiScan4Idx] = kiMV;
             mv_ptr[1 + kuiScan4Idx] = kiMV;
             mv_ptr[kuiScan4IdxPlus4] = kiMV;
@@ -1138,7 +1138,7 @@ pub fn UpdateP16x8MotionInfo(
     iMVs: &[i16; 2],
 ) {
     let kiMV = *iMVs;
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
 
     for _ in 0..2 {
         let kuiScan4Idx = g_kuiScan4[iPartIdx] as usize;
@@ -1159,13 +1159,13 @@ pub fn UpdateP16x8MotionInfo(
             mv_ptr[kuiScan4IdxPlus4] = kiMV;
             mv_ptr[1 + kuiScan4IdxPlus4] = kiMV;
         } else {
-            let ref_ptr = (*pCurDqLayer).grid.ref_index[listIdx].get_mut(iMbXy);
+            let ref_ptr = pCurDqLayer.grid.ref_index[listIdx].get_mut(iMbXy);
             ref_ptr[kuiScan4Idx] = iRef;
             ref_ptr[kuiScan4Idx + 1] = iRef;
             ref_ptr[kuiScan4IdxPlus4] = iRef;
             ref_ptr[kuiScan4IdxPlus4 + 1] = iRef;
 
-            let mv_ptr = (*pCurDqLayer).grid.mv[listIdx].get_mut(iMbXy);
+            let mv_ptr = pCurDqLayer.grid.mv[listIdx].get_mut(iMbXy);
             mv_ptr[kuiScan4Idx] = kiMV;
             mv_ptr[1 + kuiScan4Idx] = kiMV;
             mv_ptr[kuiScan4IdxPlus4] = kiMV;
@@ -1204,7 +1204,7 @@ pub fn UpdateP8x16MotionInfo(
     iMVs: &[i16; 2],
 ) {
     let kiMV = *iMVs;
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
 
     for _ in 0..2 {
         let kuiScan4Idx = g_kuiScan4[iPartIdx] as usize;
@@ -1225,13 +1225,13 @@ pub fn UpdateP8x16MotionInfo(
             mv_ptr[kuiScan4IdxPlus4] = kiMV;
             mv_ptr[1 + kuiScan4IdxPlus4] = kiMV;
         } else {
-            let ref_ptr = (*pCurDqLayer).grid.ref_index[listIdx].get_mut(iMbXy);
+            let ref_ptr = pCurDqLayer.grid.ref_index[listIdx].get_mut(iMbXy);
             ref_ptr[kuiScan4Idx] = iRef;
             ref_ptr[kuiScan4Idx + 1] = iRef;
             ref_ptr[kuiScan4IdxPlus4] = iRef;
             ref_ptr[kuiScan4IdxPlus4 + 1] = iRef;
 
-            let mv_ptr = (*pCurDqLayer).grid.mv[listIdx].get_mut(iMbXy);
+            let mv_ptr = pCurDqLayer.grid.mv[listIdx].get_mut(iMbXy);
             mv_ptr[kuiScan4Idx] = kiMV;
             mv_ptr[1 + kuiScan4Idx] = kiMV;
             mv_ptr[kuiScan4IdxPlus4] = kiMV;
@@ -1266,7 +1266,7 @@ pub fn Update8x8RefIdx(
     listIdx: usize,
     iRef: i8,
 ) {
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
     let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
     // No `pDec` guard: `mv_pred.cpp:1175` dereferences unconditionally.
     let pDecRef = pDec.pRefIndex[listIdx].get_mut(iMbXy);
@@ -1284,10 +1284,10 @@ pub use crate::decoder::parse_mb_syn_cabac::UpdateP8x8RefIdxCabac;
 
 #[inline(always)]
 pub fn UpdateP8x8DirectCabac(pCurDqLayer: &mut DqLayerState, iPartIdx: i32) {
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
     let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
     {
-        let direct_ptr = (*pCurDqLayer).grid.direct.get_mut(iMbXy);
+        let direct_ptr = pCurDqLayer.grid.direct.get_mut(iMbXy);
         direct_ptr[iScan4Idx] = 1;
         direct_ptr[iScan4Idx + 1] = 1;
         direct_ptr[iScan4Idx + 4] = 1;
@@ -1297,10 +1297,10 @@ pub fn UpdateP8x8DirectCabac(pCurDqLayer: &mut DqLayerState, iPartIdx: i32) {
 
 #[inline(always)]
 pub fn UpdateP16x16DirectCabac(pCurDqLayer: &mut DqLayerState) {
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
     let direct: u16 = (1 << 8) | 1;
     {
-        let direct_ptr = (*pCurDqLayer).grid.direct.get_mut(iMbXy);
+        let direct_ptr = pCurDqLayer.grid.direct.get_mut(iMbXy);
         for i in (0..16).step_by(4) {
             let kuiScan4Idx = g_kuiScan4[i] as usize;
             let kuiScan4IdxPlus4 = 4 + kuiScan4Idx;
@@ -1315,8 +1315,8 @@ pub fn UpdateP16x16DirectCabac(pCurDqLayer: &mut DqLayerState) {
 #[inline(always)]
 pub fn UpdateP16x16MvdCabac(pCurDqLayer: &mut DqLayerState, pMvd: &[i16; 2], iListIdx: i32) {
     let kMvd = *pMvd;
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
-    let mvd = (*pCurDqLayer).grid.mvd[iListIdx as usize].get_mut(iMbXy);
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
+    let mvd = pCurDqLayer.grid.mvd[iListIdx as usize].get_mut(iMbXy);
     for i in 0..16 {
         mvd[i] = kMvd;
     }
@@ -1340,7 +1340,7 @@ pub fn FillSpatialDirect8x8Mv(
     mut pMotionVector: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
     mut pMvdCache: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
 ) {
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
 
     for j in 0..iPartCount as i32 {
         let iPartIdx = (iIdx8 as i32 + j * iPartW as i32) as usize;
@@ -1360,7 +1360,7 @@ pub fn FillSpatialDirect8x8Mv(
                 dec_mv_l0[iScan4Idx + 4 + 1] = pMV[1];
             }
             {
-                let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy);
+                let mvd_l0 = pCurDqLayer.grid.mvd[LIST_0].get_mut(iMbXy);
                 mvd_l0[iScan4Idx] = [0, 0];
                 mvd_l0[iScan4Idx + 1] = [0, 0];
                 mvd_l0[iScan4Idx + 4] = [0, 0];
@@ -1391,7 +1391,7 @@ pub fn FillSpatialDirect8x8Mv(
                 dec_mv_l1[iScan4Idx + 4 + 1] = pMV[1];
             }
             {
-                let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy);
+                let mvd_l1 = pCurDqLayer.grid.mvd[LIST_1].get_mut(iMbXy);
                 mvd_l1[iScan4Idx] = [0, 0];
                 mvd_l1[iScan4Idx + 1] = [0, 0];
                 mvd_l1[iScan4Idx + 4] = [0, 0];
@@ -1418,7 +1418,7 @@ pub fn FillSpatialDirect8x8Mv(
                 dec_mv_l0[iScan4Idx] = pMV[0];
             }
             {
-                let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy);
+                let mvd_l0 = pCurDqLayer.grid.mvd[LIST_0].get_mut(iMbXy);
                 mvd_l0[iScan4Idx] = [0, 0];
             }
             if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
@@ -1436,7 +1436,7 @@ pub fn FillSpatialDirect8x8Mv(
                 dec_mv_l1[iScan4Idx] = pMV[0];
             }
             {
-                let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy);
+                let mvd_l1 = pCurDqLayer.grid.mvd[LIST_1].get_mut(iMbXy);
                 mvd_l1[iScan4Idx] = [0, 0];
             }
             if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
@@ -1450,16 +1450,16 @@ pub fn FillSpatialDirect8x8Mv(
         }
 
         if pMvDirect[LIST_0] != [0, 0] || pMvDirect[LIST_1] != [0, 0] {
-            let uiColZeroFlag = (0 == (*pCurDqLayer).iColocIntra[iColocIdx]) && !bIsLongRef &&
-                ((*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] == 0 ||
-                 ((*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] < 0 && (*pCurDqLayer).iColocRefIndex[LIST_1][iColocIdx] == 0));
+            let uiColZeroFlag = (0 == pCurDqLayer.iColocIntra[iColocIdx]) && !bIsLongRef &&
+                (pCurDqLayer.iColocRefIndex[LIST_0][iColocIdx] == 0 ||
+                 (pCurDqLayer.iColocRefIndex[LIST_0][iColocIdx] < 0 && pCurDqLayer.iColocRefIndex[LIST_1][iColocIdx] == 0));
 
-            let colocList = if 0 == (*pCurDqLayer).iColocRefIndex[LIST_0][iColocIdx] {
+            let colocList = if 0 == pCurDqLayer.iColocRefIndex[LIST_0][iColocIdx] {
                 LIST_0
             } else {
                 LIST_1
             };
-            let mv = (*pCurDqLayer).iColocMv[colocList][iColocIdx];
+            let mv = pCurDqLayer.iColocMv[colocList][iColocIdx];
 
             if IS_SUB_8x8(subMbType) {
                 if uiColZeroFlag && ((mv[0] + 1) as u32 <= 2 && (mv[1] + 1) as u32 <= 2) {
@@ -1472,7 +1472,7 @@ pub fn FillSpatialDirect8x8Mv(
                             dec_mv_l0[iScan4Idx + 4 + 1] = [0, 0];
                         }
                         {
-                            let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy);
+                            let mvd_l0 = pCurDqLayer.grid.mvd[LIST_0].get_mut(iMbXy);
                             mvd_l0[iScan4Idx] = [0, 0];
                             mvd_l0[iScan4Idx + 1] = [0, 0];
                             mvd_l0[iScan4Idx + 4] = [0, 0];
@@ -1503,7 +1503,7 @@ pub fn FillSpatialDirect8x8Mv(
                             dec_mv_l1[iScan4Idx + 4 + 1] = [0, 0];
                         }
                         {
-                            let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy);
+                            let mvd_l1 = pCurDqLayer.grid.mvd[LIST_1].get_mut(iMbXy);
                             mvd_l1[iScan4Idx] = [0, 0];
                             mvd_l1[iScan4Idx + 1] = [0, 0];
                             mvd_l1[iScan4Idx + 4] = [0, 0];
@@ -1533,7 +1533,7 @@ pub fn FillSpatialDirect8x8Mv(
                             dec_mv_l0[iScan4Idx] = [0, 0];
                         }
                         {
-                            let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy);
+                            let mvd_l0 = pCurDqLayer.grid.mvd[LIST_0].get_mut(iMbXy);
                             mvd_l0[iScan4Idx] = [0, 0];
                         }
                         if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
@@ -1551,7 +1551,7 @@ pub fn FillSpatialDirect8x8Mv(
                             dec_mv_l1[iScan4Idx] = [0, 0];
                         }
                         {
-                            let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy);
+                            let mvd_l1 = pCurDqLayer.grid.mvd[LIST_1].get_mut(iMbXy);
                             mvd_l1[iScan4Idx] = [0, 0];
                         }
                         if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
@@ -1582,8 +1582,8 @@ pub fn FillTemporalDirect8x8Mv(
     mut pMotionVector: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
     mut pMvdCache: Option<&mut [[[i16; 2]; 30]; LIST_A]>,
 ) {
-    let pSlice = &mut (*pCurDqLayer).sLayerInfo.sSliceInLayer;
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let pSlice = &mut pCurDqLayer.sLayerInfo.sSliceInLayer;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
     let mut pMvDirect = [[0i16; 2]; 2];
 
     for j in 0..iPartCount as i32 {
@@ -1592,11 +1592,11 @@ pub fn FillTemporalDirect8x8Mv(
         let iColocIdx = g_kuiScan4[iPartIdx] as usize;
         let iCacheIdx = g_kuiCache30ScanIdx[iPartIdx] as usize;
 
-        let mv = (*pCurDqLayer).iColocMv[colocList][iColocIdx];
+        let mv = pCurDqLayer.iColocMv[colocList][iColocIdx];
 
         let mut pMV = [[0i16; 2]; 2];
         if IS_SUB_8x8(subMbType) {
-            if (*pCurDqLayer).iColocIntra[iColocIdx] == 0 {
+            if pCurDqLayer.iColocIntra[iColocIdx] == 0 {
                 let ref0 = iRef[LIST_0] as usize;
                 let scale = pSlice.iMvScale[LIST_0][ref0] as i32;
                 pMvDirect[LIST_0][0] = ((scale * (mv[0] as i32) + 128) >> 8) as i16;
@@ -1612,7 +1612,7 @@ pub fn FillTemporalDirect8x8Mv(
                 dec_mv_l0[iScan4Idx + 4 + 1] = pMV[1];
             }
             {
-                let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy);
+                let mvd_l0 = pCurDqLayer.grid.mvd[LIST_0].get_mut(iMbXy);
                 mvd_l0[iScan4Idx] = [0, 0];
                 mvd_l0[iScan4Idx + 1] = [0, 0];
                 mvd_l0[iScan4Idx + 4] = [0, 0];
@@ -1633,7 +1633,7 @@ pub fn FillTemporalDirect8x8Mv(
                 mvd_cache_l0[iCacheIdx + 6 + 1] = [0, 0];
             }
 
-            if (*pCurDqLayer).iColocIntra[g_kuiScan4[iIdx8 as usize] as usize] == 0 {
+            if pCurDqLayer.iColocIntra[g_kuiScan4[iIdx8 as usize] as usize] == 0 {
                 pMvDirect[LIST_1][0] = pMvDirect[LIST_0][0] - mv[0];
                 pMvDirect[LIST_1][1] = pMvDirect[LIST_0][1] - mv[1];
             }
@@ -1647,7 +1647,7 @@ pub fn FillTemporalDirect8x8Mv(
                 dec_mv_l1[iScan4Idx + 4 + 1] = pMV[1];
             }
             {
-                let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy);
+                let mvd_l1 = pCurDqLayer.grid.mvd[LIST_1].get_mut(iMbXy);
                 mvd_l1[iScan4Idx] = [0, 0];
                 mvd_l1[iScan4Idx + 1] = [0, 0];
                 mvd_l1[iScan4Idx + 4] = [0, 0];
@@ -1668,7 +1668,7 @@ pub fn FillTemporalDirect8x8Mv(
                 mvd_cache_l1[iCacheIdx + 6 + 1] = [0, 0];
             }
         } else {
-            if (*pCurDqLayer).iColocIntra[iColocIdx] == 0 {
+            if pCurDqLayer.iColocIntra[iColocIdx] == 0 {
                 let ref0 = iRef[LIST_0] as usize;
                 let scale = pSlice.iMvScale[LIST_0][ref0] as i32;
                 pMvDirect[LIST_0][0] = ((scale * (mv[0] as i32) + 128) >> 8) as i16;
@@ -1680,7 +1680,7 @@ pub fn FillTemporalDirect8x8Mv(
                 dec_mv_l0[iScan4Idx] = pMV[0];
             }
             {
-                let mvd_l0 = (*pCurDqLayer).grid.mvd[LIST_0].get_mut(iMbXy);
+                let mvd_l0 = pCurDqLayer.grid.mvd[LIST_0].get_mut(iMbXy);
                 mvd_l0[iScan4Idx] = [0, 0];
             }
             if let Some(pMotionVector) = pMotionVector.as_deref_mut() {
@@ -1692,7 +1692,7 @@ pub fn FillTemporalDirect8x8Mv(
                 mvd_cache_l0[iCacheIdx] = [0, 0];
             }
 
-            if (*pCurDqLayer).iColocIntra[iColocIdx] == 0 {
+            if pCurDqLayer.iColocIntra[iColocIdx] == 0 {
                 pMvDirect[LIST_1][0] = pMvDirect[LIST_0][0] - mv[0];
                 pMvDirect[LIST_1][1] = pMvDirect[LIST_0][1] - mv[1];
             }
@@ -1702,7 +1702,7 @@ pub fn FillTemporalDirect8x8Mv(
                 dec_mv_l1[iScan4Idx] = pMV[0];
             }
             {
-                let mvd_l1 = (*pCurDqLayer).grid.mvd[LIST_1].get_mut(iMbXy);
+                let mvd_l1 = pCurDqLayer.grid.mvd[LIST_1].get_mut(iMbXy);
                 mvd_l1[iScan4Idx] = [0, 0];
             }
             if let Some(pMotionVector) = pMotionVector.as_deref_mut() {

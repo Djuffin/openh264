@@ -1752,10 +1752,10 @@ pub fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
     }
 
     if bNeedFrameNumIncreasing {
-        if (*pParamInternal).iFrameNum < max_frame_num_minus1 {
-            (*pParamInternal).iFrameNum += 1;
+        if pParamInternal.iFrameNum < max_frame_num_minus1 {
+            pParamInternal.iFrameNum += 1;
         } else {
-            (*pParamInternal).iFrameNum = 0;
+            pParamInternal.iFrameNum = 0;
         }
     }
 
@@ -1781,10 +1781,10 @@ pub fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
     }
 
     if bNeedFrameNumIncreasing {
-        if (*pParamInternal).iFrameNum != 0 {
-            (*pParamInternal).iFrameNum -= 1;
+        if pParamInternal.iFrameNum != 0 {
+            pParamInternal.iFrameNum -= 1;
         } else {
-            (*pParamInternal).iFrameNum = max_frame_num_minus1;
+            pParamInternal.iFrameNum = max_frame_num_minus1;
         }
     }
 }
@@ -1819,12 +1819,12 @@ pub fn InitFrameCoding(
 
     if keFrameType == EVideoFrameType::videoFrameTypeP {
         let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
-        (*pParamInternal).iFrameIndex += 1;
+        pParamInternal.iFrameIndex += 1;
 
-        if (*pParamInternal).iPOC < max_poc_boundary {
-            (*pParamInternal).iPOC += 2;
+        if pParamInternal.iPOC < max_poc_boundary {
+            pParamInternal.iPOC += 2;
         } else {
-            (*pParamInternal).iPOC = 0;
+            pParamInternal.iPOC = 0;
         }
 
         UpdateFrameNum(pEncCtx, kiDidx);
@@ -1845,10 +1845,10 @@ pub fn InitFrameCoding(
         pEncCtx.eNalPriority = EWelsNalRefIdc::NRI_PRI_HIGHEST;
     } else if keFrameType == EVideoFrameType::videoFrameTypeI {
         let pParamInternal = &mut pEncCtx.param_mut().sDependencyLayers[kiDidx as usize];
-        if (*pParamInternal).iPOC < max_poc_boundary {
-            (*pParamInternal).iPOC += 2;
+        if pParamInternal.iPOC < max_poc_boundary {
+            pParamInternal.iPOC += 2;
         } else {
-            (*pParamInternal).iPOC = 0;
+            pParamInternal.iPOC = 0;
         }
 
         UpdateFrameNum(pEncCtx, kiDidx);

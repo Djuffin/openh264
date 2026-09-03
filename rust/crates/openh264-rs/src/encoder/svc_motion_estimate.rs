@@ -372,9 +372,9 @@ pub fn UpdateMeResults(ksBestMv: SMVUnitXY, kiBestSadCost: u32, pMe: &mut SWelsM
 #[inline]
 pub fn MeEndIntepelSearch(pMe: &mut SWelsME<'_>) {
     {
-        (*pMe).sMv.iMvX *= 1 << 2;
-        (*pMe).sMv.iMvY *= 1 << 2;
-        (*pMe).uiSatdCost = (*pMe).uiSadCost;
+        pMe.sMv.iMvX *= 1 << 2;
+        pMe.sMv.iMvY *= 1 << 2;
+        pMe.uiSatdCost = pMe.uiSadCost;
     }
 }
 
@@ -400,10 +400,10 @@ pub fn SetMvWithinIntegerMvRange(
     pMvMax: &mut SMVUnitXY,
 ) {
     {
-        (*pMvMin).iMvX = ((-1 * ((kiMbX + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN)).max(-1 * kiMaxMvRange) as i16;
-        (*pMvMin).iMvY = ((-1 * ((kiMbY + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN)).max(-1 * kiMaxMvRange) as i16;
-        (*pMvMax).iMvX = (((kiMbWidth - kiMbX) * (1 << 4)) - INTPEL_NEEDED_MARGIN).min(kiMaxMvRange) as i16;
-        (*pMvMax).iMvY = (((kiMbHeight - kiMbY) * (1 << 4)) - INTPEL_NEEDED_MARGIN).min(kiMaxMvRange) as i16;
+        pMvMin.iMvX = ((-1 * ((kiMbX + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN)).max(-1 * kiMaxMvRange) as i16;
+        pMvMin.iMvY = ((-1 * ((kiMbY + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN)).max(-1 * kiMaxMvRange) as i16;
+        pMvMax.iMvX = (((kiMbWidth - kiMbX) * (1 << 4)) - INTPEL_NEEDED_MARGIN).min(kiMaxMvRange) as i16;
+        pMvMax.iMvY = (((kiMbHeight - kiMbY) * (1 << 4)) - INTPEL_NEEDED_MARGIN).min(kiMaxMvRange) as i16;
     }
 }
 
@@ -474,15 +474,15 @@ pub fn WelsMotionEstimateSearch(
 ) {
     if crate::encoder::dump_enabled(&ME_DUMP, "OH264_MEDUMP") {
         let mut mvc = String::new();
-        for di in 0..(*pSlice).uiMvcNum as usize {
+        for di in 0..pSlice.uiMvcNum as usize {
             mvc.push_str(&format!(
                 "{}/{},",
-                (*pSlice).sMvc[di].iMvX,
-                (*pSlice).sMvc[di].iMvY
+                pSlice.sMvc[di].iMvX,
+                pSlice.sMvc[di].iMvY
             ));
         }
-        let kiX = (*pMe).iCurMeBlockPixX as isize;
-        let kiY = (*pMe).iCurMeBlockPixY as isize;
+        let kiX = pMe.iCurMeBlockPixX as isize;
+        let kiY = pMe.iCurMeBlockPixY as isize;
         let cEnc = pEncPlane.cursor(kiX, kiY);
         // Entry state: the reference position is colocated (mv not yet
         // searched).
@@ -497,48 +497,48 @@ pub fn WelsMotionEstimateSearch(
         }
         eprintln!(
             "ME bs={} px={},{} mvp={},{} base={},{} sadpred={} mvcn={} min={},{} max={},{} mvc={} enc={} ref={} refup={} mvdc={},{}",
-            (*pMe).uiBlockSize,
-            (*pMe).iCurMeBlockPixX,
-            (*pMe).iCurMeBlockPixY,
-            (*pMe).sMvp.iMvX,
-            (*pMe).sMvp.iMvY,
-            (*pMe).sMvBase.iMvX,
-            (*pMe).sMvBase.iMvY,
-            (*pMe).uSadPredISatd.uiValue,
-            (*pSlice).uiMvcNum,
-            (*pSlice).sMvStartMin.iMvX,
-            (*pSlice).sMvStartMin.iMvY,
-            (*pSlice).sMvStartMax.iMvX,
-            (*pSlice).sMvStartMax.iMvY,
+            pMe.uiBlockSize,
+            pMe.iCurMeBlockPixX,
+            pMe.iCurMeBlockPixY,
+            pMe.sMvp.iMvX,
+            pMe.sMvp.iMvY,
+            pMe.sMvBase.iMvX,
+            pMe.sMvBase.iMvY,
+            pMe.uSadPredISatd.uiValue,
+            pSlice.uiMvcNum,
+            pSlice.sMvStartMin.iMvX,
+            pSlice.sMvStartMin.iMvY,
+            pSlice.sMvStartMax.iMvX,
+            pSlice.sMvStartMax.iMvY,
             mvc,
             enc,
             rf,
             rfup,
-            (*pMe).pMvdCost.at(0),
-            (*pMe).pMvdCost.at(4),
+            pMe.pMvdCost.at(0),
+            pMe.pMvdCost.at(4),
         );
     }
 
     // Step 1: Initial point prediction
     if !WelsMotionEstimateInitialPoint(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane) {
-        let block_size = (*pMe).uiBlockSize as usize;
+        let block_size = pMe.uiBlockSize as usize;
         if let Some(search_fn) = pMeFuncs.pfSearchMethod[block_size] {
             search_fn(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
         }
         MeEndIntepelSearch(pMe);
     }
 
-    let block_size = (*pMe).uiBlockSize as usize;
+    let block_size = pMe.uiBlockSize as usize;
     if let Some(calc_satd) = pMeFuncs.pfCalculateSatd {
         calc_satd(sdf.pfSampleSatd[block_size], pMe, pEncPlane, pRefPlane);
     }
     if crate::encoder::dump_enabled(&ME_DUMP, "OH264_MEDUMP") {
         eprintln!(
             "ME> mv={},{} sad={} satd={}",
-            (*pMe).sMv.iMvX,
-            (*pMe).sMv.iMvY,
-            (*pMe).uiSadCost,
-            (*pMe).uiSatdCost
+            pMe.sMv.iMvX,
+            pMe.sMv.iMvY,
+            pMe.uiSadCost,
+            pMe.uiSatdCost
         );
     }
 }
@@ -552,18 +552,18 @@ pub fn WelsMotionEstimateSearchStatic(
     pEncPlane: &SharedPlane,
     pRefPlane: &SharedPlane,
 ) {
-    let block_size = (*pMe).uiBlockSize as usize;
-    let kiX = (*pMe).iCurMeBlockPixX as isize;
-    let kiY = (*pMe).iCurMeBlockPixY as isize;
+    let block_size = pMe.uiBlockSize as usize;
+    let kiX = pMe.iCurMeBlockPixX as isize;
+    let kiY = pMe.iCurMeBlockPixY as isize;
 
-    (*pMe).sMv.iMvX = 0;
-    (*pMe).sMv.iMvY = 0;
+    pMe.sMv.iMvX = 0;
+    pMe.sMv.iMvY = 0;
 
     if let Some(sad_fn) = sdf.pfSampleSad[block_size] {
-        (*pMe).uiSadCost =
+        pMe.uiSadCost =
             sad_fn(&pEncPlane.cursor(kiX, kiY), &pRefPlane.cursor(kiX, kiY)) as u32;
     }
-    (*pMe).uiSadCost += COST_MVD((*pMe).pMvdCost, -((*pMe).sMvp.iMvX as i32), -((*pMe).sMvp.iMvY as i32));
+    pMe.uiSadCost += COST_MVD(pMe.pMvdCost, -(pMe.sMvp.iMvX as i32), -(pMe.sMvp.iMvY as i32));
 
     MeEndIntepelSearch(pMe);
 
@@ -581,13 +581,13 @@ pub fn WelsMotionEstimateSearchScrolled(
     pEncPlane: &SharedPlane,
     pRefPlane: &SharedPlane,
 ) {
-    let block_size = (*pMe).uiBlockSize as usize;
-    let kiX = (*pMe).iCurMeBlockPixX as isize;
-    let kiY = (*pMe).iCurMeBlockPixY as isize;
+    let block_size = pMe.uiBlockSize as usize;
+    let kiX = pMe.iCurMeBlockPixX as isize;
+    let kiY = pMe.iCurMeBlockPixY as isize;
 
-    (*pMe).sMv = (*pMe).sDirectionalMv;
-    let mv_x = (*pMe).sMv.iMvX as i32;
-    let mv_y = (*pMe).sMv.iMvY as i32;
+    pMe.sMv = pMe.sDirectionalMv;
+    let mv_x = pMe.sMv.iMvX as i32;
+    let mv_y = pMe.sMv.iMvY as i32;
 
     let mut sad_cost = 0u32;
     if let Some(sad_fn) = sdf.pfSampleSad[block_size] {
@@ -597,11 +597,11 @@ pub fn WelsMotionEstimateSearchScrolled(
         ) as u32;
     }
     sad_cost += COST_MVD(
-        (*pMe).pMvdCost,
-        (mv_x * 4) - ((*pMe).sMvp.iMvX as i32),
-        (mv_y * 4) - ((*pMe).sMvp.iMvY as i32),
+        pMe.pMvdCost,
+        (mv_x * 4) - (pMe.sMvp.iMvX as i32),
+        (mv_y * 4) - (pMe.sMvp.iMvY as i32),
     );
-    (*pMe).uiSadCost = sad_cost;
+    pMe.uiSadCost = sad_cost;
 
     MeEndIntepelSearch(pMe);
 
@@ -623,17 +623,17 @@ pub fn WelsMotionEstimateInitialPoint(
     pEncPlane: &SharedPlane,
     pRefPlane: &SharedPlane,
 ) -> bool {
-    let block_size = (*pMe).uiBlockSize as usize;
+    let block_size = pMe.uiBlockSize as usize;
     let pSad = sdf.pfSampleSad[block_size];
-    let kpMvdCost = (*pMe).pMvdCost;
-    let kiX = (*pMe).iCurMeBlockPixX as isize;
-    let kiY = (*pMe).iCurMeBlockPixY as isize;
+    let kpMvdCost = pMe.pMvdCost;
+    let kiX = pMe.iCurMeBlockPixX as isize;
+    let kiY = pMe.iCurMeBlockPixY as isize;
     let cEnc = pEncPlane.cursor(kiX, kiY);
 
-    let kuiMvcNum = (*pSlice).uiMvcNum as usize;
-    let ksMvStartMin = (*pSlice).sMvStartMin;
-    let ksMvStartMax = (*pSlice).sMvStartMax;
-    let ksMvp = (*pMe).sMvp;
+    let kuiMvcNum = pSlice.uiMvcNum as usize;
+    let ksMvStartMin = pSlice.sMvStartMin;
+    let ksMvStartMax = pSlice.sMvStartMax;
+    let ksMvp = pMe.sMvp;
 
     let mut sMv = SMVUnitXY {
         iMvX: (((2 + ksMvp.iMvX as i32) >> 2).clamp(ksMvStartMin.iMvX as i32, ksMvStartMax.iMvX as i32)) as i16,
@@ -655,7 +655,7 @@ pub fn WelsMotionEstimateInitialPoint(
 
     let mut iSadCost: i32 = 0;
     for i in 0..kuiMvcNum {
-        let mvc = (*pSlice).sMvc[i];
+        let mvc = pSlice.sMvc[i];
         let iMvc0 = (((2 + mvc.iMvX as i32) >> 2).clamp(ksMvStartMin.iMvX as i32, ksMvStartMax.iMvX as i32)) as i16;
         let iMvc1 = (((2 + mvc.iMvY as i32) >> 2).clamp(ksMvStartMin.iMvY as i32, ksMvStartMax.iMvY as i32)) as i16;
 
@@ -682,14 +682,14 @@ pub fn WelsMotionEstimateInitialPoint(
 
     if let Some(check_dir) = pMeFuncs.pfCheckDirectionalMv {
         if check_dir(pSad, pMe, ksMvStartMin, ksMvStartMax, pEncPlane, pRefPlane, &mut iSadCost) {
-            sMv = (*pMe).sDirectionalMv;
+            sMv = pMe.sDirectionalMv;
             iBestSadCost = iSadCost;
         }
     }
 
     UpdateMeResults(sMv, iBestSadCost as u32, pMe);
 
-    if iBestSadCost < (*pMe).uSadPredISatd.uiValue as i32 {
+    if iBestSadCost < pMe.uSadPredISatd.uiValue as i32 {
         MeEndIntepelSearch(pMe);
         return true;
     }
@@ -710,18 +710,18 @@ pub fn CalculateSatdCost(
     pRefPlane: &SharedPlane,
 ) {
     if let Some(satd_fn) = pSatd {
-        let kiX = (*pMe).iCurMeBlockPixX as isize;
-        let kiY = (*pMe).iCurMeBlockPixY as isize;
+        let kiX = pMe.iCurMeBlockPixX as isize;
+        let kiY = pMe.iCurMeBlockPixY as isize;
         let cRef = pRefPlane.cursor(
-            kiX + (((*pMe).sMv.iMvX as isize) >> 2),
-            kiY + (((*pMe).sMv.iMvY as isize) >> 2),
+            kiX + ((pMe.sMv.iMvX as isize) >> 2),
+            kiY + ((pMe.sMv.iMvY as isize) >> 2),
         );
-        (*pMe).uSadPredISatd.uiValue = satd_fn(&pEncPlane.cursor(kiX, kiY), &cRef) as u32;
-        (*pMe).uiSatdCost = (*pMe).uSadPredISatd.uiValue
+        pMe.uSadPredISatd.uiValue = satd_fn(&pEncPlane.cursor(kiX, kiY), &cRef) as u32;
+        pMe.uiSatdCost = pMe.uSadPredISatd.uiValue
             + COST_MVD(
-                (*pMe).pMvdCost,
-                ((*pMe).sMv.iMvX - (*pMe).sMvp.iMvX) as i32,
-                ((*pMe).sMv.iMvY - (*pMe).sMvp.iMvY) as i32,
+                pMe.pMvdCost,
+                (pMe.sMv.iMvX - pMe.sMvp.iMvX) as i32,
+                (pMe.sMv.iMvY - pMe.sMvp.iMvY) as i32,
             );
     }
 }
@@ -790,38 +790,38 @@ pub fn WelsDiamondSearch(
     pRefPlane: &SharedPlane,
 ) {
     {
-        let block_size = (*pMe).uiBlockSize as usize;
+        let block_size = pMe.uiBlockSize as usize;
         let pSad4 = sdf.pfSample4Sad[block_size];
         let pSadSingle = sdf.pfSampleSad[block_size];
 
-        let kiX = (*pMe).iCurMeBlockPixX as isize;
-        let kiY = (*pMe).iCurMeBlockPixY as isize;
+        let kiX = pMe.iCurMeBlockPixX as isize;
+        let kiY = pMe.iCurMeBlockPixY as isize;
         let cEnc = pEncPlane.cursor(kiX, kiY);
-        let kpMvdCost = (*pMe).pMvdCost;
+        let kpMvdCost = pMe.pMvdCost;
 
-        let ksMvStartMin = (*pSlice).sMvStartMin;
-        let ksMvStartMax = (*pSlice).sMvStartMax;
+        let ksMvStartMin = pSlice.sMvStartMin;
+        let ksMvStartMax = pSlice.sMvStartMax;
 
-        let mut iMvDx = ((*pMe).sMv.iMvX as i32 * 4) - (*pMe).sMvp.iMvX as i32;
-        let mut iMvDy = ((*pMe).sMv.iMvY as i32 * 4) - (*pMe).sMvp.iMvY as i32;
+        let mut iMvDx = (pMe.sMv.iMvX as i32 * 4) - pMe.sMvp.iMvX as i32;
+        let mut iMvDy = (pMe.sMv.iMvY as i32 * 4) - pMe.sMvp.iMvY as i32;
 
-        let mut iBestCost = (*pMe).uiSadCost as i32;
+        let mut iBestCost = pMe.uiSadCost as i32;
         let mut iTimeThreshold = ITERATIVE_TIMES;
         let mut iSadCosts = [0i32; 4];
 
         while iTimeThreshold > 0 {
             iTimeThreshold -= 1;
-            (*pMe).sMv.iMvX = ((iMvDx + (*pMe).sMvp.iMvX as i32) >> 2) as i16;
-            (*pMe).sMv.iMvY = ((iMvDy + (*pMe).sMvp.iMvY as i32) >> 2) as i16;
+            pMe.sMv.iMvX = ((iMvDx + pMe.sMvp.iMvX as i32) >> 2) as i16;
+            pMe.sMv.iMvY = ((iMvDy + pMe.sMvp.iMvY as i32) >> 2) as i16;
 
-            if !CheckMvInRange((*pMe).sMv, ksMvStartMin, ksMvStartMax) {
+            if !CheckMvInRange(pMe.sMv, ksMvStartMin, ksMvStartMax) {
                 continue;
             }
 
             // The centre of this iteration's probe: colo + the current
             // integer MV.
-            let kiRx = kiX + (*pMe).sMv.iMvX as isize;
-            let kiRy = kiY + (*pMe).sMv.iMvY as isize;
+            let kiRx = kiX + pMe.sMv.iMvX as isize;
+            let kiRy = kiY + pMe.sMv.iMvY as isize;
 
             if let Some(sad4_fn) = pSad4 {
                 sad4_fn(&cEnc, &pRefPlane.cursor(kiRx, kiRy), &mut iSadCosts);
@@ -851,10 +851,10 @@ pub fn WelsDiamondSearch(
             iMvDy -= iY * 4;
         }
 
-        (*pMe).sMv.iMvX = ((iMvDx + (*pMe).sMvp.iMvX as i32) >> 2) as i16;
-        (*pMe).sMv.iMvY = ((iMvDy + (*pMe).sMvp.iMvY as i32) >> 2) as i16;
-        (*pMe).uiSadCost = iBestCost as u32;
-        (*pMe).uiSatdCost = (*pMe).uiSadCost;
+        pMe.sMv.iMvX = ((iMvDx + pMe.sMvp.iMvX as i32) >> 2) as i16;
+        pMe.sMv.iMvY = ((iMvDy + pMe.sMvp.iMvY as i32) >> 2) as i16;
+        pMe.uiSadCost = iBestCost as u32;
+        pMe.uiSatdCost = pMe.uiSadCost;
     }
 }
 
@@ -872,15 +872,15 @@ pub fn CheckDirectionalMv(
     iBestSadCost: &mut i32,
 ) -> bool {
     {
-        let kiMvX = (*pMe).sDirectionalMv.iMvX;
-        let kiMvY = (*pMe).sDirectionalMv.iMvY;
+        let kiMvX = pMe.sDirectionalMv.iMvX;
+        let kiMvY = pMe.sDirectionalMv.iMvY;
 
-        if ((*pMe).uiBlockSize as usize != BLOCK_16x16)
+        if (pMe.uiBlockSize as usize != BLOCK_16x16)
             && ((kiMvX != 0) || (kiMvY != 0))
-            && CheckMvInRange((*pMe).sDirectionalMv, ksMinMv, ksMaxMv)
+            && CheckMvInRange(pMe.sDirectionalMv, ksMinMv, ksMaxMv)
         {
-            let kiX = (*pMe).iCurMeBlockPixX as isize;
-            let kiY = (*pMe).iCurMeBlockPixY as isize;
+            let kiX = pMe.iCurMeBlockPixX as isize;
+            let kiY = pMe.iCurMeBlockPixY as isize;
             let mut uiCurrentSadCost = 0u32;
             if let Some(sad_fn) = pSad {
                 uiCurrentSadCost = sad_fn(
@@ -889,11 +889,11 @@ pub fn CheckDirectionalMv(
                 ) as u32;
             }
             uiCurrentSadCost += COST_MVD(
-                (*pMe).pMvdCost,
-                (kiMvX as i32 * 4) - (*pMe).sMvp.iMvX as i32,
-                (kiMvY as i32 * 4) - (*pMe).sMvp.iMvY as i32,
+                pMe.pMvdCost,
+                (kiMvX as i32 * 4) - pMe.sMvp.iMvX as i32,
+                (kiMvY as i32 * 4) - pMe.sMvp.iMvY as i32,
             );
-            if uiCurrentSadCost < (*pMe).uiSadCost {
+            if uiCurrentSadCost < pMe.uiSadCost {
                 *iBestSadCost = uiCurrentSadCost as i32;
                 return true;
             }
@@ -928,10 +928,10 @@ pub fn LineFullSearch_c(
     iMaxMv: i16,
     bVerticalSearch: bool,
 ) {
-    let block_size = (*pMe).uiBlockSize as usize;
+    let block_size = pMe.uiBlockSize as usize;
     let pSad = sdf.pfSampleSad[block_size];
-    let kiCurMeBlockPixX = (*pMe).iCurMeBlockPixX;
-    let kiCurMeBlockPixY = (*pMe).iCurMeBlockPixY;
+    let kiCurMeBlockPixX = pMe.iCurMeBlockPixX;
+    let kiCurMeBlockPixY = pMe.iCurMeBlockPixY;
     let kiX = kiCurMeBlockPixX as isize;
     let kiY = kiCurMeBlockPixY as isize;
     let cEnc = pEncPlane.cursor(kiX, kiY);
@@ -945,15 +945,15 @@ pub fn LineFullSearch_c(
     if bVerticalSearch {
         iMinPos = kiCurMeBlockPixY + iMinMv as i32;
         iMaxPos = kiCurMeBlockPixY + iMaxMv as i32;
-        iFixedMvd = pMvdTable.at(-((*pMe).sMvp.iMvX as i32)) as i32;
+        iFixedMvd = pMvdTable.at(-(pMe.sMvp.iMvX as i32)) as i32;
         iCurMeBlockPix = kiCurMeBlockPixY;
-        pMvdCost = pMvdTable.offset((iMinMv as i32 * 4) - (*pMe).sMvp.iMvY as i32);
+        pMvdCost = pMvdTable.offset((iMinMv as i32 * 4) - pMe.sMvp.iMvY as i32);
     } else {
         iMinPos = kiCurMeBlockPixX + iMinMv as i32;
         iMaxPos = kiCurMeBlockPixX + iMaxMv as i32;
-        iFixedMvd = pMvdTable.at(-((*pMe).sMvp.iMvY as i32)) as i32;
+        iFixedMvd = pMvdTable.at(-(pMe.sMvp.iMvY as i32)) as i32;
         iCurMeBlockPix = kiCurMeBlockPixX;
-        pMvdCost = pMvdTable.offset((iMinMv as i32 * 4) - (*pMe).sMvp.iMvX as i32);
+        pMvdCost = pMvdTable.offset((iMinMv as i32 * 4) - pMe.sMvp.iMvX as i32);
     }
 
     let mut uiBestCost: u32 = 0xFFFF_FFFF;
@@ -978,7 +978,7 @@ pub fn LineFullSearch_c(
         pMvdCost = pMvdCost.offset(4);
     }
 
-    if uiBestCost < (*pMe).uiSadCost {
+    if uiBestCost < pMe.uiSadCost {
         let mut sBestMv = SMVUnitXY::default();
         sBestMv.iMvX = if bVerticalSearch { 0 } else { (iBestPos - iCurMeBlockPix) as i16 };
         sBestMv.iMvY = if bVerticalSearch { (iBestPos - iCurMeBlockPix) as i16 } else { 0 };
@@ -998,25 +998,25 @@ pub fn WelsMotionCrossSearch(
         vert_fn(
             sdf,
             pMe,
-            (*pMe).pMvdCost,
+            pMe.pMvdCost,
             pEncPlane,
             pRefPlane,
-            (*pSlice).sMvStartMin.iMvY,
-            (*pSlice).sMvStartMax.iMvY,
+            pSlice.sMvStartMin.iMvY,
+            pSlice.sMvStartMax.iMvY,
             true,
         );
     }
 
-    if (*pMe).uiSadCost >= (*pMe).uiSadCostThreshold {
+    if pMe.uiSadCost >= pMe.uiSadCostThreshold {
         if let Some(horiz_fn) = pMeFuncs.pfHorizontalFullSearch {
             horiz_fn(
                 sdf,
                 pMe,
-                (*pMe).pMvdCost,
+                pMe.pMvdCost,
                 pEncPlane,
                 pRefPlane,
-                (*pSlice).sMvStartMin.iMvX,
-                (*pSlice).sMvStartMax.iMvX,
+                pSlice.sMvStartMin.iMvX,
+                pSlice.sMvStartMax.iMvX,
                 false,
             );
         }
@@ -1033,11 +1033,11 @@ pub fn WelsDiamondCrossSearch(
 ) {
     WelsDiamondSearch(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
 
-    if let Some(storage) = (*pMe).pRefFeatureStorage {
-        let block_size = (*pMe).uiBlockSize as usize;
-        (*pMe).uiSadCostThreshold = storage.uiSadCostThreshold[block_size];
+    if let Some(storage) = pMe.pRefFeatureStorage {
+        let block_size = pMe.uiBlockSize as usize;
+        pMe.uiSadCostThreshold = storage.uiSadCostThreshold[block_size];
     }
-    if (*pMe).uiSadCost >= (*pMe).uiSadCostThreshold {
+    if pMe.uiSadCost >= pMe.uiSadCostThreshold {
         WelsMotionCrossSearch(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
     }
 }
@@ -1052,8 +1052,8 @@ pub fn WelsDiamondCrossFeatureSearch(
 ) {
     WelsDiamondCrossSearch(pMeFuncs, sdf, pMe, pSlice, pEncPlane, pRefPlane);
 
-    if (*pMe).uiSadCost >= (*pMe).uiSadCostThreshold {
-        (*pSlice).uiSliceFMECostDown = (*pSlice).uiSliceFMECostDown.wrapping_add((*pMe).uiSadCost);
+    if pMe.uiSadCost >= pMe.uiSadCostThreshold {
+        pSlice.uiSliceFMECostDown = pSlice.uiSliceFMECostDown.wrapping_add(pMe.uiSadCost);
 
         let mut sFeatureSearchIn = SFeatureSearchIn::default();
         if SetFeatureSearchIn(
@@ -1061,14 +1061,14 @@ pub fn WelsDiamondCrossFeatureSearch(
             sdf,
             pMe,
             &*pSlice,
-            (*pMe).pRefFeatureStorage,
+            pMe.pRefFeatureStorage,
             pEncPlane,
             pRefPlane,
             &mut sFeatureSearchIn,
         ) {
             MotionEstimateFeatureFullSearch(sFeatureSearchIn, u32::MAX, pMe);
         }
-        (*pSlice).uiSliceFMECostDown = (*pSlice).uiSliceFMECostDown.wrapping_sub((*pMe).uiSadCost);
+        pSlice.uiSliceFMECostDown = pSlice.uiSliceFMECostDown.wrapping_sub(pMe.uiSadCost);
     }
 }
 
@@ -1545,14 +1545,14 @@ pub fn MotionEstimateFeatureFullSearch(
 ) {
     {
         let mut sFeatureSearchOut = SFeatureSearchOut {
-            sBestMv: (*pMe).sMv,
-            uiBestSadCost: (*pMe).uiSadCost,
+            sBestMv: pMe.sMv,
+            uiBestSadCost: pMe.uiSadCost,
         };
 
         let iFeatureDifference = 0i32;
         FeatureSearchOne(&sFeatureSearchIn, iFeatureDifference, kuiMaxSearchPoint, &mut sFeatureSearchOut);
 
-        if sFeatureSearchOut.uiBestSadCost < (*pMe).uiSadCost {
+        if sFeatureSearchOut.uiBestSadCost < pMe.uiSadCost {
             UpdateMeResults(
                 sFeatureSearchOut.sBestMv,
                 sFeatureSearchOut.uiBestSadCost,

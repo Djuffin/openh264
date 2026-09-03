@@ -780,7 +780,7 @@ pub fn ParseNalHeader(
 
     pNalUnitHeader.uiForbiddenZeroBit = pCtx.sRawData.bytes()[iNal] >> 7;
     if pNalUnitHeader.uiForbiddenZeroBit != 0 {
-        (*pCtx).iErrorCode |= dsBitstreamError;
+        pCtx.iErrorCode |= dsBitstreamError;
         return None;
     }
 
@@ -806,7 +806,7 @@ pub fn ParseNalHeader(
         20 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT,
         other => EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
     };
-    (*pCtx).sCurNalHead = *pNalUnitHeader;
+    pCtx.sCurNalHead = *pNalUnitHeader;
 
     iNal += 1;
     iNalSize -= 1;
@@ -817,41 +817,41 @@ pub fn ParseNalHeader(
     if !(IS_SEI_NAL(eType)
         || IS_SPS_NAL(eType)
         || IS_AU_DELIMITER_NAL(eType)
-        || (*pCtx).sSpsPpsCtx.bSpsExistAheadFlag)
+        || pCtx.sSpsPpsCtx.bSpsExistAheadFlag)
     {
         {
-            let stat = &mut (*pCtx).pDecoderStatistics;
+            let stat = &mut pCtx.pDecoderStatistics;
             stat.iSpsNoExistNalNum += 1;
         }
-        (*pCtx).iErrorCode |= dsNoParamSets;
+        pCtx.iErrorCode |= dsNoParamSets;
         return None;
     }
 
     if !(IS_SEI_NAL(eType)
         || IS_PARAM_SETS_NALS(eType)
         || IS_AU_DELIMITER_NAL(eType)
-        || (*pCtx).sSpsPpsCtx.bPpsExistAheadFlag)
+        || pCtx.sSpsPpsCtx.bPpsExistAheadFlag)
     {
         {
-            let stat = &mut (*pCtx).pDecoderStatistics;
+            let stat = &mut pCtx.pDecoderStatistics;
             stat.iPpsNoExistNalNum += 1;
         }
-        (*pCtx).iErrorCode |= dsNoParamSets;
+        pCtx.iErrorCode |= dsNoParamSets;
         return None;
     }
 
     if (IS_VCL_NAL_AVC_BASE(eType)
-        && !((*pCtx).sSpsPpsCtx.bSpsExistAheadFlag || (*pCtx).sSpsPpsCtx.bPpsExistAheadFlag))
+        && !(pCtx.sSpsPpsCtx.bSpsExistAheadFlag || pCtx.sSpsPpsCtx.bPpsExistAheadFlag))
         || (IS_NEW_INTRODUCED_SVC_NAL(eType)
-            && !((*pCtx).sSpsPpsCtx.bSpsExistAheadFlag
-                || (*pCtx).sSpsPpsCtx.bSubspsExistAheadFlag
-                || (*pCtx).sSpsPpsCtx.bPpsExistAheadFlag))
+            && !(pCtx.sSpsPpsCtx.bSpsExistAheadFlag
+                || pCtx.sSpsPpsCtx.bSubspsExistAheadFlag
+                || pCtx.sSpsPpsCtx.bPpsExistAheadFlag))
     {
         {
-            let stat = &mut (*pCtx).pDecoderStatistics;
+            let stat = &mut pCtx.pDecoderStatistics;
             stat.iSubSpsNoExistNalNum += 1;
         }
-        (*pCtx).iErrorCode |= dsNoParamSets;
+        pCtx.iErrorCode |= dsNoParamSets;
         return None;
     }
 
@@ -869,12 +869,12 @@ pub fn ParseNalHeader(
                     pCtx.sSpsPpsCtx.sPrefixNal
                 };
             }
-            pCurNal!().uiTimeStamp = (*pCtx).uiTimeStamp;
+            pCurNal!().uiTimeStamp = pCtx.uiTimeStamp;
 
             if iNalSize < NAL_UNIT_HEADER_EXT_SIZE as i32 {
                 mark_au_ready(pCtx);
                 pCurNal!().sNalData.sPrefixNal.bPrefixNalCorrectFlag = false;
-                (*pCtx).iErrorCode |= dsBitstreamError;
+                pCtx.iErrorCode |= dsBitstreamError;
                 return None;
             }
 
@@ -888,7 +888,7 @@ pub fn ParseNalHeader(
             {
                 mark_au_ready(pCtx);
                 pCurNal!().sNalData.sPrefixNal.bPrefixNalCorrectFlag = false;
-                (*pCtx).iErrorCode |= dsBitstreamError;
+                pCtx.iErrorCode |= dsBitstreamError;
                 return None;
             }
 
@@ -902,15 +902,15 @@ pub fn ParseNalHeader(
 
             if pNalUnitHeader.uiNalRefIdc != 0 {
                 let iBitSize = rbsp_bit_size(pCtx.sRawData.bytes(), iNal, iNalSize);
-                let iErr = DecInitBits(&mut (*pCtx).sBs, &(*pCtx).sRawData, iNal, iBitSize);
+                let iErr = DecInitBits(&mut pCtx.sBs, &pCtx.sRawData, iNal, iBitSize);
                 if iErr != ERR_NONE {
-                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    pCtx.iErrorCode |= dsBitstreamError;
                     return None;
                 }
                 // The cursor travels as a value and is written back.
-                let (start, mut cursor) = ((*pCtx).sBs.start, (*pCtx).sBs.cursor);
+                let (start, mut cursor) = (pCtx.sBs.start, pCtx.sBs.cursor);
                 ParsePrefixNalUnit(pCtx, start, &mut cursor);
-                (*pCtx).sBs.cursor = cursor;
+                pCtx.sBs.cursor = cursor;
             }
             pCurNal!().sNalData.sPrefixNal.bPrefixNalCorrectFlag = true;
         }
@@ -925,10 +925,10 @@ pub fn ParseNalHeader(
             let bExtensionFlag = eType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT;
 
             let Some(cur_idx) = cur_au(&mut pCtx.access_unit).and_then(MemGetNextNal) else {
-                (*pCtx).iErrorCode |= dsOutOfMemory;
+                pCtx.iErrorCode |= dsOutOfMemory;
                 return None;
             };
-            let uiTimeStamp = (*pCtx).uiTimeStamp;
+            let uiTimeStamp = pCtx.uiTimeStamp;
             if let Some(nal) = cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(cur_idx)) {
                 nal.uiTimeStamp = uiTimeStamp;
                 nal.sNalHeaderExt.sNalUnitHeader.uiForbiddenZeroBit = pNalUnitHeader.uiForbiddenZeroBit;
@@ -944,7 +944,7 @@ pub fn ParseNalHeader(
             if bExtensionFlag {
                 if iNalSize < NAL_UNIT_HEADER_EXT_SIZE as i32 {
                     discard_nal_and_close_au(pCtx, uiAvailNalNum);
-                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    pCtx.iErrorCode |= dsBitstreamError;
                     return None;
                 }
 
@@ -963,7 +963,7 @@ pub fn ParseNalHeader(
                 if qid != 0 || base_pic {
                     // MGS not supported.
                     discard_nal_and_close_au(pCtx, uiAvailNalNum);
-                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    pCtx.iErrorCode |= dsBitstreamError;
                     return None;
                 }
                 iNal += NAL_UNIT_HEADER_EXT_SIZE;
@@ -971,7 +971,7 @@ pub fn ParseNalHeader(
                 *pConsumedBytes += NAL_UNIT_HEADER_EXT_SIZE as i32;
 
                 // `au_parser.cpp:324-357` — the parse-only capture.
-                if (*pCtx).pParam.bParseOnly {
+                if pCtx.pParam.bParseOnly {
                     let captured = parse_only_capture_vcl(
                         &mut pCtx.sSavedData,
                         kpSrcNal,
@@ -992,7 +992,7 @@ pub fn ParseNalHeader(
             } else {
                 // `au_parser.cpp:359-382` — the plain arm's capture, before the
                 // prefix-NAL prefetch, as in the reference.
-                if (*pCtx).pParam.bParseOnly {
+                if pCtx.pParam.bParseOnly {
                     let captured =
                         parse_only_capture_vcl(&mut pCtx.sSavedData, kpSrcNal, false, false);
                     if let Some((iNalPos, iNalLength)) = captured {
@@ -1005,11 +1005,11 @@ pub fn ParseNalHeader(
                     }
                 }
 
-                if (*pCtx).sSpsPpsCtx.sPrefixNal.sNalHeaderExt.sNalUnitHeader.eNalUnitType
+                if pCtx.sSpsPpsCtx.sPrefixNal.sNalHeaderExt.sNalUnitHeader.eNalUnitType
                     == EWelsNalUnitType::NAL_UNIT_PREFIX
                 {
-                    if (*pCtx).sSpsPpsCtx.sPrefixNal.sNalData.sPrefixNal.bPrefixNalCorrectFlag {
-                        let prefix = (*pCtx).sSpsPpsCtx.sPrefixNal;
+                    if pCtx.sSpsPpsCtx.sPrefixNal.sNalData.sPrefixNal.bPrefixNalCorrectFlag {
+                        let prefix = pCtx.sSpsPpsCtx.sPrefixNal;
                         if let Some(dst) =
                             cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(cur_idx))
                         {
@@ -1041,7 +1041,7 @@ pub fn ParseNalHeader(
             };
             if iErr != ERR_NONE {
                 discard_nal_and_close_au(pCtx, uiAvailNalNum);
-                (*pCtx).iErrorCode |= dsBitstreamError;
+                pCtx.iErrorCode |= dsBitstreamError;
                 return None;
             }
 
@@ -1076,7 +1076,7 @@ pub fn ParseNalHeader(
                     crate::decoder::decoder_core::ResetActiveSPSForEachLayer(pCtx);
                 }
                 discard_nal_and_close_au(pCtx, uiAvailNalNum);
-                (*pCtx).iErrorCode |= dsBitstreamError;
+                pCtx.iErrorCode |= dsBitstreamError;
                 return None;
             }
 
@@ -1109,8 +1109,8 @@ pub fn ParseNalHeader(
                     if let Some(au) = cur_au(&mut pCtx.access_unit) {
                         au.uiEndPos = uiAvailNalNum - 2;
                     }
-                    (*pCtx).bAuReadyFlag = true;
-                    (*pCtx).bNextNewSeqBegin = new_seq(pCtx);
+                    pCtx.bAuReadyFlag = true;
+                    pCtx.bNextNewSeqBegin = new_seq(pCtx);
                 }
             }
         }
@@ -1310,9 +1310,9 @@ pub fn ParseNonVclNal(
         return ERR_NONE;
     }
 
-    let pBs = &mut (*pCtx).sBs;
-    let iBitSize = rbsp_bit_size((*pCtx).sRawData.bytes(), kiRbspStart, kiSrcLen);
-    let eNalType = (*pCtx).sCurNalHead.eNalUnitType;
+    let pBs = &mut pCtx.sBs;
+    let iBitSize = rbsp_bit_size(pCtx.sRawData.bytes(), kiRbspStart, kiSrcLen);
+    let eNalType = pCtx.sCurNalHead.eNalUnitType;
     let mut iPicWidth = 0;
     let mut iPicHeight = 0;
     let mut iErr = ERR_NONE;
@@ -1320,13 +1320,13 @@ pub fn ParseNonVclNal(
     match eNalType {
         EWelsNalUnitType::NAL_UNIT_SPS | EWelsNalUnitType::NAL_UNIT_SUBSET_SPS => {
             if iBitSize > 0 {
-                iErr = DecInitBits(pBs, &(*pCtx).sRawData, kiRbspStart, iBitSize);
+                iErr = DecInitBits(pBs, &pCtx.sRawData, kiRbspStart, iBitSize);
                 if iErr != ERR_NONE {
-                    if (*pCtx).pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                    if pCtx.pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
                     {
-                        (*pCtx).iErrorCode |= dsNoParamSets;
+                        pCtx.iErrorCode |= dsNoParamSets;
                     } else {
-                        (*pCtx).iErrorCode |= dsBitstreamError;
+                        pCtx.iErrorCode |= dsBitstreamError;
                     }
                     return iErr;
                 }
@@ -1335,28 +1335,28 @@ pub fn ParseNonVclNal(
             {
                 iErr = ParseSps(pCtx, start, &mut cursor, kpSrcNal, &mut iPicWidth, &mut iPicHeight);
             }
-            (*pCtx).sBs.cursor = cursor;
+            pCtx.sBs.cursor = cursor;
             if iErr != ERR_NONE {
-                if (*pCtx).pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                if pCtx.pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
                 {
-                    (*pCtx).iErrorCode |= dsNoParamSets;
+                    pCtx.iErrorCode |= dsNoParamSets;
                 } else {
-                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    pCtx.iErrorCode |= dsBitstreamError;
                 }
                 return iErr;
             }
-            (*pCtx).bHasNewSps = true;
+            pCtx.bHasNewSps = true;
         }
 
         EWelsNalUnitType::NAL_UNIT_PPS => {
             if iBitSize > 0 {
-                iErr = DecInitBits(pBs, &(*pCtx).sRawData, kiRbspStart, iBitSize);
+                iErr = DecInitBits(pBs, &pCtx.sRawData, kiRbspStart, iBitSize);
                 if iErr != ERR_NONE {
-                    if (*pCtx).pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                    if pCtx.pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
                     {
-                        (*pCtx).iErrorCode |= dsNoParamSets;
+                        pCtx.iErrorCode |= dsNoParamSets;
                     } else {
-                        (*pCtx).iErrorCode |= dsBitstreamError;
+                        pCtx.iErrorCode |= dsBitstreamError;
                     }
                     return iErr;
                 }
@@ -1365,19 +1365,19 @@ pub fn ParseNonVclNal(
             {
                 iErr = ParsePps(pCtx, start, &mut cursor, kpSrcNal);
             }
-            (*pCtx).sBs.cursor = cursor;
+            pCtx.sBs.cursor = cursor;
             if iErr != ERR_NONE {
-                if (*pCtx).pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                if pCtx.pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
                 {
-                    (*pCtx).iErrorCode |= dsNoParamSets;
+                    pCtx.iErrorCode |= dsNoParamSets;
                 } else {
-                    (*pCtx).iErrorCode |= dsBitstreamError;
+                    pCtx.iErrorCode |= dsBitstreamError;
                 }
-                (*pCtx).bHasNewSps = false;
+                pCtx.bHasNewSps = false;
                 return iErr;
             }
-            (*pCtx).sSpsPpsCtx.bPpsExistAheadFlag = true;
-            (*pCtx).sSpsPpsCtx.iSeqId += 1;
+            pCtx.sSpsPpsCtx.bPpsExistAheadFlag = true;
+            pCtx.sSpsPpsCtx.iSeqId += 1;
         }
 
         EWelsNalUnitType::NAL_UNIT_SEI => {
@@ -1443,7 +1443,7 @@ pub fn ParsePrefixNalUnit(
     pBs: &mut BsCursor,
 ) -> i32 {
     let buf = pCtx.sRawData.window_from(kiRbspStart);
-    let pCurNal = &mut (*pCtx).sSpsPpsCtx.sPrefixNal;
+    let pCurNal = &mut pCtx.sSpsPpsCtx.sPrefixNal;
     let mut uiCode: u32 = 0;
 
     if pCurNal.sNalHeaderExt.sNalUnitHeader.uiNalRefIdc != 0 {
@@ -1579,11 +1579,11 @@ pub fn CheckSpsActive(
     bUseSubsetFlag: bool,
 ) -> bool {
     for i in 0..MAX_LAYER_NUM {
-        if (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] == r && r.is_some() {
+        if pCtx.sSpsPpsCtx.pActiveLayerSps[i] == r && r.is_some() {
             return true;
         }
     }
-    let Some(pSps) = sps_of(&(*pCtx).sSpsPpsCtx, r) else {
+    let Some(pSps) = sps_of(&pCtx.sSpsPpsCtx, r) else {
         return false;
     };
     let (iSpsId, iMbWidth, iMbHeight) = (pSps.iSpsId, pSps.iMbWidth, pSps.iMbHeight);
@@ -1593,12 +1593,12 @@ pub fn CheckSpsActive(
     }
 
     let avail = if bUseSubsetFlag {
-        (*pCtx).sSpsPpsCtx.bSubspsAvailFlags[sps_id]
+        pCtx.sSpsPpsCtx.bSubspsAvailFlags[sps_id]
     } else {
-        (*pCtx).sSpsPpsCtx.bSpsAvailFlags[sps_id]
+        pCtx.sSpsPpsCtx.bSpsAvailFlags[sps_id]
     };
     if iMbWidth > 0 && iMbHeight > 0 && avail {
-        if (*pCtx).iTotalNumMbRec > 0 {
+        if pCtx.iTotalNumMbRec > 0 {
             return true;
         }
         if let Some(pCurAu) = cur_au(&mut pCtx.access_unit) {
@@ -1611,8 +1611,8 @@ pub fn CheckSpsActive(
                     continue;
                 }
                 let next = sps_of(
-                    &(*pCtx).sSpsPpsCtx,
-                    (*pNalUnit).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref,
+                    &pCtx.sSpsPpsCtx,
+                    pNalUnit.sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref,
                 );
                 if next.is_some_and(|n| n.iSpsId == iSpsId) {
                     return true;
@@ -1642,7 +1642,7 @@ pub fn ParseSps(
     let mut sTempSubsetSps = SSubsetSps::memset_zero();
     let pSubsetSps = &mut sTempSubsetSps;
 
-    let kbUseSubsetFlag = IS_SUBSET_SPS_NAL((*pCtx).sCurNalHead.eNalUnitType);
+    let kbUseSubsetFlag = IS_SUBSET_SPS_NAL(pCtx.sCurNalHead.eNalUnitType);
 
     let mut uiCode: u32 = 0;
     let mut iCode: i32 = 0;
@@ -1864,10 +1864,10 @@ pub fn ParseSps(
     // *plain* SPS, so it must be built from the syntax elements parsed so far and
     // not from the extension that follows.
     // ------------------------------------------------------------------
-    if (*pCtx).pParam.bParseOnly {
+    if pCtx.pParam.bParseOnly {
         if kpSrcNal.len() >= SPS_PPS_BS_SIZE - 4 {
             crate::decoder::decoder_core::WelsLog(
-                (*pCtx).sLogCtx,
+                pCtx.sLogCtx,
                 crate::decoder::decoder_core::WELS_LOG_WARNING,
                 &format!(
                     "sps payload size ({}) too large for parse only ({}), not supported!",
@@ -1875,26 +1875,26 @@ pub fn ParseSps(
                     SPS_PPS_BS_SIZE - 4
                 ),
             );
-            (*pCtx).iErrorCode |= dsBitstreamError;
+            pCtx.iErrorCode |= dsBitstreamError;
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_OUT_OF_MEMORY);
         }
         if !kbUseSubsetFlag {
-            if let Some(row) = (*pCtx).sSpsBsInfo.get_mut(iSpsId as usize) {
+            if let Some(row) = pCtx.sSpsBsInfo.get_mut(iSpsId as usize) {
                 parse_only_write_sps(row, iSpsId, kpSrcNal);
             }
         } else {
             let sps = pSubsetSps.sSps;
-            let ok = match (*pCtx).sSubsetSpsBsInfo.get_mut(iSpsId as usize) {
+            let ok = match pCtx.sSubsetSpsBsInfo.get_mut(iSpsId as usize) {
                 Some(row) => parse_only_write_subset_sps(row, &sps),
                 None => true,
             };
             if !ok {
                 crate::decoder::decoder_core::WelsLog(
-                    (*pCtx).sLogCtx,
+                    pCtx.sLogCtx,
                     crate::decoder::decoder_core::WELS_LOG_ERROR,
                     "subset sps rewrite does not fit the parse-only buffer",
                 );
-                (*pCtx).iErrorCode |= dsOutOfMemory;
+                pCtx.iErrorCode |= dsOutOfMemory;
                 return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_OUT_OF_MEMORY);
             }
         }
@@ -1906,7 +1906,7 @@ pub fn ParseSps(
             return iRet;
         }
         if BsGetOneBit(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
-        (*pSubsetSps).bSvcVuiParamPresentFlag = uiCode != 0;
+        pSubsetSps.bSvcVuiParamPresentFlag = uiCode != 0;
     }
 
     *pPicWidth = (pSubsetSps.sSps.iMbWidth << 4) as i32;
@@ -1917,46 +1917,46 @@ pub fn ParseSps(
     if kbUseSubsetFlag {
         if CheckSpsActive(pCtx, tmp_ref, true) {
             // Overwriting the active subset SPS: only act when it actually changed.
-            if !bytes_equal(&(*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[idx], &*pSubsetSps) {
+            if !bytes_equal(&pCtx.sSpsPpsCtx.sSubsetSpsBuffer[idx], &*pSubsetSps) {
                 if au_has_nals(pCtx) {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[MAX_SPS_COUNT], &*pSubsetSps);
+                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSubsetSpsBuffer[MAX_SPS_COUNT], &*pSubsetSps);
                     mark_au_ready(pCtx);
-                    (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SUBSETSPS;
-                } else if active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
-                    .is_some_and(|s| s.iSpsId == (*pSubsetSps).sSps.iSpsId)
+                    pCtx.sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SUBSETSPS;
+                } else if active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
+                    .is_some_and(|s| s.iSpsId == pSubsetSps.sSps.iSpsId)
                 {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[MAX_SPS_COUNT], &*pSubsetSps);
-                    (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SUBSETSPS;
+                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSubsetSpsBuffer[MAX_SPS_COUNT], &*pSubsetSps);
+                    pCtx.sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SUBSETSPS;
                 } else {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[idx], &*pSubsetSps);
+                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSubsetSpsBuffer[idx], &*pSubsetSps);
                 }
             }
         } else {
-            bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSubsetSpsBuffer[idx], &*pSubsetSps);
-            (*pCtx).sSpsPpsCtx.bSubspsAvailFlags[idx] = true;
-            (*pCtx).sSpsPpsCtx.bSubspsExistAheadFlag = true;
+            bytes_copy(&mut pCtx.sSpsPpsCtx.sSubsetSpsBuffer[idx], &*pSubsetSps);
+            pCtx.sSpsPpsCtx.bSubspsAvailFlags[idx] = true;
+            pCtx.sSpsPpsCtx.bSubspsExistAheadFlag = true;
         }
     } else {
         if CheckSpsActive(pCtx, tmp_ref, false) {
             // Overwriting the active SPS: only act when it actually changed.
-            if !bytes_equal(&(*pCtx).sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps) {
+            if !bytes_equal(&pCtx.sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps) {
                 if au_has_nals(pCtx) {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], &mut pSubsetSps.sSps);
-                    (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
+                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], &mut pSubsetSps.sSps);
+                    pCtx.sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                     mark_au_ready(pCtx);
-                } else if active_sps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_sps)
+                } else if active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
                     .is_some_and(|s| s.iSpsId == pSubsetSps.sSps.iSpsId)
                 {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], &mut pSubsetSps.sSps);
-                    (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
+                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], &mut pSubsetSps.sSps);
+                    pCtx.sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                 } else {
-                    bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps);
+                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps);
                 }
             }
         } else {
-            bytes_copy(&mut (*pCtx).sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps);
-            (*pCtx).sSpsPpsCtx.bSpsAvailFlags[idx] = true;
-            (*pCtx).sSpsPpsCtx.bSpsExistAheadFlag = true;
+            bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps);
+            pCtx.sSpsPpsCtx.bSpsAvailFlags[idx] = true;
+            pCtx.sSpsPpsCtx.bSpsExistAheadFlag = true;
         }
     }
 
@@ -2078,9 +2078,9 @@ pub fn ParsePps(
         pPps.bPicScalingMatrixPresentFlag = uiCode != 0;
 
         if pPps.bPicScalingMatrixPresentFlag {
-            if (*pCtx).sSpsPpsCtx.bSpsAvailFlags[pPps.iSpsId as usize] {
+            if pCtx.sSpsPpsCtx.bSpsAvailFlags[pPps.iSpsId as usize] {
                 let src =
-                    ScalingListSource::of(&(*pCtx).sSpsPpsCtx.sSpsBuffer[pPps.iSpsId as usize]);
+                    ScalingListSource::of(&pCtx.sSpsPpsCtx.sSpsBuffer[pPps.iSpsId as usize]);
                 ParseScalingList(
                     &src,
                     buf,
@@ -2106,26 +2106,26 @@ pub fn ParsePps(
     }
 
     let pps_idx = uiPpsId as usize;
-    if active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps).is_some_and(|p| p.iPpsId == pPps.iPpsId) {
+    if active_pps(&pCtx.sSpsPpsCtx, pCtx.active_pps).is_some_and(|p| p.iPpsId == pPps.iPpsId) {
         // Re-sent PPS for the active id: only flag an overwrite when it changed.
-        let unchanged = active_pps(&(*pCtx).sSpsPpsCtx, (*pCtx).active_pps)
+        let unchanged = active_pps(&pCtx.sSpsPpsCtx, pCtx.active_pps)
             .is_some_and(|active| bytes_equal(active, pPps));
         if !unchanged {
-            bytes_copy(&mut (*pCtx).sSpsPpsCtx.sPpsBuffer[MAX_PPS_COUNT], pPps);
-            (*pCtx).sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_PPS;
+            bytes_copy(&mut pCtx.sSpsPpsCtx.sPpsBuffer[MAX_PPS_COUNT], pPps);
+            pCtx.sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_PPS;
             mark_au_ready(pCtx);
         }
     } else {
-        bytes_copy(&mut (*pCtx).sSpsPpsCtx.sPpsBuffer[pps_idx], pPps);
-        (*pCtx).sSpsPpsCtx.bPpsAvailFlags[pps_idx] = true;
+        bytes_copy(&mut pCtx.sSpsPpsCtx.sPpsBuffer[pps_idx], pPps);
+        pCtx.sSpsPpsCtx.bPpsAvailFlags[pps_idx] = true;
     }
 
     // `au_parser.cpp:1471-1493` — the parse-only PPS cache, last thing in
     // the function as in the reference.
-    if (*pCtx).pParam.bParseOnly {
+    if pCtx.pParam.bParseOnly {
         if kpSrcNal.len() >= SPS_PPS_BS_SIZE - 4 {
             crate::decoder::decoder_core::WelsLog(
-                (*pCtx).sLogCtx,
+                pCtx.sLogCtx,
                 crate::decoder::decoder_core::WELS_LOG_WARNING,
                 &format!(
                     "pps payload size ({}) too large for parse only ({}), not supported!",
@@ -2133,10 +2133,10 @@ pub fn ParsePps(
                     SPS_PPS_BS_SIZE - 4
                 ),
             );
-            (*pCtx).iErrorCode |= dsBitstreamError;
+            pCtx.iErrorCode |= dsBitstreamError;
             return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_OUT_OF_MEMORY);
         }
-        if let Some(row) = (*pCtx).sPpsBsInfo.get_mut(pps_idx) {
+        if let Some(row) = pCtx.sPpsBsInfo.get_mut(pps_idx) {
             parse_only_write_pps(row, uiPpsId as i32, kpSrcNal);
         }
     }
@@ -2462,9 +2462,9 @@ pub fn ParseScalingList(
 /// `UninitFmoList (&pCtx->sFmoList[0], MAX_PPS_COUNT, pCtx->iActiveFmoNum, …)` — and
 /// *then* zeroes `iActiveFmoNum`.
 pub fn ResetFmoList(pCtx: &mut SWelsDecoderContext) -> i32 {
-    let iCountNum = (*pCtx).iActiveFmoNum;
-    crate::decoder::fmo::UninitFmoList(&mut (*pCtx).sFmoList, iCountNum);
-    (*pCtx).iActiveFmoNum = 0;
+    let iCountNum = pCtx.iActiveFmoNum;
+    crate::decoder::fmo::UninitFmoList(&mut pCtx.sFmoList, iCountNum);
+    pCtx.iActiveFmoNum = 0;
     iCountNum
 }
 
@@ -2532,9 +2532,9 @@ fn discard_nal_and_close_au(pCtx: &mut SWelsDecoderContext, uiAvailNalNum: u32) 
         }
     }
     if uiAvailNalNum > 1
-        && (*pCtx).pParam.eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE
+        && pCtx.pParam.eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE
     {
-        (*pCtx).bAuReadyFlag = true;
+        pCtx.bAuReadyFlag = true;
     }
 }
 
@@ -2555,9 +2555,9 @@ pub fn prefetch_nal_header_ext(kppDst: &mut SNalUnit, kpSrc: &SNalUnit) -> bool 
 
 /// Resets active SPS pointers for each layer if MB reconstruction has not started.
 pub fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
-    if (*pCtx).iTotalNumMbRec == 0 {
+    if pCtx.iTotalNumMbRec == 0 {
         for i in 0..MAX_LAYER_NUM {
-            (*pCtx).sSpsPpsCtx.pActiveLayerSps[i] = None;
+            pCtx.sSpsPpsCtx.pActiveLayerSps[i] = None;
         }
     }
 }
@@ -2636,10 +2636,10 @@ mod au_list_tests {
         {
             let mut au = SAccessUnit::with_nodes(4);
             for i in 0..4usize {
-                (*au.nal(i)).uiTimeStamp = i as u64;
+                au.nal(i).uiTimeStamp = i as u64;
             }
             au.nal_units.swap(0, 3);
-            let seen: Vec<u64> = (0..4).map(|i| (*au.nal(i)).uiTimeStamp).collect();
+            let seen: Vec<u64> = (0..4).map(|i| au.nal(i).uiTimeStamp).collect();
             assert_eq!(seen, vec![3, 1, 2, 0]);
         }
     }
@@ -2654,19 +2654,19 @@ mod au_list_tests {
             let pCtx = &mut *ctx;
 
             // One active entry with a map, exactly as `FmoParamUpdate` leaves it.
-            (*pCtx).sFmoList[0].bActiveFlag = true;
-            (*pCtx).sFmoList[0].pMbAllocMap = vec![0u8; 16];
-            (*pCtx).sFmoList[0].iCountMbNum = 16;
-            (*pCtx).sFmoList[0].iSliceGroupCount = 1;
-            (*pCtx).sFmoList[0].iSliceGroupType = 0;
-            (*pCtx).iActiveFmoNum = 1;
+            pCtx.sFmoList[0].bActiveFlag = true;
+            pCtx.sFmoList[0].pMbAllocMap = vec![0u8; 16];
+            pCtx.sFmoList[0].iCountMbNum = 16;
+            pCtx.sFmoList[0].iSliceGroupCount = 1;
+            pCtx.sFmoList[0].iSliceGroupType = 0;
+            pCtx.iActiveFmoNum = 1;
 
             assert_eq!(ResetFmoList(pCtx), 1, "returns the count it reset");
-            assert!(!(*pCtx).sFmoList[0].bActiveFlag, "the entry is deactivated");
-            assert!((*pCtx).sFmoList[0].pMbAllocMap.is_empty(), "its map is dropped");
-            assert_eq!((*pCtx).sFmoList[0].iCountMbNum, 0);
-            assert_eq!((*pCtx).sFmoList[0].iSliceGroupType, -1);
-            assert_eq!((*pCtx).iActiveFmoNum, 0);
+            assert!(!pCtx.sFmoList[0].bActiveFlag, "the entry is deactivated");
+            assert!(pCtx.sFmoList[0].pMbAllocMap.is_empty(), "its map is dropped");
+            assert_eq!(pCtx.sFmoList[0].iCountMbNum, 0);
+            assert_eq!(pCtx.sFmoList[0].iSliceGroupType, -1);
+            assert_eq!(pCtx.iActiveFmoNum, 0);
 
             // A cleared entry can be re-activated, so the counter climbs again.
             let mut sps = crate::decoder::parameter_sets::SSps::default();
@@ -2675,13 +2675,13 @@ mod au_list_tests {
             let mut pps = crate::decoder::parameter_sets::SPps::default();
             pps.uiNumSliceGroups = 1;
             let ret = crate::decoder::fmo::FmoParamUpdate(
-                Some(&mut (*pCtx).sFmoList[0]),
+                Some(&mut pCtx.sFmoList[0]),
                 Some(&sps),
                 Some(&pps),
-                &mut (*pCtx).iActiveFmoNum,
+                &mut pCtx.iActiveFmoNum,
             );
             assert_eq!(ret, ERR_NONE);
-            assert_eq!((*pCtx).iActiveFmoNum, 1, "re-activation counts again");
+            assert_eq!(pCtx.iActiveFmoNum, 1, "re-activation counts again");
         }
     }
 

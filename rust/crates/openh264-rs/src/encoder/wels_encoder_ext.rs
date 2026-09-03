@@ -658,27 +658,27 @@ pub fn WelsEncoderParamAdjust(
 
     let pOldParam: &mut SWelsSvcCodingParam = ctx.param_mut();
 
-    if (*pOldParam).iUsageType != pNewParam.iUsageType {
+    if pOldParam.iUsageType != pNewParam.iUsageType {
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
 
     /* Decide whether need reset for IDR frame based on adjusting prarameters changed */
     /* Temporal levels, spatial settings and/ or quality settings changed need update parameter sets related. */
-    bNeedReset = ((*pOldParam).bSimulcastAVC != pNewParam.bSimulcastAVC)
-        || ((*pOldParam).iSpatialLayerNum != pNewParam.iSpatialLayerNum)
-        || ((*pOldParam).iPicWidth != pNewParam.iPicWidth
-            || (*pOldParam).iPicHeight != pNewParam.iPicHeight)
-        || ((*pOldParam).SUsedPicRect.iWidth != pNewParam.SUsedPicRect.iWidth
-            || (*pOldParam).SUsedPicRect.iHeight != pNewParam.SUsedPicRect.iHeight)
-        || ((*pOldParam).bEnableLongTermReference != pNewParam.bEnableLongTermReference)
-        || ((*pOldParam).iLTRRefNum != pNewParam.iLTRRefNum)
-        || ((*pOldParam).iMultipleThreadIdc != pNewParam.iMultipleThreadIdc)
-        || ((*pOldParam).bEnableBackgroundDetection != pNewParam.bEnableBackgroundDetection)
-        || ((*pOldParam).bEnableAdaptiveQuant != pNewParam.bEnableAdaptiveQuant)
-        || ((*pOldParam).eSpsPpsIdStrategy != pNewParam.eSpsPpsIdStrategy);
-    if (pNewParam.iMaxNumRefFrame > (*pOldParam).iMaxNumRefFrame)
-        || ((*pOldParam).iMaxNumRefFrame == 1
-            && (*pOldParam).iTemporalLayerNum == 1
+    bNeedReset = (pOldParam.bSimulcastAVC != pNewParam.bSimulcastAVC)
+        || (pOldParam.iSpatialLayerNum != pNewParam.iSpatialLayerNum)
+        || (pOldParam.iPicWidth != pNewParam.iPicWidth
+            || pOldParam.iPicHeight != pNewParam.iPicHeight)
+        || (pOldParam.SUsedPicRect.iWidth != pNewParam.SUsedPicRect.iWidth
+            || pOldParam.SUsedPicRect.iHeight != pNewParam.SUsedPicRect.iHeight)
+        || (pOldParam.bEnableLongTermReference != pNewParam.bEnableLongTermReference)
+        || (pOldParam.iLTRRefNum != pNewParam.iLTRRefNum)
+        || (pOldParam.iMultipleThreadIdc != pNewParam.iMultipleThreadIdc)
+        || (pOldParam.bEnableBackgroundDetection != pNewParam.bEnableBackgroundDetection)
+        || (pOldParam.bEnableAdaptiveQuant != pNewParam.bEnableAdaptiveQuant)
+        || (pOldParam.eSpsPpsIdStrategy != pNewParam.eSpsPpsIdStrategy);
+    if (pNewParam.iMaxNumRefFrame > pOldParam.iMaxNumRefFrame)
+        || (pOldParam.iMaxNumRefFrame == 1
+            && pOldParam.iTemporalLayerNum == 1
             && pNewParam.iTemporalLayerNum == 2)
     {
         bNeedReset = true;
@@ -686,17 +686,17 @@ pub fn WelsEncoderParamAdjust(
     if !bNeedReset {
         // Check its picture resolutions/quality settings respectively in each dependency layer
         iIndexD = 0;
-        debug_assert!((*pOldParam).iSpatialLayerNum == pNewParam.iSpatialLayerNum);
+        debug_assert!(pOldParam.iSpatialLayerNum == pNewParam.iSpatialLayerNum);
         loop {
             let d = iIndexD as usize;
-            let kpOldDlp = &(*pOldParam).sDependencyLayers[d];
+            let kpOldDlp = &pOldParam.sDependencyLayers[d];
             let kpNewDlp = &pNewParam.sDependencyLayers[d];
             let mut fT1: f32 = 0.0;
             let mut fT2: f32 = 0.0;
 
             // check frame size settings
-            if (*pOldParam).sSpatialLayers[d].iVideoWidth != pNewParam.sSpatialLayers[d].iVideoWidth
-                || (*pOldParam).sSpatialLayers[d].iVideoHeight
+            if pOldParam.sSpatialLayers[d].iVideoWidth != pNewParam.sSpatialLayers[d].iVideoWidth
+                || pOldParam.sSpatialLayers[d].iVideoHeight
                     != pNewParam.sSpatialLayers[d].iVideoHeight
                 || kpOldDlp.iActualWidth != kpNewDlp.iActualWidth
                 || kpOldDlp.iActualHeight != kpNewDlp.iActualHeight
@@ -705,9 +705,9 @@ pub fn WelsEncoderParamAdjust(
                 break;
             }
 
-            if (*pOldParam).sSpatialLayers[d].sSliceArgument.uiSliceMode
+            if pOldParam.sSpatialLayers[d].sSliceArgument.uiSliceMode
                 != pNewParam.sSpatialLayers[d].sSliceArgument.uiSliceMode
-                || (*pOldParam).sSpatialLayers[d].sSliceArgument.uiSliceNum
+                || pOldParam.sSpatialLayers[d].sSliceArgument.uiSliceNum
                     != pNewParam.sSpatialLayers[d].sSliceArgument.uiSliceNum
             {
                 bNeedReset = true;
@@ -723,13 +723,13 @@ pub fn WelsEncoderParamAdjust(
             }
             if kpNewDlp.fOutputFrameRate > EPSN && kpOldDlp.fOutputFrameRate > EPSN {
                 fT2 = pNewParam.fMaxFrameRate / kpNewDlp.fOutputFrameRate
-                    - (*pOldParam).fMaxFrameRate / kpOldDlp.fOutputFrameRate;
+                    - pOldParam.fMaxFrameRate / kpOldDlp.fOutputFrameRate;
             }
             if fT1 > EPSN || fT1 < -EPSN || fT2 > EPSN || fT2 < -EPSN {
                 bNeedReset = true;
                 break;
             }
-            if (*pOldParam).sSpatialLayers[d].uiProfileIdc
+            if pOldParam.sSpatialLayers[d].uiProfileIdc
                 != pNewParam.sSpatialLayers[d].uiProfileIdc
             {
                 bNeedReset = true;
@@ -738,29 +738,29 @@ pub fn WelsEncoderParamAdjust(
             // check level change, if new level is smaller than old level, don't reset
             // encoder. still use old level.
             if pNewParam.sSpatialLayers[d].uiLevelIdc as i32
-                > (*pOldParam).sSpatialLayers[d].uiLevelIdc as i32
+                > pOldParam.sSpatialLayers[d].uiLevelIdc as i32
             {
                 bNeedReset = true;
                 break;
             }
             iIndexD += 1;
-            if iIndexD >= (*pOldParam).iSpatialLayerNum {
+            if iIndexD >= pOldParam.iSpatialLayerNum {
                 break;
             }
         }
     }
 
     if bNeedReset {
-        let iOldSpsPpsIdStrategy = (*pOldParam).eSpsPpsIdStrategy;
+        let iOldSpsPpsIdStrategy = pOldParam.eSpsPpsIdStrategy;
         let mut sTmpPsoVariable: [SParaSetOffsetVariable; PARA_SET_TYPE] = Default::default();
         let mut iTmpPpsIdList: [i32; MAX_DQ_LAYER_NUM * MAX_PPS_COUNT] =
             [0; MAX_DQ_LAYER_NUM * MAX_PPS_COUNT];
         // for LTR or SPS,PPS ID update
         let mut uiMaxIdrPicId: u16 = 0;
         iIndexD = 0;
-        while iIndexD < (*pOldParam).iSpatialLayerNum {
-            if (*pOldParam).sDependencyLayers[iIndexD as usize].uiIdrPicId > uiMaxIdrPicId {
-                uiMaxIdrPicId = (*pOldParam).sDependencyLayers[iIndexD as usize].uiIdrPicId;
+        while iIndexD < pOldParam.iSpatialLayerNum {
+            if pOldParam.sDependencyLayers[iIndexD as usize].uiIdrPicId > uiMaxIdrPicId {
+                uiMaxIdrPicId = pOldParam.sDependencyLayers[iIndexD as usize].uiIdrPicId;
             }
             iIndexD += 1;
         }
@@ -854,78 +854,78 @@ pub fn WelsEncoderParamAdjust(
             WELS_CLIP3(pNewParam.fMaxFrameRate, MIN_FRAME_RATE, MAX_FRAME_RATE);
 
         // we can not use direct struct based memcpy due some fields need keep unchanged as before
-        (*pOldParam).fMaxFrameRate = pNewParam.fMaxFrameRate;
-        (*pOldParam).iComplexityMode = pNewParam.iComplexityMode;
-        (*pOldParam).uiIntraPeriod = pNewParam.uiIntraPeriod;
-        (*pOldParam).eSpsPpsIdStrategy = pNewParam.eSpsPpsIdStrategy;
-        (*pOldParam).bPrefixNalAddingCtrl = pNewParam.bPrefixNalAddingCtrl;
-        (*pOldParam).iNumRefFrame = pNewParam.iNumRefFrame;
-        (*pOldParam).uiGopSize = pNewParam.uiGopSize;
-        if (*pOldParam).iTemporalLayerNum != pNewParam.iTemporalLayerNum {
-            (*pOldParam).iTemporalLayerNum = pNewParam.iTemporalLayerNum;
+        pOldParam.fMaxFrameRate = pNewParam.fMaxFrameRate;
+        pOldParam.iComplexityMode = pNewParam.iComplexityMode;
+        pOldParam.uiIntraPeriod = pNewParam.uiIntraPeriod;
+        pOldParam.eSpsPpsIdStrategy = pNewParam.eSpsPpsIdStrategy;
+        pOldParam.bPrefixNalAddingCtrl = pNewParam.bPrefixNalAddingCtrl;
+        pOldParam.iNumRefFrame = pNewParam.iNumRefFrame;
+        pOldParam.uiGopSize = pNewParam.uiGopSize;
+        if pOldParam.iTemporalLayerNum != pNewParam.iTemporalLayerNum {
+            pOldParam.iTemporalLayerNum = pNewParam.iTemporalLayerNum;
             for d in 0..MAX_DEPENDENCY_LAYER as usize {
-                (*pOldParam).sDependencyLayers[d].iCodingIndex = 0;
+                pOldParam.sDependencyLayers[d].iCodingIndex = 0;
             }
         }
-        (*pOldParam).iDecompStages = pNewParam.iDecompStages;
+        pOldParam.iDecompStages = pNewParam.iDecompStages;
         /* denoise control */
-        (*pOldParam).bEnableDenoise = pNewParam.bEnableDenoise;
+        pOldParam.bEnableDenoise = pNewParam.bEnableDenoise;
 
         /* background detection control */
-        (*pOldParam).bEnableBackgroundDetection = pNewParam.bEnableBackgroundDetection;
+        pOldParam.bEnableBackgroundDetection = pNewParam.bEnableBackgroundDetection;
 
         /* adaptive quantization control */
-        (*pOldParam).bEnableAdaptiveQuant = pNewParam.bEnableAdaptiveQuant;
+        pOldParam.bEnableAdaptiveQuant = pNewParam.bEnableAdaptiveQuant;
 
         /* int32_t term reference control */
-        (*pOldParam).bEnableLongTermReference = pNewParam.bEnableLongTermReference;
-        (*pOldParam).iLtrMarkPeriod = pNewParam.iLtrMarkPeriod;
+        pOldParam.bEnableLongTermReference = pNewParam.bEnableLongTermReference;
+        pOldParam.iLtrMarkPeriod = pNewParam.iLtrMarkPeriod;
 
         // keep below values unchanged as before
-        (*pOldParam).bEnableSSEI = pNewParam.bEnableSSEI;
-        (*pOldParam).bSimulcastAVC = pNewParam.bSimulcastAVC;
-        (*pOldParam).bEnableFrameCroppingFlag = pNewParam.bEnableFrameCroppingFlag;
+        pOldParam.bEnableSSEI = pNewParam.bEnableSSEI;
+        pOldParam.bSimulcastAVC = pNewParam.bSimulcastAVC;
+        pOldParam.bEnableFrameCroppingFlag = pNewParam.bEnableFrameCroppingFlag;
 
         /* Motion search */
 
         /* Deblocking loop filter */
-        (*pOldParam).iLoopFilterDisableIdc = pNewParam.iLoopFilterDisableIdc;
-        (*pOldParam).iLoopFilterAlphaC0Offset = pNewParam.iLoopFilterAlphaC0Offset;
-        (*pOldParam).iLoopFilterBetaOffset = pNewParam.iLoopFilterBetaOffset;
+        pOldParam.iLoopFilterDisableIdc = pNewParam.iLoopFilterDisableIdc;
+        pOldParam.iLoopFilterAlphaC0Offset = pNewParam.iLoopFilterAlphaC0Offset;
+        pOldParam.iLoopFilterBetaOffset = pNewParam.iLoopFilterBetaOffset;
 
         /* Rate Control */
-        (*pOldParam).iRCMode = pNewParam.iRCMode;
-        (*pOldParam).iTargetBitrate = pNewParam.iTargetBitrate;
-        (*pOldParam).iPaddingFlag = pNewParam.iPaddingFlag;
+        pOldParam.iRCMode = pNewParam.iRCMode;
+        pOldParam.iTargetBitrate = pNewParam.iTargetBitrate;
+        pOldParam.iPaddingFlag = pNewParam.iPaddingFlag;
 
         /* Layer definition */
-        (*pOldParam).bPrefixNalAddingCtrl = pNewParam.bPrefixNalAddingCtrl;
+        pOldParam.bPrefixNalAddingCtrl = pNewParam.bPrefixNalAddingCtrl;
 
         // d
         iIndexD = 0;
         loop {
             let d = iIndexD as usize;
-            (*pOldParam).sDependencyLayers[d].fInputFrameRate =
+            pOldParam.sDependencyLayers[d].fInputFrameRate =
                 pNewParam.sDependencyLayers[d].fInputFrameRate;
-            (*pOldParam).sDependencyLayers[d].fOutputFrameRate =
+            pOldParam.sDependencyLayers[d].fOutputFrameRate =
                 pNewParam.sDependencyLayers[d].fOutputFrameRate;
-            (*pOldParam).sSpatialLayers[d].iSpatialBitrate =
+            pOldParam.sSpatialLayers[d].iSpatialBitrate =
                 pNewParam.sSpatialLayers[d].iSpatialBitrate;
-            (*pOldParam).sSpatialLayers[d].iMaxSpatialBitrate =
+            pOldParam.sSpatialLayers[d].iMaxSpatialBitrate =
                 pNewParam.sSpatialLayers[d].iMaxSpatialBitrate;
-            (*pOldParam).sSpatialLayers[d].uiProfileIdc =
+            pOldParam.sSpatialLayers[d].uiProfileIdc =
                 pNewParam.sSpatialLayers[d].uiProfileIdc;
-            (*pOldParam).sSpatialLayers[d].iDLayerQp = pNewParam.sSpatialLayers[d].iDLayerQp;
+            pOldParam.sSpatialLayers[d].iDLayerQp = pNewParam.sSpatialLayers[d].iDLayerQp;
 
             /* Derived variants below */
-            (*pOldParam).sDependencyLayers[d].iTemporalResolution =
+            pOldParam.sDependencyLayers[d].iTemporalResolution =
                 pNewParam.sDependencyLayers[d].iTemporalResolution;
-            (*pOldParam).sDependencyLayers[d].iDecompositionStages =
+            pOldParam.sDependencyLayers[d].iDecompositionStages =
                 pNewParam.sDependencyLayers[d].iDecompositionStages;
-            (*pOldParam).sDependencyLayers[d].uiCodingIdx2TemporalId =
+            pOldParam.sDependencyLayers[d].uiCodingIdx2TemporalId =
                 pNewParam.sDependencyLayers[d].uiCodingIdx2TemporalId;
             iIndexD += 1;
-            if iIndexD >= (*pOldParam).iSpatialLayerNum {
+            if iIndexD >= pOldParam.iSpatialLayerNum {
                 break;
             }
         }
@@ -976,18 +976,18 @@ pub fn WelsEncoderApplyBitRate(
     pParam: &mut SWelsSvcCodingParam,
     iLayer: i32,
 ) -> i32 {
-    let iNumLayers = (*pParam).iSpatialLayerNum;
+    let iNumLayers = pParam.iSpatialLayerNum;
     let mut iOrigTotalBitrate = 0i32;
     if iLayer == SPATIAL_LAYER_ALL as i32 {
         // read old BR
         for i in 0..iNumLayers as usize {
-            iOrigTotalBitrate += (*pParam).sSpatialLayers[i].iSpatialBitrate;
+            iOrigTotalBitrate += pParam.sSpatialLayers[i].iSpatialBitrate;
         }
         // write new BR
         for i in 0..iNumLayers as usize {
-            let pLayerParam = &mut (*pParam).sSpatialLayers[i];
+            let pLayerParam = &mut pParam.sSpatialLayers[i];
             let fRatio = pLayerParam.iSpatialBitrate as f32 / iOrigTotalBitrate as f32;
-            pLayerParam.iSpatialBitrate = ((*pParam).iTargetBitrate as f32 * fRatio) as i32;
+            pLayerParam.iSpatialBitrate = (pParam.iTargetBitrate as f32 * fRatio) as i32;
 
             if WelsBitRateVerification(pLogCtx, pLayerParam, i as i32) != ENC_RETURN_SUCCESS {
                 return ENC_RETURN_UNSUPPORTED_PARA;
@@ -996,7 +996,7 @@ pub fn WelsEncoderApplyBitRate(
     } else {
         return WelsBitRateVerification(
             pLogCtx,
-            &mut (*pParam).sSpatialLayers[iLayer as usize],
+            &mut pParam.sSpatialLayers[iLayer as usize],
             iLayer,
         );
     }
@@ -1390,13 +1390,13 @@ pub fn ParamValidationExt(
                 let iMaxSliceNum = MAX_SLICES_NUM as i32;
                 let pSliceArgument = &mut pCodingParam.sSpatialLayers[idx].sSliceArgument;
 
-                if (*pSliceArgument).uiSliceMbNum[0] == 0 {
+                if pSliceArgument.uiSliceMbNum[0] == 0 {
                     if iMbHeight > iMaxSliceNum {
                         return ENC_RETURN_UNSUPPORTED_PARA;
                     }
-                    (*pSliceArgument).uiSliceNum = iMbHeight as u32;
+                    pSliceArgument.uiSliceNum = iMbHeight as u32;
                     for j in 0..iMbHeight as usize {
-                        (*pSliceArgument).uiSliceMbNum[j] = iMbWidth as u32;
+                        pSliceArgument.uiSliceMbNum[j] = iMbWidth as u32;
                     }
                     // verify interleave mode settings
                     if !CheckRowMbMultiSliceSetting(iMbWidth, pSliceArgument) {
@@ -1407,14 +1407,14 @@ pub fn ParamValidationExt(
                     if !CheckRasterMultiSliceSetting(iMbNumInFrame, pSliceArgument) {
                         return ENC_RETURN_UNSUPPORTED_PARA;
                     }
-                    if (*pSliceArgument).uiSliceNum == 0
-                        || (*pSliceArgument).uiSliceNum > iMaxSliceNum as u32
+                    if pSliceArgument.uiSliceNum == 0
+                        || pSliceArgument.uiSliceNum > iMaxSliceNum as u32
                     {
                         return ENC_RETURN_UNSUPPORTED_PARA;
                     }
-                    if (*pSliceArgument).uiSliceNum == 1 {
+                    if pSliceArgument.uiSliceNum == 1 {
                         // SM_RASTER_SLICE with one slice is just SM_SINGLE_SLICE
-                        (*pSliceArgument).uiSliceMode = SM_SINGLE_SLICE;
+                        pSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
                     } else {
                         // C++ logs "GOM based RC do not support SM_RASTER_SLICE" when
                         // iRCMode != RC_OFF_MODE here, but does not fail.
@@ -1422,8 +1422,8 @@ pub fn ParamValidationExt(
                         // considering coding efficiency and performance, iCountMbNum is
                         // constrained by MIN_NUM_MB_PER_SLICE for multi-slice mode
                         if iMbNumInFrame <= MIN_NUM_MB_PER_SLICE {
-                            (*pSliceArgument).uiSliceMode = SM_SINGLE_SLICE;
-                            (*pSliceArgument).uiSliceNum = 1;
+                            pSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
+                            pSliceArgument.uiSliceNum = 1;
                         }
                     }
                 }
@@ -1488,9 +1488,9 @@ pub fn CheckProfileSetting(
     iLayer: i32,
     uiProfileIdc: EProfileIdc,
 ) {
-    let pLayerInfo = &mut (*pParam).sSpatialLayers[iLayer as usize];
+    let pLayerInfo = &mut pParam.sSpatialLayers[iLayer as usize];
     pLayerInfo.uiProfileIdc = uiProfileIdc;
-    if (*pParam).bSimulcastAVC {
+    if pParam.bSimulcastAVC {
         if uiProfileIdc != PRO_BASELINE && uiProfileIdc != PRO_MAIN && uiProfileIdc != PRO_HIGH {
             WelsLog(
                 pLogCtx,
@@ -1536,7 +1536,7 @@ pub fn CheckLevelSetting(
     iLayer: i32,
     uiLevelIdc: ELevelIdc,
 ) {
-    let pLayerInfo = &mut (*pParam).sSpatialLayers[iLayer as usize];
+    let pLayerInfo = &mut pParam.sSpatialLayers[iLayer as usize];
     pLayerInfo.uiLevelIdc = LEVEL_UNKNOWN;
     let mut iLevelIdx = LEVEL_NUMBER as i32 - 1;
     while iLevelIdx >= 0 {
@@ -1557,14 +1557,14 @@ pub fn CheckReferenceNumSetting(
     pParam: &mut SWelsSvcCodingParam,
     iNumRef: i32,
 ) {
-    let iRefUpperBound = if (*pParam).iUsageType == CAMERA_VIDEO_REAL_TIME {
+    let iRefUpperBound = if pParam.iUsageType == CAMERA_VIDEO_REAL_TIME {
         MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA
     } else {
         MAX_REFERENCE_PICTURE_COUNT_NUM_SCREEN
     };
-    (*pParam).iNumRefFrame = iNumRef;
+    pParam.iNumRefFrame = iNumRef;
     if iNumRef < MIN_REF_PIC_COUNT || iNumRef > iRefUpperBound {
-        (*pParam).iNumRefFrame = AUTO_REF_PIC_COUNT;
+        pParam.iNumRefFrame = AUTO_REF_PIC_COUNT;
     }
 }
 
@@ -1578,9 +1578,9 @@ pub fn WelsEncoderApplyBitVaryRang(
     pParam: &mut SWelsSvcCodingParam,
     iRang: i32,
 ) -> i32 {
-    let iNumLayers = (*pParam).iSpatialLayerNum;
+    let iNumLayers = pParam.iSpatialLayerNum;
     for i in 0..iNumLayers as usize {
-        let pLayerParam = &mut (*pParam).sSpatialLayers[i];
+        let pLayerParam = &mut pParam.sSpatialLayers[i];
         pLayerParam.iMaxSpatialBitrate = WELS_MIN(
             (pLayerParam.iSpatialBitrate as f64 * (1.0 + iRang as f64 / 100.0)) as i32,
             pLayerParam.iMaxSpatialBitrate,

@@ -204,26 +204,26 @@ pub fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
     };
 
     for i in 0..=(MAX_SHORT_REF_COUNT) {
-        (*pRefList).pShortRefList[i] = None;
+        pRefList.pShortRefList[i] = None;
     }
     for i in 0..=(ltrRefNum) {
         if i <= MAX_REF_PIC_COUNT {
-            (*pRefList).pLongRefList[i] = None;
+            pRefList.pLongRefList[i] = None;
         }
     }
     for i in 0..=(numRefFrame) {
-        if i < (*pRefList).pRef.len() {
-            let id = (*pRefList).pRef.at(i);
-            (*pRefList).pic_mut(id).SetUnref();
+        if i < pRefList.pRef.len() {
+            let id = pRefList.pRef.at(i);
+            pRefList.pic_mut(id).SetUnref();
         }
     }
 
-    (*pRefList).uiLongRefCount = 0;
-    (*pRefList).uiShortRefCount = 0;
-    (*pRefList).pNextBuffer = if (*pRefList).pRef.is_empty() {
+    pRefList.uiLongRefCount = 0;
+    pRefList.uiShortRefCount = 0;
+    pRefList.pNextBuffer = if pRefList.pRef.is_empty() {
         None
     } else {
-        Some((*pRefList).pRef.at(0))
+        Some(pRefList.pRef.at(0))
     };
 }
 
@@ -285,9 +285,9 @@ pub fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) {
     };
     let mut i = 0;
     while i < numRef {
-        let hit = match (*pRefList).pLongRefList[i as usize] {
+        let hit = match pRefList.pLongRefList[i as usize] {
             Some(id) => {
-                let pRef = (*pRefList).pic(id);
+                let pRef = pRefList.pic(id);
                 pRef.bUsedAsRef
                     && pRef.bIsLongRef
                     && (!pRef.bIsSceneLTR)
@@ -297,8 +297,8 @@ pub fn DeleteNonSceneLTR(pCtx: &mut sWelsEncCtx) {
             None => false,
         };
         if hit {
-            let id = (*pRefList).pLongRefList[i as usize].expect("checked just above");
-            (*pRefList).pic_mut(id).SetUnref();
+            let id = pRefList.pLongRefList[i as usize].expect("checked just above");
+            pRefList.pic_mut(id).SetUnref();
             DeleteLTRFromLongList(&mut *pRefList, i);
             i -= 1;
         }
@@ -356,8 +356,8 @@ pub fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
     };
 
     for i in 0..LONG_TERM_REF_NUM {
-        if let Some(idPic) = (*pRefList).pLongRefList[i as usize] {
-            let pPic = (*pRefList).pic(idPic);
+        if let Some(idPic) = pRefList.pLongRefList[i as usize] {
+            let pPic = pRefList.pic(idPic);
             let cond1 = CompareFrameNum(pPic.iFrameNum, pLtr.iLastCorFrameNumDec, iMaxFrameNumPlus1)
                 == COMPARE_FRAME_NUM::FRAME_NUM_BIGGER as i32
                 && ((CompareFrameNum(pPic.iFrameNum, pLtr.iCurFrameNumInDec, iMaxFrameNumPlus1)
@@ -365,14 +365,14 @@ pub fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
                     != 0);
 
             if cond1 {
-                (*pRefList).pic_mut(idPic).SetUnref();
+                pRefList.pic_mut(idPic).SetUnref();
                 DeleteLTRFromLongList(&mut *pRefList, i);
                 pLtr.bLTRMarkEnable = true;
-                if (*pRefList).uiLongRefCount == 0 {
-                    (*pParamInternal).bEncCurFrmAsIdrFlag = true;
+                if pRefList.uiLongRefCount == 0 {
+                    pParamInternal.bEncCurFrmAsIdrFlag = true;
                 }
             } else {
-                let pPic = (*pRefList).pic(idPic);
+                let pPic = pRefList.pic(idPic);
                 let cond2 = CompareFrameNum(pPic.iMarkFrameNum, pLtr.iLastCorFrameNumDec, iMaxFrameNumPlus1)
                     == COMPARE_FRAME_NUM::FRAME_NUM_BIGGER as i32
                     && ((CompareFrameNum(pPic.iMarkFrameNum, pLtr.iCurFrameNumInDec, iMaxFrameNumPlus1)
@@ -381,11 +381,11 @@ pub fn DeleteInvalidLTR(pCtx: &mut sWelsEncCtx) {
                     && pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32;
 
                 if cond2 {
-                    (*pRefList).pic_mut(idPic).SetUnref();
+                    pRefList.pic_mut(idPic).SetUnref();
                     DeleteLTRFromLongList(&mut *pRefList, i);
                     pLtr.bLTRMarkEnable = true;
-                    if (*pRefList).uiLongRefCount == 0 {
-                        (*pParamInternal).bEncCurFrmAsIdrFlag = true;
+                    if pRefList.uiLongRefCount == 0 {
+                        pParamInternal.bEncCurFrmAsIdrFlag = true;
                     }
                 }
             }
@@ -408,32 +408,32 @@ pub fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
     };
 
     if pLtr.uiLtrMarkState == LTR_MARKING_SUCCESS {
-        for i in 0..((*pRefList).uiLongRefCount as i32) {
-            let Some(idPic) = (*pRefList).pLongRefList[i as usize] else {
+        for i in 0..(pRefList.uiLongRefCount as i32) {
+            let Some(idPic) = pRefList.pLongRefList[i as usize] else {
                 continue;
             };
-            let pPic = (*pRefList).pic(idPic);
+            let pPic = pRefList.pic(idPic);
             if pPic.iFrameNum == pLtr.iLtrMarkFbFrameNum
                 && pPic.uiRecieveConfirmed != RECIEVE_SUCCESS
             {
-                (*pRefList).pic_mut(idPic).uiRecieveConfirmed = RECIEVE_SUCCESS;
+                pRefList.pic_mut(idPic).uiRecieveConfirmed = RECIEVE_SUCCESS;
                 if let Some(pVaa) = pVaa.as_mut() {
                     pVaa.uiValidLongTermPicIdx =
-                        (*pRefList).pic(idPic).iLongTermPicNum as u8;
+                        pRefList.pic(idPic).iLongTermPicNum as u8;
                 }
                 pLtr.iCurFrameNumInDec = pLtr.iLtrMarkFbFrameNum;
                 pLtr.iLastRecoverFrameNum = pLtr.iLtrMarkFbFrameNum;
                 pLtr.iLastCorFrameNumDec = pLtr.iLtrMarkFbFrameNum;
 
                 let mut j = 0;
-                while j < (*pRefList).uiLongRefCount as i32 {
-                    let drop = match (*pRefList).pLongRefList[j as usize] {
-                        Some(id) => (*pRefList).pic(id).iLongTermPicNum != pLtr.iCurLtrIdx,
+                while j < pRefList.uiLongRefCount as i32 {
+                    let drop = match pRefList.pLongRefList[j as usize] {
+                        Some(id) => pRefList.pic(id).iLongTermPicNum != pLtr.iCurLtrIdx,
                         None => false,
                     };
                     if drop {
-                        let id = (*pRefList).pLongRefList[j as usize].expect("checked just above");
-                        (*pRefList).pic_mut(id).SetUnref();
+                        let id = pRefList.pLongRefList[j as usize].expect("checked just above");
+                        pRefList.pic_mut(id).SetUnref();
                         DeleteLTRFromLongList(&mut *pRefList, j);
                     } else {
                         j += 1;
@@ -453,12 +453,12 @@ pub fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
         }
         pLtr.uiLtrMarkState = NO_LTR_MARKING_FEEDBACK;
     } else if pLtr.uiLtrMarkState == LTR_MARKING_FAILED {
-        for i in 0..((*pRefList).uiLongRefCount as i32) {
-            let Some(idPic) = (*pRefList).pLongRefList[i as usize] else {
+        for i in 0..(pRefList.uiLongRefCount as i32) {
+            let Some(idPic) = pRefList.pLongRefList[i as usize] else {
                 continue;
             };
-            if (*pRefList).pic(idPic).iFrameNum == pLtr.iLtrMarkFbFrameNum {
-                (*pRefList).pic_mut(idPic).SetUnref();
+            if pRefList.pic(idPic).iFrameNum == pLtr.iLtrMarkFbFrameNum {
+                pRefList.pic_mut(idPic).SetUnref();
                 DeleteLTRFromLongList(&mut *pRefList, i);
                 break;
             }
@@ -467,7 +467,7 @@ pub fn HandleLTRMarkFeedback(pCtx: &mut sWelsEncCtx) {
         pLtr.bLTRMarkEnable = true;
 
         if pLtr.iLTRMarkSuccessNum == 0 {
-            (*pParamInternal).bEncCurFrmAsIdrFlag = true;
+            pParamInternal.bEncCurFrmAsIdrFlag = true;
         }
     }
 }
@@ -504,8 +504,8 @@ pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
 
     if keSliceType == EWelsSliceType::I_SLICE {
         i = 0;
-        if let Some(id) = (*pRefList).pShortRefList[i] {
-            (*pRefList).pic_mut(id).uiRecieveConfirmed = RECIEVE_SUCCESS;
+        if let Some(id) = pRefList.pShortRefList[i] {
+            pRefList.pic_mut(id).uiRecieveConfirmed = RECIEVE_SUCCESS;
         }
     } else if pLtr.bLTRMarkingFlag {
         if let Some(pVaa) = pVaa.as_mut() {
@@ -513,11 +513,11 @@ pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
         }
 
         if pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DELAY_MARK as i32 {
-            for idx in 0..((*pRefList).uiShortRefCount as usize) {
-                if let Some(id) = (*pRefList).pShortRefList[idx] {
+            for idx in 0..(pRefList.uiShortRefCount as usize) {
+                if let Some(id) = pRefList.pShortRefList[idx] {
                     if CompareFrameNum(
-                        (*pParamInternal).iFrameNum,
-                        (*pRefList).pic(id).iFrameNum + iGoPFrameNumInterval,
+                        pParamInternal.iFrameNum,
+                        pRefList.pic(id).iFrameNum + iGoPFrameNumInterval,
                         iMaxFrameNumPlus1,
                     ) == COMPARE_FRAME_NUM::FRAME_NUM_EQUAL as i32
                     {
@@ -530,9 +530,9 @@ pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     }
 
     if keSliceType == EWelsSliceType::I_SLICE || pLtr.bLTRMarkingFlag {
-        if let Some(id) = (*pRefList).pShortRefList[i] {
-            let iFrameNum = (*pParamInternal).iFrameNum;
-            let pShort = (*pRefList).pic_mut(id);
+        if let Some(id) = pRefList.pShortRefList[i] {
+            let iFrameNum = pParamInternal.iFrameNum;
+            let pShort = pRefList.pic_mut(id);
             pShort.bIsLongRef = true;
             pShort.iLongTermPicNum = pLtr.iCurLtrIdx;
             pShort.iMarkFrameNum = iFrameNum;
@@ -543,9 +543,9 @@ pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
         && keSliceType != EWelsSliceType::I_SLICE
         && !pLtr.bLTRMarkingFlag
     {
-        for j in 0..((*pRefList).uiShortRefCount as usize) {
-            if let Some(id) = (*pRefList).pShortRefList[j] {
-                if (*pRefList).pic(id).bIsLongRef {
+        for j in 0..(pRefList.uiShortRefCount as usize) {
+            if let Some(id) = pRefList.pShortRefList[j] {
+                if pRefList.pic(id).bIsLongRef {
                     i = j;
                     bMoveLtrFromShortToLong = true;
                     break;
@@ -559,23 +559,23 @@ pub fn LTRMarkProcess(pCtx: &mut sWelsEncCtx) {
     {
         let tid = uiTemporalId;
         if uiDid < MAX_DEPENDENCY_LAYER && tid < MAX_TEMPORAL_LEVEL {
-            (*bRefOfCurTidIsLtr)[uiDid][tid] = true;
+            bRefOfCurTidIsLtr[uiDid][tid] = true;
         }
 
-        let longCount = (*pRefList).uiLongRefCount as usize;
+        let longCount = pRefList.uiLongRefCount as usize;
         if longCount > 0 {
             for k in (1..=longCount).rev() {
                 if k <= MAX_REF_PIC_COUNT {
-                    (*pRefList).pLongRefList[k] = (*pRefList).pLongRefList[k - 1];
+                    pRefList.pLongRefList[k] = pRefList.pLongRefList[k - 1];
                 }
             }
         }
-        (*pRefList).pLongRefList[0] = (*pRefList).pShortRefList[i];
-        (*pRefList).uiLongRefCount += 1;
-        if (*pRefList).uiLongRefCount as i32 > iLTRRefNum {
-            let lastIdx = ((*pRefList).uiLongRefCount - 1) as usize;
-            if let Some(id) = (*pRefList).pLongRefList[lastIdx] {
-                (*pRefList).pic_mut(id).SetUnref();
+        pRefList.pLongRefList[0] = pRefList.pShortRefList[i];
+        pRefList.uiLongRefCount += 1;
+        if pRefList.uiLongRefCount as i32 > iLTRRefNum {
+            let lastIdx = (pRefList.uiLongRefCount - 1) as usize;
+            if let Some(id) = pRefList.pLongRefList[lastIdx] {
+                pRefList.pic_mut(id).SetUnref();
             }
             DeleteLTRFromLongList(&mut *pRefList, lastIdx as i32);
         }
@@ -600,11 +600,11 @@ pub fn LTRMarkProcessScreen(pCtx: &mut sWelsEncCtx) {
         return;
     };
     if iLtrIdx >= 0 && (iLtrIdx as usize) < MAX_REF_PIC_COUNT {
-        match (*pRefList).pLongRefList[iLtrIdx as usize] {
-            Some(id) => (*pRefList).pic_mut(id).SetUnref(),
-            None => (*pRefList).uiLongRefCount += 1,
+        match pRefList.pLongRefList[iLtrIdx as usize] {
+            Some(id) => pRefList.pic_mut(id).SetUnref(),
+            None => pRefList.uiLongRefCount += 1,
         }
-        (*pRefList).pLongRefList[iLtrIdx as usize] = Some(idDec);
+        pRefList.pLongRefList[iLtrIdx as usize] = Some(idDec);
     }
 }
 
@@ -619,29 +619,29 @@ pub fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
         return;
     };
 
-    (*pRefList).pNextBuffer = None;
+    pRefList.pNextBuffer = None;
     for i in 0..=(kiNumRef as usize) {
-        if i < (*pRefList).pRef.len() {
-            let id = (*pRefList).pRef.at(i);
-            if !(*pRefList).pic(id).bUsedAsRef {
-                (*pRefList).pNextBuffer = Some(id);
+        if i < pRefList.pRef.len() {
+            let id = pRefList.pRef.at(i);
+            if !pRefList.pic(id).bUsedAsRef {
+                pRefList.pNextBuffer = Some(id);
                 break;
             }
         }
     }
 
-    if (*pRefList).pNextBuffer.is_none() && (*pRefList).uiShortRefCount > 0 {
+    if pRefList.pNextBuffer.is_none() && pRefList.uiShortRefCount > 0 {
         // The C++ counterpart is `ref_list_mgr_svc.cpp:343`
         // (`pShortRefList[pRefList->uiShortRefCount - 1]`), an unchecked *read*.
-        let lastIdx = (((*pRefList).uiShortRefCount - 1) as usize)
-            .min((*pRefList).pShortRefList.len() - 1);
-        (*pRefList).pNextBuffer = (*pRefList).pShortRefList[lastIdx];
-        if let Some(id) = (*pRefList).pNextBuffer {
-            (*pRefList).pic_mut(id).SetUnref();
+        let lastIdx = (((pRefList.uiShortRefCount - 1) as usize))
+            .min(pRefList.pShortRefList.len() - 1);
+        pRefList.pNextBuffer = pRefList.pShortRefList[lastIdx];
+        if let Some(id) = pRefList.pNextBuffer {
+            pRefList.pic_mut(id).SetUnref();
         }
     }
 
-    pCtx.pDecPic = (*pRefList).pNextBuffer;
+    pCtx.pDecPic = pRefList.pNextBuffer;
 }
 
 /// Updates reference picture list after current frame reconstruction.
@@ -791,9 +791,9 @@ pub fn CheckCurMarkFrameNumUsed(pCtx: &mut sWelsEncCtx) -> bool {
         return false;
     };
 
-    for i in 0..((*pRefList).uiLongRefCount as usize) {
-        if let Some(idLong) = (*pRefList).pLongRefList[i] {
-            let iFrameNum = (*pRefList).pic(idLong).iFrameNum;
+    for i in 0..(pRefList.uiLongRefCount as usize) {
+        if let Some(idLong) = pRefList.pLongRefList[i] {
+            let iFrameNum = pRefList.pic(idLong).iFrameNum;
             let cond1 = kiParamFrameNum == iFrameNum
                 && pLtr.iLTRMarkMode == LTR_MARKING_PROCESS_MODE::LTR_DIRECT_MARK as i32;
             let cond2 = CompareFrameNum(
@@ -820,7 +820,7 @@ pub fn WelsMarkMMCORefInfoWithBase(
     for iSliceIdx in 0..kiCountSliceNum {
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx);
         if let Some(pSlice) = pSlice {
-            (*pSlice).sSliceHeaderExt.sSliceHeader.sRefMarking = kBaseMarking;
+            pSlice.sSliceHeaderExt.sSliceHeader.sRefMarking = kBaseMarking;
         }
     }
 }
@@ -839,7 +839,7 @@ pub fn WelsMarkMMCORefInfo(
     let Some(pBaseSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, 0) else {
         return;
     };
-    let pRefPicMark = &mut (*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
+    let pRefPicMark = &mut pBaseSlice.sSliceHeaderExt.sSliceHeader.sRefMarking;
     let iGoPFrameNumInterval = if (kuiGopSize >> 1) > 1 {
         (kuiGopSize >> 1) as i32
     } else {
@@ -978,7 +978,7 @@ pub fn FilterLTRMarkingFeedback(
     if pCtx.param_opt().is_none() {
         return;
     }
-    let iLayerId = (*pLTRMarkingFeedback).iLayerId;
+    let iLayerId = pLTRMarkingFeedback.iLayerId;
     if iLayerId < 0 || iLayerId >= pCtx.param().iSpatialLayerNum {
         return;
     }
@@ -986,12 +986,12 @@ pub fn FilterLTRMarkingFeedback(
     let kuiIdrPicId = pCtx.param().sDependencyLayers[iLayerId as usize].uiIdrPicId;
     let pLtr = ctx_ltr_at(pCtx, (iLayerId as usize) as usize);
     if kbEnableLtr {
-        if (*pLTRMarkingFeedback).uiIDRPicId == kuiIdrPicId as u32
-            && ((*pLTRMarkingFeedback).uiFeedbackType == LTR_MARKING_SUCCESS
-                || (*pLTRMarkingFeedback).uiFeedbackType == LTR_MARKING_FAILED)
+        if pLTRMarkingFeedback.uiIDRPicId == kuiIdrPicId as u32
+            && (pLTRMarkingFeedback.uiFeedbackType == LTR_MARKING_SUCCESS
+                || pLTRMarkingFeedback.uiFeedbackType == LTR_MARKING_FAILED)
         {
-            pLtr.uiLtrMarkState = (*pLTRMarkingFeedback).uiFeedbackType;
-            pLtr.iLtrMarkFbFrameNum = (*pLTRMarkingFeedback).iLTRFrameNum;
+            pLtr.uiLtrMarkState = pLTRMarkingFeedback.uiFeedbackType;
+            pLtr.iLtrMarkFbFrameNum = pLTRMarkingFeedback.iLTRFrameNum;
         }
     }
 }
@@ -1218,7 +1218,7 @@ pub fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32)
     if pCtx.iNumRef0 > 0 {
         let pRefList = pCtx.ref_list(uiDid).expect("the dependency layer's reference list");
         if let Some(id) = pCtx.pRefList0[0] {
-            iAbsDiffPicNumMinus1 = pParamD.iFrameNum - (*pRefList).pic(id).iFrameNum - 1;
+            iAbsDiffPicNumMinus1 = pParamD.iFrameNum - pRefList.pic(id).iFrameNum - 1;
             if iAbsDiffPicNumMinus1 < 0 {
                 if let Some(kpSps) = ctx_sps_ref(pCtx) {
                     iAbsDiffPicNumMinus1 += 1 << kpSps.uiLog2MaxFrameNum;
@@ -1361,7 +1361,7 @@ pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
             return false;
         };
         // The reconstruction picture, resolved once.
-        let pDecPic: &mut SPicture = (*pRefList).pic_mut(idDec);
+        let pDecPic: &mut SPicture = pRefList.pic_mut(idDec);
         let sDec = pDecPic.planes();
         if kiHighestTid == 0 || (kuiTid as i32) < kiHighestTid as i32 {
             // `ref_list_mgr_svc.cpp:779`.
@@ -1596,7 +1596,7 @@ pub fn WelsMarkMMCORefInfoScreen(
     let Some(pBaseSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, 0) else {
         return;
     };
-    let pRefPicMark = &mut (*pBaseSlice).sSliceHeaderExt.sSliceHeader.sRefMarking;
+    let pRefPicMark = &mut pBaseSlice.sSliceHeaderExt.sSliceHeader.sRefMarking;
     let iMaxLtrIdx = kiNumRefFrame - STR_ROOM - 1;
 
     *pRefPicMark = SRefPicMarking::default();

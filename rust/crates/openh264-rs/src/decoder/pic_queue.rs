@@ -815,25 +815,25 @@ mod tests {
             let mut pic = alloc_picture(false, 160, 120)
                 .expect("the picture allocates");
             let p_pic: &mut SPicture = &mut *pic;
-            assert_eq!((*p_pic).iWidthInPixel, 160);
-            assert_eq!((*p_pic).iHeightInPixel, 120);
-            assert!(!(*p_pic).data_ptr(0).is_null());
+            assert_eq!(p_pic.iWidthInPixel, 160);
+            assert_eq!(p_pic.iHeightInPixel, 120);
+            assert!(!p_pic.data_ptr(0).is_null());
 
             // stride = WELS_ALIGN(160 + 64, 32) = 224, rows = WELS_ALIGN(120 + 64, 32)
             // = 192, so the luma allocation is 224*192 and the padded picture needs
             // 224*(120+64) — the alignment leaves eight spare rows, and `from_parts`
             // accepts that.
-            assert_eq!((*p_pic).linesize(0), 224);
-            assert_eq!((*p_pic).linesize(1), 112);
-            assert_eq!((*p_pic).plane(0).pad(), 32);
-            assert_eq!((*p_pic).plane(1).pad(), 16);
-            assert_eq!((*p_pic).plane(0).origin(), (1 + 224) * 32);
-            assert_eq!((*p_pic).plane(1).origin(), ((1 + 112) * 32) >> 1);
-            assert_eq!((*p_pic).plane(0).as_slice().len(), 224 * 192);
-            assert_eq!((*p_pic).plane(1).as_slice().len(), 112 * 96);
+            assert_eq!(p_pic.linesize(0), 224);
+            assert_eq!(p_pic.linesize(1), 112);
+            assert_eq!(p_pic.plane(0).pad(), 32);
+            assert_eq!(p_pic.plane(1).pad(), 16);
+            assert_eq!(p_pic.plane(0).origin(), (1 + 224) * 32);
+            assert_eq!(p_pic.plane(1).origin(), ((1 + 112) * 32) >> 1);
+            assert_eq!(p_pic.plane(0).as_slice().len(), 224 * 192);
+            assert_eq!(p_pic.plane(1).as_slice().len(), 112 * 96);
             // The 128 fill covers the whole allocation, corners included.
-            assert!((*p_pic).plane(0).as_slice().iter().all(|&b| b == 128));
-            assert_eq!((*p_pic).plane(0).at(-32, -32), 128);
+            assert!(p_pic.plane(0).as_slice().iter().all(|&b| b == 128));
+            assert_eq!(p_pic.plane(0).at(-32, -32), 128);
 
             drop(pic);
         }
@@ -857,13 +857,13 @@ mod tests {
             let mut pic = alloc_picture(parse_only(&pCtx.pParam), 160, 120)
                 .expect("the picture allocates");
             let p_pic: &mut SPicture = &mut *pic;
-            assert_eq!((*p_pic).linesize(0), 224);
-            assert_eq!((*p_pic).linesize(1), 112);
-            assert_eq!((*p_pic).linesize(2), 112);
-            assert!((*p_pic).plane(0).is_empty());
-            assert!((*p_pic).data_ptr(0).is_null());
-            assert!((*p_pic).data_ptr(1).is_null());
-            assert!((*p_pic).data_ptr(2).is_null());
+            assert_eq!(p_pic.linesize(0), 224);
+            assert_eq!(p_pic.linesize(1), 112);
+            assert_eq!(p_pic.linesize(2), 112);
+            assert!(p_pic.plane(0).is_empty());
+            assert!(p_pic.data_ptr(0).is_null());
+            assert!(p_pic.data_ptr(1).is_null());
+            assert!(p_pic.data_ptr(2).is_null());
             drop(pic);
         }
     }

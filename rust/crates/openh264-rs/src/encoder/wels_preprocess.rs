@@ -817,14 +817,14 @@ pub fn JudgeNeedOfScaling(
 ) -> bool {
     let kiInputPicWidth = pParam.SUsedPicRect.iWidth;
     let kiInputPicHeight = pParam.SUsedPicRect.iHeight;
-    let layerCount = (*pParam).iSpatialLayerNum;
+    let layerCount = pParam.iSpatialLayerNum;
     if layerCount <= 0 {
         return false;
     }
 
     let lastLayerIdx = (layerCount - 1) as usize;
-    let kiDstPicWidth = (*pParam).sDependencyLayers[lastLayerIdx].iActualWidth;
-    let kiDstPicHeight = (*pParam).sDependencyLayers[lastLayerIdx].iActualHeight;
+    let kiDstPicWidth = pParam.sDependencyLayers[lastLayerIdx].iActualWidth;
+    let kiDstPicHeight = pParam.sDependencyLayers[lastLayerIdx].iActualHeight;
     let mut bNeedDownsampling = true;
 
     if kiDstPicWidth >= kiInputPicWidth && kiDstPicHeight >= kiInputPicHeight {
@@ -834,7 +834,7 @@ pub fn JudgeNeedOfScaling(
     let mut iSpatialIdx = layerCount - 1;
     while iSpatialIdx >= 0 {
         let idx = iSpatialIdx as usize;
-        let pCurLayer = &(*pParam).sDependencyLayers[idx];
+        let pCurLayer = &pParam.sDependencyLayers[idx];
         let iCurDstWidth = pCurLayer.iActualWidth;
         let iCurDstHeight = pCurLayer.iActualHeight;
         let iInputWidthXDstHeight = kiInputPicWidth * iCurDstHeight;
@@ -927,7 +927,7 @@ pub fn WelsInitScaledPic(
             return -1;
         }
 
-        let pPic = (*pScaledPicture)
+        let pPic = pScaledPicture
             .pScaledInputPicture
             .as_deref_mut()
             .expect("just allocated");
@@ -1092,10 +1092,10 @@ impl CWelsPreProcess {
         }
 
         let pSvcParam = pCtx.param_mut();
-        (*pSvcParam).SUsedPicRect.iLeft = 0;
-        (*pSvcParam).SUsedPicRect.iTop = 0;
-        (*pSvcParam).SUsedPicRect.iWidth = iWidth;
-        (*pSvcParam).SUsedPicRect.iHeight = iHeight;
+        pSvcParam.SUsedPicRect.iLeft = 0;
+        pSvcParam.SUsedPicRect.iTop = 0;
+        pSvcParam.SUsedPicRect.iWidth = iWidth;
+        pSvcParam.SUsedPicRect.iHeight = iHeight;
 
         if iWidth < 16 || iHeight < 16 {
             return -1;
@@ -1108,7 +1108,7 @@ impl CWelsPreProcess {
 
     pub fn AllocSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 {
         let pParam = pCtx.param();
-        let kiDlayerCount = (*pParam).iSpatialLayerNum;
+        let kiDlayerCount = pParam.iSpatialLayerNum;
         let mut iDlayerIndex = 0;
         // The pool takes its slots in one piece and never grows, so the pictures are
         // collected first and the per-layer index is stamped from the finished pool.
@@ -1117,14 +1117,14 @@ impl CWelsPreProcess {
 
         while iDlayerIndex < kiDlayerCount {
             let idx = iDlayerIndex as usize;
-            let kiPicWidth = (*pParam).sSpatialLayers[idx].iVideoWidth;
-            let kiPicHeight = (*pParam).sSpatialLayers[idx].iVideoHeight;
-            let highestTid = (*pParam).sDependencyLayers[idx].iHighestTemporalId as i32;
+            let kiPicWidth = pParam.sSpatialLayers[idx].iVideoWidth;
+            let kiPicHeight = pParam.sSpatialLayers[idx].iVideoHeight;
+            let highestTid = pParam.sDependencyLayers[idx].iHighestTemporalId as i32;
             let kuiLayerInTemporal = (2 + highestTid.max(1)) as u8;
             // wels_preprocess.cpp:180 — the sum is computed in int and narrowed to
             // uint8_t, so kuiRefNumInTemporal really is a uint8_t.
             let kuiRefNumInTemporal: u8 =
-                (kuiLayerInTemporal as i32 + (*pParam).iLTRRefNum) as u8;
+                (kuiLayerInTemporal as i32 + pParam.iLTRRefNum) as u8;
 
             self.m_uiSpatialPicNum[idx] = kuiRefNumInTemporal;
             let mut i: u8 = 0;
@@ -1139,7 +1139,7 @@ impl CWelsPreProcess {
                 i += 1;
             }
 
-            if (*pParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+            if pParam.iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
                 self.m_uiSpatialLayersInTemporal[idx] = 1;
             } else {
                 self.m_uiSpatialLayersInTemporal[idx] = kuiLayerInTemporal;
@@ -2001,10 +2001,10 @@ impl CWelsPreProcess {
 
     pub fn InitLastSpatialPictures(&mut self, pCtx: &mut sWelsEncCtx) -> i32 {
         let pParam = pCtx.param();
-        let kiDlayerCount = (*pParam).iSpatialLayerNum;
+        let kiDlayerCount = pParam.iSpatialLayerNum;
         let mut iDlayerIndex = 0;
 
-        if (*pParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+        if pParam.iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             while iDlayerIndex < MAX_DEPENDENCY_LAYER {
                 self.m_pLastSpatialPicture[iDlayerIndex][0] = None;
                 self.m_pLastSpatialPicture[iDlayerIndex][1] = None;
@@ -2060,9 +2060,9 @@ impl CWelsPreProcess {
             iSrcHeight -= 1;
         }
 
-        let kiSrcTopOffsetY = (*pSvcParam).SUsedPicRect.iTop;
+        let kiSrcTopOffsetY = pSvcParam.SUsedPicRect.iTop;
         let kiSrcTopOffsetUV = kiSrcTopOffsetY >> 1;
-        let kiSrcLeftOffsetY = (*pSvcParam).SUsedPicRect.iLeft;
+        let kiSrcLeftOffsetY = pSvcParam.SUsedPicRect.iLeft;
         let kiSrcLeftOffsetUV = kiSrcLeftOffsetY >> 1;
 
         let iSrcOffset0 = kpSrc.iStride[0] * kiSrcTopOffsetY + kiSrcLeftOffsetY;
@@ -2528,25 +2528,25 @@ impl CWelsPreProcess {
 
     fn InitPixMap(pPicture: &PicPlanes, pPixMap: &mut SPixMap) {
         {
-            (*pPixMap).pPixel[0] = pPicture.pData[0];
-            (*pPixMap).pPixel[1] = pPicture.pData[1];
-            (*pPixMap).pPixel[2] = pPicture.pData[2];
-            (*pPixMap).iSizeInBits = std::mem::size_of::<u8>() as i32;
-            (*pPixMap).iStride[0] = pPicture.iLineSize[0];
-            (*pPixMap).iStride[1] = pPicture.iLineSize[1];
-            (*pPixMap).sRect.iRectWidth = pPicture.iWidthInPixel;
-            (*pPixMap).sRect.iRectHeight = pPicture.iHeightInPixel;
-            (*pPixMap).eFormat = VideoFormat::videoFormatI420;
+            pPixMap.pPixel[0] = pPicture.pData[0];
+            pPixMap.pPixel[1] = pPicture.pData[1];
+            pPixMap.pPixel[2] = pPicture.pData[2];
+            pPixMap.iSizeInBits = std::mem::size_of::<u8>() as i32;
+            pPixMap.iStride[0] = pPicture.iLineSize[0];
+            pPixMap.iStride[1] = pPicture.iLineSize[1];
+            pPixMap.sRect.iRectWidth = pPicture.iWidthInPixel;
+            pPixMap.sRect.iRectHeight = pPicture.iHeightInPixel;
+            pPixMap.eFormat = VideoFormat::videoFormatI420;
         }
     }
 
     fn InitRefJudgement(&self, pRefJudgement: &mut SRefJudgement) {
         {
-            (*pRefJudgement).iMinFrameComplexity = i32::MAX as i64;
-            (*pRefJudgement).iMinFrameComplexity08 = i32::MAX as i64;
-            (*pRefJudgement).iMinFrameComplexity11 = i32::MAX as i64;
-            (*pRefJudgement).iMinFrameNumGap = i32::MAX;
-            (*pRefJudgement).iMinFrameQp = i32::MAX;
+            pRefJudgement.iMinFrameComplexity = i32::MAX as i64;
+            pRefJudgement.iMinFrameComplexity08 = i32::MAX as i64;
+            pRefJudgement.iMinFrameComplexity11 = i32::MAX as i64;
+            pRefJudgement.iMinFrameNumGap = i32::MAX;
+            pRefJudgement.iMinFrameQp = i32::MAX;
         }
     }
 
@@ -2573,10 +2573,10 @@ impl CWelsPreProcess {
         pRefJudgement: &mut SRefJudgement,
     ) {
         {
-            (*pRefJudgement).iMinFrameQp = iRefPictureAvQP;
-            (*pRefJudgement).iMinFrameComplexity = iComplexity;
-            (*pRefJudgement).iMinFrameComplexity08 = (iComplexity as f64 * 0.8) as i64;
-            (*pRefJudgement).iMinFrameComplexity11 = (iComplexity as f64 * 1.1) as i64;
+            pRefJudgement.iMinFrameQp = iRefPictureAvQP;
+            pRefJudgement.iMinFrameComplexity = iComplexity;
+            pRefJudgement.iMinFrameComplexity08 = (iComplexity as f64 * 0.8) as i64;
+            pRefJudgement.iMinFrameComplexity11 = (iComplexity as f64 * 1.1) as i64;
         }
     }
 
@@ -2588,7 +2588,7 @@ impl CWelsPreProcess {
     ) {
         {
             *pRefSaved = *pRefPicInfo;
-            (*pRefSaved).pBestBlockStaticIdc = sSceneChangeResult.pStaticBlockIdc;
+            pRefSaved.pBestBlockStaticIdc = sSceneChangeResult.pStaticBlockIdc;
         }
     }
 
@@ -2787,7 +2787,7 @@ impl CWelsPreProcess {
             .unwrap_or(sCur);
 
         let pSvcParam = pCtx.param_mut();
-        if (*pSvcParam).iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+        if pSvcParam.iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
             let eSliceType = pCtx.eSliceType;
 
             let _iComplexityAnalysisMode = if eSliceType == EWelsSliceType::P_SLICE {
@@ -2960,12 +2960,12 @@ impl CWelsPreProcess {
             sComplexityAnalysisParam.iCalcBgd = bCalculateBGD;
             sComplexityAnalysisParam.iFrameComplexity = 0;
 
-            (*pWelsSvcRc).pGomForegroundBlockNum.fill(0);
+            pWelsSvcRc.pGomForegroundBlockNum.fill(0);
             if iComplexityAnalysisMode != FRAME_SAD {
-                (*pWelsSvcRc).pCurrentFrameGomSad.fill(0);
+                pWelsSvcRc.pCurrentFrameGomSad.fill(0);
             }
 
-            sComplexityAnalysisParam.iMbNumInGom = (*pWelsSvcRc).iNumberMbGom;
+            sComplexityAnalysisParam.iMbNumInGom = pWelsSvcRc.iNumberMbGom;
 
             // METHOD_COMPLEXITY_ANALYSIS; the VAA result handed over at the call.
             let mut sSrcPixMap = SPixMap::default();
@@ -2996,8 +2996,8 @@ impl CWelsPreProcess {
                 &sSrcPixMap,
                 &sRefPixMap,
                 &pVaaInfo.sVaaCalcInfo,
-                &mut (*pWelsSvcRc).pCurrentFrameGomSad,
-                &mut (*pWelsSvcRc).pGomForegroundBlockNum,
+                &mut pWelsSvcRc.pCurrentFrameGomSad,
+                &mut pWelsSvcRc.pGomForegroundBlockNum,
                 &pVaaInfo.pVaaBackgroundMbFlag,
                 uiRefMbType,
             );

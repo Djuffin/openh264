@@ -286,7 +286,7 @@ pub fn UpdateMbListNeighborParallel(
 /// `WelsEncoderEncodeExt`, at the end of the per-layer body, under the C++'s own
 /// four-term guard — the site is `encoder_ext.cpp:4064-4073`.
 pub fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
-    let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
+    let pSliceCtx = &mut pCurDq.sSliceEncCtx;
     let mut iSumAv = 0i32;
     let kiSliceCount = pSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed);
     let mut iSliceIdx = 0i32;
@@ -298,8 +298,8 @@ pub fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
     while iSliceIdx < kiSliceCount {
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx);
         if let Some(pSlice) = pSlice {
-            let consume_time = (*pSlice).uiSliceConsumeTime as i32;
-            let mb_num = (*pSlice).iCountMbNumInSlice;
+            let consume_time = pSlice.uiSliceConsumeTime as i32;
+            let mb_num = pSlice.iCountMbNumInSlice;
             iAvI[iSliceIdx as usize] = WelsDivRound(INT_MULTIPLY * mb_num, consume_time);
             iSumAv += iAvI[iSliceIdx as usize];
         }
@@ -310,7 +310,7 @@ pub fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
         iSliceIdx -= 1;
         let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx);
         if let Some(pSlice) = pSlice {
-            (*pSlice).iSliceComplexRatio =
+            pSlice.iSliceComplexRatio =
                 WelsDivRound(INT_MULTIPLY * iAvI[iSliceIdx as usize], iSumAv);
         }
     }
@@ -384,7 +384,7 @@ pub fn DynamicAdjustSlicing(
     pCurDqLayer: &mut SDqLayer,
     iCurDid: i32,
 ) {
-    let pSliceCtx = &mut (*pCurDqLayer).sSliceEncCtx;
+    let pSliceCtx = &mut pCurDqLayer.sSliceEncCtx;
     let kiCountSliceNum = pSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed);
     let kiCountNumMb = pSliceCtx.iMbNumInFrame;
     let mut iMinimalMbNum = pSliceCtx.iMbWidth as i32;
@@ -427,7 +427,7 @@ pub fn DynamicAdjustSlicing(
             return;
         };
         let mut iNumMbAssigning = WelsDivRound(
-            kiCountNumMb * (*pSlice).iSliceComplexRatio,
+            kiCountNumMb * pSlice.iSliceComplexRatio,
             INT_MULTIPLY,
         );
 
@@ -458,12 +458,12 @@ pub fn DynamicAdjustSlicing(
     }
 
     let ret = DynamicAdjustSlicePEncCtxAll(pCurDqLayer, &iRunLen);
-    (*pCurDqLayer).bNeedAdjustingSlicing = ret == 0;
+    pCurDqLayer.bNeedAdjustingSlicing = ret == 0;
 }
 
 /// Applies newly calculated macroblock run-lengths to slice context structures.
 pub fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: &[i32]) -> i32 {
-    let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
+    let pSliceCtx = &mut pCurDq.sSliceEncCtx;
     let iCountNumMbInFrame = pSliceCtx.iMbNumInFrame;
     let iCountSliceNumInFrame = pSliceCtx.iSliceNumInFrame.load(Ordering::Relaxed);
     let mut iSameRunLenFlag = 1i32;
@@ -471,7 +471,7 @@ pub fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: &[i32]) -
     let mut iSliceIdx = 0i32;
 
     while iSliceIdx < iCountSliceNumInFrame {
-        let first: &[i32] = &(*pCurDq).pFirstMbIdxOfSlice;
+        let first: &[i32] = &pCurDq.pFirstMbIdxOfSlice;
         if pRunLength[iSliceIdx as usize] != first[iSliceIdx as usize] {
             iSameRunLenFlag = 0;
             break;
@@ -486,9 +486,9 @@ pub fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: &[i32]) -
     while iSliceIdx < iCountSliceNumInFrame && iFirstMbIdx < iCountNumMbInFrame {
         let kiSliceRun = pRunLength[iSliceIdx as usize];
         {
-            let first: &mut Vec<i32> = &mut (*pCurDq).pFirstMbIdxOfSlice;
+            let first: &mut Vec<i32> = &mut pCurDq.pFirstMbIdxOfSlice;
             first[iSliceIdx as usize] = iFirstMbIdx;
-            let count: &mut Vec<i32> = &mut (*pCurDq).pCountMbNumInSlice;
+            let count: &mut Vec<i32> = &mut pCurDq.pCountMbNumInSlice;
             count[iSliceIdx as usize] = kiSliceRun;
         }
 
@@ -574,7 +574,7 @@ pub fn AppendSliceToFrameBs(
     };
     let mut iLayerSize = 0i32;
     let mut iNalIdxBase = 0i32;
-    (*pLbi).iNalCount = 0;
+    pLbi.iNalCount = 0;
 
     let mut iSliceIdx = 0i32;
     while iSliceIdx < kiSliceCount {
@@ -618,7 +618,7 @@ pub fn AppendSliceToFrameBs(
                     }
                     iNalIdx += 1;
                 }
-                (*pLbi).iNalCount += iCountNal;
+                pLbi.iNalCount += iCountNal;
                 iNalIdxBase += iCountNal;
             }
         }
@@ -1128,9 +1128,9 @@ fn EncodeOneSliceInJob(
     iSliceStep: i32,
 ) -> SliceJobResult {
     // ---- CWelsSliceEncodingTask::InitTask
-    let eNalType = (*pCtx).eNalType;
-    let eNalRefIdc = (*pCtx).eNalPriority;
-    let bNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
+    let eNalType = pCtx.eNalType;
+    let eNalRefIdc = pCtx.eNalPriority;
+    let bNeedPrefix = pCtx.bNeedPrefixNalFlag;
 
     // The slice comes from this worker's own list: `iSliceIdx` advances by
     // `iSliceStep` from `iFirstSlice`, so this worker's `n`th slice is at
@@ -1182,7 +1182,7 @@ fn EncodeOneSliceInJob(
         }
 
         let pfDeblockingFilterSlice =
-            (*pCtx).func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
+            pCtx.func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
         {
             // The walker's window is the worker's own carved run, the same one
             // the coding chain just wrote through. `uiFilterIdc == 1` (MT
@@ -1535,9 +1535,9 @@ fn EncodeOnePartitionSizeLimited(
     pBank: &mut crate::encoder::svc_encode_slice::SSliceBufferInfo,
 ) -> SliceJobResult {
     // ---- InitTask (base), minus the slot claim
-    let eNalType = (*pCtx).eNalType;
-    let eNalRefIdc = (*pCtx).eNalPriority;
-    let bNeedPrefix = (*pCtx).bNeedPrefixNalFlag;
+    let eNalType = pCtx.eNalType;
+    let eNalRefIdc = pCtx.eNalPriority;
+    let bNeedPrefix = pCtx.bNeedPrefixNalFlag;
 
     // The resolve is an index into the owned bank; the borrow is taken *after*
     // each growth, per iteration.
@@ -1563,7 +1563,7 @@ fn EncodeOnePartitionSizeLimited(
     // ---- ExecuteTaskConstrainedSize
     let iResult = (|| {
         let pCurDq = current_layer_expect(pCtx);
-        let kiSliceIdxStep = (*pCtx).iActiveThreadsNum as i32;
+        let kiSliceIdxStep = pCtx.iActiveThreadsNum as i32;
         let kiPartitionId = iPartitionIdx % kiSliceIdxStep;
         let kiFirstMbInPartition = pCurDq.FirstMbIdxOfPartition[kiPartitionId as usize];
         let kiEndMbIdxInPartition = pCurDq.EndMbIdxOfPartition[kiPartitionId as usize];
@@ -1587,7 +1587,7 @@ fn EncodeOnePartitionSizeLimited(
             if bNeedReallocate {
                 let iRet = crate::encoder::svc_encode_slice::ReallocateSliceInThread(
                     pCtx,
-                    (*pCtx).uiDependencyId as i32,
+                    pCtx.uiDependencyId as i32,
                     pBank,
                 );
                 if ENC_RETURN_SUCCESS != iRet {
@@ -1639,7 +1639,7 @@ fn EncodeOnePartitionSizeLimited(
                 return iRet;
             }
             let pfDeblockingFilterSlice =
-                (*pCtx).func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
+                pCtx.func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
             // The walker reuses the partition run the coding chain just wrote
             // through, carved before the fork. `uiFilterIdc == 1` keeps the walk
             // and the neighbour reads inside the slice, hence inside the run.

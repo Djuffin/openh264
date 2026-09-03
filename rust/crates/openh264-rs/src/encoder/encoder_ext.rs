@@ -456,21 +456,21 @@ pub fn GetMvMvdRange(
     iMvdRange: &mut i32,
 ) {
     let mut iMinLevelIdc = ELevelIdc::LEVEL_5_2;
-    let iFixMvRange = if (*pParam).iUsageType as i32 != 0 {
+    let iFixMvRange = if pParam.iUsageType as i32 != 0 {
         EXPANDED_MV_RANGE
     } else {
         CAMERA_STARTMV_RANGE
     };
-    let iFixMvdRange = if (*pParam).iUsageType as i32 != 0 {
+    let iFixMvdRange = if pParam.iUsageType as i32 != 0 {
         EXPANDED_MVD_RANGE
-    } else if (*pParam).iSpatialLayerNum == 1 {
+    } else if pParam.iSpatialLayerNum == 1 {
         CAMERA_MVD_RANGE
     } else {
         CAMERA_HIGHLAYER_MVD_RANGE
     };
-    for iLayer in 0..(*pParam).iSpatialLayerNum as usize {
-        if ((*pParam).sSpatialLayers[iLayer].uiLevelIdc as i32) < iMinLevelIdc as i32 {
-            iMinLevelIdc = (*pParam).sSpatialLayers[iLayer].uiLevelIdc;
+    for iLayer in 0..pParam.iSpatialLayerNum as usize {
+        if (pParam.sSpatialLayers[iLayer].uiLevelIdc as i32) < iMinLevelIdc as i32 {
+            iMinLevelIdc = pParam.sSpatialLayers[iLayer].uiLevelIdc;
         }
     }
     let mut idx = 0usize;
@@ -1368,7 +1368,7 @@ pub fn FreeDqLayer(p: &mut SDqLayer) {
     FreeSliceInLayer(&mut *p);
 
     crate::encoder::svc_enc_slice_segment::UninitSlicePEncCtx(&mut *p);
-    (*p).iMaxSliceNum = 0;
+    p.iMaxSliceNum = 0;
 }
 
 #[cfg(test)]
@@ -1490,25 +1490,25 @@ mod tests {
             let pCtx = build_gate_context();
 
             let pDq = dq_layer_ref(&*pCtx, 0).expect("RequestMemorySvc built layer 0");
-            assert_eq!((*pDq).iMbWidth, 10);
-            assert_eq!((*pDq).iMbHeight, 6);
-            assert_eq!((*pDq).sSliceEncCtx.iMbNumInFrame, 60);
-            assert_eq!((*pDq).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed), 1);
-            assert_eq!((*pDq).sSliceEncCtx.pOverallMbMap.len(), 60);
-            assert_eq!((*pDq).sMbDataP.dims().count(), 60);
+            assert_eq!(pDq.iMbWidth, 10);
+            assert_eq!(pDq.iMbHeight, 6);
+            assert_eq!(pDq.sSliceEncCtx.iMbNumInFrame, 60);
+            assert_eq!(pDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed), 1);
+            assert_eq!(pDq.sSliceEncCtx.pOverallMbMap.len(), 60);
+            assert_eq!(pDq.sMbDataP.dims().count(), 60);
 
             // InitMbInfo wired every macroblock to its slot in the context arrays.
-            let pMb = (*pDq).sMbDataP.get(0);
+            let pMb = pDq.sMbDataP.get(0);
             assert_eq!(pMb.iMbXY, 0);
             assert_eq!(pMb.iMbX, 0);
             assert_eq!(pMb.iMbY, 0);
             // MB 0 has no left/top neighbour.
             assert_eq!(pMb.uiNeighborAvail, 0);
-            let pMb11 = (*pDq).sMbDataP.get(11); // row 1, column 1: all four neighbours present
+            let pMb11 = pDq.sMbDataP.get(11); // row 1, column 1: all four neighbours present
             assert_eq!(pMb11.iMbX, 1);
             assert_eq!(pMb11.iMbY, 1);
             assert_eq!(
-                (*pMb11).uiNeighborAvail,
+                pMb11.uiNeighborAvail,
                 LEFT_MB_POS | TOP_MB_POS | TOPLEFT_MB_POS | TOPRIGHT_MB_POS
             );
 
@@ -1658,20 +1658,20 @@ pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrame
 
 /// `encoder_ext.cpp:3376`.
 pub fn ClearFrameBsInfo(pCtx: &mut sWelsEncCtx, pFbi: &mut SFrameBSInfo) {
-    (*pFbi).sLayerInfo[0].pBsBuf = pCtx.frame_bs();
+    pFbi.sLayerInfo[0].pBsBuf = pCtx.frame_bs();
     {
         // The frame's first layer starts at entry 0 of `pOut.sNalLen`.
         let pOut = pCtx.out_mut();
         pOut.iNalLenBase = 0;
-        (*pFbi).sLayerInfo[0].pNalLengthInByte = pOut.nal_len_ptr();
+        pFbi.sLayerInfo[0].pNalLengthInByte = pOut.nal_len_ptr();
     }
 
-    for i in 0..(*pFbi).iLayerNum as usize {
-        (*pFbi).sLayerInfo[i].iNalCount = 0;
-        (*pFbi).sLayerInfo[i].eFrameType = EVideoFrameType::videoFrameTypeSkip;
+    for i in 0..pFbi.iLayerNum as usize {
+        pFbi.sLayerInfo[i].iNalCount = 0;
+        pFbi.sLayerInfo[i].eFrameType = EVideoFrameType::videoFrameTypeSkip;
     }
-    (*pFbi).iLayerNum = 0;
-    (*pFbi).iFrameSizeInBytes = 0;
+    pFbi.iLayerNum = 0;
+    pFbi.iFrameSizeInBytes = 0;
 }
 
 /// `encoder_ext.cpp:3341`. Roll the encoder state back one frame after the rate
@@ -2731,7 +2731,7 @@ pub fn WelsInitCurrentQBLayerMltslc(pCtx: &mut sWelsEncCtx) {
 /// bound differs from the C++. Note the trailing loop clears the *whole* of those
 /// arrays, not just the entries beyond `iPartitionNum` that this call wrote.
 pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum: i32) {
-    let pSliceCtx = &mut (*pCurDq).sSliceEncCtx;
+    let pSliceCtx = &mut pCurDq.sSliceEncCtx;
     let kiMbNumInFrame = pSliceCtx.iMbNumInFrame;
     let mut iCountMbNumPerPartition = kiMbNumInFrame;
     let mut iAssignableMbLeft = kiMbNumInFrame;
@@ -2765,13 +2765,13 @@ pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum:
             iCountMbNumInPartition = iCountMbNumPerPartition;
         }
 
-        (*pCurDq).FirstMbIdxOfPartition[i] = iFirstMbIdx;
-        (*pCurDq).EndMbIdxOfPartition[i] = iFirstMbIdx + iCountMbNumInPartition - 1;
-        (*pCurDq).LastCodedMbIdxOfPartition[i].store(0, Ordering::Relaxed);
-        (*pCurDq).NumSliceCodedOfPartition[i].store(0, Ordering::Relaxed);
+        pCurDq.FirstMbIdxOfPartition[i] = iFirstMbIdx;
+        pCurDq.EndMbIdxOfPartition[i] = iFirstMbIdx + iCountMbNumInPartition - 1;
+        pCurDq.LastCodedMbIdxOfPartition[i].store(0, Ordering::Relaxed);
+        pCurDq.NumSliceCodedOfPartition[i].store(0, Ordering::Relaxed);
 
         {
-            let map: &[AtomicU16] = &(*pCurDq).sSliceEncCtx.pOverallMbMap;
+            let map: &[AtomicU16] = &pCurDq.sSliceEncCtx.pOverallMbMap;
             crate::encoder::slice_multi_threading::fill_mb_map(
                 map,
                 iFirstMbIdx,
@@ -2787,10 +2787,10 @@ pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum:
     }
 
     while i < MAX_THREADS_NUM {
-        (*pCurDq).FirstMbIdxOfPartition[i] = 0;
-        (*pCurDq).EndMbIdxOfPartition[i] = 0;
-        (*pCurDq).LastCodedMbIdxOfPartition[i].store(0, Ordering::Relaxed);
-        (*pCurDq).NumSliceCodedOfPartition[i].store(0, Ordering::Relaxed);
+        pCurDq.FirstMbIdxOfPartition[i] = 0;
+        pCurDq.EndMbIdxOfPartition[i] = 0;
+        pCurDq.LastCodedMbIdxOfPartition[i].store(0, Ordering::Relaxed);
+        pCurDq.NumSliceCodedOfPartition[i].store(0, Ordering::Relaxed);
         i += 1;
     }
 }
@@ -3376,7 +3376,7 @@ pub fn WelsEncoderEncodeExt(
                 eNalType as i32,
                 eNalRefIdc as i32,
             );
-            debug_assert_eq!(0, (*pCurSlice).iSliceIdx);
+            debug_assert_eq!(0, pCurSlice.iSliceIdx);
             pCtx.iEncoderError = crate::encoder::svc_encode_slice::SetSliceBoundaryInfo(
                 current_layer_ref(pCtx),
                 &mut *pCurSlice,

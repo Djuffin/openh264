@@ -392,8 +392,8 @@ pub use crate::decoder::decode_slice::{g_kuiCache30ScanIdx, g_kuiCache48CountSca
 #[inline(always)]
 pub fn POP_BUFFER(pBitsCache: &mut SReadBitsCache<'_>, iCount: u32) {
     {
-        (*pBitsCache).uiCache32Bit = (*pBitsCache).uiCache32Bit.wrapping_shl(iCount);
-        (*pBitsCache).uiRemainBits = (*pBitsCache).uiRemainBits.wrapping_sub(iCount as u8);
+        pBitsCache.uiCache32Bit = pBitsCache.uiCache32Bit.wrapping_shl(iCount);
+        pBitsCache.uiRemainBits = pBitsCache.uiRemainBits.wrapping_sub(iCount as u8);
     }
 }
 
@@ -402,13 +402,13 @@ pub fn SHIFT_BUFFER(pBitsCache: &mut SReadBitsCache<'_>) {
     {
         // Matches the C++ macro: pBuf is advanced FIRST, so the two bytes
         // shifted in are the original pBuf[4] and pBuf[5].
-        (*pBitsCache).pBuf = &(*pBitsCache).pBuf[2..];
-        let pBuf = (*pBitsCache).pBuf;
+        pBitsCache.pBuf = &pBitsCache.pBuf[2..];
+        let pBuf = pBitsCache.pBuf;
         let b2 = pBuf[2] as u32;
         let b3 = pBuf[3] as u32;
-        (*pBitsCache).uiRemainBits = (*pBitsCache).uiRemainBits.wrapping_add(16);
-        let shift = 32u32.wrapping_sub((*pBitsCache).uiRemainBits as u32);
-        (*pBitsCache).uiCache32Bit |= ((b2 << 8) | b3).wrapping_shl(shift);
+        pBitsCache.uiRemainBits = pBitsCache.uiRemainBits.wrapping_add(16);
+        let shift = 32u32.wrapping_sub(pBitsCache.uiRemainBits as u32);
+        pBitsCache.uiCache32Bit |= ((b2 << 8) | b3).wrapping_shl(shift);
     }
 }
 
@@ -1003,16 +1003,16 @@ pub fn ParseInterInfo(
     pBs: &mut BsCursor,
 ) -> i32 {
     let bDefaultMotionPredFlag =
-        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultMotionPredFlag;
+        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultMotionPredFlag;
     let bAdaptiveMotionPredFlag =
-        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveMotionPredFlag;
-    let iDirectSpatialMvPredFlag = (*pCurDqLayer)
+        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveMotionPredFlag;
+    let iDirectSpatialMvPredFlag = pCurDqLayer
         .sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag;
     let uiRefCountHdr =
-        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
+        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
     let ppRefPic = &pCtx.sRefPic.pRefList[0];
     let mut iRefCount = [0i32; 2];
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
     let mut iMotionPredFlag = [if bDefaultMotionPredFlag { 1u32 } else { 0u32 }; 4];
     let mut uiCode = 0u32;
     let mut iCode = 0i32;
@@ -1022,7 +1022,7 @@ pub fn ParseInterInfo(
     let bIsPending = pCtx.iThreadCount > 1;
     let ec_active = pCtx.bEcActive;
 
-    let mb_type = *(*pDec).pMbType.get(iMbXy);
+    let mb_type = *pDec.pMbType.get(iMbXy);
     match mb_type {
         MB_TYPE_16x16 => {
             let mut iRefIdx: i32;
@@ -1201,9 +1201,9 @@ pub fn ParseInterInfo(
                 iRefCount[1] = 1;
             }
 
-            let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy);
+            let pSubMbType = pCurDqLayer.grid.sub_mb_type.get_mut(iMbXy);
             let pNoSubMbPartSizeLessThan8x8Flag =
-                (*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy);
+                pCurDqLayer.grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy);
 
             for i in 0..4 {
                 let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
@@ -1232,7 +1232,7 @@ pub fn ParseInterInfo(
             }
 
             if MB_TYPE_8x8_REF0 == mb_type {
-                let ref_idx_mb = (*pDec).pRefIndex[0].get_mut(iMbXy);
+                let ref_idx_mb = pDec.pRefIndex[0].get_mut(iMbXy);
                 ref_idx_mb.fill(0);
             } else {
                 for i in 0..4 {
@@ -1259,7 +1259,7 @@ pub fn ParseInterInfo(
                             || *pCtx.bMbRefConcealed
                             || !pRefPic.map_or(false, |c| c || bIsPending);
 
-                        let ref_idx_mb = (*pDec).pRefIndex[0].get_mut(iMbXy);
+                        let ref_idx_mb = pDec.pRefIndex[0].get_mut(iMbXy);
                         ref_idx_mb[uiScan4Idx] = iRefIdx[i] as i8;
                         ref_idx_mb[uiScan4Idx + 1] = iRefIdx[i] as i8;
                         ref_idx_mb[uiScan4Idx + 4] = iRefIdx[i] as i8;
@@ -1300,7 +1300,7 @@ pub fn ParseInterInfo(
                     }
                     iMv[1] = iMv[1].wrapping_add(iCode as i16);
 
-                    let mv_mb = (*pDec).pMv[0].get_mut(iMbXy);
+                    let mv_mb = pDec.pMv[0].get_mut(iMbXy);
                     if SUB_MB_TYPE_8x8 == uiSubMbType {
                         mv_mb[uiScan4Idx] = iMv;
                         mv_mb[uiScan4Idx + 1] = iMv;
@@ -1348,14 +1348,14 @@ pub fn ParseInterBInfo(
     pBs: &mut BsCursor,
 ) -> i32 {
     let bDefaultMotionPredFlag =
-        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultMotionPredFlag;
+        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultMotionPredFlag;
     let bAdaptiveMotionPredFlag =
-        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveMotionPredFlag;
-    let iDirectSpatialMvPredFlag = (*pCurDqLayer)
+        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveMotionPredFlag;
+    let iDirectSpatialMvPredFlag = pCurDqLayer
         .sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag;
     let uiRefCountHdr =
-        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
-    let iMbXy = (*pCurDqLayer).iMbXyIndex as usize;
+        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
+    let iMbXy = pCurDqLayer.iMbXyIndex as usize;
 
     let mut ref_idx_list = [[-1i8; 4]; LIST_A];
     let mut iRef = [0i8; 2];
@@ -1405,7 +1405,7 @@ pub fn ParseInterBInfo(
         }};
     }
 
-    let mbType = *(*pDec).pMbType.get(iMbXy);
+    let mbType = *pDec.pMbType.get(iMbXy);
     if IS_DIRECT(mbType) {
         let mut pMvDirect = [[0i16; 2]; LIST_A];
         let mut subMbType: crate::decoder::mv_pred::SubMbType = 0;
@@ -1676,7 +1676,7 @@ pub fn ParseInterBInfo(
 
             // Need modification when B picture add in, reference to 7.3.5
             if pSubPartCount[i] > 1 {
-                *(*pCurDqLayer).grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) =
+                *pCurDqLayer.grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) =
                     false;
             }
 
@@ -1710,18 +1710,18 @@ pub fn ParseInterBInfo(
                     }
                     has_direct_called = true;
                 }
-                let pSubMbType = (*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy);
+                let pSubMbType = pCurDqLayer.grid.sub_mb_type.get_mut(iMbXy);
                 pSubMbType[i] = directSubMbType;
                 if IS_SUB_4x4(pSubMbType[i]) {
                     pSubPartCount[i] = 4;
                     pPartW[i] = 1;
                 }
             } else {
-                (*(*pCurDqLayer).grid.sub_mb_type.get_mut(iMbXy))[i] =
+                pCurDqLayer.grid.sub_mb_type.get_mut(iMbXy)[i] =
                     g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType;
             }
         }
-        let pSubMbType = *(*pCurDqLayer).grid.sub_mb_type.get(iMbXy);
+        let pSubMbType = *pCurDqLayer.grid.sub_mb_type.get(iMbXy);
         if bAdaptiveMotionPredFlag {
             for listIdx in LIST_0..LIST_A {
                 for i in 0..4usize {
@@ -1760,9 +1760,9 @@ pub fn ParseInterBInfo(
                     iRef[LIST_1] = 0;
                     iRef[LIST_0] = 0;
                     let uiColoc4Idx = g_kuiScan4[iIdx8 as usize] as usize;
-                    if (*pCurDqLayer).iColocIntra[uiColoc4Idx] == 0 {
+                    if pCurDqLayer.iColocIntra[uiColoc4Idx] == 0 {
                         iRef[LIST_0] = 0;
-                        let colocRefIndexL0 = (*pCurDqLayer).iColocRefIndex[LIST_0][uiColoc4Idx];
+                        let colocRefIndexL0 = pCurDqLayer.iColocRefIndex[LIST_0][uiColoc4Idx];
                         if colocRefIndexL0 >= 0 {
                             iRef[LIST_0] = crate::decoder::mv_pred::MapColToList0(
                                 pCtx,
@@ -1899,7 +1899,7 @@ pub fn ParseInterBInfo(
                         iMv[1] = 0;
                     }
 
-                    let mv_mb = (*pDec).pMv[listIdx].get_mut(iMbXy);
+                    let mv_mb = pDec.pMv[listIdx].get_mut(iMbXy);
                     if IS_SUB_8x8(subMbType) {
                         // MB_TYPE_8x8
                         mv_mb[uiScan4Idx] = iMv;
@@ -2334,8 +2334,8 @@ pub fn CavlcGetTrailingOnesAndTotalCoeff(
     let mut iUsedBits: i32 = 0;
 
     if bChromaDc {
-        let uiValue = ((*pBitsCache).uiCache32Bit >> 24) as usize;
-        let vlc_entry = (*pVlcTable).kpChromaCoeffTokenVlcTable[uiValue];
+        let uiValue = (pBitsCache.uiCache32Bit >> 24) as usize;
+        let vlc_entry = pVlcTable.kpChromaCoeffTokenVlcTable[uiValue];
         let iIndexVlc = vlc_entry[0] as usize;
         let uiCount = vlc_entry[1] as u32;
         POP_BUFFER(pBitsCache, uiCount);
@@ -2345,13 +2345,13 @@ pub fn CavlcGetTrailingOnesAndTotalCoeff(
     } else {
         let iNcMapIdx = g_kuiNcMapTable[nC as usize] as usize;
         if iNcMapIdx <= 2 {
-            let uiValue = ((*pBitsCache).uiCache32Bit >> 24) as usize;
+            let uiValue = (pBitsCache.uiCache32Bit >> 24) as usize;
             if uiValue < g_kuiVlcTableNeedMoreBitsThread[iNcMapIdx] as usize {
                 POP_BUFFER(pBitsCache, 8);
                 iUsedBits += 8;
                 let more_bits_shift = 32 - kpVlcTableMoreBitsCountList[iNcMapIdx][uiValue] as usize;
-                let iIndexValue = ((*pBitsCache).uiCache32Bit >> more_bits_shift) as usize;
-                let entry = (*pVlcTable).kpCoeffTokenVlcTable[iNcMapIdx + 1][uiValue][iIndexValue];
+                let iIndexValue = (pBitsCache.uiCache32Bit >> more_bits_shift) as usize;
+                let entry = pVlcTable.kpCoeffTokenVlcTable[iNcMapIdx + 1][uiValue][iIndexValue];
                 let iIndexVlc = entry[0] as usize;
                 let uiCount = entry[1] as u32;
                 POP_BUFFER(pBitsCache, uiCount);
@@ -2359,7 +2359,7 @@ pub fn CavlcGetTrailingOnesAndTotalCoeff(
                 *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
                 *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
             } else {
-                let entry = (*pVlcTable).kpCoeffTokenVlcTable[0][iNcMapIdx][uiValue];
+                let entry = pVlcTable.kpCoeffTokenVlcTable[0][iNcMapIdx][uiValue];
                 let iIndexVlc = entry[0] as usize;
                 let uiCount = entry[1] as u32;
                 POP_BUFFER(pBitsCache, uiCount);
@@ -2368,10 +2368,10 @@ pub fn CavlcGetTrailingOnesAndTotalCoeff(
                 *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
             }
         } else {
-            let uiValue = ((*pBitsCache).uiCache32Bit >> (32 - 6)) as usize;
+            let uiValue = (pBitsCache.uiCache32Bit >> (32 - 6)) as usize;
             POP_BUFFER(pBitsCache, 6);
             iUsedBits += 6;
-            let entry = (*pVlcTable).kpCoeffTokenVlcTable[0][3][uiValue];
+            let entry = pVlcTable.kpCoeffTokenVlcTable[0][3][uiValue];
             let iIndexVlc = entry[0] as usize;
             *uiTrailingOnes = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][0];
             *uiTotalCoeff = g_kuiVlcTrailingOneTotalCoeffTable[iIndexVlc][1];
@@ -2399,7 +2399,7 @@ pub fn CavlcGetLevelVal(
 ) -> i32 {
     let mut iUsedBits: i32 = 0;
     for i in 0..(uiTrailingOnes as usize) {
-        iLevel[i] = 1 - (((*pBitsCache).uiCache32Bit >> (30 - i)) & 0x02) as i32;
+        iLevel[i] = 1 - ((pBitsCache.uiCache32Bit >> (30 - i)) & 0x02) as i32;
     }
     POP_BUFFER(pBitsCache, uiTrailingOnes as u32);
     iUsedBits += uiTrailingOnes as i32;
@@ -2407,10 +2407,10 @@ pub fn CavlcGetLevelVal(
     let mut iSuffixLength: i32 = if uiTotalCoeff > 10 && uiTrailingOnes < 3 { 1 } else { 0 };
 
     for i in (uiTrailingOnes as usize)..(uiTotalCoeff as usize) {
-        if (*pBitsCache).uiRemainBits <= 16 {
+        if pBitsCache.uiRemainBits <= 16 {
             SHIFT_BUFFER(pBitsCache);
         }
-        let iPrefixBits = ((*pBitsCache).uiCache32Bit.leading_zeros() + 1) as i32;
+        let iPrefixBits = (pBitsCache.uiCache32Bit.leading_zeros() + 1) as i32;
         if iPrefixBits > MAX_LEVEL_PREFIX + 1 {
             return -1;
         }
@@ -2432,10 +2432,10 @@ pub fn CavlcGetLevelVal(
         }
 
         if iSuffixLengthSize > 0 {
-            if (*pBitsCache).uiRemainBits <= iSuffixLengthSize as u8 {
+            if pBitsCache.uiRemainBits <= iSuffixLengthSize as u8 {
                 SHIFT_BUFFER(pBitsCache);
             }
-            iLevelCode += ((*pBitsCache).uiCache32Bit >> (32 - iSuffixLengthSize)) as i32;
+            iLevelCode += (pBitsCache.uiCache32Bit >> (32 - iSuffixLengthSize)) as i32;
             POP_BUFFER(pBitsCache, iSuffixLengthSize as u32);
             iUsedBits += iSuffixLengthSize;
         }
@@ -2477,11 +2477,11 @@ pub fn CavlcGetTotalZeros(
         g_kuiTotalZerosBitNumMap[iTotalZeroVlcIdx - 1] as usize
     };
 
-    if (*pBitsCache).uiRemainBits < iCount as u8 {
+    if pBitsCache.uiRemainBits < iCount as u8 {
         SHIFT_BUFFER(pBitsCache);
     }
-    let uiValue = ((*pBitsCache).uiCache32Bit >> (32 - iCount)) as usize;
-    let entry = (*pVlcTable).kpTotalZerosTable[uiTableType][iTotalZeroVlcIdx - 1][uiValue];
+    let uiValue = (pBitsCache.uiCache32Bit >> (32 - iCount)) as usize;
+    let entry = pVlcTable.kpTotalZerosTable[uiTableType][iTotalZeroVlcIdx - 1][uiValue];
     let consumed_bits = entry[1] as u32;
     POP_BUFFER(pBitsCache, consumed_bits);
     iUsedBits += consumed_bits as i32;
@@ -2512,12 +2512,12 @@ pub fn CavlcGetRunBefore(
     for i in 0..(total - 1) {
         if iZerosLeft > 0 {
             let uiCount = g_kuiZeroLeftBitNumMap[iZerosLeft as usize] as u32;
-            if (*pBitsCache).uiRemainBits < uiCount as u8 {
+            if pBitsCache.uiRemainBits < uiCount as u8 {
                 SHIFT_BUFFER(pBitsCache);
             }
-            let uiValue = ((*pBitsCache).uiCache32Bit >> (32 - uiCount)) as usize;
+            let uiValue = (pBitsCache.uiCache32Bit >> (32 - uiCount)) as usize;
             if iZerosLeft < 7 {
-                let entry = (*pVlcTable).kpZeroTable[(iZerosLeft - 1) as usize][uiValue];
+                let entry = pVlcTable.kpZeroTable[(iZerosLeft - 1) as usize][uiValue];
                 let consumed = entry[1] as u32;
                 POP_BUFFER(pBitsCache, consumed);
                 iUsedBits += consumed as i32;
@@ -2525,14 +2525,14 @@ pub fn CavlcGetRunBefore(
             } else {
                 POP_BUFFER(pBitsCache, uiCount);
                 iUsedBits += uiCount as i32;
-                let entry = (*pVlcTable).kpZeroTable[6][uiValue];
+                let entry = pVlcTable.kpZeroTable[6][uiValue];
                 if entry[0] < 7 {
                     iRun[i] = entry[0] as i32;
                 } else {
-                    if (*pBitsCache).uiRemainBits < 16 {
+                    if pBitsCache.uiRemainBits < 16 {
                         SHIFT_BUFFER(pBitsCache);
                     }
-                    let iPrefixBits = ((*pBitsCache).uiCache32Bit.leading_zeros() + 1) as i32;
+                    let iPrefixBits = (pBitsCache.uiCache32Bit.leading_zeros() + 1) as i32;
                     iRun[i] = iPrefixBits + 6;
                     if iRun[i] > iZerosLeft {
                         return -1;

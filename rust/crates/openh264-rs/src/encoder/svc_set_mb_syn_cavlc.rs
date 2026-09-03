@@ -375,15 +375,15 @@ pub fn WelsSpatialWriteMbPred(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) {
-    let pMbCache = &mut (*pSlice).sMbCacheInfo;
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     let pBs = crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs);
     let buf = pSliceBsBuf;
-    let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
+    let pSliceHeadExt = &mut pSlice.sSliceHeaderExt;
     let iNumRefIdxl0ActiveMinus1 = (pSliceHeadExt.sSliceHeader.uiNumRefIdxL0Active as i32) - 1;
 
-    let uiMbType = (*pCurMb).uiMbType;
-    let iCbpChroma = ((*pCurMb).uiCbp >> 4) as i32;
-    let iCbpLuma = ((*pCurMb).uiCbp & 15) as i32;
+    let uiMbType = pCurMb.uiMbType;
+    let iCbpChroma = (pCurMb.uiCbp >> 4) as i32;
+    let iCbpLuma = (pCurMb.uiCbp & 15) as i32;
 
     // svc_set_mb_syn_cavlc.cpp:76
     let iMbOffset = match pSliceHeadExt.sSliceHeader.eSliceType {
@@ -426,12 +426,12 @@ pub fn WelsSpatialWriteMbPred(
 
         MB_TYPE_16x16 => {
             BsWriteUE(buf, &mut *pBs, 0);
-            sMvd[0].sDeltaMv((*pCurMb).sMv[0], pMbCache.sMbMvp[0]);
+            sMvd[0].sDeltaMv(pCurMb.sMv[0], pMbCache.sMbMvp[0]);
 
             if iNumRefIdxl0ActiveMinus1 > 0 {
                 BsWriteTE(buf, &mut *pBs,
                     iNumRefIdxl0ActiveMinus1,
-                    (*pCurMb).iRefIndex[0] as u32,
+                    pCurMb.iRefIndex[0] as u32,
                 );
             }
 
@@ -442,17 +442,17 @@ pub fn WelsSpatialWriteMbPred(
         MB_TYPE_16x8 => {
             BsWriteUE(buf, &mut *pBs, 1);
 
-            sMvd[0].sDeltaMv((*pCurMb).sMv[0], pMbCache.sMbMvp[0]);
-            sMvd[1].sDeltaMv((*pCurMb).sMv[8], pMbCache.sMbMvp[1]);
+            sMvd[0].sDeltaMv(pCurMb.sMv[0], pMbCache.sMbMvp[0]);
+            sMvd[1].sDeltaMv(pCurMb.sMv[8], pMbCache.sMbMvp[1]);
 
             if iNumRefIdxl0ActiveMinus1 > 0 {
                 BsWriteTE(buf, &mut *pBs,
                     iNumRefIdxl0ActiveMinus1,
-                    (*pCurMb).iRefIndex[0] as u32,
+                    pCurMb.iRefIndex[0] as u32,
                 );
                 BsWriteTE(buf, &mut *pBs,
                     iNumRefIdxl0ActiveMinus1,
-                    (*pCurMb).iRefIndex[2] as u32,
+                    pCurMb.iRefIndex[2] as u32,
                 );
             }
             BsWriteSE(buf, &mut *pBs, sMvd[0].iMvX as i32);
@@ -464,17 +464,17 @@ pub fn WelsSpatialWriteMbPred(
         MB_TYPE_8x16 => {
             BsWriteUE(buf, &mut *pBs, 2);
 
-            sMvd[0].sDeltaMv((*pCurMb).sMv[0], pMbCache.sMbMvp[0]);
-            sMvd[1].sDeltaMv((*pCurMb).sMv[2], pMbCache.sMbMvp[1]);
+            sMvd[0].sDeltaMv(pCurMb.sMv[0], pMbCache.sMbMvp[0]);
+            sMvd[1].sDeltaMv(pCurMb.sMv[2], pMbCache.sMbMvp[1]);
 
             if iNumRefIdxl0ActiveMinus1 > 0 {
                 BsWriteTE(buf, &mut *pBs,
                     iNumRefIdxl0ActiveMinus1,
-                    (*pCurMb).iRefIndex[0] as u32,
+                    pCurMb.iRefIndex[0] as u32,
                 );
                 BsWriteTE(buf, &mut *pBs,
                     iNumRefIdxl0ActiveMinus1,
-                    (*pCurMb).iRefIndex[1] as u32,
+                    pCurMb.iRefIndex[1] as u32,
                 );
             }
             BsWriteSE(buf, &mut *pBs, sMvd[0].iMvX as i32);
@@ -497,10 +497,10 @@ pub fn WelsSpatialWriteSubMbPred(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) {
-    let pMbCache = &mut (*pSlice).sMbCacheInfo;
+    let pMbCache = &mut pSlice.sMbCacheInfo;
     let pBs = crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs);
     let buf = pSliceBsBuf;
-    let pSliceHeadExt = &mut (*pSlice).sSliceHeaderExt;
+    let pSliceHeadExt = &mut pSlice.sSliceHeaderExt;
 
     let iNumRefIdxl0ActiveMinus1 = (pSliceHeadExt.sSliceHeader.uiNumRefIdxL0Active as i32) - 1;
 
@@ -508,7 +508,7 @@ pub fn WelsSpatialWriteSubMbPred(
     let mut kpScan4_idx = 0usize;
 
     // `LD32 (pCurMb->pRefIndex)` — the four 8x8 reference indices as one word.
-    let ref_idx_u32 = u32::from_ne_bytes((*pCurMb).iRefIndex.map(|r| r as u8));
+    let ref_idx_u32 = u32::from_ne_bytes(pCurMb.iRefIndex.map(|r| r as u8));
     if ref_idx_u32 == 0 {
         BsWriteUE(buf, &mut *pBs, 4);
         bSubRef0 = false;
@@ -519,7 +519,7 @@ pub fn WelsSpatialWriteSubMbPred(
 
     // Step 1: sub_mb_type
     for i in 0..4 {
-        match (*pCurMb).uiSubMbType[i] as u32 {
+        match pCurMb.uiSubMbType[i] as u32 {
             SUB_MB_TYPE_8x8 => {
                 BsWriteUE(buf, &mut *pBs, 0);
             }
@@ -533,7 +533,7 @@ pub fn WelsSpatialWriteSubMbPred(
             _ => unreachable!(
                 "sub_mb_type {:#x} — the sub-8x8 search is #if 0 upstream and \
                  unwritten here (D-dead-2/F122)",
-                (*pCurMb).uiSubMbType[i]
+                pCurMb.uiSubMbType[i]
             ),
         }
     }
@@ -542,31 +542,31 @@ pub fn WelsSpatialWriteSubMbPred(
     if iNumRefIdxl0ActiveMinus1 > 0 && bSubRef0 {
         BsWriteTE(buf, &mut *pBs,
             iNumRefIdxl0ActiveMinus1,
-            (*pCurMb).iRefIndex[0] as u32,
+            pCurMb.iRefIndex[0] as u32,
         );
         BsWriteTE(buf, &mut *pBs,
             iNumRefIdxl0ActiveMinus1,
-            (*pCurMb).iRefIndex[1] as u32,
+            pCurMb.iRefIndex[1] as u32,
         );
         BsWriteTE(buf, &mut *pBs,
             iNumRefIdxl0ActiveMinus1,
-            (*pCurMb).iRefIndex[2] as u32,
+            pCurMb.iRefIndex[2] as u32,
         );
         BsWriteTE(buf, &mut *pBs,
             iNumRefIdxl0ActiveMinus1,
-            (*pCurMb).iRefIndex[3] as u32,
+            pCurMb.iRefIndex[3] as u32,
         );
     }
 
     // Write sMvd
     for i in 0..4 {
-        let uiSubMbType = (*pCurMb).uiSubMbType[i] as u32;
+        let uiSubMbType = pCurMb.uiSubMbType[i] as u32;
         let s0 = g_kuiMbCountScan4Idx[kpScan4_idx] as usize;
         let s1 = g_kuiMbCountScan4Idx[kpScan4_idx + 1] as usize;
         let s2 = g_kuiMbCountScan4Idx[kpScan4_idx + 2] as usize;
         let s3 = g_kuiMbCountScan4Idx[kpScan4_idx + 3] as usize;
 
-        let cur_mv = &(*pCurMb).sMv;
+        let cur_mv = &pCurMb.sMv;
 
         if SUB_MB_TYPE_8x8 == uiSubMbType {
             BsWriteSE(buf, &mut *pBs,
@@ -634,17 +634,17 @@ pub fn WelsSpatialWriteMbSyn(
     .uiChromaQpIndexOffset;
 
     if IS_SKIP(mbs.cur().uiMbType) {
-        mbs.cur_mut().uiLumaQp = (*pSlice).uiLastMbQp;
+        mbs.cur_mut().uiLumaQp = pSlice.uiLastMbQp;
         let idx = CLIP3_QP_0_51((mbs.cur().uiLumaQp as i32) + (kuiChromaQpIndexOffset as i32));
         mbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[idx as usize];
 
-        (*pSlice).iMbSkipRun += 1;
+        pSlice.iMbSkipRun += 1;
         ENC_RETURN_SUCCESS
     } else {
-        if (*pEncCtx).eSliceType != EWelsSliceType::I_SLICE {
-            let kiMbSkipRun = (*pSlice).iMbSkipRun as u32;
+        if pEncCtx.eSliceType != EWelsSliceType::I_SLICE {
+            let kiMbSkipRun = pSlice.iMbSkipRun as u32;
             BsWriteUE(&mut *pSliceBsBuf, crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), kiMbSkipRun);
-            (*pSlice).iMbSkipRun = 0;
+            pSlice.iMbSkipRun = 0;
         }
 
         // Step 1: write mb type and pred
@@ -666,8 +666,8 @@ pub fn WelsSpatialWriteMbSyn(
 
         // Step 3: write QP and residual
         if mbs.cur().uiCbp > 0 || IS_INTRA16x16(mbs.cur().uiMbType) {
-            let kiDeltaQp = (mbs.cur().uiLumaQp as i32) - ((*pSlice).uiLastMbQp as i32);
-            (*pSlice).uiLastMbQp = mbs.cur().uiLumaQp;
+            let kiDeltaQp = (mbs.cur().uiLumaQp as i32) - (pSlice.uiLastMbQp as i32);
+            pSlice.uiLastMbQp = mbs.cur().uiLumaQp;
 
             BsWriteSE(
                 &mut *pSliceBsBuf,
@@ -676,11 +676,11 @@ pub fn WelsSpatialWriteMbSyn(
             );
             let pMbCache = &mut pSlice.sMbCacheInfo;
             let buf = &mut *pSliceBsBuf;
-            if WelsWriteMbResidual((*pEncCtx).func_list(), &mut *pMbCache, mbs.cur(), buf, &mut *pBs) != 0 {
+            if WelsWriteMbResidual(pEncCtx.func_list(), &mut *pMbCache, mbs.cur(), buf, &mut *pBs) != 0 {
                 return ENC_RETURN_VLCOVERFLOWFOUND;
             }
         } else {
-            mbs.cur_mut().uiLumaQp = (*pSlice).uiLastMbQp;
+            mbs.cur_mut().uiLumaQp = pSlice.uiLastMbQp;
             // `kuiChromaQpIndexOffset`, bound at this function's head from the same
             // expression. The C++ re-reads `pCurLayer->sLayerInfo.pPpsP->…` here
             // (`svc_set_mb_syn_cavlc.cpp`); nothing between the two can change the
@@ -693,7 +693,7 @@ pub fn WelsSpatialWriteMbSyn(
 
         // Step 4: Check the left buffer
         CheckBitstreamBuffer(
-            (*pSlice).iSliceIdx as u32,
+            pSlice.iSliceIdx as u32,
             pEncCtx,
             &mut *pSliceBsBuf,
             &*pBs,
@@ -723,12 +723,12 @@ pub fn WelsWriteMbResidual(
 
     if IS_INTRA16x16(uiMbType) {
         // DC luma
-        iA = (*sMbCacheInfo).iNonZeroCoeffCount[8];
-        iB = (*sMbCacheInfo).iNonZeroCoeffCount[1];
+        iA = sMbCacheInfo.iNonZeroCoeffCount[8];
+        iB = sMbCacheInfo.iNonZeroCoeffCount[1];
         iC = wels_non_zero_count_average(iA, iB);
         if WriteBlockResidualCavlc(
             pFuncList,
-            &(*sMbCacheInfo).sDct.iLumaI16x16Dc[..],
+            &sMbCacheInfo.sDct.iLumaI16x16Dc[..],
             15,
             1,
             LUMA_4x4,
@@ -744,14 +744,14 @@ pub fn WelsWriteMbResidual(
         if kiCbpLuma != 0 {
             for i in 0..16 {
                 let iIdx = g_kuiCache48CountScan4Idx[i] as usize;
-                iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 1];
-                iB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 8];
+                iA = sMbCacheInfo.iNonZeroCoeffCount[iIdx - 1];
+                iB = sMbCacheInfo.iNonZeroCoeffCount[iIdx - 8];
                 iC = wels_non_zero_count_average(iA, iB);
                 if WriteBlockResidualCavlc(
                     pFuncList,
-                    &(*sMbCacheInfo).sDct.iLumaBlock[i][..],
+                    &sMbCacheInfo.sDct.iLumaBlock[i][..],
                     14,
-                    if (*sMbCacheInfo).iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
+                    if sMbCacheInfo.iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
                     LUMA_AC,
                     iC,
                     buf, pBs,
@@ -768,17 +768,17 @@ pub fn WelsWriteMbResidual(
             while i < 16 {
                 if (kiCbpLuma & (1 << (i >> 2))) != 0 {
                     let iIdx = g_kuiCache48CountScan4Idx[i] as usize;
-                    let kiA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx];
-                    let kiB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx + 1];
-                    let kiC_val = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx + 8];
-                    let kiD = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx + 9];
+                    let kiA = sMbCacheInfo.iNonZeroCoeffCount[iIdx];
+                    let kiB = sMbCacheInfo.iNonZeroCoeffCount[iIdx + 1];
+                    let kiC_val = sMbCacheInfo.iNonZeroCoeffCount[iIdx + 8];
+                    let kiD = sMbCacheInfo.iNonZeroCoeffCount[iIdx + 9];
 
-                    iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 1];
-                    iB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 8];
+                    iA = sMbCacheInfo.iNonZeroCoeffCount[iIdx - 1];
+                    iB = sMbCacheInfo.iNonZeroCoeffCount[iIdx - 8];
                     iC = wels_non_zero_count_average(iA, iB);
                     if WriteBlockResidualCavlc(
                         pFuncList,
-                        &(*sMbCacheInfo).sDct.iLumaBlock[i][..],
+                        &sMbCacheInfo.sDct.iLumaBlock[i][..],
                         15,
                         if kiA > 0 { 1 } else { 0 },
                         LUMA_4x4,
@@ -790,11 +790,11 @@ pub fn WelsWriteMbResidual(
                     }
 
                     iA = kiA;
-                    iB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 7];
+                    iB = sMbCacheInfo.iNonZeroCoeffCount[iIdx - 7];
                     iC = wels_non_zero_count_average(iA, iB);
                     if WriteBlockResidualCavlc(
                         pFuncList,
-                        &(*sMbCacheInfo).sDct.iLumaBlock[i + 1][..],
+                        &sMbCacheInfo.sDct.iLumaBlock[i + 1][..],
                         15,
                         if kiB > 0 { 1 } else { 0 },
                         LUMA_4x4,
@@ -805,12 +805,12 @@ pub fn WelsWriteMbResidual(
                         return ENC_RETURN_VLCOVERFLOWFOUND;
                     }
 
-                    iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx + 7];
+                    iA = sMbCacheInfo.iNonZeroCoeffCount[iIdx + 7];
                     iB = kiA;
                     iC = wels_non_zero_count_average(iA, iB);
                     if WriteBlockResidualCavlc(
                         pFuncList,
-                        &(*sMbCacheInfo).sDct.iLumaBlock[i + 2][..],
+                        &sMbCacheInfo.sDct.iLumaBlock[i + 2][..],
                         15,
                         if kiC_val > 0 { 1 } else { 0 },
                         LUMA_4x4,
@@ -826,7 +826,7 @@ pub fn WelsWriteMbResidual(
                     iC = wels_non_zero_count_average(iA, iB);
                     if WriteBlockResidualCavlc(
                         pFuncList,
-                        &(*sMbCacheInfo).sDct.iLumaBlock[i + 3][..],
+                        &sMbCacheInfo.sDct.iLumaBlock[i + 3][..],
                         15,
                         if kiD > 0 { 1 } else { 0 },
                         LUMA_4x4,
@@ -848,7 +848,7 @@ pub fn WelsWriteMbResidual(
         // exact extent.
         if WriteBlockResidualCavlc(
             pFuncList,
-            &(*sMbCacheInfo).sDct.iChromaDc[0][..],
+            &sMbCacheInfo.sDct.iChromaDc[0][..],
             3,
             1,
             CHROMA_DC,
@@ -861,7 +861,7 @@ pub fn WelsWriteMbResidual(
 
         if WriteBlockResidualCavlc(
             pFuncList,
-            &(*sMbCacheInfo).sDct.iChromaDc[1][..],
+            &sMbCacheInfo.sDct.iChromaDc[1][..],
             3,
             1,
             CHROMA_DC,
@@ -878,14 +878,14 @@ pub fn WelsWriteMbResidual(
             // Blocks 0..4 are Cb, 4..8 are Cr.
             for i in 0..4 {
                 let iIdx = kCache48CountScan4Idx16base[i] as usize;
-                iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 1];
-                iB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 8];
+                iA = sMbCacheInfo.iNonZeroCoeffCount[iIdx - 1];
+                iB = sMbCacheInfo.iNonZeroCoeffCount[iIdx - 8];
                 iC = wels_non_zero_count_average(iA, iB);
                 if WriteBlockResidualCavlc(
                     pFuncList,
-                    &(*sMbCacheInfo).sDct.iChromaBlock[i][..],
+                    &sMbCacheInfo.sDct.iChromaBlock[i][..],
                     14,
-                    if (*sMbCacheInfo).iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
+                    if sMbCacheInfo.iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
                     CHROMA_AC,
                     iC,
                     buf, pBs,
@@ -898,14 +898,14 @@ pub fn WelsWriteMbResidual(
             // The Cr half.
             for i in 0..4 {
                 let iIdx = 24 + (kCache48CountScan4Idx16base[i] as usize);
-                iA = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 1];
-                iB = (*sMbCacheInfo).iNonZeroCoeffCount[iIdx - 8];
+                iA = sMbCacheInfo.iNonZeroCoeffCount[iIdx - 1];
+                iB = sMbCacheInfo.iNonZeroCoeffCount[iIdx - 8];
                 iC = wels_non_zero_count_average(iA, iB);
                 if WriteBlockResidualCavlc(
                     pFuncList,
-                    &(*sMbCacheInfo).sDct.iChromaBlock[4 + i][..],
+                    &sMbCacheInfo.sDct.iChromaBlock[4 + i][..],
                     14,
-                    if (*sMbCacheInfo).iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
+                    if sMbCacheInfo.iNonZeroCoeffCount[iIdx] > 0 { 1 } else { 0 },
                     CHROMA_AC,
                     iC,
                     buf, pBs,
@@ -959,11 +959,11 @@ pub fn StashMBStatusCabac(
     // `SCabacCtx` is `Copy` and holds no pointers — so the whole snapshot is this
     // one assignment. CABAC's `PropagateCarry` rewrites bytes it already emitted,
     // so restoring the cursor is not enough to restore the output.
-    (*pDss).sStoredCabac = *pCtx;
+    pDss.sStoredCabac = *pCtx;
     if let Some(pRestore) = pDss.pRestoreBuffer.as_deref_mut() {
         let iPosBitOffset = GetBsPosCabac(pCtx) - pDss.iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
-        let start = (*pCtx).m_iBufStart;
+        let start = pCtx.m_iBufStart;
         // Sliced, not offset: `buf[start..start + iLen]` bounds the read against
         // the output buffer, which the C++ never did — the scratch is a slice, so
         // a stash longer than the partition's buffer panics naming the length
@@ -971,8 +971,8 @@ pub fn StashMBStatusCabac(
         let src = &buf[start..start + iLen as usize];
         pRestore[..iLen as usize].copy_from_slice(src);
     }
-    (*pDss).uiLastMbQp = kuiLastMbQp;
-    (*pDss).iMbSkipRunStack = iMbSkipRun;
+    pDss.uiLastMbQp = kuiLastMbQp;
+    pDss.iMbSkipRunStack = iMbSkipRun;
 }
 
 /// `StashPopMBStatusCabac` — set_mb_syn_cavlc.cpp:261.
@@ -985,12 +985,12 @@ pub fn StashPopMBStatusCabac(
     pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
 ) -> i32 {
     let pCtx = pCabacCtx;
-    *pCtx = (*pDss).sStoredCabac;
+    *pCtx = pDss.sStoredCabac;
     // The one write that is not at the cursor.
     if let Some(pRestore) = pDss.pRestoreBuffer.as_deref() {
         let iPosBitOffset = GetBsPosCabac(pCtx) - pDss.iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
-        let start = (*pCtx).m_iBufStart;
+        let start = pCtx.m_iBufStart;
         // Same bound as the stash side, on the write this time — this is the one
         // write in the whole engine that is not at the cursor, and
         // `buf[start..start + iLen]` is what says how far it may reach; the scratch
@@ -998,7 +998,7 @@ pub fn StashPopMBStatusCabac(
         let dst = &mut buf[start..start + iLen as usize];
         dst.copy_from_slice(&pRestore[..iLen as usize]);
     }
-    (*pDss).iMbSkipRunStack
+    pDss.iMbSkipRunStack
 }
 
 /// `GetBsPosCabac` — set_mb_syn_cavlc.cpp:275.
