@@ -65,15 +65,23 @@ pub const MAX_LOG_SIZE: usize = 1024;
 /// `SWelsDecoderContext::sLogCtx`, so that code far below the boundary can log
 /// without reaching back up to it. See the module comment for why this one carries
 /// the callback rather than a route to the object that holds it.
+///
+/// The two callback fields are crate-private — that is what keeps [`WelsLog`] safe:
+///
+/// ```compile_fail,E0451
+/// # unsafe extern "C" fn sink(_: *mut std::ffi::c_void, _: i32, _: *const std::ffi::c_char) {}
+/// use openh264_rs::common::wels_trace::SLogContext;
+/// let _ = SLogContext { pfLog: Some(sink), ..SLogContext::default() };
+/// ```
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SLogContext {
     /// The callback the caller installed, or `None` — the reference's
     /// `pfLog`/`m_fpTrace` pair collapsed into the half that is observable.
-    pub pfLog: WelsTraceCallback,
+    pub(crate) pfLog: WelsTraceCallback,
     /// **C-ABI**: the caller's opaque context, handed back to `pfLog` untouched.
     /// Never dereferenced by this crate.
-    pub pLogCtx: TraceUserCtx,
+    pub(crate) pLogCtx: TraceUserCtx,
     /// The boundary object's address, for the message tag's `this = 0x…` only.
     /// An address and not a pointer: `utils.cpp:51` formats it with `%p` and does
     /// nothing else with it.
@@ -214,13 +222,13 @@ impl welsCodecTrace {
         self.m_sLogCtx.iTraceLevel
     }
 
-    pub fn SetTraceCallback(&mut self, func: WelsTraceCallback) {
+    pub(crate) fn SetTraceCallback(&mut self, func: WelsTraceCallback) {
         self.m_sLogCtx.pfLog = func;
     }
 
     /// Callers at the C-ABI boundary mint the token with
     /// [`TraceUserCtx::from_abi`].
-    pub fn SetTraceCallbackContext(&mut self, pCtx: TraceUserCtx) {
+    pub(crate) fn SetTraceCallbackContext(&mut self, pCtx: TraceUserCtx) {
         self.m_sLogCtx.pLogCtx = pCtx;
     }
 

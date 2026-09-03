@@ -1599,7 +1599,7 @@ pub struct CWelsH264SVCEncoder {
     /// `WelsUninitEncoderExt` takes it by value.
     pub m_pEncContext: Option<Box<sWelsEncCtx>>,
     /// The trace object, owned outright.
-    pub m_pWelsTrace: Box<welsCodecTrace>,
+    pub(crate) m_pWelsTrace: Box<welsCodecTrace>,
     pub m_iMaxPicWidth: i32,
     pub m_iMaxPicHeight: i32,
     pub m_iCspInternal: i32,

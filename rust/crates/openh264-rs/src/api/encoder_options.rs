@@ -53,7 +53,24 @@ impl CWelsH264SVCEncoder {
     /// of `eOptionId` and of nothing else, over thirty-two ids, and no Rust type
     /// states that. `Encoder::set_option_raw` is the safe surface's `unsafe`
     /// spelling of the same obligation.
-    pub fn SetOption(&mut self, eOptionId: EncoderOption, pOption: *mut c_void) -> i32 {
+    ///
+    /// # Safety
+    ///
+    /// `pOption` must point at a readable, aligned object of the type `eOptionId`
+    /// names, live for the call. The three trace ids also *install*: what is read
+    /// out of the blob is kept and entered on every later message, under
+    /// [`crate::api::codec_api::Encoder::set_trace_callback`]'s contract.
+    ///
+    /// ```compile_fail,E0133
+    /// # unsafe extern "C" fn sink(_: *mut std::ffi::c_void, _: i32, _: *const std::ffi::c_char) {}
+    /// use openh264_rs::api::codec_api::{EncoderOption, WelsTraceCallback};
+    /// use openh264_rs::encoder::wels_encoder_ext::CWelsH264SVCEncoder;
+    /// let mut e = CWelsH264SVCEncoder::new();
+    /// let mut cb: WelsTraceCallback = Some(sink);
+    /// e.SetOption(EncoderOption::ENCODER_OPTION_TRACE_CALLBACK,
+    ///             &mut cb as *mut _ as *mut std::ffi::c_void);
+    /// ```
+    pub unsafe fn SetOption(&mut self, eOptionId: EncoderOption, pOption: *mut c_void) -> i32 {
         if pOption.is_null() {
             return cmInitParaError;
         }
@@ -491,7 +508,11 @@ impl CWelsH264SVCEncoder {
 
     #[allow(unsafe_code)]
     /// `pOption` is **C-ABI**, as in [`Self::SetOption`], with the blob written.
-    pub fn GetOption(&mut self, eOptionId: EncoderOption, pOption: *mut c_void) -> i32 {
+    ///
+    /// # Safety
+    ///
+    /// As [`Self::SetOption`], with `pOption` **written**.
+    pub unsafe fn GetOption(&mut self, eOptionId: EncoderOption, pOption: *mut c_void) -> i32 {
         if pOption.is_null() {
             return cmInitParaError;
         }
