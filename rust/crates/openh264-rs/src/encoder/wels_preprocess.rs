@@ -2771,6 +2771,26 @@ impl CWelsPreProcess {
             ESceneChangeIdc::SIMILAR_SCENE
         };
 
+        // `wels_preprocess.cpp:1247-1248` — **P10.2.C2, and it is a referee's input,
+        // not a diagnostic.** `scc_verdicts.sh` reads exactly this line off both
+        // encoders and diffs the two sequences, which is how the screen
+        // preprocessor is judged before the bitstreams can match: under `SCC_TIER=min`
+        // rate control is off, so the plugins' inputs are identical on both sides
+        // frame by frame and the verdicts must be too. Text, level and argument
+        // order are therefore fixed by the C++, not chosen here.
+        //
+        // §4.6: the parameter read is consumed into an `i32` before the extension's
+        // `&mut` below, and `WelsLog` takes the log context by value (S8.1).
+        let kiCodingIndex = pCtx.param().sDependencyLayers[0].iCodingIndex;
+        crate::common::wels_trace::WelsLog(
+            pCtx.sLogCtx,
+            crate::common::wels_trace::WELS_LOG_DEBUG,
+            &format!(
+                "iVaaFrameSceneChangeIdc = {},codingIdx = {}",
+                iVaaFrameSceneChangeIdc as i32, kiCodingIndex
+            ),
+        );
+
         self.SaveBestRefToVaa(&sLtrSaved, &mut pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").sVaaStrBestRefCandidate[0]);
         if let Some(id) = sLtrSaved.pRefPicture {
             pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").iVaaBestRefFrameNum = self.src_id(id).iFrameNum;
