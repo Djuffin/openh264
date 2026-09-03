@@ -4524,8 +4524,16 @@ pub fn WelsEncoderEncodeExt(
         }
 
         // update scc related
-        if let Some(f) = pCtx.func_list().pfUpdateFMESwitch {
-            f(current_layer_ref(pCtx));
+        //
+        // **D-scc-13**: the slot takes the layer exclusively now, so the fn
+        // pointer is copied out of the table first (`Option<fn(..)>` is `Copy`)
+        // and the context's shared borrow ends with that statement — §4.6, the
+        // same shape as the `iAverageFrameQp` hoist above. Position is the C++'s
+        // (`encoder_ext.cpp:3891-3897`): after `pDecPic->iFrameAverageQp` is
+        // stamped, before the reference list is updated.
+        let pfUpdateFMESwitch = pCtx.func_list().pfUpdateFMESwitch;
+        if let Some(f) = pfUpdateFMESwitch {
+            f(current_layer_expect_mut(pCtx));
         }
 
         // reference picture list update

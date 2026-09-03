@@ -169,7 +169,6 @@ name WelsCabacEncodeGetPtr | renamed | set_mb_syn_cabac.rs:1137
 name CreateReferenceStrategy | renamed | ref_list_mgr_svc.rs:1662 — a match, not a factory
 name WelsEncoderEncodeParameterSets | renamed | wels_encoder_ext.rs:591 WelsEncoderEncodeParameterSetsRust
 name ReleaseFeatureSearchPreparation | renamed | P10.1.B4: `Drop` of `SFeatureSearchPreparation` (svc_motion_estimate.rs), released with the DQ layer as encoder_ext.cpp:973-977 does
-name UpdateFMESwitch | renamed | svc_motion_estimate.rs:377 (PUpdateFMESwitch) — the table entry exists
 name WelsFillingPred1to16_c | renamed | a 4-byte store; the port writes the slice
 name WelsFillingPred8to16_c | renamed | a store; the port writes the slice
 name WelsFillingPred8x2to16_c | renamed | a store; the port writes the slice
@@ -261,11 +260,15 @@ name GeneralBilinearDownsamplerWrap | dead | the SIMD wrapper (downsamplefuncs.c
 # ported all eight under their C++ names (`processing/scroll_detection.rs` and
 # `processing/complexity_analysis.rs`), so the census finds them by name and a rule
 # for a present function is a stale row.
+
+# The same at **P10.3.D2** for the FME switch family: `CountFMECostDown` and
+# `UpdateFMEGoodFrameCount` were this file's last two `missing` rows, and
+# `UpdateFMESwitch` was `renamed` against its own table typedef. All three are
+# ported under their C++ names in `svc_motion_estimate.rs`, so all three rules
+# go. `missing` reads 0.
 name RequestScreenBlockFeatureStorage | renamed | P10.1.B5: `SScreenBlockFeatureStorage::for_frame` (picture.rs), called from `AllocPicture`'s screen arm (wels_preprocess.rs) as picture_handle.cpp:115 does; the both-sizes refusal is `AllocPicture`'s `None`
 name ReleaseScreenBlockFeatureStorage | renamed | P10.1.B5: `Drop` of `SScreenBlockFeatureStorage` — the picture owns the box (`Option<Box<..>>`)
 name RequestFeatureSearchPreparation | renamed | P10.1.B4: `SFeatureSearchPreparation::new` (svc_motion_estimate.rs), called from `InitDqLayers` for the last layer (encoder_ext.rs)
-name CountFMECostDown | missing | Phase 10: svc_motion_estimate.cpp:1027, 8 statements (svc_motion_estimate.rs:1589)
-name UpdateFMEGoodFrameCount | missing | Phase 10: svc_motion_estimate.cpp:1043, 2 statements
 name GetReferenceSrcPicList | renamed | D-scc-12: inlined as the `pRefPicList` array in `DetectSceneChangeScreen` (wels_preprocess.rs) — the C++ body is one `return &m_pSpatialPic[iTargetDid][1]`, which the port spells as the `std::array::from_fn` that builds that window
 
 # imagerotate — reachable only through METHOD_IMAGE_ROTATE, which nothing in the
