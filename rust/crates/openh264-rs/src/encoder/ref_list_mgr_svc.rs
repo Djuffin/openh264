@@ -1780,6 +1780,42 @@ pub fn WelsBuildRefListScreen(
                     current_layer_expect_mut(pCtx).pRefOri[num0] = refOri;
                     pCtx.pRefList0[num0] = Some(idRefPic);
                     pCtx.iNumRef0 += 1;
+                    // `ref_list_mgr_svc.cpp:829-834` — **P10.2.C2.** These five lines
+                    // are `scc_verdicts.sh`'s second observable on the LTR rows: they
+                    // say which reference the verdict actually selected, which a
+                    // matching verdict sequence alone does not. Text, level and
+                    // argument order come from the C++ and are the referee's input.
+                    // §4.6: every value is read out before the log call, so no borrow
+                    // spans it.
+                    let (kiRefFrameNum, kuiRefTid, kbRefIsSceneLtr) = {
+                        let pRefPic = pCtx
+                            .ref_list(uiDid)
+                            .expect("the dependency layer's reference list")
+                            .pic(idRefPic);
+                        (pRefPic.iFrameNum, pRefPic.uiTemporalId, pRefPic.bIsSceneLTR)
+                    };
+                    let kuiLongRefCount = pCtx
+                        .ref_list(uiDid)
+                        .expect("the dependency layer's reference list")
+                        .uiLongRefCount;
+                    // `pParamD->iFrameNum` — the *parameter* layer's frame number
+                    // (`ref_list_mgr_svc.cpp:815`), not the DQ layer's.
+                    let kiCurFrameNum = pCtx.param().sDependencyLayers[uiDid].iFrameNum;
+                    let kuiTid = pCtx.uiTemporalId;
+                    crate::common::wels_trace::WelsLog(
+                        pCtx.sLogCtx,
+                        crate::common::wels_trace::WELS_LOG_DEBUG,
+                        &format!(
+                            "WelsBuildRefListScreen(), current iFrameNum = {}, current Tid = {}, ref iFrameNum = {}, ref uiTemporalId = {}, ref is Scene LTR = {}, LTR count = {},iNumRef = {}",
+                            kiCurFrameNum,
+                            kuiTid,
+                            kiRefFrameNum,
+                            kuiRefTid,
+                            kbRefIsSceneLtr as i32,
+                            kuiLongRefCount,
+                            iNumRef
+                        ),
+                    );
                 }
             } else {
                 let mut i = iNumRef;
@@ -1794,11 +1830,80 @@ pub fn WelsBuildRefListScreen(
                         current_layer_expect_mut(pCtx).pRefOri[num0] = refOri;
                         pCtx.pRefList0[num0] = Some(idLong);
                         pCtx.iNumRef0 += 1;
+                        // `ref_list_mgr_svc.cpp:845-848`. The C++ reads back
+                        // `pRefList0[iNumRef0 - 1]->iFrameNum`, which is the slot
+                        // just pushed — `idLong`.
+                        let kiRefFrameNum = pCtx
+                            .ref_list(uiDid)
+                            .expect("the dependency layer's reference list")
+                            .pic(idLong)
+                            .iFrameNum;
+                        let kuiLongRefCount = pCtx
+                            .ref_list(uiDid)
+                            .expect("the dependency layer's reference list")
+                            .uiLongRefCount;
+                        let kiCurFrameNum = pCtx.param().sDependencyLayers[uiDid].iFrameNum;
+                        crate::common::wels_trace::WelsLog(
+                            pCtx.sLogCtx,
+                            crate::common::wels_trace::WELS_LOG_DEBUG,
+                            &format!(
+                                "WelsBuildRefListScreen(), ref !current iFrameNum = {}, ref iFrameNum = {},LTR number = {}",
+                                kiCurFrameNum, kiRefFrameNum, kuiLongRefCount
+                            ),
+                        );
                         break;
                     }
                     i -= 1;
                 }
             }
+        }
+
+        // `ref_list_mgr_svc.cpp:853-875` — the reference-list dump, after the walk
+        // and still inside the non-I arm. `%d` of a C++ `bool` prints 0/1; the two
+        // `uint8_t`s promote to `int` and print as the numbers they are. The `\t`
+        // is upstream's literal tab.
+        crate::common::wels_trace::WelsLog(
+            pCtx.sLogCtx,
+            crate::common::wels_trace::WELS_LOG_DEBUG,
+            &format!(
+                "WelsBuildRefListScreen(), CurrentFramePoc={}, isLTR={}",
+                iPOC, pCtx.bCurFrameMarkedAsSceneLtr as i32
+            ),
+        );
+        for j in 0..iNumRef {
+            // A3: the list is re-derived per read, as everywhere else in this body.
+            let pARefPicture = pCtx
+                .ref_list(uiDid)
+                .expect("the dependency layer's reference list")
+                .pLongRefList[j as usize];
+            let line = match pARefPicture {
+                Some(idA) => {
+                    let a = pCtx
+                        .ref_list(uiDid)
+                        .expect("the dependency layer's reference list")
+                        .pic(idA);
+                    format!(
+                        "WelsBuildRefListScreen()\tRefLot[{}]: iPoc={}, iPictureType={}, bUsedAsRef={}, bIsLongRef={}, bIsSceneLTR={}, uiTemporalId={}, iFrameNum={}, iMarkFrameNum={}, iLongTermPicNum={}, uiRecieveConfirmed={}",
+                        j,
+                        a.iFramePoc,
+                        a.iPictureType,
+                        a.bUsedAsRef as i32,
+                        a.bIsLongRef as i32,
+                        a.bIsSceneLTR as i32,
+                        a.uiTemporalId,
+                        a.iFrameNum,
+                        a.iMarkFrameNum,
+                        a.iLongTermPicNum,
+                        a.uiRecieveConfirmed
+                    )
+                }
+                None => format!("WelsBuildRefListScreen()\tRefLot[{}]: NULL", j),
+            };
+            crate::common::wels_trace::WelsLog(
+                pCtx.sLogCtx,
+                crate::common::wels_trace::WELS_LOG_DEBUG,
+                &line,
+            );
         }
     } else {
         WelsResetRefList(pCtx);
