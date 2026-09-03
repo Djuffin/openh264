@@ -67,15 +67,18 @@
 # `EncoderInitTest.ScreenContentScrollMotionVectorBounds` (encoder_test.cpp:323)
 # and `EncodeDecodeTestAPI.ScreenContent_LosslessLink0_EnableLongTermReference`
 # (encode_options_test.cpp:2195) — pass and left this list in that commit. The
-# five that hash the bytes stay: the three screen video-processing plugins are
-# P10.2's and the dispatch block (`PreprocessSliceCoding`'s screen half,
-# `SetMeMethod`, the FME switch) is P10.3's, and until both land every screen P
-# frame differs from the reference. The `scc` sweep preset is their referee.
-EncodeFile/EncoderOutputTest.CompareOutput/8 | 10 | screen content: bytes differ until P10.2 (plugins) and P10.3 (dispatch)
-EncodeFile/EncoderOutputTest.CompareOutput/9 | 10 | screen content: bytes differ until P10.2 (plugins) and P10.3 (dispatch)
-EncodeFile/EncoderOutputTest.CompareOutput/10 | 10 | screen content: bytes differ until P10.2 (plugins) and P10.3 (dispatch)
-EncodeFile/EncoderOutputTest.CompareOutput/11 | 10 | screen content: bytes differ until P10.2 (plugins) and P10.3 (dispatch)
-EncodeFile/EncoderOutputTest.CompareOutput/12 | 10 | screen content: bytes differ until P10.2 (plugins) and P10.3 (dispatch)
+# five that hashed the bytes stayed: the three screen video-processing plugins
+# were P10.2's and the dispatch block (`PreprocessSliceCoding`'s screen half,
+# `SetMeMethod`, the FME switch) P10.3's, and until both landed every screen P
+# frame differed from the reference.
+#
+# **P10.3.D6: all five are gone too, and the section is empty.** The dispatch
+# block landed at P10.3.D4 and the rows pass — measured, `--check` reported them
+# "LISTED BUT PASSING", 193/199 -> 198/199. They are the harder half of the axis:
+# `GetDefaultParams`'s rate control is *on* for all five, `/11` and `/12` run four
+# threads, and `/12` adds lossless LTR (`test/api/BaseEncoderTest.cpp:30-66`) —
+# none of which the min byte tier reaches. `sweep.sh scc` reads 148/148 in both
+# profiles, which is the referee that covers them.
 
 # --- HashFunctions.h:20 — the POC tiebreak ----------------------------------
 # Deliberate divergence, argued at decoder_conformance_test.rs:238 and corroborated

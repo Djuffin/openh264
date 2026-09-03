@@ -142,6 +142,93 @@ fn encode_bytes(w: i32, h: i32, frames: usize, mutate: impl FnOnce(&mut SEncPara
     }
 }
 
+/// [`textured_frame`] with every plane rolled up by `rows` luma lines (chroma by
+/// half that, so the three planes stay registered). Wrapping rather than clamping,
+/// so no new content enters and the only difference between two frames is the
+/// displacement itself.
+fn scrolled(base: &[u8], w: usize, h: usize, rows: usize) -> Vec<u8> {
+    let luma = w * h;
+    let (cw, ch) = (w / 2, h / 2);
+    let mut out = vec![0u8; luma * 3 / 2];
+    for y in 0..h {
+        let src = (y + rows) % h;
+        out[y * w..(y + 1) * w].copy_from_slice(&base[src * w..(src + 1) * w]);
+    }
+    for pl in 0..2usize {
+        let off = luma + pl * (luma / 4);
+        for y in 0..ch {
+            let src = (y + rows / 2) % ch;
+            out[off + y * cw..off + (y + 1) * cw]
+                .copy_from_slice(&base[off + src * cw..off + (src + 1) * cw]);
+        }
+    }
+    out
+}
+
+/// [`encode_bytes`] over a **scrolling** source: frame `i` is [`textured_frame`]
+/// rolled up by `i * rows_per_frame` lines. Rate control is off and the QP fixed,
+/// so the coded size reflects how well the encoder predicted the motion rather
+/// than a bitrate target both configurations would hit alike.
+fn encode_scrolling(
+    w: i32,
+    h: i32,
+    frames: usize,
+    rows_per_frame: usize,
+    mutate: impl FnOnce(&mut SEncParamExt),
+) -> Vec<u8> {
+    unsafe {
+        let mut enc: *mut ISVCEncoder = std::ptr::null_mut();
+        assert_eq!(WelsCreateSVCEncoder(&mut enc), CM_RESULT_SUCCESS);
+        let mut p = base_params(enc, w, h);
+        p.iRCMode = RC_MODES::RC_OFF_MODE;
+        p.iMinQp = 0;
+        p.iMaxQp = 51;
+        p.sSpatialLayers[0].iDLayerQp = 26;
+        mutate(&mut p);
+        assert_eq!(
+            ISVCEncoder::InitializeExt(enc, &p as *const SEncParamExt),
+            CM_RESULT_SUCCESS,
+            "InitializeExt"
+        );
+
+        let (uw, uh) = (w as usize, h as usize);
+        let luma = uw * uh;
+        let base = textured_frame(w, h);
+        let mut out = Vec::new();
+        for f in 0..frames {
+            let mut buf = scrolled(&base, uw, uh, (f * rows_per_frame) % uh);
+            let mut pic = SSourcePicture::default();
+            pic.iColorFormat = EVideoFormatType::videoFormatI420 as i32;
+            pic.iPicWidth = w;
+            pic.iPicHeight = h;
+            pic.iStride[0] = w;
+            pic.iStride[1] = w / 2;
+            pic.iStride[2] = w / 2;
+            pic.pData[0] = buf.as_mut_ptr();
+            pic.pData[1] = buf.as_mut_ptr().add(luma);
+            pic.pData[2] = buf.as_mut_ptr().add(luma + luma / 4);
+
+            let mut info = SFrameBSInfo::default();
+            assert_eq!(
+                ISVCEncoder::EncodeFrame(enc, &pic as *const SSourcePicture, &mut info),
+                CM_RESULT_SUCCESS,
+                "EncodeFrame"
+            );
+            for li in 0..info.iLayerNum as usize {
+                let layer = &info.sLayerInfo[li];
+                let n: i32 = (0..layer.iNalCount as usize)
+                    .map(|i| *layer.pNalLengthInByte.add(i))
+                    .sum();
+                out.extend_from_slice(std::slice::from_raw_parts(layer.pBsBuf, n as usize));
+            }
+        }
+
+        ISVCEncoder::Uninitialize(enc);
+        WelsDestroySVCEncoder(enc);
+        out
+    }
+}
+
 /// **P10.1: `SCREEN_CONTENT_REAL_TIME` is accepted at init.** Three port-added
 /// refusals stood where the C++ allocates — the VAA extension
 /// (`RequestMemoryVaaScreen`), the last layer's feature-search preparation
@@ -185,13 +272,11 @@ fn screen_content_ltr_without_lossless_link_is_accepted_at_init() {
     );
 }
 
-/// A screen-content sequence encodes to completion. **Deliberately not asserted:
-/// that the bytes differ from the camera encode.** They do (the two usage types
-/// already differ in MV range, QP range and reference count), but that assertion's
-/// *meaning* — "the screen-content algorithms ran" — is only true once P10.2 ports
-/// the three plugins and P10.3 the dispatch block; P10.3 adds
-/// `screen_content_changes_the_output` with that meaning. Byte-exactness against
-/// the reference is the `scc` sweep preset's, from P10.3 on.
+/// A screen-content sequence encodes to completion. It deliberately asserts nothing
+/// about the bytes: `screen_content_scrolling_source_codes_smaller_than_camera`
+/// below is the row that does, and it took P10.2's three plugins and P10.3's
+/// dispatch block to be able to. Byte-exactness against the reference is the `scc`
+/// sweep preset's (`SCC_TIER=min`, 28/28 since P10.3.D4).
 #[test]
 fn screen_content_encodes_a_sequence() {
     let screen = encode_bytes(320, 192, 12, |p| p.iUsageType = EUsageType::SCREEN_CONTENT_REAL_TIME);
@@ -332,4 +417,48 @@ fn a_layer_rounded_up_to_a_macroblock_multiple_is_not_a_downsample() {
         ISVCEncoder::Uninitialize(enc);
         WelsDestroySVCEncoder(enc);
     }
+}
+
+/// **P10.3: the screen-content algorithms ran.** A source that scrolls eight lines
+/// per frame codes *materially smaller* under `SCREEN_CONTENT_REAL_TIME` than under
+/// `CAMERA_VIDEO_REAL_TIME`, at the same fixed QP with rate control off.
+///
+/// **Why the comparison is this one and not "the bytes differ".** Camera and screen
+/// bytes have differed since long before this phase — the two usage types already
+/// disagree about MV range, QP range and reference count — so an `assert_ne!` here
+/// would have passed at P10.1, with every screen algorithm dormant, and would not
+/// have meant what it said. What cannot happen without the dispatch block is
+/// *exploiting the scroll*: `DetectSceneChangeScreen` finds the displacement,
+/// `PreprocessSliceCoding`'s screen block installs `SetScrollingMvToMd` and
+/// `WelsMotionEstimateSearchScrolled`, and the search starts at the right vector
+/// instead of hunting for it. That shows up as size, which is why size is what is
+/// asserted. The inequality is checked too, as the weaker half.
+///
+/// Correctness — that these bytes are the C++'s bytes — is the `scc` sweep's claim,
+/// not this file's. What lives here is that the feature is reachable and effective
+/// through the public API alone.
+#[test]
+fn screen_content_scrolling_source_codes_smaller_than_camera() {
+    let camera = encode_scrolling(320, 192, 12, 8, |p| {
+        p.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME
+    });
+    let screen = encode_scrolling(320, 192, 12, 8, |p| {
+        p.iUsageType = EUsageType::SCREEN_CONTENT_REAL_TIME
+    });
+    assert!(
+        !camera.is_empty() && !screen.is_empty(),
+        "both configurations coded something"
+    );
+    assert_ne!(
+        camera, screen,
+        "screen content produced the camera path's bytes exactly — the dispatch \
+         block did not run"
+    );
+    assert!(
+        screen.len() < camera.len(),
+        "a scrolling source must code smaller under screen content than under \
+         camera content: {} vs {} bytes",
+        screen.len(),
+        camera.len()
+    );
 }
