@@ -1550,8 +1550,11 @@ pub fn CalculateFeatureOfBlock(
     true
 }
 
-// SCREEN_CONTENT(dormant: Phase 10) — no caller after P10.1: P10.3 installs the
-// call from `PreprocessSliceCoding`'s screen block (`encoder_ext.cpp:2745-2749`).
+// SCREEN_CONTENT(dormant: Phase 10) — the caller arrived at P10.3.D4:
+// `PreprocessSliceCoding`'s screen block (`encoder_ext.cpp:2745-2749`), which
+// takes the layer's scratch and the reference's storage out by `Option::take`
+// so this can hold the picture's planes and its storage at once (D-scc-14).
+// The tag comes off at D7, against the entry count D5 measures.
 /// `PerformFMEPreprocess` — `svc_motion_estimate.cpp:880-893`.
 ///
 /// **P10.1.B5 (D-scc-3)**: the C++ stores its caller's `pFeatureOfBlock` pointer
