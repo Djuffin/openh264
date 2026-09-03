@@ -53,7 +53,7 @@ pub const dsDataErrorConcealed: i32 = 0x20;
 pub const dsOutOfMemory: i32 = 0x4000;
 
 // Log levels — the bit mask at `codec_app_def.h:323-331`.
-pub use crate::common::wels_trace::{WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING};
+pub use crate::common::wels_trace::{WelsLog, WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING};
 
 // ============================================================================
 // Data Structures
@@ -82,16 +82,6 @@ use crate::decoder::decoder_context::{
 };
 pub use crate::decoder::pic_queue::PicId;
 
-
-// ============================================================================
-// Internal Logging & Picture Helpers
-// ============================================================================
-
-#[inline(always)]
-pub fn WelsLog(_pLogCtx: &SLogContext, _iLevel: i32, _msg: &str) {
-
-    // Logging stub for no-std / embedded compatibility
-}
 
 // ============================================================================
 // Core Reference Management Implementation
@@ -483,7 +473,7 @@ pub fn SlidingWindow(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) -> i32 {
     if uiShort + uiLong >= num_ref_frames {
         if uiShort == 0 {
             WelsLog(
-                &(*pCtx).sLogCtx,
+                (*pCtx).sLogCtx,
                 WELS_LOG_ERROR,
                 "No reference picture in short term list when sliding window",
             );
@@ -546,7 +536,7 @@ pub fn RemainOneBufferInDpbForEC(
 
     if ref_set(pCtx, bTmpRefSet).uiShortRefCount[0] + ref_set(pCtx, bTmpRefSet).uiLongRefCount[0] >= num_ref_frames {
         WelsLog(
-            &(*pCtx).sLogCtx,
+            (*pCtx).sLogCtx,
             WELS_LOG_WARNING,
             "RemainOneBufferInDpbForEC(): empty one DPB failed for EC!",
         );
@@ -636,7 +626,7 @@ pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i
                     }
                     RefSlot::Current if bCrossIdr => {
                         WelsLog(
-                            &(*pCtx).sLogCtx,
+                            (*pCtx).sLogCtx,
                             WELS_LOG_WARNING,
                             "WelsInitRefList()::EC memcpy overlap.",
                         );
@@ -662,7 +652,7 @@ pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i
                 AddShortTermToList(pCtx, false, ec_slot);
             } else {
                 WelsLog(
-                    &(*pCtx).sLogCtx,
+                    (*pCtx).sLogCtx,
                     WELS_LOG_ERROR,
                     "WelsInitRefList()::PrefetchPic for EC errors.",
                 );
@@ -692,7 +682,7 @@ pub fn MMCOProcess(
         MMCO_SHORT2UNUSED => {
             if WelsDelShortFromListSetUnref(pCtx, bTmpRefSet, iShortFrameNum).is_none() {
                 WelsLog(
-                    &(*pCtx).sLogCtx,
+                    (*pCtx).sLogCtx,
                     WELS_LOG_WARNING,
                     "MMCO_SHORT2UNUSED: delete an empty entry from short term list",
                 );
@@ -701,7 +691,7 @@ pub fn MMCOProcess(
         MMCO_LONG2UNUSED => {
             if WelsDelLongFromListSetUnref(pCtx, bTmpRefSet, uiLongTermPicNum).is_none() {
                 WelsLog(
-                    &(*pCtx).sLogCtx,
+                    (*pCtx).sLogCtx,
                     WELS_LOG_WARNING,
                     "MMCO_LONG2UNUSED: delete an empty entry from long term list",
                 );
@@ -713,7 +703,7 @@ pub fn MMCOProcess(
             }
             if WelsDelShortFromList(pCtx, bTmpRefSet, iShortFrameNum).is_none() {
                 WelsLog(
-                    &(*pCtx).sLogCtx,
+                    (*pCtx).sLogCtx,
                     WELS_LOG_WARNING,
                     "MMCO_LONG2LONG: delete an empty entry from short term list",
                 );
@@ -721,6 +711,14 @@ pub fn MMCOProcess(
                 WelsDelLongFromListSetUnref(pCtx, bTmpRefSet, iLongTermFrameIdx as u32);
                 (*pCtx).bCurAuContainLtrMarkSeFlag = true;
                 (*pCtx).iFrameNumOfAuMarkedLtr = iShortFrameNum;
+                WelsLog(
+                    (*pCtx).sLogCtx,
+                    WELS_LOG_INFO,
+                    &format!(
+                        "ex_mark_avc():::MMCO_SHORT2LONG:::LTR marking....iFrameNum: {}",
+                        (*pCtx).iFrameNumOfAuMarkedLtr
+                    ),
+                );
                 MarkAsLongTerm(pCtx, bTmpRefSet, iShortFrameNum, iLongTermFrameIdx, uiLongTermPicNum);
             }
         }
@@ -760,6 +758,14 @@ pub fn MMCOProcess(
             }
             (*pCtx).bCurAuContainLtrMarkSeFlag = true;
             (*pCtx).iFrameNumOfAuMarkedLtr = (*pCtx).iFrameNum;
+            WelsLog(
+                (*pCtx).sLogCtx,
+                WELS_LOG_INFO,
+                &format!(
+                    "ex_mark_avc():::MMCO_LONG:::LTR marking....iFrameNum: {}",
+                    (*pCtx).iFrameNum
+                ),
+            );
             iRet = AddLongTermToList(
                 pCtx,
                 bTmpRefSet,
@@ -1050,9 +1056,13 @@ pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
                                 && (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId != iSpsId
                             {
                                 WelsLog(
-                                    &(*pCtx).sLogCtx,
+                                    (*pCtx).sLogCtx,
                                     WELS_LOG_WARNING,
-                                    "WelsReorderRefList()::::BASE LAYER SPS mismatch",
+                                    &format!(
+                                        "WelsReorderRefList()::::BASE LAYER::::iSpsId:{}, ref_sps_id:{}",
+                                        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId,
+                                        iSpsId
+                                    ),
                                 );
                                 (*pCtx).iErrorCode = dsNoParamSets;
                                 return ERR_INFO_REFERENCE_PIC_LOST;
@@ -1074,9 +1084,13 @@ pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
                                 && (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId != iSpsId
                             {
                                 WelsLog(
-                                    &(*pCtx).sLogCtx,
+                                    (*pCtx).sLogCtx,
                                     WELS_LOG_WARNING,
-                                    "WelsReorderRefList()::::BASE LAYER SPS mismatch",
+                                    &format!(
+                                        "WelsReorderRefList()::::BASE LAYER::::iSpsId:{}, ref_sps_id:{}",
+                                        (*pCurDqLayer).sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId,
+                                        iSpsId
+                                    ),
                                 );
                                 (*pCtx).iErrorCode = dsNoParamSets;
                                 return ERR_INFO_REFERENCE_PIC_LOST;
