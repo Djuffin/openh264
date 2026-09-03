@@ -422,10 +422,19 @@ fi
 #
 # A failure at ANY other configuration, or in `st`/`def`, is real, in either
 # profile: stop, revert, investigate.
+#
+# **F334 (P10.4) corrects who is racing.** This block and F3's own write-up both
+# read as though `rust_enc` produces the wrong bitstream. Measured on a screen
+# `sm=3 t=4` row — 100 solo runs of each binary alternating in one loop — it is the
+# other way round: `rust_enc` gave **100 identical** outputs and `cxx_enc` gave
+# **12 distinct** ones, the port's single output being the reference's own 88-run
+# majority. So a retry works because the *reference* re-encodes correctly, and a
+# byte difference at this signature is not evidence about the port at all. The
+# retry rule is unchanged; only its explanation is.
 # ---------------------------------------------------------------------------
 sweep_gate() {  # $1 = profile
   local prof=$1 log="$LOGS/sweep_$1.log" rc t0 t1
-  hdr "diffharness sweep st mt def sl ltr ps dl bg ($prof)"
+  hdr "diffharness sweep st mt def sl ltr ps dl bg scc(gate) ($prof)"
   if ! RUST_ENC_PROFILE="$prof" bash "$DIFF/build.sh" > "$LOGS/build_$prof.log" 2>&1; then
     fail "sweep ($prof): harness build failed — see $LOGS/build_$prof.log"
     return
@@ -450,7 +459,35 @@ sweep_gate() {  # $1 = profile
   # wrong since `dl` landed: the list has measured **535** at every commit since,
   # which is the number the findings file quotes throughout. Corrected here by
   # running the list and reading the tally rather than by re-adding the presets.
-  RUST_ENC_PROFILE="$prof" bash "$DIFF/sweep.sh" st mt def sl ltr ps dl bg 2>&1 | tee "$log" | tail -20
+  #
+  # **`scc` joined in Phase 10 session P10.4 (D-scc-17)** — the last axis the
+  # reference accepts that had no gate at all. `iUsageType` was pinned
+  # `CAMERA_VIDEO_REAL_TIME` in both drivers until P10.1 added the `usage`
+  # argument, so the whole screen family — the three video-processing plugins
+  # (`METHOD_SCROLL_DETECTION`, `METHOD_SCENE_CHANGE_DETECTION_SCREEN`,
+  # `METHOD_COMPLEXITY_ANALYSIS_SCREEN`), the two SCD P-skips, the static and
+  # scrolled motion searches, the cross and feature searches, and the scene-LTR
+  # marking — had no byte referee in any gate, in any phase. Until P10.3 landed
+  # the dispatch block every row of it FAILED, which is why it sat outside this
+  # list while it existed. 583 -> 691 configurations per profile.
+  #
+  # **`SCC_TIER=gate` (108 rows), not the whole 148 — and the reason is F334, not
+  # the clock.** D-scc-17 made the tier a function of wall time: at most three
+  # minutes per profile buys the full preset. Time was never the constraint —
+  # measured at `26f56ece`, all 148 rows cost **51s debug / 27s release** (the
+  # `gate` tier costs 39s/20s). What decided it was the calibration run: promoting
+  # all 148 turned the family gate red in BOTH profiles, at a different row each
+  # time, and both were `sm=3 t=4`. That is F3's `SM_SIZELIMITED_SLICE` +
+  # multithreading race — but measured properly it is a race in the **C++
+  # reference**, not in the port, and screen usage widens its window by about two
+  # orders of magnitude. 100 alternating solo runs of one such row gave `rust_enc`
+  # 100 identical bitstreams and `cxx_enc` **12 distinct ones**, the port's single
+  # output being the reference's own 88-run majority (F334). Every family run would
+  # go red on a reference misencode, so the gate does not sample those 40 rows —
+  # the same call `abi_harness/run.sh` already makes ("a gate is not the place to
+  # sample a known flake"). They stay in `sweep.sh scc`/`all` under the F3 retry
+  # rule, which is where the phase exit runs them.
+  SCC_TIER=gate RUST_ENC_PROFILE="$prof" bash "$DIFF/sweep.sh" st mt def sl ltr ps dl bg scc 2>&1 | tee "$log" | tail -20
   rc=${PIPESTATUS[0]}
   t1=$(date +%s)
   times > "$LOGS/.times"; local c1; c1=$(cpu_of "$LOGS/.times")   # F170

@@ -178,6 +178,21 @@ standing defect class in this port, not an incident.
 
 **Status: open, unfixed, and it makes one gate unreliable.** Found during T5b.
 
+> **2026-09-02 (P10.4.E1, F334) — the racing side is the C++ reference, not the
+> port.** Everything below was observed through `compare.sh`, which reports a byte
+> difference without saying which side moved, and the wording that grew around it
+> ("a zero-byte output while `rust_enc` still exits 0") assumed the port. Running
+> the two drivers **solo**, alternating in one loop, on a screen `sm=3 t=4` row:
+> `rust_enc` gave **100 identical** bitstreams in 100 runs and `cxx_enc` gave
+> **12 distinct** ones, the port's single output being the reference's own 88-run
+> majority. The retry rule below is unchanged and correct — it works because the
+> *reference* re-encodes correctly on the next run. What changes is what a hit
+> means: at this signature a byte difference is not evidence about the port.
+> `SCREEN_CONTENT_REAL_TIME` widens the window by roughly two orders of magnitude
+> (12/100 there against 0/40 on the camera version of the same row), which is why
+> `gates.sh` runs `SCC_TIER=gate` and leaves those 40 rows to `sweep.sh all`.
+> See `phase10_findings.md` F334 for the full tables.
+
 Roughly 1 in 400–1000 encodes of a `iMultipleThreadIdc=4` + `SM_SIZELIMITED_SLICE`
 configuration produces the wrong bitstream. Two failure shapes were seen:
 
