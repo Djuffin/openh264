@@ -1744,6 +1744,11 @@ pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
         pCtx.pIdctResAddPredFunc8x8 = Some(crate::decoder::decode_mb_aux::idct_res_add_pred8x8);
         pCtx.pIdctFourResAddPredFunc = Some(crate::decoder::decode_mb_aux::idct_four_res_add_pred);
 
+        #[cfg(target_arch = "x86_64")]
+        if (cpu_flag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+            pCtx.pIdctResAddPredFunc = Some(crate::simd::x86_64::dct::idct_res_add_pred_sse2);
+        }
+
         // 4. Intra Prediction
         pCtx.pGetI4x4LumaPredFunc = [
             Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_v),

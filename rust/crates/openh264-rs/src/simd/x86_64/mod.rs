@@ -2,3 +2,5 @@
 pub mod sad;
 pub mod satd;
 pub mod mc;
+pub mod dct;
+pub mod quant;

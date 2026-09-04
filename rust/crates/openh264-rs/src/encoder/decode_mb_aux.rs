@@ -98,6 +98,11 @@ pub fn dequant_four_4x4(res: &mut [i16; 64], mf: &[u16; 8]) {
 ///
 /// C++: `WelsIDctRecI16x16Dc_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_rec_i16x16_dc(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc: &[i16; 16]) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::dct::idct_rec_i16x16_dc_sse2(rec, pred, dc);
+        return;
+    }
     for i in 0..16usize {
         let r: &mut [u8; 16] = rec.row_mut(i as isize, 0, 16).try_into().unwrap();
         let p: &[u8; 16] = pred.row(i as isize, 0, 16).try_into().unwrap();
@@ -118,6 +123,11 @@ pub fn idct_rec_i16x16_dc(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, 
 ///
 /// C++: `WelsIDctT4Rec_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::dct::idct_t4_rec_sse2(rec, pred, dct);
+        return;
+    }
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
         let p: &[u8; 4] = pred.row(dy as isize, 0, 4).try_into().unwrap();
@@ -135,6 +145,11 @@ pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[
 /// arithmetic, one cursor: the sample is read where [`idct_t4_rec`] reads
 /// `pred`, and written where it writes `rec`.
 pub fn idct_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::dct::idct_t4_rec_in_place_sse2(rec, dct);
+        return;
+    }
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
         let out: &mut [u8; 4] = rec.row_mut(dy as isize, 0, 4).try_into().unwrap();
@@ -186,6 +201,11 @@ fn idct_t4_residual(dct: &[i16; 16]) -> [[i32; 4]; 4] {
 ///
 /// C++: `WelsIDctFourT4Rec_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 64]) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::dct::idct_four_t4_rec_sse2(rec, pred, dct);
+        return;
+    }
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
@@ -195,6 +215,11 @@ pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc
 
 /// [`idct_t4_rec_in_place`] over the four 4x4 blocks of one 8x8 quadrant.
 pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::dct::idct_four_t4_rec_in_place_sse2(rec, dct);
+        return;
+    }
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
@@ -226,6 +251,11 @@ pub fn idct_t4_rec_to_view(
     pred_stride: usize,
     dct: &[i16; 16],
 ) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::dct::idct_t4_rec_to_view_sse2(rec, pred, pred_stride, dct);
+        return;
+    }
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
         let p: &[u8; 4] = pred[dy * pred_stride..][..4].try_into().unwrap();
@@ -244,6 +274,11 @@ pub fn idct_four_t4_rec_to_view(
     pred_stride: usize,
     dct: &[i16; 64],
 ) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::dct::idct_four_t4_rec_to_view_sse2(rec, pred, pred_stride, dct);
+        return;
+    }
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
@@ -259,6 +294,11 @@ pub fn idct_rec_i16x16_dc_to_view(
     pred_stride: usize,
     dc: &[i16; 16],
 ) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::dct::idct_rec_i16x16_dc_to_view_sse2(rec, pred, pred_stride, dc);
+        return;
+    }
     for i in 0..16usize {
         let p: &[u8; 16] = pred[i * pred_stride..][..16].try_into().unwrap();
         let mut out = [0u8; 16];
@@ -275,6 +315,11 @@ pub fn idct_rec_i16x16_dc_to_view(
 /// rows, which `RecCursor`'s by-value `row`/`write_row` pair does without ever
 /// naming a `&mut [u8]`.
 pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::dct::idct_t4_rec_in_place_view_sse2(rec, dct);
+        return;
+    }
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
         let cur = rec.row::<4>(dy as isize, 0);
@@ -288,6 +333,11 @@ pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
 
 /// [`idct_t4_rec_in_place_view`] over the four 4x4 blocks of one 8x8 quadrant.
 pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::dct::idct_four_t4_rec_in_place_view_sse2(rec, dct);
+        return;
+    }
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
@@ -302,6 +352,11 @@ pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
 /// `OutputPMbWithoutConstructCsRsNoCopy` passes `pDecY` as both `pDst` and
 /// `pPred`. One cursor, one stride, no pair.
 pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::dct::idct_t4_rec_on_mb_in_place_view_sse2(rec, dct);
+        return;
+    }
     const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
     for (k, &(dx, dy)) in QUADS.iter().enumerate() {
         let sub: &[i16; 64] = (&dct[k << 6..][..64]).try_into().unwrap();
@@ -388,12 +443,19 @@ pub fn dequant_ihadamard_2x2_dc(dct: &mut [i16; 4], mf: u16) {
 /// The C++'s three `pfIDct*` slots are not carried by `SWelsFuncPtrList` (see
 /// `abi_guard.rs`), so nothing is installed for them: the port calls those kernels
 /// by name.
-pub fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
+pub fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
     let fl = &mut *pFuncList;
 
     fl.pfDequantization4x4 = dequant_4x4;
     fl.pfDequantizationFour4x4 = dequant_four_4x4;
     fl.pfDequantizationIHadamard4x4 = dequant_ihadamard_4x4;
+
+    #[cfg(target_arch = "x86_64")]
+    if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+        fl.pfDequantization4x4 = crate::simd::x86_64::quant::dequant_4x4_sse2;
+        fl.pfDequantizationFour4x4 = crate::simd::x86_64::quant::dequant_four_4x4_sse2;
+        fl.pfDequantizationIHadamard4x4 = crate::simd::x86_64::quant::dequant_ihadamard_4x4_sse2;
+    }
 }
 
 #[cfg(test)]
