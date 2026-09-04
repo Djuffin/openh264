@@ -314,11 +314,7 @@ pub fn pixel_avg<A: RefSamples, B: RefSamples>(
     width: usize,
     height: usize,
 ) {
-    if crate::simd::has_simd() {
-        kernels::mc::pixel_avg(dst, a, b, width, height);
-        return;
-    }
-    pixel_avg_c(dst, a, b, width, height);
+    kernels::mc::pixel_avg(dst, a, b, width, height)
 }
 
 /// C++: `McHorVer20_c` — the horizontal half-pel filter, `(2, 0)` in quarter-pel.
@@ -348,11 +344,7 @@ pub fn mc_hor_ver20<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    if crate::simd::has_simd() {
-        kernels::mc::mc_hor_ver20(src, dst, width, height);
-        return;
-    }
-    mc_hor_ver20_c(src, dst, width, height);
+    kernels::mc::mc_hor_ver20(src, dst, width, height)
 }
 
 /// C++: `McHorVer02_c` — the vertical half-pel filter, `(0, 2)` in quarter-pel.
@@ -398,11 +390,7 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    if crate::simd::has_simd() {
-        kernels::mc::mc_hor_ver02(src, dst, width, height);
-        return;
-    }
-    mc_hor_ver02_c(src, dst, width, height);
+    kernels::mc::mc_hor_ver02(src, dst, width, height)
 }
 
 /// C++: `McHorVer22_c` — the centre half-pel filter, `(2, 2)` in quarter-pel:
@@ -454,11 +442,7 @@ pub fn mc_hor_ver22<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    if crate::simd::has_simd() {
-        kernels::mc::mc_hor_ver22(src, dst, width, height);
-        return;
-    }
-    mc_hor_ver22_c(src, dst, width, height);
+    kernels::mc::mc_hor_ver22(src, dst, width, height)
 }
 
 /// A `16`-stride scratch surface for the quarter-pel kernels — the C++
@@ -838,11 +822,7 @@ pub fn mc_luma<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    if crate::simd::has_simd() {
-        kernels::mc::mc_luma(src, dst, mv_x, mv_y, width, height);
-        return;
-    }
-    mc_luma_c(src, dst, mv_x, mv_y, width, height);
+    kernels::mc::mc_luma(src, dst, mv_x, mv_y, width, height)
 }
 
 /// C++: `McChromaWithFragMv_c` — bilinear chroma interpolation at eighth-pel.
@@ -907,11 +887,7 @@ pub fn mc_chroma<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    if crate::simd::has_simd() {
-        kernels::mc::mc_chroma(src, dst, mv_x, mv_y, width, height);
-        return;
-    }
-    mc_chroma_c(src, dst, mv_x, mv_y, width, height);
+    kernels::mc::mc_chroma(src, dst, mv_x, mv_y, width, height)
 }
 
 // ============================================================================
@@ -1267,22 +1243,20 @@ fn block_span(stride: usize, width: usize, height: usize) -> usize {
 /// scalar or SSE2 for every motion-compensated block. This port does not: `md.rs:582`
 /// states it outright — "MC and the half-pel filters are called directly, not via
 /// `sMcFuncs`" — and `grep` for the six field names below finds no read anywhere
-/// outside this file. The live dispatch is the per-call `crate::simd::has_simd()` test
-/// in `mc_luma`/`mc_chroma`/`pixel_avg` and the half-pel filters (`:312`, `:347`,
-/// `:398`, `:455`, `:773`, `:843`).
+/// outside this file. `mc_luma`, `mc_chroma`, `pixel_avg` and the half-pel filters call
+/// `simd::kernels` directly, and which kernel set that names was decided at compile
+/// time.
 ///
-/// Two consequences, both real and neither fixed by editing this function:
-///
-/// - A host that restricts `uiCpuFlag` to force scalar MC does not get it. The slots
-///   go scalar; the code that runs consults `has_simd()`, which answers from the
-///   process-wide probe (`simd/mod.rs`), not from this argument.
-/// - The `init_mc_func_cpu_flags` test below is a faithful test of *this function* and
-///   of nothing downstream of it. It is not evidence that MC dispatch is gated.
+/// The consequence, unchanged by editing this function: **a caller that restricts
+/// `uiCpuFlag` to force scalar MC does not get it.** The slots go scalar; the code that
+/// runs is whichever set the build selected. `--features scalar` is what forces scalar
+/// MC, and it forces it everywhere at once. So `init_mc_func_cpu_flags` below is a
+/// faithful test of *this function* and of nothing downstream of it — not evidence that
+/// MC dispatch is gated by the argument.
 ///
 /// The table is still filled, and the fields still exist (`decoder_context.rs:1281`,
 /// `encoder/wels_func_ptr_def.rs:327`), because the struct is part of the ported
-/// context layout. Closing the gap means routing MC back through the table, or
-/// threading the context's flag into the direct calls — one mechanism instead of two.
+/// context layout. Closing the gap means routing MC back through the table.
 pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, uiCpuFlag: u32) {
     *pMcFuncs = SMcFunc::default();
     if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {

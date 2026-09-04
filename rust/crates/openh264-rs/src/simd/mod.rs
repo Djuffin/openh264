@@ -14,53 +14,61 @@ pub mod x86_64;
 pub mod wide;
 
 /// The scalar forwards, compiled only where they are what [`kernels`] names.
-#[cfg(not(any(target_arch = "x86_64", feature = "wide")))]
+#[cfg(any(feature = "scalar", not(any(target_arch = "x86_64", feature = "wide"))))]
 pub mod scalar;
 
-/// **The kernel set the dispatch sites call.** Every `has_simd()` arm and every
+/// **The kernel set, and the whole of the dispatch.** Every direct call site and every
 /// `WELS_CPU_SSE2` table install names its kernel `kernels::<family>::<kernel>`, and
 /// this alias decides what that resolves to. Each dispatch file imports it once at
 /// module level rather than spelling the path per call, because a kernel shares its
 /// name with the scalar it was ported from — `pixel_avg` is both — and the module
 /// qualifier is what tells them apart.
 ///
-/// **The alias is total, and that is the point.** Three arms, and every target lands
-/// on exactly one:
+/// **The alias is total, and it is the selection.** Every build lands on exactly one
+/// arm, and there is no runtime test in front of it:
 ///
 /// | build | resolves to | what runs |
 /// |---|---|---|
 /// | x86_64, default | [`x86_64`] | `core::arch` intrinsics |
-/// | any target, `--features wide` | [`wide`] | portable `wide` lanes |
-/// | neither | [`scalar`] | forwards to the scalar body |
+/// | `--features wide` | [`wide`] | portable `wide` lanes — NEON on aarch64 |
+/// | `--features scalar` | [`scalar`] | forwards to the scalar body |
+/// | no kernels for this target | [`scalar`] | likewise |
 ///
-/// The third arm exists so the sites need no `#[cfg]` of their own. It is never
-/// *executed* — [`has_simd`] is false wherever it is selected, so each site takes its
-/// scalar arm before reaching the alias — but it has to *resolve*, and 34 attributes
-/// saying so at the call sites is the alternative.
+/// `scalar` wins over `wide`, which wins over the default, so the two feature flags
+/// compose rather than conflict.
+///
+/// **This is how the reference does it too.** Upstream dispatches every kernel through
+/// its `pfXxx` tables under `#if defined(X86_ASM)`, has no environment switch anywhere
+/// in `codec/`, and gets a scalar build from `USE_ASM=No` at the Makefile.
+/// `--features scalar` is that flag. Selecting a kernel set is a build-time question,
+/// asked once here, and the sites carry no `#[cfg]` and no branch.
 ///
 /// The three modules export the same entry points with the same signatures, which
 /// `tests::the_kernel_sets_expose_the_same_entry_points` holds; the sites therefore do
 /// not change when the selection does, only this block does. [`x86_64`] and [`wide`]
 /// are both compiled whenever they can be, which is what lets
 /// `benches/kernel_bench.rs` time the implementations of one kernel in one process.
-#[cfg(all(target_arch = "x86_64", not(feature = "wide")))]
+#[cfg(all(target_arch = "x86_64", not(feature = "wide"), not(feature = "scalar")))]
 pub use x86_64 as kernels;
-#[cfg(feature = "wide")]
+#[cfg(all(feature = "wide", not(feature = "scalar")))]
 pub use wide as kernels;
-#[cfg(not(any(target_arch = "x86_64", feature = "wide")))]
+#[cfg(any(feature = "scalar", not(any(target_arch = "x86_64", feature = "wide"))))]
 pub use scalar as kernels;
 
 use crate::common::cpu_core::*;
 
 /// Detects available CPU SIMD features, once per process.
 ///
-/// Respects `OPENH264_NO_SIMD=1`, which forces scalar fallbacks for differential
-/// verification. Latching makes it a process-start switch: every dispatch site reads
-/// this one word, so the switch is all-or-nothing rather than half-applied.
+/// **What selects scalar is the build, not the environment.** `OPENH264_NO_SIMD` used
+/// to clear this word, and it was removed with the per-call `has_simd()` sites it was
+/// the other half of: with the twenty-two direct sites now calling [`kernels`]
+/// unconditionally, clearing the word would take the `pfXxx` tables scalar and leave
+/// motion compensation, deblocking and the IDCTs on the vector kernels — a switch that
+/// half-applies is worse than none. `--features scalar` is the switch now, and it is
+/// the reference's own (`USE_ASM=No`); see [`arch_cpu_features`].
 ///
-/// Keep the body this small. [`has_simd`] is `#[inline(always)]` onto it from
-/// twenty-four per-call dispatch sites, and it only folds into them because the
-/// one-time initialiser lives out of line in [`latch_cpu_features`].
+/// Latching keeps this to one probe per process. Out-of-line initialiser so the
+/// steady-state read is an acquire load and a compare.
 #[inline]
 pub fn detect_cpu_features() -> u32 {
     // `Acquire` here pairs with the `Release` in `latch_cpu_features`, so a thread that
@@ -75,11 +83,7 @@ pub fn detect_cpu_features() -> u32 {
 #[cold]
 #[inline(never)]
 fn latch_cpu_features() -> u32 {
-    let flags = if std::env::var_os("OPENH264_NO_SIMD").is_some() {
-        0
-    } else {
-        arch_cpu_features()
-    };
+    let flags = arch_cpu_features();
     // Racing callers compute the same word from the same inputs, so both stores are
     // idempotent and neither needs a compare-exchange. The word goes first and the flag
     // second, under `Release`, so no reader can see the flag without the word.
@@ -92,6 +96,13 @@ fn latch_cpu_features() -> u32 {
 /// instruction set, so those bits are unconditional.
 #[cfg(target_arch = "x86_64")]
 fn arch_cpu_features() -> u32 {
+    // `--features scalar` is this port's `USE_ASM=No`: `kernels` is the scalar set, so
+    // there is no vector kernel for any slot and no bit to report. The `pfXxx` tables
+    // then install the scalar arm directly rather than a forward to it.
+    if cfg!(feature = "scalar") {
+        return 0;
+    }
+
     let mut flags = WELS_CPU_MMX | WELS_CPU_MMXEXT | WELS_CPU_SSE | WELS_CPU_SSE2;
 
     if std::is_x86_feature_detected!("sse3") {
@@ -148,7 +159,7 @@ fn arch_cpu_features() -> u32 {
 /// `flags` is only `mut` where it is actually mutated (`lib.rs` denies `unused_mut`).
 #[cfg(not(target_arch = "x86_64"))]
 fn arch_cpu_features() -> u32 {
-    if cfg!(feature = "wide") { WELS_CPU_SSE2 } else { 0 }
+    if cfg!(all(feature = "wide", not(feature = "scalar"))) { WELS_CPU_SSE2 } else { 0 }
 }
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -161,25 +172,12 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 /// word would be masked out of a live flag as soon as `arch_cpu_features` grows to
 /// report cache-line size. A separate cell cannot collide with any future flag.
 ///
-/// `0` has to stay a legitimate answer, and is: `arch_cpu_features` returns it on every
-/// non-x86_64 target and under `OPENH264_NO_SIMD=1`.
+/// `0` has to stay a legitimate answer, and is: `arch_cpu_features` returns it under
+/// `--features scalar` and on every non-x86_64 target without `--features wide`.
 static CPU_FEATURES: AtomicU32 = AtomicU32::new(0);
 static CPU_FEATURES_READY: AtomicBool = AtomicBool::new(false);
 
-/// Whether this build has a vector kernel set that is enabled right now.
-///
-/// **Not "does this CPU have SSE2".** It reads the `WELS_CPU_SSE2` bit because that is
-/// the slot bit upstream's tables are keyed on (see [`arch_cpu_features`]), but the
-/// question every caller is asking is the portable one: on x86_64 the answer is the
-/// hardware's, off x86_64 it is `--features wide`'s, and under `OPENH264_NO_SIMD=1` it
-/// is `false` everywhere. [`has_avx2`] is the one probe that really is about an
-/// instruction set, and it is only consulted from x86 table arms.
-#[inline(always)]
-pub fn has_simd() -> bool {
-    (detect_cpu_features() & WELS_CPU_SSE2) != 0
-}
-
-/// Returns true if AVX2 is supported and not disabled by `OPENH264_NO_SIMD=1`.
+/// Returns true if this build has the AVX2 kernels and the CPU can run them.
 ///
 /// Unlike SSE2 this is not x86_64 baseline, so it is a real runtime question: the AVX2
 /// SAD kernels execute `vpsadbw` and fault on any pre-Haswell Intel or pre-Excavator
@@ -190,8 +188,10 @@ pub fn has_simd() -> bool {
 /// `-C target-feature=+avx2` applies to the whole crate, so LLVM would vectorise
 /// everything else with it too and the `cdylib` a C consumer `dlopen`s would fault on
 /// an older CPU. Per-function AVX2 codegen is `#[target_feature(enable = "avx2")]`,
-/// which `sad_16x_avx2` carries. On such a build this answers `true` without consulting
-/// `OPENH264_NO_SIMD`, which is consistent — that binary is AVX2 throughout.
+/// which `sad_16x_avx2` carries. On such a build this answers `true` on the `cfg!`
+/// alone, which is consistent — that binary is AVX2 throughout. Under `--features
+/// scalar` the feature word is `0`, so the `cfg!` is the only way it can be true; also
+/// consistent, since a `+avx2` build asked for AVX2 everywhere.
 #[inline(always)]
 pub fn has_avx2() -> bool {
     cfg!(target_feature = "avx2") || (detect_cpu_features() & WELS_CPU_AVX2) != 0

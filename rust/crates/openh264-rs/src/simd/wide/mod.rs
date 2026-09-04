@@ -6,9 +6,9 @@
 //! To measure one thing: what it costs, and what it buys, to write these kernels in
 //! safe, portable SIMD. Every file here is `#![forbid(unsafe_code)]`; the intrinsic
 //! set is `unsafe` at every load, store and `target_feature` boundary. The two are
-//! run against each other by `benches/kernel_bench.rs` (per kernel, three ways:
-//! scalar, intrinsics, wide) and by `benches/simd_vs_scalar_bench.rs` with
-//! `BENCH_WIDE_EXE` set (the whole encoder).
+//! run against each other by `benches/kernel_bench.rs`, which times all three in one
+//! process; whole-encoder numbers come from building `c_vs_rust_bench` once per
+//! feature, since the kernel set is chosen when the binary is built.
 //!
 //! # The rules the port follows, so the comparison measures the API and not the author
 //!

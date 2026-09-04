@@ -39,7 +39,7 @@ rust/
 │   ├── src/safe/                the safe vocabulary the codec is written in (see below)
 │   ├── tests/                   integration tests, incl. conformance and parity suites
 │   ├── benches/                 c_vs_rust_bench and decode_1080p_bench (both load the C++ .dylib),
-│   │                            simd_vs_scalar_bench (kernels on/off/wide) and kernel_bench (per kernel), Rust only
+│   │                            and kernel_bench (per kernel: scalar, intrinsics, wide), Rust only
 │   └── examples/portref.rs      the port's answer for one malformed-corpus entry
 └── tools/
     ├── gates.sh                 the gate battery: commit | family | session | full | exit
@@ -135,14 +135,17 @@ down: each is a parity port of the scalar beside it, checked against that scalar
 directly by a unit test — exhaustively where the input space allows it, and over
 the full `i16` range where it does not, because a kernel that agrees on small
 coefficients and diverges at the extremes would pass a sampled test and corrupt a
-real stream. `OPENH264_NO_SIMD=1` clears the feature word at its one latch, which
-turns off both halves of the dispatch (the `uiCpuFlag` that fills the `pfXxx`
-tables, and the `has_simd` the directly-dispatched kernels ask), so the whole tier
-is one switch and the suites run both ways:
+real stream. **Which kernel set a build has is a compile-time question**, exactly as
+it is upstream — `codec/` contains no environment switch, and a scalar reference is
+`USE_ASM=No` at the Makefile. `--features scalar` is that flag here: it points
+`simd::kernels` at the scalar forwards and clears the feature word, so the `pfXxx`
+tables install their scalar arm too. One flag, the whole tier, and the suite runs
+each way:
 
 ```bash
-cargo test --release                        # 657 pass
-OPENH264_NO_SIMD=1 cargo test --release     # the same 657, same bytes
+cargo test --release                      # 657 pass, on whatever kernels this target has
+cargo test --release --features scalar    # the same 657, same bytes, no kernels at all
+cargo test --release --features wide      # the same again, on the portable kernels
 ```
 
 A kernel that is written but never reached is the failure this arrangement is
@@ -162,8 +165,8 @@ must agree, or a dispatch site would compile on one target and not another.
 **The benches** double as referees: `c_vs_rust_bench` encodes every row through
 both libraries in one process and prints the SHA-1 of each stream next to the
 timing; a row that is not bit-identical is reported as such and fails the run.
-`simd_vs_scalar_bench` does the same for the SIMD switch and exits non-zero if any
-bitstream differs.
+Running it once per feature is how one kernel set is measured against another, and
+the SHA-1 column is what says the sets agree.
 
 **The gate battery** ties it together:
 
@@ -179,13 +182,20 @@ wrong by definition and is reverted, not explained.
 
 ## Performance
 
+A kernel set is chosen when the binary is built, so measuring one against another is
+building twice. `kernel_bench` is the per-kernel instrument and needs neither ffmpeg
+nor a reference build; `c_vs_rust_bench` is the whole-encoder one and needs both.
+
 ```bash
 cd rust/crates/openh264-rs
-cargo bench --bench simd_vs_scalar_bench      # needs ffmpeg; needs no reference build
+cargo bench --bench kernel_bench --features wide     # scalar, intrinsics and wide, one table
+cargo bench --bench c_vs_rust_bench                  # this target's kernels, against the C++
+cargo bench --bench c_vs_rust_bench --features scalar # the same rows with no kernels at all
 ```
 
 Single-threaded, one slice, best of two alternating passes, on a host reporting
-SSE2 through AVX2:
+SSE2 through AVX2 — the default build against the same build with `--features
+scalar`:
 
 | clip | scalar fps | SIMD fps | speedup |
 |---|---:|---:|---:|
@@ -197,8 +207,9 @@ SSE2 through AVX2:
 | 1280x720 720p mandelbrot | 119 | 183 | 1.55x |
 | | | geometric mean | **1.43x** |
 
-All six bitstreams hash identically with the kernels on and off; the bench fails
-if they do not.
+All six bitstreams hash identically across the two builds. That is checked, not
+assumed: every bench row prints its stream's SHA-1 beside the timing, and a set of
+kernels that changed the output would show up there rather than as a speedup.
 
 **The spread is the result, not noise.** SMPTE bars is flat colour fields, so most
 macroblocks resolve to skip or static and the time goes to mode decision and
@@ -208,8 +219,8 @@ every block, which is where the kernels are. 13% to 65% is the honest range for
 its content, not on the port.
 
 Two things the table does not say. It is single-threaded on purpose, to keep
-scheduling out of the measurement — `BENCH_THREADS=4` gives a smaller ratio,
-because threading recovers some of the same wall clock. And it is the encoder;
+scheduling out of the measurement — more threads give a smaller ratio, because
+threading recovers some of the same wall clock. And it is the encoder;
 the shared kernels in `src/common/` serve the decoder too, but the decode path
 has not been measured this way.
 
@@ -219,7 +230,7 @@ has not been measured this way.
 `src/simd/x86_64/`. Those kernels are `wide`-crate lane types throughout — no
 `core::arch`, every file `#![forbid(unsafe_code)]` — so unlike the intrinsics they
 are reachable on any target, and on aarch64 LLVM lowers their lanes to NEON. On
-On x86_64 they keep about 88% of what the intrinsics buy — 1.35x on the encoder
+x86_64 they keep about 88% of what the intrinsics buy — 1.35x on the encoder
 against the intrinsics' 1.42x, the gap being the SAD family, where the portable API
 has no `psadbw` and pays seven operations a row instead of two.
 
@@ -250,7 +261,8 @@ cargo bench --bench kernel_bench --features wide       # the per-kernel table ab
 ```
 
 Against the C++ reference rather than against itself, use `c_vs_rust_bench`, which
-needs the reference library built first.
+needs the reference library built first — once per feature for one kernel set
+against another, since a build has exactly one.
 
 ## The safety posture
 
