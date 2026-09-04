@@ -57,7 +57,7 @@ fn workspace_root() -> PathBuf {
 
 #[path = "../tests/common/mod.rs"]
 mod common;
-use common::Sha1Hasher;
+use common::{Sha1Hasher, dylib};
 
 fn compute_sha1(data: &[u8]) -> String {
     let mut hasher = Sha1Hasher::new();
@@ -148,9 +148,13 @@ struct CppLibrary {
 impl CppLibrary {
     pub fn load() -> Option<Self> {
         let root = workspace_root();
+        // The names the Windows builds produce: MSVC drops the prefix
+        // (`build/msvc-common.mk:42`), MinGW and Cygwin keep it (`Makefile:12`).
         let lib_paths = [
             root.join("libopenh264.so"),
             root.join("libopenh264.dylib"),
+            root.join("openh264.dll"),
+            root.join("libopenh264.dll"),
             PathBuf::from("/usr/local/lib/libopenh264.so"),
             PathBuf::from("/usr/lib/libopenh264.so"),
         ];
@@ -159,12 +163,11 @@ impl CppLibrary {
             if !path.exists() {
                 continue;
             }
-            let c_path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
             unsafe {
-                let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW);
+                let handle = dylib::open(path);
                 if !handle.is_null() {
-                    let create_sym = libc::dlsym(handle, b"WelsCreateSVCEncoder\0".as_ptr() as *const _);
-                    let destroy_sym = libc::dlsym(handle, b"WelsDestroySVCEncoder\0".as_ptr() as *const _);
+                    let create_sym = dylib::sym(handle, c"WelsCreateSVCEncoder");
+                    let destroy_sym = dylib::sym(handle, c"WelsDestroySVCEncoder");
                     if !create_sym.is_null() && !destroy_sym.is_null() {
                         return Some(Self {
                             _handle: handle,
