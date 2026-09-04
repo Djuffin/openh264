@@ -32,8 +32,12 @@ codec_unittest
 *.pdb
 *.map
 
-# Executables built by the MSVC project files
-bin
+# Executables built by the MSVC project files.
+# Anchored: unanchored `bin` matches any directory of that name at any depth, which
+# swallowed `rust/crates/openh264-rs/src/bin/` — Cargo's binary-target directory, and
+# so a Rust source tree nobody could see. `dump_yuv.rs` had rotted there against an
+# API change because nothing ever compiled it in CI or review.
+/bin
 
 # External source
 gtest
