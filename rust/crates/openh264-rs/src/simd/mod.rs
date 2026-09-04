@@ -14,30 +14,13 @@ use crate::common::cpu_core::*;
 
 /// Detects available CPU SIMD features, once per process.
 ///
-/// Respects the `OPENH264_NO_SIMD=1` environment variable to force scalar fallbacks
-/// for testing and differential verification.
+/// Respects `OPENH264_NO_SIMD=1`, which forces scalar fallbacks for differential
+/// verification. Latching makes it a process-start switch: every dispatch site reads
+/// this one word, so the switch is all-or-nothing rather than half-applied.
 ///
-/// **The answer is latched, and that is the point.** This used to re-read the
-/// environment on every call while [`has_sse2`] latched its own copy on the first,
-/// so the two could disagree for the rest of the process: a host that decoded one
-/// stream, then set `OPENH264_NO_SIMD=1` and opened a second decoder, got
-/// `uiCpuFlag == 0` in every table slot while the per-call `has_sse2()` sites kept
-/// returning `true` from the stale cache. The four-block residual path
-/// (`decode_slice.rs:913/931/1873/2030`, reached through `pIdctFourResAddPredFunc`)
-/// ran SSE2 while its single-block sibling ran scalar, on the same picture. Both
-/// mechanisms now read this one word, so the switch is all-or-nothing.
-///
-/// The cost of latching is that the variable is a process-start switch rather than
-/// a per-decoder one, which is what it already was in practice — nothing outside
-/// this module reads it, and the tables a decoder builds at init never rebuild.
-/// **The hot path is a load and a test, and it has to inline.** [`has_sse2`] is on
-/// twenty-four per-call dispatch sites (`common/mc.rs`, `common/deblocking_common.rs`,
-/// `encoder/decode_mb_aux.rs`, `decoder/decode_mb_aux.rs`), and it is `#[inline(always)]`
-/// onto *this* — so if this does not inline, every one of those is a real call. It did
-/// not: the one-time initialiser, `std::env::var_os` and all, used to sit in this body,
-/// which is exactly the bulk that makes LLVM decline. The initialiser is now
-/// [`latch_cpu_features`], `#[cold]` and `#[inline(never)]`, leaving this small enough
-/// to fold into its callers.
+/// Keep the body this small. [`has_sse2`] is `#[inline(always)]` onto it from
+/// twenty-four per-call dispatch sites, and it only folds into them because the
+/// one-time initialiser lives out of line in [`latch_cpu_features`].
 #[inline]
 pub fn detect_cpu_features() -> u32 {
     // `Acquire` here pairs with the `Release` in `latch_cpu_features`, so a thread that
@@ -109,19 +92,14 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// The process-wide feature word, and whether it has been computed yet.
 ///
-/// **Two cells, not a sentinel bit inside the word.** This used to mark the word as
-/// computed by setting bit 31, on the stated premise that no `WELS_CPU_*` flag used it.
-/// The premise was false: `WELS_CPU_CACHELINE_128` is `0x8000_0000`
-/// (`common/cpu_core.rs:49`), and upstream's `WelsCPUFeatureDetect` genuinely sets it —
-/// `codec/common/src/cpu.cpp:207` does `uiCPU |= WELS_CPU_CACHELINE_128` when CLFLUSH
-/// reports a 128-byte line. The read path masked that bit off unconditionally, so on the
-/// day `arch_cpu_features` learns to report cache-line size the flag would have read back
-/// as never-set for the life of the process, on hardware where it is set, with nothing to
-/// fail. A separate cell cannot collide with any flag, whichever bit a future one takes,
-/// so the whole class of bug is gone rather than moved to a different bit.
+/// **Two cells rather than a sentinel bit inside the word.** Every bit of the `u32` is
+/// spoken for — `WELS_CPU_CACHELINE_128` is `0x8000_0000` (`common/cpu_core.rs:49`) and
+/// upstream sets it for real (`codec/common/src/cpu.cpp:207`) — so a marker inside the
+/// word would be masked out of a live flag as soon as `arch_cpu_features` grows to
+/// report cache-line size. A separate cell cannot collide with any future flag.
 ///
-/// The flag needs `0` to remain a legitimate answer, which it is: `arch_cpu_features`
-/// returns `0` on every non-x86_64 target and under `OPENH264_NO_SIMD=1`.
+/// `0` has to stay a legitimate answer, and is: `arch_cpu_features` returns it on every
+/// non-x86_64 target and under `OPENH264_NO_SIMD=1`.
 static CPU_FEATURES: AtomicU32 = AtomicU32::new(0);
 static CPU_FEATURES_READY: AtomicBool = AtomicBool::new(false);
 
@@ -133,28 +111,17 @@ pub fn has_sse2() -> bool {
 
 /// Returns true if AVX2 is supported and not disabled by `OPENH264_NO_SIMD=1`.
 ///
-/// Unlike SSE2 this is not x86_64 baseline, so it is a real runtime question: the
-/// AVX2 SAD kernels execute `vpsadbw` and fault on any pre-Haswell Intel or
-/// pre-Excavator AMD part.
+/// Unlike SSE2 this is not x86_64 baseline, so it is a real runtime question: the AVX2
+/// SAD kernels execute `vpsadbw` and fault on any pre-Haswell Intel or pre-Excavator
+/// AMD part.
 ///
-/// # Why the `cfg!` is there and why it is not the whole answer
-///
-/// `cfg!(target_feature = "avx2")` is true only when the *crate* was compiled with
-/// `-C target-feature=+avx2` or `-C target-cpu=native`, which is not the default on any
-/// `x86_64-*` target — `rustc --print cfg` lists `sse`, `sse2`, `sse3`, `fxsr` and
-/// `cmpxchg16b`, and nothing more. When someone does build that way the probe folds to a
-/// constant and the branch disappears; otherwise this is the runtime test, unchanged.
-///
-/// It cannot replace the runtime test. Building with `+avx2` applies to the whole crate,
-/// not to the kernels — LLVM auto-vectorises everything else with it too — so the
-/// resulting `cdylib`, which is the drop-in a C consumer `dlopen`s, would fault on any
-/// pre-Haswell part. One binary, unknown CPU, is the shape of the problem
-/// `WelsCPUFeatureDetect` exists to solve upstream. Per-function AVX2 codegen is
-/// `#[target_feature(enable = "avx2")]`, which `sad_16x_avx2` already carries.
-///
-/// One consequence to know: on such a build this answers `true` without consulting
-/// `OPENH264_NO_SIMD`. That is consistent — a `+avx2` binary is AVX2 throughout, so the
-/// switch could not have made it scalar anyway.
+/// The `cfg!` folds the branch away for a build that already guarantees AVX2, and is
+/// false by default on every `x86_64-*` target. **It cannot replace the runtime test:**
+/// `-C target-feature=+avx2` applies to the whole crate, so LLVM would vectorise
+/// everything else with it too and the `cdylib` a C consumer `dlopen`s would fault on
+/// an older CPU. Per-function AVX2 codegen is `#[target_feature(enable = "avx2")]`,
+/// which `sad_16x_avx2` carries. On such a build this answers `true` without consulting
+/// `OPENH264_NO_SIMD`, which is consistent — that binary is AVX2 throughout.
 #[inline(always)]
 pub fn has_avx2() -> bool {
     cfg!(target_feature = "avx2") || (detect_cpu_features() & WELS_CPU_AVX2) != 0

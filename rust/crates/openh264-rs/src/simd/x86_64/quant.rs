@@ -585,16 +585,10 @@ mod tests {
     // ========================================================================
     // The two luma-DC Hadamard kernels.
     //
-    // Neither had a parity test before, which is how a "kernel" that was the scalar
-    // copied verbatim — not one `_mm_*` call in either — sat in the dispatch tables
-    // unnoticed (review §10). These are the real ports of `WelsHadamardT4Dc_sse2`
-    // (`codec/encoder/core/x86/dct.asm:78`) and `WelsDequantIHadamard4x4_sse2`
-    // (`codec/encoder/core/x86/quant.asm:332`), so they get the test first.
-    //
-    // Both sweep the **full `i16` input range**. That is not decoration: the ihadamard
+    // Both sweep the **full `i16` input range**, which is not decoration: the ihadamard
     // is `int16_t` end to end in the C++ and its overflow is observable output, so a
-    // kernel that widened anywhere would pass a small-coefficient sweep and diverge in
-    // a real stream. The `hadamard_t4_dc` clamp is only reachable from large inputs too.
+    // kernel that widened anywhere would pass a small-coefficient sweep and diverge on
+    // a real stream. `hadamard_t4_dc`'s clamp is only reachable from large inputs too.
     // ========================================================================
 
     fn lcg_full_i16(seed: &mut u64) -> i16 {

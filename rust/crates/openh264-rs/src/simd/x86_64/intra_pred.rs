@@ -4,17 +4,14 @@
 //! serving both the encoder candidate generator and the decoder in-place reconstructor.
 //!
 //! **`_sse2` in a name here means the body contains intrinsics**, directly or through
-//! one of the shared halves below. The predictors that vectorize nothing carry no
-//! suffix: the chroma V/H/DC pair, the 4x4 luma V/H/DC decoder predictors, and the
-//! 16x16 luma V/H pair and DC-128 that the `PredOut` collapse turned into plain row
-//! fills. They are not redundant — they are word-wide rewrites of their scalar twins,
-//! and the SSE2 arms of the init tables install them deliberately — but a name that
-//! says `_sse2` sends a reader looking for a kernel that is not there.
+//! one of the shared halves below; the predictors that vectorize nothing carry no
+//! suffix. Those are not redundant — they are word-wide rewrites of their scalar twins
+//! and the init tables install them deliberately — but a name that says `_sse2` sends a
+//! reader looking for a kernel that is not there.
 //!
-//! The rule is enforced by `sse2_suffix_means_the_body_has_intrinsics` at the bottom of
-//! this file, not left to review: it was stated here and broken six times by the very
-//! refactor that stated it, because collapsing the `enc_`/`dec_` pairs swapped
-//! `_mm_storeu_si128` for `copy_from_slice` and nothing noticed.
+//! `sse2_suffix_means_the_body_has_intrinsics` enforces the rule; it is easy to break
+//! by accident, since swapping an `_mm_storeu_si128` for a `copy_from_slice` empties a
+//! kernel without touching its name.
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
@@ -29,26 +26,22 @@ use crate::safe::plane::{PlaneCursorMut, RefSamples};
 // ============================================================================
 
 // ============================================================================
-// The enc/dec pairs, once (review §11)
+// The enc/dec pairs, once
 // ============================================================================
 
 /// **Where a predictor's rows go — the only thing that differed between the pairs.**
 ///
-/// Seven predictor families were written twice here, `enc_*` and `dec_*`, for 263 of
-/// this file's lines. The neighbour reads were already identical in substance on both
-/// sides (`RefSamples::at` and `row_n`, which `RecCursor` and `PlaneCursorMut` both
-/// implement) and so was every line of arithmetic; the pairs diverged only at the
-/// store — the encoder fills a packed candidate buffer at a fixed pitch, the decoder
-/// writes back through the same cursor it read from.
+/// The `enc_`/`dec_` pairs share their neighbour reads (`RefSamples::at` and `row_n`,
+/// which `RecCursor` and `PlaneCursorMut` both implement) and every line of arithmetic;
+/// they diverged only at the store — the encoder fills a packed candidate buffer at a
+/// fixed pitch, the decoder writes back through the same cursor it read from. So the
+/// bodies are generic over this trait and the entry points are three lines each. The
+/// stores are `copy_from_slice` over a fixed-size array, which is the same instruction
+/// as `_mm_storeu_si128` and one less `unsafe`.
 ///
-/// So the bodies are generic over this trait and the two entry points are three lines
-/// each. The stores are `copy_from_slice` over a fixed-size array rather than
-/// `_mm_storeu_si128`, which is the same instruction and one less `unsafe`.
-///
-/// The decoder side reads its neighbours and writes its rows through one cursor, so a
-/// body cannot hold `&S` and `&mut O` to it at once. Every collapsed body is therefore
-/// split the way the arithmetic already was: read and compute from `&S` first, then
-/// write. The two phases were already in that order in all fourteen originals.
+/// The decoder reads neighbours and writes rows through one cursor, so a body cannot
+/// hold `&S` and `&mut O` to it at once. Every collapsed body therefore reads and
+/// computes from `&S` first, then writes — the order the arithmetic was already in.
 trait PredOut {
     /// Writes `row` as row `dy` of the destination.
     fn put<const N: usize>(&mut self, dy: usize, row: &[u8; N]);
@@ -810,7 +803,7 @@ mod tests {
     }
 
     // ========================================================================
-    // The decoder-side predictors (review §14).
+    // The decoder-side predictors.
     //
     // The three tests above cover the twelve `enc_*` kernels — the encoder's packed
     // candidate buffers — and nothing covered the thirteen `dec_*` ones, which are the

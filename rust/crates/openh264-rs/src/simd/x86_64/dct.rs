@@ -185,25 +185,18 @@ unsafe fn widen_lo_i16_to_i32_sse2(v: __m128i) -> __m128i {
 ///
 /// # The vertical pass runs in `i32`, unlike upstream's asm
 ///
-/// The horizontal pass truncates to `i16` in both this and the scalar
-/// (`decoder/decode_mb_aux.rs:38-42` calls that truncation load-bearing, and it is —
-/// `iSrc` is an `int16_t[16]` in the C++), so `s0..s12` below span the full `i16`
-/// range and `s0 + s8` can overflow 16 bits. This pass used to run in `epi16` and did
-/// overflow: with `rs[0] = rs[8] = 20000` and a zero prediction, the scalar computes
-/// `t1 = 40000`, `>> 6 = 625`, `WelsClip1 → 255`, while the 16-bit lanes wrapped to
-/// `-25536`, `>> 6 = -399`, and `packus` saturated to `0`. Divergence was measured at
-/// 0/50000 blocks for `|coef| <= 4000`, 170/50000 at 5000 and 48132/50000 at 12000.
-/// Encoder round-trips never showed it — quantised coefficient sets stay consistent —
-/// but the decoder's come from the bitstream and need not.
+/// The horizontal pass truncates to `i16` in both this and the scalar — `iSrc` is an
+/// `int16_t[16]` in the C++ and the truncation is observable — so `s0..s12` span the
+/// full `i16` range and `s0 + s8` overflows 16 bits. In `epi16` lanes that wrapped
+/// where the scalar saturates; `idct_vertical_pass_does_not_wrap_at_16_bits` pins the
+/// case.
 ///
-/// Widening resolves that in favour of this port's own scalar, at the cost of a known
-/// divergence from `SSE2_IDCT_4x4P` (`codec/common/x86/dct.asm:450`), which is 16-bit
-/// (`paddw`/`psubw`) and has the same overflow. Note that upstream is not itself
-/// consistent here: its aarch64 kernel `IdctResAddPred_AArch64_neon`
-/// (`codec/decoder/core/arm64/block_add_aarch64_neon.S:70`) widens with `saddl`/`ssubl`
-/// and runs the column transform entirely on `.4s` lanes, matching its C scalar and
-/// this. So the choice is which of upstream's two answers to reproduce, and this port
-/// reproduces the one that agrees with its own scalar on every architecture.
+/// **This is a deliberate divergence from `SSE2_IDCT_4x4P`**
+/// (`codec/common/x86/dct.asm:450`), which is 16-bit and has the same overflow.
+/// Upstream is not consistent about it either: `IdctResAddPred_AArch64_neon`
+/// (`codec/decoder/core/arm64/block_add_aarch64_neon.S:70`) widens to `.4s` and agrees
+/// with its own C. Widening picks the answer that agrees with this port's scalar on
+/// every architecture.
 #[target_feature(enable = "sse2")]
 unsafe fn compute_idct_residuals_sse2(dct: &[i16; 16]) -> (__m128i, __m128i, __m128i, __m128i) {
     let s0 = widen_lo_i16_to_i32_sse2(idct_row_sse2(dct[0], dct[1], dct[2], dct[3]));
@@ -567,11 +560,10 @@ mod tests {
         ((*seed >> 32) & 0xFF) as u8
     }
 
-    /// Coefficients over the **full `i16` range**, which is the range the decoder
-    /// actually hands the IDCT: `rs` comes from the bitstream by way of dequantisation,
-    /// not from this port's own quantiser. This used to be capped at `|coef| <= 1000` —
-    /// a factor of five below where the 16-bit vertical pass began to diverge from the
-    /// scalar, so every assertion below passed while the kernel was wrong. See
+    /// Coefficients over the **full `i16` range**, which is what the decoder hands the
+    /// IDCT: `rs` comes from the bitstream by way of dequantisation, not from this
+    /// port's own quantiser. A narrower cap keeps the vertical pass inside the range
+    /// where 16- and 32-bit lanes agree, and passes on a kernel that is wrong — see
     /// `compute_idct_residuals_sse2`.
     fn lcg_i16(seed: &mut u64) -> i16 {
         *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -751,25 +743,18 @@ mod tests {
     }
 
     // ========================================================================
-    // The reconstruction-seam entry points (review §14).
+    // The reconstruction-seam entry points.
     //
-    // Nine of the fourteen public kernels in this file had no test of their own.
-    // They are not dead — `encoder/svc_encode_mb.rs:472/485/577` and
-    // `encoder/svc_encode_slice.rs:1581/1595/1648/1652/1656` reach them through the
-    // wrappers at `encoder/decode_mb_aux.rs:255..356`. What existed instead were the
-    // `*_matches_the_plane_cursor_form` tests over in `encoder/decode_mb_aux.rs`, and
-    // on x86_64 *both* of their sides dispatch into this file: they pin the
-    // `RecCursor`-vs-`PlaneCursorMut` equivalence, not SSE2 against scalar.
+    // Each runs an `_sse2` kernel against `idct_t4_rec_c` / `idct_t4_rec_in_place_c` /
+    // `idct_rec_i16x16_dc_c`, which cannot route back here. Note the
+    // `*_matches_the_plane_cursor_form` tests in `encoder/decode_mb_aux.rs` are *not*
+    // this: on x86_64 both of their sides dispatch into this file, so they pin the
+    // `RecCursor`-vs-`PlaneCursorMut` equivalence and not SSE2 against scalar.
     //
-    // So each test below runs an `_sse2` kernel against `idct_t4_rec_c` /
-    // `idct_t4_rec_in_place_c` / `idct_rec_i16x16_dc_c`, which cannot route back here.
-    // The multi-block forms are referenced against the scalar applied *per block* at
-    // the sub-offsets rather than against this file's own four-block loop, so a
-    // transposed `(dx, dy)` or a stride mix-up in the hand-written `off`/`advance`
-    // arithmetic (`:342`, `:400`) is a failure and not a shared assumption.
-    //
-    // The whole allocation is compared, never just the block: a write one row or one
-    // column out of place has to fail rather than pass silently.
+    // The multi-block forms are referenced against the scalar applied per block at the
+    // sub-offsets, not against this file's own four-block loop, so a transposed
+    // `(dx, dy)` in the hand-written `off`/`advance` arithmetic fails rather than being
+    // a shared assumption. Whole allocations are compared, never just the block.
     // ========================================================================
 
     /// Two planes of identical geometry filled with the same noise, padding included —
