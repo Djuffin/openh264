@@ -20,7 +20,7 @@
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
-use std::ffi::{CString, c_long, c_void};
+use std::ffi::{c_long, c_void};
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 #[path = "../tests/common/mod.rs"]
 #[allow(dead_code)]
 mod common;
-use common::Sha1Hasher;
+use common::{Sha1Hasher, dylib};
 
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
@@ -273,9 +273,13 @@ impl CppLibrary {
         if !root.join("res").exists() {
             root = PathBuf::from("../../");
         }
+        // The names the Windows builds produce: MSVC drops the prefix
+        // (`build/msvc-common.mk:42`), MinGW and Cygwin keep it (`Makefile:12`).
         let candidates = [
             root.join("libopenh264.dylib"),
             root.join("libopenh264.so"),
+            root.join("openh264.dll"),
+            root.join("libopenh264.dll"),
             PathBuf::from("/usr/local/lib/libopenh264.dylib"),
             PathBuf::from("/usr/local/lib/libopenh264.so"),
             PathBuf::from("/usr/lib/libopenh264.so"),
@@ -285,18 +289,17 @@ impl CppLibrary {
             if !path.exists() {
                 continue;
             }
-            let c_path = CString::new(path.to_str().unwrap()).unwrap();
             unsafe {
-                let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW);
+                let handle = dylib::open(path);
                 if handle.is_null() {
                     continue;
                 }
-                let create = libc::dlsym(handle, c"WelsCreateDecoder".as_ptr());
-                let destroy = libc::dlsym(handle, c"WelsDestroyDecoder".as_ptr());
+                let create = dylib::sym(handle, c"WelsCreateDecoder");
+                let destroy = dylib::sym(handle, c"WelsDestroyDecoder");
                 if create.is_null() || destroy.is_null() {
                     continue;
                 }
-                let detect = libc::dlsym(handle, c"WelsCPUFeatureDetect".as_ptr());
+                let detect = dylib::sym(handle, c"WelsCPUFeatureDetect");
                 let cpu_flags = (!detect.is_null()).then(|| {
                     let detect =
                         std::mem::transmute::<*mut c_void, CppCpuFeatureDetectFn>(detect);

@@ -849,12 +849,19 @@ fn check_table(stem: &str, actual: &str) {
             path.display()
         )
     });
-    if expected == actual {
+    // Compared per line, like the other two golden tables
+    // (`decoder_options_parity_test.rs:150`, `decoder_parseonly_parity_test.rs:206`).
+    // A whole-string `==` also compares the line terminators, which are not part of what
+    // this table records — it is error codes, frame counts and plane hashes. A checkout
+    // under `core.autocrlf=true` hands `read_to_string` a CRLF file for a golden written
+    // with LF, and all fifteen of these failed on Windows with an empty per-line diff,
+    // because the renderer below already splits on `lines()` and found nothing to show.
+    let (want, got): (Vec<&str>, Vec<&str>) = (expected.lines().collect(), actual.lines().collect());
+    if want == got {
         return;
     }
 
     let mut diff = String::new();
-    let (want, got): (Vec<&str>, Vec<&str>) = (expected.lines().collect(), actual.lines().collect());
     let mut shown = 0;
     for i in 0..want.len().max(got.len()) {
         let (w, g) = (want.get(i).copied(), got.get(i).copied());
