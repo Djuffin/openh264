@@ -659,6 +659,26 @@ pub fn WelsDctFourT4_c(
     dct_four_4x4(dct, pPixel1, pPixel2);
 }
 
+#[cfg(target_arch = "x86_64")]
+pub fn WelsDctT4_sse2(
+    pDct: &mut [i16],
+    pPixel1: &crate::encoder::rec_view::RecCursor<'_>,
+    pPixel2: &crate::encoder::rec_view::RecCursor<'_>,
+) {
+    let dct: &mut [i16; 16] = (&mut pDct[..16]).try_into().unwrap();
+    crate::simd::x86_64::dct::dct_4x4_sse2(dct, pPixel1, pPixel2);
+}
+
+#[cfg(target_arch = "x86_64")]
+pub fn WelsDctFourT4_sse2(
+    pDct: &mut [i16],
+    pPixel1: &crate::encoder::rec_view::RecCursor<'_>,
+    pPixel2: &crate::encoder::rec_view::RecCursor<'_>,
+) {
+    let dct: &mut [i16; 64] = (&mut pDct[..64]).try_into().unwrap();
+    crate::simd::x86_64::dct::dct_four_4x4_sse2(dct, pPixel1, pPixel2);
+}
+
 // ============================================================================
 // Forward Quantization Functions
 // ============================================================================
@@ -820,6 +840,17 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
     f.pfQuantizationFour4x4 = quant_four_4x4;
     f.pfQuantizationFour4x4Max = quant_four_4x4_max;
 
+    #[cfg(target_arch = "x86_64")]
+    if (uiCpuFlag & WELS_CPU_SSE2) != 0 {
+        f.pfDctT4 = WelsDctT4_sse2;
+        f.pfDctFourT4 = WelsDctFourT4_sse2;
+        f.pfTransformHadamard4x4Dc = crate::simd::x86_64::quant::hadamard_t4_dc_sse2;
+        f.pfGetNoneZeroCount = crate::simd::x86_64::quant::get_none_zero_count_sse2;
+        f.pfQuantization4x4 = crate::simd::x86_64::quant::quant_4x4_sse2;
+        f.pfQuantizationDc4x4 = crate::simd::x86_64::quant::quant_4x4_dc_sse2;
+        f.pfQuantizationFour4x4 = crate::simd::x86_64::quant::quant_four_4x4_sse2;
+        f.pfQuantizationFour4x4Max = crate::simd::x86_64::quant::quant_four_4x4_max_sse2;
+    }
 }
 
 // ============================================================================

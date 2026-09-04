@@ -150,13 +150,13 @@ fn main() {
 }
 
 unsafe fn hash_frame(info: &SBufferInfo, dst: [*mut u8; 3]) -> String {
-    let sys = info.UsrData.sSystemBuffer;
+    let sys = unsafe { info.UsrData.sSystemBuffer };
     let (w, h) = (sys.iWidth as usize, sys.iHeight as usize);
     let (sy, suv) = (sys.iStride[0] as usize, sys.iStride[1] as usize);
     let mut hasher = Sha1Hasher::new();
     let mut plane = |p: *mut u8, w: usize, h: usize, stride: usize| {
         for row in 0..h {
-            hasher.update(std::slice::from_raw_parts(p.add(row * stride), w));
+            hasher.update(unsafe { std::slice::from_raw_parts(p.add(row * stride), w) });
         }
     };
     plane(dst[0], w, h, sy);
