@@ -511,10 +511,14 @@ pub fn idct_rec_i16x16_dc_to_view_sse2(
 mod tests {
     use super::*;
     use crate::encoder::encode_mb_aux::{dct_4x4, dct_four_4x4};
+    // These MUST be the `_c` scalar kernels, not the same-named dispatchers:
+    // the dispatchers route to the very SSE2 kernels under test, which would
+    // make every assertion below a tautology.
     use crate::encoder::decode_mb_aux::{
-        idct_rec_i16x16_dc, idct_t4_rec, idct_t4_rec_in_place,
+        idct_rec_i16x16_dc_c as idct_rec_i16x16_dc, idct_t4_rec_c as idct_t4_rec,
+        idct_t4_rec_in_place_c as idct_t4_rec_in_place,
     };
-    use crate::decoder::decode_mb_aux::idct_res_add_pred;
+    use crate::decoder::decode_mb_aux::idct_res_add_pred_c as idct_res_add_pred;
     use crate::safe::plane::PaddedPlane;
 
     fn lcg(seed: &mut u64) -> u8 {

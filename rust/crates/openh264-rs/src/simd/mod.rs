@@ -21,37 +21,47 @@ pub fn detect_cpu_features() -> u32 {
         return 0;
     }
 
-    let mut flags = 0u32;
+    arch_cpu_features()
+}
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        // On x86_64, MMX, SSE, and SSE2 are part of the baseline x86_64 instruction set.
-        flags |= WELS_CPU_MMX | WELS_CPU_MMXEXT | WELS_CPU_SSE | WELS_CPU_SSE2;
+/// The x86_64 feature probe. MMX, SSE and SSE2 are part of the baseline x86_64
+/// instruction set, so those bits are unconditional.
+#[cfg(target_arch = "x86_64")]
+fn arch_cpu_features() -> u32 {
+    let mut flags = WELS_CPU_MMX | WELS_CPU_MMXEXT | WELS_CPU_SSE | WELS_CPU_SSE2;
 
-        if std::is_x86_feature_detected!("sse3") {
-            flags |= WELS_CPU_SSE3;
-        }
-        if std::is_x86_feature_detected!("ssse3") {
-            flags |= WELS_CPU_SSSE3;
-        }
-        if std::is_x86_feature_detected!("sse4.1") {
-            flags |= WELS_CPU_SSE41;
-        }
-        if std::is_x86_feature_detected!("sse4.2") {
-            flags |= WELS_CPU_SSE42;
-        }
-        if std::is_x86_feature_detected!("avx") {
-            flags |= WELS_CPU_AVX;
-        }
-        if std::is_x86_feature_detected!("avx2") {
-            flags |= WELS_CPU_AVX2;
-        }
-        if std::is_x86_feature_detected!("fma") {
-            flags |= WELS_CPU_FMA;
-        }
+    if std::is_x86_feature_detected!("sse3") {
+        flags |= WELS_CPU_SSE3;
+    }
+    if std::is_x86_feature_detected!("ssse3") {
+        flags |= WELS_CPU_SSSE3;
+    }
+    if std::is_x86_feature_detected!("sse4.1") {
+        flags |= WELS_CPU_SSE41;
+    }
+    if std::is_x86_feature_detected!("sse4.2") {
+        flags |= WELS_CPU_SSE42;
+    }
+    if std::is_x86_feature_detected!("avx") {
+        flags |= WELS_CPU_AVX;
+    }
+    if std::is_x86_feature_detected!("avx2") {
+        flags |= WELS_CPU_AVX2;
+    }
+    if std::is_x86_feature_detected!("fma") {
+        flags |= WELS_CPU_FMA;
     }
 
     flags
+}
+
+/// No SIMD kernels are translated for this architecture, so no feature bit is
+/// ever set and every dispatch site takes its scalar fallback. Split out per
+/// arch rather than `#[cfg]`-ing a block inside one function, so that `flags`
+/// is only `mut` where it is actually mutated (`lib.rs` denies `unused_mut`).
+#[cfg(not(target_arch = "x86_64"))]
+fn arch_cpu_features() -> u32 {
+    0
 }
 
 use std::sync::atomic::{AtomicU8, Ordering};

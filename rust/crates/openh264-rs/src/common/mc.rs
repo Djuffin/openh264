@@ -468,28 +468,28 @@ fn scratch() -> [u8; 256] {
 
 /// C++: `McHorVer01_c`.
 #[inline(never)]
-pub fn mc_hor_ver01<S: RefSamples + Copy>(
+pub fn mc_hor_ver01_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
     let mut tmp = scratch();
-    mc_hor_ver02(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    pixel_avg(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
+    mc_hor_ver02_c(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
+    pixel_avg_c(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
 }
 
 /// C++: `McHorVer03_c`.
 #[inline(never)]
-pub fn mc_hor_ver03<S: RefSamples + Copy>(
+pub fn mc_hor_ver03_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
     let mut tmp = scratch();
-    mc_hor_ver02(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    pixel_avg(
+    mc_hor_ver02_c(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
+    pixel_avg_c(
         dst,
         &src.advance(0, 1),
         &PlaneCursor::new(&tmp, 0, 16),
@@ -500,20 +500,20 @@ pub fn mc_hor_ver03<S: RefSamples + Copy>(
 
 /// C++: `McHorVer10_c`.
 #[inline(never)]
-pub fn mc_hor_ver10<S: RefSamples + Copy>(
+pub fn mc_hor_ver10_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
     let mut tmp = scratch();
-    mc_hor_ver20(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    pixel_avg(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
+    mc_hor_ver20_c(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
+    pixel_avg_c(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
 }
 
 /// C++: `McHorVer11_c`.
 #[inline(never)]
-pub fn mc_hor_ver11<S: RefSamples + Copy>(
+pub fn mc_hor_ver11_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -521,9 +521,9 @@ pub fn mc_hor_ver11<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ver = scratch();
-    mc_hor_ver20(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    mc_hor_ver02(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    pixel_avg(
+    mc_hor_ver20_c(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    mc_hor_ver02_c(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
+    pixel_avg_c(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ver, 0, 16),
@@ -534,7 +534,7 @@ pub fn mc_hor_ver11<S: RefSamples + Copy>(
 
 /// C++: `McHorVer12_c`.
 #[inline(never)]
-pub fn mc_hor_ver12<S: RefSamples + Copy>(
+pub fn mc_hor_ver12_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -542,9 +542,9 @@ pub fn mc_hor_ver12<S: RefSamples + Copy>(
 ) {
     let mut ver = scratch();
     let mut ctr = scratch();
-    mc_hor_ver02(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    mc_hor_ver22(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg(
+    mc_hor_ver02_c(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
+    mc_hor_ver22_c(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    pixel_avg_c(
         dst,
         &PlaneCursor::new(&ver, 0, 16),
         &PlaneCursor::new(&ctr, 0, 16),
@@ -555,7 +555,7 @@ pub fn mc_hor_ver12<S: RefSamples + Copy>(
 
 /// C++: `McHorVer13_c`.
 #[inline(never)]
-pub fn mc_hor_ver13<S: RefSamples + Copy>(
+pub fn mc_hor_ver13_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -563,14 +563,14 @@ pub fn mc_hor_ver13<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ver = scratch();
-    mc_hor_ver20(
+    mc_hor_ver20_c(
         &src.advance(0, 1),
         &mut PlaneCursorMut::new(&mut hor, 0, 16),
         width,
         height,
     );
-    mc_hor_ver02(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    pixel_avg(
+    mc_hor_ver02_c(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
+    pixel_avg_c(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ver, 0, 16),
@@ -581,7 +581,7 @@ pub fn mc_hor_ver13<S: RefSamples + Copy>(
 
 /// C++: `McHorVer21_c`.
 #[inline(never)]
-pub fn mc_hor_ver21<S: RefSamples + Copy>(
+pub fn mc_hor_ver21_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -589,9 +589,9 @@ pub fn mc_hor_ver21<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ctr = scratch();
-    mc_hor_ver20(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    mc_hor_ver22(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg(
+    mc_hor_ver20_c(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    mc_hor_ver22_c(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    pixel_avg_c(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ctr, 0, 16),
@@ -602,7 +602,7 @@ pub fn mc_hor_ver21<S: RefSamples + Copy>(
 
 /// C++: `McHorVer23_c`.
 #[inline(never)]
-pub fn mc_hor_ver23<S: RefSamples + Copy>(
+pub fn mc_hor_ver23_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -610,14 +610,14 @@ pub fn mc_hor_ver23<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ctr = scratch();
-    mc_hor_ver20(
+    mc_hor_ver20_c(
         &src.advance(0, 1),
         &mut PlaneCursorMut::new(&mut hor, 0, 16),
         width,
         height,
     );
-    mc_hor_ver22(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg(
+    mc_hor_ver22_c(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    pixel_avg_c(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ctr, 0, 16),
@@ -628,15 +628,15 @@ pub fn mc_hor_ver23<S: RefSamples + Copy>(
 
 /// C++: `McHorVer30_c`.
 #[inline(never)]
-pub fn mc_hor_ver30<S: RefSamples + Copy>(
+pub fn mc_hor_ver30_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
     let mut hor = scratch();
-    mc_hor_ver20(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    pixel_avg(
+    mc_hor_ver20_c(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    pixel_avg_c(
         dst,
         &src.advance(1, 0),
         &PlaneCursor::new(&hor, 0, 16),
@@ -647,7 +647,7 @@ pub fn mc_hor_ver30<S: RefSamples + Copy>(
 
 /// C++: `McHorVer31_c`.
 #[inline(never)]
-pub fn mc_hor_ver31<S: RefSamples + Copy>(
+pub fn mc_hor_ver31_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -655,14 +655,14 @@ pub fn mc_hor_ver31<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ver = scratch();
-    mc_hor_ver20(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    mc_hor_ver02(
+    mc_hor_ver20_c(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    mc_hor_ver02_c(
         &src.advance(1, 0),
         &mut PlaneCursorMut::new(&mut ver, 0, 16),
         width,
         height,
     );
-    pixel_avg(
+    pixel_avg_c(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ver, 0, 16),
@@ -673,7 +673,7 @@ pub fn mc_hor_ver31<S: RefSamples + Copy>(
 
 /// C++: `McHorVer32_c`.
 #[inline(never)]
-pub fn mc_hor_ver32<S: RefSamples + Copy>(
+pub fn mc_hor_ver32_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -681,14 +681,14 @@ pub fn mc_hor_ver32<S: RefSamples + Copy>(
 ) {
     let mut ver = scratch();
     let mut ctr = scratch();
-    mc_hor_ver02(
+    mc_hor_ver02_c(
         &src.advance(1, 0),
         &mut PlaneCursorMut::new(&mut ver, 0, 16),
         width,
         height,
     );
-    mc_hor_ver22(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg(
+    mc_hor_ver22_c(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    pixel_avg_c(
         dst,
         &PlaneCursor::new(&ver, 0, 16),
         &PlaneCursor::new(&ctr, 0, 16),
@@ -699,7 +699,7 @@ pub fn mc_hor_ver32<S: RefSamples + Copy>(
 
 /// C++: `McHorVer33_c`.
 #[inline(never)]
-pub fn mc_hor_ver33<S: RefSamples + Copy>(
+pub fn mc_hor_ver33_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -707,19 +707,19 @@ pub fn mc_hor_ver33<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ver = scratch();
-    mc_hor_ver20(
+    mc_hor_ver20_c(
         &src.advance(0, 1),
         &mut PlaneCursorMut::new(&mut hor, 0, 16),
         width,
         height,
     );
-    mc_hor_ver02(
+    mc_hor_ver02_c(
         &src.advance(1, 0),
         &mut PlaneCursorMut::new(&mut ver, 0, 16),
         width,
         height,
     );
-    pixel_avg(
+    pixel_avg_c(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ver, 0, 16),
@@ -742,21 +742,21 @@ pub fn mc_luma_c<S: RefSamples + Copy>(
 ) {
     match ((mv_x & 0x03) as u8, (mv_y & 0x03) as u8) {
         (0, 0) => mc_copy(src, dst, width, height),
-        (0, 1) => mc_hor_ver01(src, dst, width, height),
-        (0, 2) => mc_hor_ver02(src, dst, width, height),
-        (0, 3) => mc_hor_ver03(src, dst, width, height),
-        (1, 0) => mc_hor_ver10(src, dst, width, height),
-        (1, 1) => mc_hor_ver11(src, dst, width, height),
-        (1, 2) => mc_hor_ver12(src, dst, width, height),
-        (1, 3) => mc_hor_ver13(src, dst, width, height),
-        (2, 0) => mc_hor_ver20(src, dst, width, height),
-        (2, 1) => mc_hor_ver21(src, dst, width, height),
-        (2, 2) => mc_hor_ver22(src, dst, width, height),
-        (2, 3) => mc_hor_ver23(src, dst, width, height),
-        (3, 0) => mc_hor_ver30(src, dst, width, height),
-        (3, 1) => mc_hor_ver31(src, dst, width, height),
-        (3, 2) => mc_hor_ver32(src, dst, width, height),
-        _ => mc_hor_ver33(src, dst, width, height),
+        (0, 1) => mc_hor_ver01_c(src, dst, width, height),
+        (0, 2) => mc_hor_ver02_c(src, dst, width, height),
+        (0, 3) => mc_hor_ver03_c(src, dst, width, height),
+        (1, 0) => mc_hor_ver10_c(src, dst, width, height),
+        (1, 1) => mc_hor_ver11_c(src, dst, width, height),
+        (1, 2) => mc_hor_ver12_c(src, dst, width, height),
+        (1, 3) => mc_hor_ver13_c(src, dst, width, height),
+        (2, 0) => mc_hor_ver20_c(src, dst, width, height),
+        (2, 1) => mc_hor_ver21_c(src, dst, width, height),
+        (2, 2) => mc_hor_ver22_c(src, dst, width, height),
+        (2, 3) => mc_hor_ver23_c(src, dst, width, height),
+        (3, 0) => mc_hor_ver30_c(src, dst, width, height),
+        (3, 1) => mc_hor_ver31_c(src, dst, width, height),
+        (3, 2) => mc_hor_ver32_c(src, dst, width, height),
+        _ => mc_hor_ver33_c(src, dst, width, height),
     }
 }
 

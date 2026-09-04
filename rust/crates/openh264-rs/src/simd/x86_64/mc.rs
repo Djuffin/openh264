@@ -913,10 +913,13 @@ pub fn mc_luma_sse2<S: RefSamples + Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // These MUST be the `_c` scalar kernels, not the same-named dispatchers:
+    // the dispatchers route to the very SSE2 kernels under test, which would
+    // make every assertion below a tautology.
     use crate::common::mc::{
-        mc_chroma_with_frag_mv, mc_hor_ver02 as scalar_hor_ver02,
-        mc_hor_ver20 as scalar_hor_ver20, mc_hor_ver22 as scalar_hor_ver22,
-        mc_luma as scalar_luma, pixel_avg as scalar_pixel_avg,
+        mc_chroma_with_frag_mv, mc_hor_ver02_c as scalar_hor_ver02,
+        mc_hor_ver20_c as scalar_hor_ver20, mc_hor_ver22_c as scalar_hor_ver22,
+        mc_luma_c as scalar_luma, pixel_avg_c as scalar_pixel_avg,
     };
 
     const STRIDE: usize = 64;

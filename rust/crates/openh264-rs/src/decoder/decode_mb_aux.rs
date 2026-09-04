@@ -45,6 +45,13 @@ pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
         crate::simd::x86_64::dct::idct_res_add_pred_sse2(pred, rs);
         return;
     }
+    idct_res_add_pred_c(pred, rs);
+}
+
+/// The scalar body of [`idct_res_add_pred`], never dispatched. Kept separate so
+/// the SSE2 parity tests have a reference that is guaranteed not to route back
+/// into the kernel under test.
+pub fn idct_res_add_pred_c(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
     let mut src = [0i16; 16];
 
     for i in 0..4 {
