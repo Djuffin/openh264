@@ -12,7 +12,7 @@ use core::arch::x86_64::*;
 ///
 /// Matches C++ `SSE2_Quant8` in `codec/encoder/core/x86/quant.asm`.
 #[target_feature(enable = "sse2")]
-unsafe fn quant_8_sse2(v: __m128i, ff: __m128i, mf: __m128i) -> __m128i {
+unsafe fn quant_8(v: __m128i, ff: __m128i, mf: __m128i) -> __m128i {
     let zero = _mm_setzero_si128();
     let sign = _mm_cmpgt_epi16(zero, v); // 0xFFFF where v < 0, 0 where v >= 0
     let abs = _mm_sub_epi16(_mm_xor_si128(v, sign), sign);
@@ -24,7 +24,7 @@ unsafe fn quant_8_sse2(v: __m128i, ff: __m128i, mf: __m128i) -> __m128i {
 /// In-place dead-zone quantization of 8 consecutive 16-bit coefficients,
 /// returning both the signed quantized values and the un-signed magnitudes.
 #[target_feature(enable = "sse2")]
-unsafe fn quant_8_with_mag_sse2(v: __m128i, ff: __m128i, mf: __m128i) -> (__m128i, __m128i) {
+unsafe fn quant_8_with_mag(v: __m128i, ff: __m128i, mf: __m128i) -> (__m128i, __m128i) {
     let zero = _mm_setzero_si128();
     let sign = _mm_cmpgt_epi16(zero, v);
     let abs = _mm_sub_epi16(_mm_xor_si128(v, sign), sign);
@@ -36,7 +36,7 @@ unsafe fn quant_8_with_mag_sse2(v: __m128i, ff: __m128i, mf: __m128i) -> (__m128
 
 /// Horizontal maximum of 8 unsigned 16-bit values in an XMM register.
 #[target_feature(enable = "sse2")]
-unsafe fn hmax_u16_sse2(m: __m128i) -> i16 {
+unsafe fn hmax_u16(m: __m128i) -> i16 {
     let m1 = _mm_shuffle_epi32(m, 0b01_00_11_10);
     let m2 = _mm_max_epi16(m, m1);
     let m3 = _mm_shufflelo_epi16(m2, 0b01_00_11_10);
@@ -58,8 +58,8 @@ unsafe fn quant_4x4_sse2_impl(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8])
         let v0 = _mm_loadu_si128(dct.as_ptr() as *const __m128i);
         let v1 = _mm_loadu_si128(dct.as_ptr().add(8) as *const __m128i);
 
-        let q0 = quant_8_sse2(v0, vff, vmf);
-        let q1 = quant_8_sse2(v1, vff, vmf);
+        let q0 = quant_8(v0, vff, vmf);
+        let q1 = quant_8(v1, vff, vmf);
 
         _mm_storeu_si128(dct.as_mut_ptr() as *mut __m128i, q0);
         _mm_storeu_si128(dct.as_mut_ptr().add(8) as *mut __m128i, q1);
@@ -70,7 +70,7 @@ unsafe fn quant_4x4_sse2_impl(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8])
 ///
 /// C++: `WelsQuant4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn quant_4x4_sse2(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
+pub fn quant_4x4(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
     unsafe { quant_4x4_sse2_impl(dct, ff, mf) }
 }
 
@@ -83,8 +83,8 @@ unsafe fn quant_4x4_dc_sse2_impl(dct: &mut [i16; 16], ff: i16, mf: i16) {
         let v0 = _mm_loadu_si128(dct.as_ptr() as *const __m128i);
         let v1 = _mm_loadu_si128(dct.as_ptr().add(8) as *const __m128i);
 
-        let q0 = quant_8_sse2(v0, vff, vmf);
-        let q1 = quant_8_sse2(v1, vff, vmf);
+        let q0 = quant_8(v0, vff, vmf);
+        let q1 = quant_8(v1, vff, vmf);
 
         _mm_storeu_si128(dct.as_mut_ptr() as *mut __m128i, q0);
         _mm_storeu_si128(dct.as_mut_ptr().add(8) as *mut __m128i, q1);
@@ -95,7 +95,7 @@ unsafe fn quant_4x4_dc_sse2_impl(dct: &mut [i16; 16], ff: i16, mf: i16) {
 ///
 /// C++: `WelsQuant4x4Dc_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn quant_4x4_dc_sse2(dct: &mut [i16; 16], ff: i16, mf: i16) {
+pub fn quant_4x4_dc(dct: &mut [i16; 16], ff: i16, mf: i16) {
     unsafe { quant_4x4_dc_sse2_impl(dct, ff, mf) }
 }
 
@@ -107,7 +107,7 @@ unsafe fn quant_four_4x4_sse2_impl(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16
 
         for i in (0..64).step_by(8) {
             let v = _mm_loadu_si128(dct.as_ptr().add(i) as *const __m128i);
-            let q = quant_8_sse2(v, vff, vmf);
+            let q = quant_8(v, vff, vmf);
             _mm_storeu_si128(dct.as_mut_ptr().add(i) as *mut __m128i, q);
         }
     }
@@ -117,7 +117,7 @@ unsafe fn quant_four_4x4_sse2_impl(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16
 ///
 /// C++: `WelsQuantFour4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn quant_four_4x4_sse2(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
+pub fn quant_four_4x4(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
     unsafe { quant_four_4x4_sse2_impl(dct, ff, mf) }
 }
 
@@ -137,14 +137,14 @@ unsafe fn quant_four_4x4_max_sse2_impl(
             let v0 = _mm_loadu_si128(dct.as_ptr().add(off) as *const __m128i);
             let v1 = _mm_loadu_si128(dct.as_ptr().add(off + 8) as *const __m128i);
 
-            let (q0, mag0) = quant_8_with_mag_sse2(v0, vff, vmf);
-            let (q1, mag1) = quant_8_with_mag_sse2(v1, vff, vmf);
+            let (q0, mag0) = quant_8_with_mag(v0, vff, vmf);
+            let (q1, mag1) = quant_8_with_mag(v1, vff, vmf);
 
             _mm_storeu_si128(dct.as_mut_ptr().add(off) as *mut __m128i, q0);
             _mm_storeu_si128(dct.as_mut_ptr().add(off + 8) as *mut __m128i, q1);
 
             let m = _mm_max_epi16(mag0, mag1);
-            max[k] = hmax_u16_sse2(m);
+            max[k] = hmax_u16(m);
         }
     }
 }
@@ -153,7 +153,7 @@ unsafe fn quant_four_4x4_max_sse2_impl(
 ///
 /// C++: `WelsQuantFour4x4Max_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn quant_four_4x4_max_sse2(
+pub fn quant_four_4x4_max(
     dct: &mut [i16; 64],
     ff: &[i16; 8],
     mf: &[i16; 8],
@@ -182,7 +182,7 @@ unsafe fn dequant_4x4_sse2_impl(res: &mut [i16; 16], mf: &[u16; 8]) {
 ///
 /// C++: `WelsDequant4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn dequant_4x4_sse2(res: &mut [i16; 16], mf: &[u16; 8]) {
+pub fn dequant_4x4(res: &mut [i16; 16], mf: &[u16; 8]) {
     unsafe { dequant_4x4_sse2_impl(res, mf) }
 }
 
@@ -201,7 +201,7 @@ unsafe fn dequant_four_4x4_sse2_impl(res: &mut [i16; 64], mf: &[u16; 8]) {
 ///
 /// C++: `WelsDequantFour4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn dequant_four_4x4_sse2(res: &mut [i16; 64], mf: &[u16; 8]) {
+pub fn dequant_four_4x4(res: &mut [i16; 64], mf: &[u16; 8]) {
     unsafe { dequant_four_4x4_sse2_impl(res, mf) }
 }
 
@@ -231,7 +231,7 @@ unsafe fn get_none_zero_count_sse2_impl(level: &[i16; 16]) -> i32 {
 ///
 /// C++: `WelsGetNoneZeroCount_sse2`, `codec/encoder/core/x86/score.asm`.
 #[inline]
-pub fn get_none_zero_count_sse2(level: &[i16; 16]) -> i32 {
+pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
     unsafe { get_none_zero_count_sse2_impl(level) }
 }
 
@@ -342,7 +342,7 @@ unsafe fn hadamard_t4_dc_sse2_impl(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
 ///
 /// C++: `WelsHadamardT4Dc_sse2`, `codec/encoder/core/x86/dct.asm`.
 #[inline]
-pub fn hadamard_t4_dc_sse2(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
+pub fn hadamard_t4_dc(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
     unsafe { hadamard_t4_dc_sse2_impl(luma_dc, dct) }
 }
 
@@ -351,7 +351,7 @@ pub fn hadamard_t4_dc_sse2(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
 /// `(a0, a1, a2, a3)` are the four taps of one line — a row in the first pass, a column
 /// in the second — with one line per lane.
 #[target_feature(enable = "sse2")]
-unsafe fn ihadamard_butterfly_sse2(
+unsafe fn ihadamard_butterfly(
     a0: __m128i,
     a1: __m128i,
     a2: __m128i,
@@ -380,7 +380,7 @@ unsafe fn ihadamard_butterfly_sse2(
 /// pass over `res[i..i+4]` and the column pass over `res[i], res[i+4], res[i+8],
 /// res[i+12]` have identical tap structure, and only the operand layout differs. So the
 /// shape is transpose, butterfly, transpose, butterfly, and
-/// [`ihadamard_butterfly_sse2`] is written once.
+/// [`ihadamard_butterfly`] is written once.
 ///
 /// # Where the multiply goes
 ///
@@ -405,10 +405,10 @@ unsafe fn dequant_ihadamard_4x4_sse2_impl(res: &mut [i16; 16], mf: u16) {
 
         // `cm` holds `res[4k + m]` in lane `k`, so the row pass is lane-wise.
         let (c0, c1, c2, c3) = transpose4_epi16_lo(r0, r1, r2, r3);
-        let (w0, w1, w2, w3) = ihadamard_butterfly_sse2(c0, c1, c2, c3);
+        let (w0, w1, w2, w3) = ihadamard_butterfly(c0, c1, c2, c3);
         // Back to one row per vector, which is what the column pass wants lane-wise.
         let (x0, x1, x2, x3) = transpose4_epi16_lo(w0, w1, w2, w3);
-        let (y0, y1, y2, y3) = ihadamard_butterfly_sse2(x0, x1, x2, x3);
+        let (y0, y1, y2, y3) = ihadamard_butterfly(x0, x1, x2, x3);
 
         let mfv = _mm_set1_epi16(mf as i16);
         let dst = res.as_mut_ptr();
@@ -423,7 +423,7 @@ unsafe fn dequant_ihadamard_4x4_sse2_impl(res: &mut [i16; 16], mf: u16) {
 ///
 /// C++: `WelsDequantIHadamard4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn dequant_ihadamard_4x4_sse2(res: &mut [i16; 16], mf: u16) {
+pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
     unsafe { dequant_ihadamard_4x4_sse2_impl(res, mf) }
 }
 
@@ -459,7 +459,7 @@ mod tests {
             let mut block_simd = block_c;
 
             quant_4x4(&mut block_c, &ff, &mf);
-            quant_4x4_sse2(&mut block_simd, &ff, &mf);
+            quant_4x4(&mut block_simd, &ff, &mf);
 
             assert_eq!(block_simd, block_c);
         }
@@ -479,7 +479,7 @@ mod tests {
             let mut block_simd = block_c;
 
             quant_4x4_dc(&mut block_c, ff, mf);
-            quant_4x4_dc_sse2(&mut block_simd, ff, mf);
+            quant_4x4_dc(&mut block_simd, ff, mf);
 
             assert_eq!(block_simd, block_c);
         }
@@ -499,7 +499,7 @@ mod tests {
             let mut block_simd = block_c;
 
             quant_four_4x4(&mut block_c, &ff, &mf);
-            quant_four_4x4_sse2(&mut block_simd, &ff, &mf);
+            quant_four_4x4(&mut block_simd, &ff, &mf);
 
             assert_eq!(block_simd, block_c);
         }
@@ -522,7 +522,7 @@ mod tests {
             let mut max_simd = [0i16; 4];
 
             quant_four_4x4_max(&mut block_c, &ff, &mf, &mut max_c);
-            quant_four_4x4_max_sse2(&mut block_simd, &ff, &mf, &mut max_simd);
+            quant_four_4x4_max(&mut block_simd, &ff, &mf, &mut max_simd);
 
             assert_eq!(block_simd, block_c);
             assert_eq!(max_simd, max_c);
@@ -542,7 +542,7 @@ mod tests {
             let mut block_simd = block_c;
 
             dequant_4x4(&mut block_c, &mf);
-            dequant_4x4_sse2(&mut block_simd, &mf);
+            dequant_4x4(&mut block_simd, &mf);
 
             assert_eq!(block_simd, block_c);
         }
@@ -561,7 +561,7 @@ mod tests {
             let mut block_simd = block_c;
 
             dequant_four_4x4(&mut block_c, &mf);
-            dequant_four_4x4_sse2(&mut block_simd, &mf);
+            dequant_four_4x4(&mut block_simd, &mf);
 
             assert_eq!(block_simd, block_c);
         }
@@ -577,7 +577,7 @@ mod tests {
                 *v = if r % 3 == 0 { 0 } else { r };
             }
             let c_count = get_none_zero_count(&block);
-            let simd_count = get_none_zero_count_sse2(&block);
+            let simd_count = get_none_zero_count(&block);
             assert_eq!(simd_count, c_count);
         }
     }
@@ -597,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn hadamard_t4_dc_sse2_parity() {
+    fn hadamard_t4_dc_parity() {
         use crate::encoder::encode_mb_aux::hadamard_t4_dc;
 
         let mut seed = 0x2545_F491_4F6C_DD1Du64;
@@ -609,7 +609,7 @@ mod tests {
             let mut want = [0i16; 16];
             let mut got = [0i16; 16];
             hadamard_t4_dc(&mut want, &dct);
-            hadamard_t4_dc_sse2(&mut got, &dct);
+            hadamard_t4_dc(&mut got, &dct);
             assert_eq!(got, want);
         }
     }
@@ -618,7 +618,7 @@ mod tests {
     /// so drive it deliberately: all sixteen DC coefficients at `i16::MIN`/`MAX` puts
     /// every output past the clamp in both directions.
     #[test]
-    fn hadamard_t4_dc_sse2_saturates_like_the_scalar() {
+    fn hadamard_t4_dc_saturates_like_the_scalar() {
         use crate::encoder::encode_mb_aux::hadamard_t4_dc;
 
         const DC_IDX: [usize; 16] = [
@@ -634,7 +634,7 @@ mod tests {
             let mut want = [0i16; 16];
             let mut got = [0i16; 16];
             hadamard_t4_dc(&mut want, &dct);
-            hadamard_t4_dc_sse2(&mut got, &dct);
+            hadamard_t4_dc(&mut got, &dct);
             assert_eq!(got, want, "pattern {pattern:#018b}");
         }
 
@@ -650,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn dequant_ihadamard_4x4_sse2_parity() {
+    fn dequant_ihadamard_4x4_parity() {
         let mut seed = 0x8A5C_D789_635D_2DFFu64;
         // Every `mf` the dequant tables can produce, plus the ends of the range: the
         // multiply wraps, so a value near `u16::MAX` is a different test from a small one.
@@ -667,7 +667,7 @@ mod tests {
                 }
                 let mut got = want;
                 dequant_ihadamard_4x4(&mut want, mf);
-                dequant_ihadamard_4x4_sse2(&mut got, mf);
+                dequant_ihadamard_4x4(&mut got, mf);
                 assert_eq!(got, want, "mf = {mf}");
             }
         }
@@ -677,13 +677,13 @@ mod tests {
     /// SSE2 kernel wraps rather than saturates, with inputs chosen to overflow every
     /// intermediate.
     #[test]
-    fn dequant_ihadamard_4x4_sse2_wraps_like_the_scalar() {
+    fn dequant_ihadamard_4x4_wraps_like_the_scalar() {
         for &v in &[i16::MIN, i16::MAX, -1, 1] {
             for &mf in &[1u16, 2, 0x8000, u16::MAX] {
                 let mut want = [v; 16];
                 let mut got = [v; 16];
                 dequant_ihadamard_4x4(&mut want, mf);
-                dequant_ihadamard_4x4_sse2(&mut got, mf);
+                dequant_ihadamard_4x4(&mut got, mf);
                 assert_eq!(got, want, "v = {v}, mf = {mf}");
             }
         }

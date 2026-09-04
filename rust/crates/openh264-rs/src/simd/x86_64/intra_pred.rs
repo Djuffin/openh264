@@ -3,15 +3,18 @@
 //! Accelerated implementations for 16x16 luma, 8x8 chroma, and 4x4 luma intra predictors,
 //! serving both the encoder candidate generator and the decoder in-place reconstructor.
 //!
-//! **`_sse2` in a name here means the body contains intrinsics**, directly or through
-//! one of the shared halves below; the predictors that vectorize nothing carry no
-//! suffix. Those are not redundant — they are word-wide rewrites of their scalar twins
-//! and the init tables install them deliberately — but a name that says `_sse2` sends a
-//! reader looking for a kernel that is not there.
+//! **A kernel here is named for the operation, not for an instruction set** — the same
+//! name its twin has in `simd::wide`, because the module path is what says which
+//! implementation you get. So the name can no longer tell you whether a body is
+//! actually vectorized, and fourteen of these predictors are not: the pure V, H, DC
+//! and DC-NA fills are word-wide rewrites of their scalar twins, which the init tables
+//! install deliberately.
 //!
-//! `sse2_suffix_means_the_body_has_intrinsics` enforces the rule; it is easy to break
-//! by accident, since swapping an `_mm_storeu_si128` for a `copy_from_slice` empties a
-//! kernel without touching its name.
+//! `every_kernel_here_reaches_an_intrinsic` holds that line, by listing those fourteen
+//! and requiring intrinsics in every other public kernel. It is easy to break by
+//! accident, since swapping an `_mm_storeu_si128` for a `copy_from_slice` empties a
+//! kernel without touching its name — which is exactly how it was broken six times by
+//! the commit that first wrote the rule down.
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
@@ -91,7 +94,7 @@ fn i16x16_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
 
 /// The 16x16 plane fill, from the three coefficients.
 #[target_feature(enable = "sse2")]
-unsafe fn i16x16_plane_fill_sse2<O: PredOut>(
+unsafe fn i16x16_plane_fill<O: PredOut>(
     out: &mut O,
     top_shift: i32,
     left_shift: i32,
@@ -121,7 +124,7 @@ unsafe fn i16x16_plane_fill_sse2<O: PredOut>(
 /// C++: `WelsI16x16LumaPredDc_c` and its `_T`/`_NA` siblings — one body, because the
 /// three differ only in which sums are in scope and what they are rounded by.
 #[target_feature(enable = "sse2")]
-unsafe fn i16x16_dc_mean_sse2<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
+unsafe fn i16x16_dc_mean<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
     unsafe {
         let sum_top = if use_top {
             let top = src.row_n::<16>(-1, 0);
@@ -187,7 +190,7 @@ fn chroma_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
 
 /// The 8x8 chroma plane fill, from the three coefficients.
 #[target_feature(enable = "sse2")]
-unsafe fn chroma_plane_fill_sse2<O: PredOut>(
+unsafe fn chroma_plane_fill<O: PredOut>(
     out: &mut O,
     top_shift: i32,
     left_shift: i32,
@@ -253,25 +256,25 @@ pub fn dec_i16x16_luma_pred_h(pred: &mut PlaneCursorMut<'_>) {
 
 /// DC 16x16 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i16x16_luma_pred_dc_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
+pub fn enc_i16x16_luma_pred_dc(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     // unsafe-cat: simd-kernel(x86_64)
-    let mean = unsafe { i16x16_dc_mean_sse2(rec, true, true) };
+    let mean = unsafe { i16x16_dc_mean(rec, true, true) };
     fill_rows(&mut Packed::<16>(pred), 16, &[mean; 16])
 }
 
 /// DC 16x16 predictor in place (decoder).
 #[inline]
-pub fn dec_i16x16_luma_pred_dc_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i16x16_luma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
     // unsafe-cat: simd-kernel(x86_64)
-    let mean = unsafe { i16x16_dc_mean_sse2(pred, true, true) };
+    let mean = unsafe { i16x16_dc_mean(pred, true, true) };
     fill_rows(pred, 16, &[mean; 16])
 }
 
 /// DC Top 16x16 predictor (decoder).
 #[inline]
-pub fn dec_i16x16_luma_pred_dc_top_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i16x16_luma_pred_dc_top(pred: &mut PlaneCursorMut<'_>) {
     // unsafe-cat: simd-kernel(x86_64)
-    let mean = unsafe { i16x16_dc_mean_sse2(pred, true, false) };
+    let mean = unsafe { i16x16_dc_mean(pred, true, false) };
     fill_rows(pred, 16, &[mean; 16])
 }
 
@@ -283,19 +286,19 @@ pub fn dec_i16x16_luma_pred_dc_na(pred: &mut PlaneCursorMut<'_>) {
 
 /// Plane 16x16 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i16x16_luma_pred_plane_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
+pub fn enc_i16x16_luma_pred_plane(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     let (top_shift, left_shift, lt_shift) = i16x16_plane_coeffs(rec);
     // unsafe-cat: simd-kernel(x86_64)
-    unsafe { i16x16_plane_fill_sse2(&mut Packed::<16>(pred), top_shift, left_shift, lt_shift) }
+    unsafe { i16x16_plane_fill(&mut Packed::<16>(pred), top_shift, left_shift, lt_shift) }
 }
 
 
 /// Plane 16x16 predictor in place (decoder).
 #[inline]
-pub fn dec_i16x16_luma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i16x16_luma_pred_plane(pred: &mut PlaneCursorMut<'_>) {
     let (top_shift, left_shift, lt_shift) = i16x16_plane_coeffs(pred);
     // unsafe-cat: simd-kernel(x86_64)
-    unsafe { i16x16_plane_fill_sse2(pred, top_shift, left_shift, lt_shift) }
+    unsafe { i16x16_plane_fill(pred, top_shift, left_shift, lt_shift) }
 }
 
 // ============================================================================
@@ -357,19 +360,19 @@ pub fn dec_chroma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
 
 /// Plane Chroma 8x8 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_chroma_pred_plane_sse2(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
+pub fn enc_chroma_pred_plane(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
     let (top_shift, left_shift, lt_shift) = chroma_plane_coeffs(rec);
     // unsafe-cat: simd-kernel(x86_64)
-    unsafe { chroma_plane_fill_sse2(&mut Packed::<8>(pred), top_shift, left_shift, lt_shift) }
+    unsafe { chroma_plane_fill(&mut Packed::<8>(pred), top_shift, left_shift, lt_shift) }
 }
 
 
 /// Plane Chroma 8x8 predictor in place (decoder).
 #[inline]
-pub fn dec_chroma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_chroma_pred_plane(pred: &mut PlaneCursorMut<'_>) {
     let (top_shift, left_shift, lt_shift) = chroma_plane_coeffs(pred);
     // unsafe-cat: simd-kernel(x86_64)
-    unsafe { chroma_plane_fill_sse2(pred, top_shift, left_shift, lt_shift) }
+    unsafe { chroma_plane_fill(pred, top_shift, left_shift, lt_shift) }
 }
 
 // ============================================================================
@@ -378,7 +381,7 @@ pub fn dec_chroma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
 
 /// Vertical 4x4 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i4x4_luma_pred_v_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_v(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let top = rec.row_n::<4>(-1, 0);
     // unsafe-cat: simd-kernel(x86_64)
     unsafe {
@@ -401,7 +404,7 @@ pub fn dec_i4x4_luma_pred_v(pred: &mut PlaneCursorMut<'_>) {
 
 /// Horizontal 4x4 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i4x4_luma_pred_h_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_h(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let l0 = rec.at(-1, 0) as i8;
     let l1 = rec.at(-1, 1) as i8;
     let l2 = rec.at(-1, 2) as i8;
@@ -425,7 +428,7 @@ pub fn dec_i4x4_luma_pred_h(pred: &mut PlaneCursorMut<'_>) {
 
 /// DC 4x4 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i4x4_luma_pred_dc_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_dc(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let top = rec.row_n::<4>(-1, 0);
     let mut sum = 4i32;
     for y in 0..4 {
@@ -458,7 +461,7 @@ pub fn dec_i4x4_luma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
 
 /// Diagonal Down-Left (DDL) 4x4 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i4x4_luma_pred_ddl_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_ddl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let top = rec.row_n::<8>(-1, 0);
     let t = |i: usize| top[i] as i32;
     let ddl0 = ((2 + t(0) + t(2) + (t(1) << 1)) >> 2) as u8;
@@ -483,7 +486,7 @@ pub fn enc_i4x4_luma_pred_ddl_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 
 /// Diagonal Down-Right (DDR) 4x4 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i4x4_luma_pred_ddr_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_ddr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let lt = rec.at(-1, -1) as i32;
     let l0 = rec.at(-1, 0) as i32;
     let l1 = rec.at(-1, 1) as i32;
@@ -521,7 +524,7 @@ pub fn enc_i4x4_luma_pred_ddr_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 
 /// Vertical Right (VR) 4x4 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i4x4_luma_pred_vr_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_vr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let lt = rec.at(-1, -1) as i32;
     let l0 = rec.at(-1, 0) as i32;
     let l1 = rec.at(-1, 1) as i32;
@@ -553,7 +556,7 @@ pub fn enc_i4x4_luma_pred_vr_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 
 /// Horizontal Down (HD) 4x4 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i4x4_luma_pred_hd_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_hd(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let lt = rec.at(-1, -1) as i32;
     let l0 = rec.at(-1, 0) as i32;
     let l1 = rec.at(-1, 1) as i32;
@@ -586,7 +589,7 @@ pub fn enc_i4x4_luma_pred_hd_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 
 /// Vertical Left (VL) 4x4 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i4x4_luma_pred_vl_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_vl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let top = rec.row_n::<7>(-1, 0);
     let t = |i: usize| top[i] as i32;
     let vl0 = ((1 + t(0) + t(1)) >> 1) as u8;
@@ -614,7 +617,7 @@ pub fn enc_i4x4_luma_pred_vl_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 
 /// Horizontal Up (HU) 4x4 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i4x4_luma_pred_hu_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let l0 = rec.at(-1, 0) as i32;
     let l1 = rec.at(-1, 1) as i32;
     let l2 = rec.at(-1, 2) as i32;
@@ -663,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn test_i16x16_luma_pred_sse2_parity() {
+    fn test_i16x16_luma_pred_parity() {
         let mut p = test_plane(32, 32, 16, 64);
         let view = shared_plane_for_test(&mut p);
         let rec = view.cursor(0, 0);
@@ -686,19 +689,19 @@ mod tests {
         let mut pred_c = [0u8; 256];
         let mut pred_simd = [0u8; 256];
         WelsI16x16LumaPredDc_c(&mut pred_c, &rec);
-        enc_i16x16_luma_pred_dc_sse2(&mut pred_simd, &rec);
+        enc_i16x16_luma_pred_dc(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "16x16 DC mismatch");
 
         // Plane
         let mut pred_c = [0u8; 256];
         let mut pred_simd = [0u8; 256];
         WelsI16x16LumaPredPlane_c(&mut pred_c, &rec);
-        enc_i16x16_luma_pred_plane_sse2(&mut pred_simd, &rec);
+        enc_i16x16_luma_pred_plane(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "16x16 Plane mismatch");
     }
 
     #[test]
-    fn test_chroma_pred_sse2_parity() {
+    fn test_chroma_pred_parity() {
         let mut p = test_plane(32, 32, 16, 64);
         let view = shared_plane_for_test(&mut p);
         let rec = view.cursor(0, 0);
@@ -728,12 +731,12 @@ mod tests {
         let mut pred_c = [0u8; 64];
         let mut pred_simd = [0u8; 64];
         WelsIChromaPredPlane_c(&mut pred_c, &rec);
-        enc_chroma_pred_plane_sse2(&mut pred_simd, &rec);
+        enc_chroma_pred_plane(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "Chroma Plane mismatch");
     }
 
     #[test]
-    fn test_i4x4_luma_pred_sse2_parity() {
+    fn test_i4x4_luma_pred_parity() {
         let mut p = test_plane(32, 32, 16, 64);
         let view = shared_plane_for_test(&mut p);
         let rec = view.cursor(0, 0);
@@ -742,63 +745,63 @@ mod tests {
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredV_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_v_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_v(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 V mismatch");
 
         // H
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredH_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_h_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_h(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 H mismatch");
 
         // DC
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredDc_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_dc_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_dc(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 DC mismatch");
 
         // DDL
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredDDL_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_ddl_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_ddl(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 DDL mismatch");
 
         // DDR
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredDDR_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_ddr_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_ddr(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 DDR mismatch");
 
         // VR
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredVR_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_vr_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_vr(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 VR mismatch");
 
         // HD
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredHD_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_hd_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_hd(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 HD mismatch");
 
         // VL
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredVL_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_vl_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_vl(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 VL mismatch");
 
         // HU
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredHU_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_hu_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_hu(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 HU mismatch");
     }
 
@@ -848,11 +851,11 @@ mod tests {
         use crate::decoder::get_intra_predictor as dec;
         assert_dec_parity("16x16 V", dec::i16x16_luma_pred_v, dec_i16x16_luma_pred_v);
         assert_dec_parity("16x16 H", dec::i16x16_luma_pred_h, dec_i16x16_luma_pred_h);
-        assert_dec_parity("16x16 DC", dec::i16x16_luma_pred_dc, dec_i16x16_luma_pred_dc_sse2);
+        assert_dec_parity("16x16 DC", dec::i16x16_luma_pred_dc, dec_i16x16_luma_pred_dc);
         assert_dec_parity(
             "16x16 DC top",
             dec::i16x16_luma_pred_dc_top,
-            dec_i16x16_luma_pred_dc_top_sse2,
+            dec_i16x16_luma_pred_dc_top,
         );
         assert_dec_parity(
             "16x16 DC n/a",
@@ -862,7 +865,7 @@ mod tests {
         assert_dec_parity(
             "16x16 Plane",
             dec::i16x16_luma_pred_plane,
-            dec_i16x16_luma_pred_plane_sse2,
+            dec_i16x16_luma_pred_plane,
         );
     }
 
@@ -872,7 +875,7 @@ mod tests {
         assert_dec_parity("Chroma V", dec::chroma_pred_v, dec_chroma_pred_v);
         assert_dec_parity("Chroma H", dec::chroma_pred_h, dec_chroma_pred_h);
         assert_dec_parity("Chroma DC", dec::chroma_pred_dc, dec_chroma_pred_dc);
-        assert_dec_parity("Chroma Plane", dec::chroma_pred_plane, dec_chroma_pred_plane_sse2);
+        assert_dec_parity("Chroma Plane", dec::chroma_pred_plane, dec_chroma_pred_plane);
     }
 
     #[test]
@@ -883,23 +886,56 @@ mod tests {
         assert_dec_parity("4x4 DC", dec::i4x4_luma_pred_dc, dec_i4x4_luma_pred_dc);
     }
 
-    /// **The `_sse2` naming rule, enforced rather than asserted in a comment.**
+    /// **The naming rule, enforced rather than asserted in a comment.**
     ///
-    /// The module header states it; this decides it. It reads this file's own source and
-    /// checks that every `pub fn` whose name ends in `_sse2` reaches at least one `_mm_*`
-    /// intrinsic — in its own body, or in a function it calls (one hop, which is how the
-    /// wrappers here delegate to their `_impl` and to the shared fills).
+    /// The module header states it; this decides it. It reads this file's own source
+    /// and checks that every public kernel reaches at least one `_mm_*` intrinsic — in
+    /// its own body, or in a function it calls (one hop, which is how the wrappers here
+    /// delegate to their `_impl` and to the shared fills) — unless it is one of the
+    /// fourteen listed below as scalar by design.
     ///
-    /// Why a test and not a review habit: the rule was written into the header and broken
-    /// six times by the same commit that wrote it. The `PredOut` collapse replaced
-    /// `_mm_storeu_si128` with `copy_from_slice`, which is the same instruction and one
-    /// less `unsafe`, but it silently emptied `enc_i16x16_luma_pred_v_sse2`,
-    /// `dec_i16x16_luma_pred_v_sse2`, the `_h` pair, `dec_i16x16_luma_pred_dc_na_sse2`
-    /// and `enc_chroma_pred_v_sse2` of every intrinsic while leaving the suffix on. A
-    /// reader looking for a kernel would not have found one.
+    /// **Why the list, and why it is the strong form.** This check used to key off an
+    /// `_sse2` suffix: suffixed meant "has intrinsics", unsuffixed meant "does not".
+    /// The suffix is gone — a kernel is named for its operation now, the same name it
+    /// has in `simd::wide` — so the rule cannot be read off a name any more and has to
+    /// be written down. That is a gain, not a loss: keying off the list catches a
+    /// kernel that loses its intrinsics *and* its suffix, which the old spelling could
+    /// not see, and it makes emptying a kernel cost an edit here that says so.
+    ///
+    /// Why a test and not a review habit: the rule was written into the header and
+    /// broken six times by the same commit that wrote it. The `PredOut` collapse
+    /// replaced `_mm_storeu_si128` with `copy_from_slice`, which is the same instruction
+    /// and one less `unsafe`, but it silently emptied five kernels of every intrinsic
+    /// while leaving the suffix on. A reader looking for a kernel would not have found
+    /// one.
     #[test]
-    fn sse2_suffix_means_the_body_has_intrinsics() {
+    fn every_kernel_here_reaches_an_intrinsic() {
+        /// The predictors that vectorize nothing, on purpose: a V fill is a row
+        /// broadcast, an H fill a byte splat, a DC fill a mean and a splat. Each is a
+        /// word-wide rewrite of its scalar twin, which is why the tables still install
+        /// it from here. Moving a name onto this list is the deliberate act the rule
+        /// exists to make visible.
+        const SCALAR_BY_DESIGN: [&str; 14] = [
+            "enc_i16x16_luma_pred_v",
+            "dec_i16x16_luma_pred_v",
+            "enc_i16x16_luma_pred_h",
+            "dec_i16x16_luma_pred_h",
+            "dec_i16x16_luma_pred_dc_na",
+            "enc_chroma_pred_v",
+            "dec_chroma_pred_v",
+            "enc_chroma_pred_h",
+            "dec_chroma_pred_h",
+            "enc_chroma_pred_dc",
+            "dec_chroma_pred_dc",
+            "dec_i4x4_luma_pred_v",
+            "dec_i4x4_luma_pred_h",
+            "dec_i4x4_luma_pred_dc",
+        ];
+
+        // The test module's own `fn`s are not `pub`, but cut it off anyway so a helper
+        // named like a kernel cannot be mistaken for one.
         let src = include_str!("intra_pred.rs");
+        let src = src.split("#[cfg(test)]").next().expect("source before the tests");
 
         // Body of the item starting at byte `i`, by brace matching.
         fn body_at(s: &str, i: usize) -> &str {
@@ -926,27 +962,44 @@ mod tests {
             &s[i..]
         }
 
+        let ident = |s: &str| -> String { s.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect() };
+
         // Every `fn` in the file, by name, so a one-hop call can be resolved.
         let mut bodies: Vec<(String, &str)> = Vec::new();
         for (off, _) in src.match_indices("fn ") {
-            let after = &src[off + 3..];
-            let name: String = after
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
+            let name = ident(&src[off + 3..]);
             if !name.is_empty() {
                 bodies.push((name, body_at(src, off)));
             }
         }
-        let intrinsics = |b: &str| b.contains("_mm_");
 
+        // The public surface: what the init tables can install.
+        let mut public: Vec<String> = Vec::new();
+        for (off, _) in src.match_indices("pub ") {
+            let rest = &src[off + 4..];
+            let rest = rest.strip_prefix("(crate) ").unwrap_or(rest);
+            let rest = rest.strip_prefix("unsafe ").unwrap_or(rest);
+            if let Some(rest) = rest.strip_prefix("fn ") {
+                let name = ident(rest);
+                if !name.is_empty() {
+                    public.push(name);
+                }
+            }
+        }
+        assert!(public.len() >= 30, "found only {} public kernels — the scan broke", public.len());
+
+        let intrinsics = |b: &str| b.contains("_mm_");
         let mut offenders = Vec::new();
-        for (name, body) in bodies.iter().filter(|(n, _)| n.ends_with("_sse2")) {
+        for name in &public {
+            if SCALAR_BY_DESIGN.contains(&name.as_str()) {
+                continue;
+            }
+            let body = bodies.iter().find(|(n, _)| n == name).map(|(_, b)| *b).unwrap_or("");
             if intrinsics(body) {
                 continue;
             }
             // One hop: any function this body *names as a whole identifier* that reaches
-            // an intrinsic. Substring matching is not enough — `..._dc_na_sse2` contains
+            // an intrinsic. Substring matching is not enough — `..._dc_na` contains
             // `..._dc`, so a plain `contains` lets an empty kernel borrow a sibling's
             // intrinsics and the check passes on a body that has none.
             let called: std::collections::HashSet<&str> = body
@@ -963,8 +1016,17 @@ mod tests {
 
         assert!(
             offenders.is_empty(),
-            "these are named `_sse2` but reach no `_mm_*` intrinsic — drop the suffix or \
-             implement the kernel (see the module header): {offenders:?}"
+            "these are installed as x86_64 kernels but reach no `_mm_*` intrinsic — \
+             implement them, or add them to `SCALAR_BY_DESIGN` and say why \
+             (see the module header): {offenders:?}"
         );
+
+        // The list is a claim about this file too: a name on it that no longer exists,
+        // or that grew intrinsics, is a stale exemption hiding a kernel nobody checks.
+        for name in SCALAR_BY_DESIGN {
+            let body = bodies.iter().find(|(n, _)| n == name).map(|(_, b)| *b);
+            let body = body.unwrap_or_else(|| panic!("`{name}` is exempt but no longer exists"));
+            assert!(!intrinsics(body), "`{name}` is exempt but now has intrinsics — drop it from the list");
+        }
     }
 }

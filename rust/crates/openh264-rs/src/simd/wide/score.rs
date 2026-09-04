@@ -31,7 +31,7 @@ fn highest_set(m: u32) -> i32 {
 
 /// C++: `WelsCalculateSingleCtr4x4_sse2`, `codec/encoder/core/x86/score.asm:263`.
 #[inline]
-pub fn calculate_single_ctr_4x4_sse2(dct: &[i16; 16]) -> i32 {
+pub fn calculate_single_ctr_4x4(dct: &[i16; 16]) -> i32 {
     let nz = nonzero_mask(dct);
 
     let mut single_ctr: i32 = 0;
@@ -58,15 +58,15 @@ mod tests {
 
     /// `calculate_single_ctr_4x4` reads its input only through `== 0`, so its
     /// result is a function of the 16-bit non-zero mask alone — all 65536 of
-    /// which fit in a test. Nothing weaker would do: the SSE2 kernel replaces
+    /// which fit in a test. Nothing weaker would do: this kernel replaces
     /// the scalar's per-coefficient walk with a walk over set bits, so the two
     /// share no structure that a sampled test could lean on.
     #[test]
-    fn single_ctr_sse2_matches_the_scalar_for_every_mask() {
+    fn single_ctr_matches_the_scalar_for_every_mask() {
         for mask in 0u32..=0xFFFF {
             let dct: [i16; 16] = core::array::from_fn(|i| ((mask >> i) & 1) as i16);
             assert_eq!(
-                calculate_single_ctr_4x4_sse2(&dct),
+                calculate_single_ctr_4x4(&dct),
                 calculate_single_ctr_4x4(&dct),
                 "mask {mask:#06x}"
             );
@@ -77,13 +77,13 @@ mod tests {
     /// low byte is zero has to stay non-zero. `256` is the smallest such value
     /// and `-256` its mirror; a `packuswb`/truncating kernel reports 0 for both.
     #[test]
-    fn single_ctr_sse2_sees_coefficients_a_truncating_narrow_would_lose() {
+    fn single_ctr_sees_coefficients_a_truncating_narrow_would_lose() {
         for &v in &[256i16, -256, 512, i16::MIN, 0x0100, 0x7F00] {
             for pos in 0..16 {
                 let mut dct = [0i16; 16];
                 dct[pos] = v;
                 assert_eq!(
-                    calculate_single_ctr_4x4_sse2(&dct),
+                    calculate_single_ctr_4x4(&dct),
                     calculate_single_ctr_4x4(&dct),
                     "value {v} at {pos}"
                 );

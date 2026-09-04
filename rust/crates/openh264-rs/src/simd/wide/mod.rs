@@ -12,11 +12,18 @@
 //!
 //! # The rules the port follows, so the comparison measures the API and not the author
 //!
-//! - **Same names, same signatures, same data access.** Each kernel keeps its
-//!   intrinsic twin's name — the `_sse2` suffix here means "the slot the SSE2 kernel
-//!   fills", not the instruction set — and reads its samples the same way (`row_n`,
+//! - **Same names, same signatures, same data access.** A kernel is named for the
+//!   operation, never for an instruction set: `deblock_luma_lt4` is the same name
+//!   here as in [`super::x86_64`], because it is the same kernel — the module path is
+//!   what says which one you get. Each also reads its samples the same way (`row_n`,
 //!   `row_view`, `block_span`), so [`super::kernels`] can alias either module and the
 //!   bench sees the same bounds checks on both sides.
+//!
+//!   The one surviving suffix is `_avx2`, on the two 16-wide SAD entry points. That
+//!   is not an exception to the rule: within [`super::x86_64`] those are a *second*
+//!   kernel for the same slot, chosen by a second runtime test, so the name has to
+//!   distinguish them from the baseline pair. This module fills the same two slots to
+//!   keep the alias total, with 128-bit bodies that step two rows — see below.
 //! - **Same algorithm.** Where the intrinsic kernel does a step in scalar code (the
 //!   forward DCT's row pass, the IDCT's row pass, the plane predictors' coefficient
 //!   sums) this does too. A kernel is restructured only where `wide` has no way to

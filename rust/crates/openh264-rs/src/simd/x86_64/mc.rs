@@ -1,10 +1,10 @@
 //! SSE2 implementations of Motion Compensation (MC) kernels:
-//! - Pixel averaging (`pixel_avg_sse2`)
-//! - Chroma motion compensation (`mc_chroma_sse2`)
-//! - Horizontal 6-tap Wiener filter (`mc_hor_ver20_sse2`)
-//! - Vertical 6-tap Wiener filter (`mc_hor_ver02_sse2`)
-//! - 2D center 6x6-tap Wiener filter (`mc_hor_ver22_sse2`)
-//! - Luma quarter-pel motion compensation (`mc_luma_sse2`)
+//! - Pixel averaging (`pixel_avg`)
+//! - Chroma motion compensation (`mc_chroma`)
+//! - Horizontal 6-tap Wiener filter (`mc_hor_ver20`)
+//! - Vertical 6-tap Wiener filter (`mc_hor_ver02`)
+//! - 2D center 6x6-tap Wiener filter (`mc_hor_ver22`)
+//! - Luma quarter-pel motion compensation (`mc_luma`)
 #![allow(unsafe_code)]
 
 use core::arch::x86_64::*;
@@ -21,7 +21,7 @@ use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples};
 ///
 /// Matches `_mm_avg_epu8` (`pavgb`) exactly.
 #[target_feature(enable = "sse2")]
-unsafe fn pixel_avg_row_sse2(
+unsafe fn pixel_avg_row(
     dst: *mut u8,
     a: *const u8,
     b: *const u8,
@@ -60,7 +60,7 @@ unsafe fn pixel_avg_row_sse2(
 }
 
 /// Public safe entry point for SSE2 pixel averaging.
-pub fn pixel_avg_sse2<A: RefSamples, B: RefSamples>(
+pub fn pixel_avg<A: RefSamples, B: RefSamples>(
     dst: &mut PlaneCursorMut<'_>,
     a: &A,
     b: &B,
@@ -72,7 +72,7 @@ pub fn pixel_avg_sse2<A: RefSamples, B: RefSamples>(
         let rb = b.row_view(dy, 0, width);
         let out = dst.row_mut(dy, 0, width);
         unsafe {
-            pixel_avg_row_sse2(out.as_mut_ptr(), ra.as_ptr(), rb.as_ptr(), width);
+            pixel_avg_row(out.as_mut_ptr(), ra.as_ptr(), rb.as_ptr(), width);
         }
     }
 }
@@ -82,7 +82,7 @@ pub fn pixel_avg_sse2<A: RefSamples, B: RefSamples>(
 // ============================================================================
 
 #[target_feature(enable = "sse2")]
-unsafe fn mc_chroma_row_w8_sse2(
+unsafe fn mc_chroma_row_w8(
     dst: *mut u8,
     r0: *const u8,
     r1: *const u8,
@@ -119,7 +119,7 @@ unsafe fn mc_chroma_row_w8_sse2(
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn mc_chroma_row_w4_sse2(
+unsafe fn mc_chroma_row_w4(
     dst: *mut u8,
     r0: *const u8,
     r1: *const u8,
@@ -156,7 +156,7 @@ unsafe fn mc_chroma_row_w4_sse2(
 }
 
 /// Public safe entry point for SSE2 chroma MC.
-pub fn mc_chroma_sse2<S: RefSamples + Copy>(
+pub fn mc_chroma<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     mv_x: i16,
@@ -188,7 +188,7 @@ pub fn mc_chroma_sse2<S: RefSamples + Copy>(
                 let r0 = src.row_view(dy, 0, 9);
                 let r1 = src.row_view(dy + 1, 0, 9);
                 let out = dst.row_mut(dy, 0, 8);
-                mc_chroma_row_w8_sse2(
+                mc_chroma_row_w8(
                     out.as_mut_ptr(),
                     r0.as_ptr(),
                     r1.as_ptr(),
@@ -209,7 +209,7 @@ pub fn mc_chroma_sse2<S: RefSamples + Copy>(
                 let r0 = src.row_view(dy, 0, 5);
                 let r1 = src.row_view(dy + 1, 0, 5);
                 let out = dst.row_mut(dy, 0, 4);
-                mc_chroma_row_w4_sse2(
+                mc_chroma_row_w4(
                     out.as_mut_ptr(),
                     r0.as_ptr(),
                     r1.as_ptr(),
@@ -291,7 +291,7 @@ unsafe fn filter_6tap_intermediate_8_samples(
 // ============================================================================
 
 #[target_feature(enable = "sse2")]
-unsafe fn mc_hor_ver20_chunk8_sse2(out: *mut u8, row: *const u8) {
+unsafe fn mc_hor_ver20_chunk8(out: *mut u8, row: *const u8) {
     unsafe {
         let zero = _mm_setzero_si128();
         let p0 = _mm_unpacklo_epi8(_mm_loadl_epi64(row as *const __m128i), zero);
@@ -307,7 +307,7 @@ unsafe fn mc_hor_ver20_chunk8_sse2(out: *mut u8, row: *const u8) {
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn mc_hor_ver20_chunk4_sse2(out: *mut u8, row: *const u8) {
+unsafe fn mc_hor_ver20_chunk4(out: *mut u8, row: *const u8) {
     unsafe {
         let zero = _mm_setzero_si128();
         let p0 = _mm_unpacklo_epi8(_mm_cvtsi32_si128((row as *const i32).read_unaligned()), zero);
@@ -323,7 +323,7 @@ unsafe fn mc_hor_ver20_chunk4_sse2(out: *mut u8, row: *const u8) {
 }
 
 /// Public safe entry point for SSE2 horizontal half-pel filter.
-pub fn mc_hor_ver20_sse2<S: RefSamples + Copy>(
+pub fn mc_hor_ver20<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -338,13 +338,13 @@ pub fn mc_hor_ver20_sse2<S: RefSamples + Copy>(
         let mut col = 0;
         while col + 8 <= width {
             unsafe {
-                mc_hor_ver20_chunk8_sse2(out_ptr.add(col), row_ptr.add(col));
+                mc_hor_ver20_chunk8(out_ptr.add(col), row_ptr.add(col));
             }
             col += 8;
         }
         if col + 4 <= width {
             unsafe {
-                mc_hor_ver20_chunk4_sse2(out_ptr.add(col), row_ptr.add(col));
+                mc_hor_ver20_chunk4(out_ptr.add(col), row_ptr.add(col));
             }
             col += 4;
         }
@@ -368,7 +368,7 @@ pub fn mc_hor_ver20_sse2<S: RefSamples + Copy>(
 // ============================================================================
 
 #[target_feature(enable = "sse2")]
-unsafe fn mc_hor_ver02_w16_sse2<S: RefSamples + Copy>(
+unsafe fn mc_hor_ver02_w16<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     height: usize,
@@ -415,7 +415,7 @@ unsafe fn mc_hor_ver02_w16_sse2<S: RefSamples + Copy>(
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn mc_hor_ver02_w8_sse2<S: RefSamples + Copy>(
+unsafe fn mc_hor_ver02_w8<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     height: usize,
@@ -453,7 +453,7 @@ unsafe fn mc_hor_ver02_w8_sse2<S: RefSamples + Copy>(
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn mc_hor_ver02_w4_sse2<S: RefSamples + Copy>(
+unsafe fn mc_hor_ver02_w4<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     height: usize,
@@ -491,7 +491,7 @@ unsafe fn mc_hor_ver02_w4_sse2<S: RefSamples + Copy>(
 }
 
 /// Public safe entry point for SSE2 vertical half-pel filter.
-pub fn mc_hor_ver02_sse2<S: RefSamples + Copy>(
+pub fn mc_hor_ver02<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -499,15 +499,15 @@ pub fn mc_hor_ver02_sse2<S: RefSamples + Copy>(
 ) {
     if width == 16 {
         unsafe {
-            mc_hor_ver02_w16_sse2(src, dst, height);
+            mc_hor_ver02_w16(src, dst, height);
         }
     } else if width == 8 {
         unsafe {
-            mc_hor_ver02_w8_sse2(src, dst, height);
+            mc_hor_ver02_w8(src, dst, height);
         }
     } else if width == 4 {
         unsafe {
-            mc_hor_ver02_w4_sse2(src, dst, height);
+            mc_hor_ver02_w4(src, dst, height);
         }
     } else {
         // Scalar fallback for non-standard widths
@@ -542,7 +542,7 @@ pub fn mc_hor_ver02_sse2<S: RefSamples + Copy>(
 // ============================================================================
 
 #[target_feature(enable = "sse2")]
-unsafe fn mc_hor_ver22_inner_sse2<S: RefSamples + Copy>(
+unsafe fn mc_hor_ver22_inner<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -621,14 +621,14 @@ unsafe fn mc_hor_ver22_inner_sse2<S: RefSamples + Copy>(
 }
 
 /// Public safe entry point for SSE2 center half-pel filter.
-pub fn mc_hor_ver22_sse2<S: RefSamples + Copy>(
+pub fn mc_hor_ver22<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
     unsafe {
-        mc_hor_ver22_inner_sse2(src, dst, width, height);
+        mc_hor_ver22_inner(src, dst, width, height);
     }
 }
 
@@ -646,15 +646,15 @@ pub struct Sse2Leaves;
 impl crate::common::mc::McLeaves for Sse2Leaves {
     #[inline(always)]
     fn hor<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
-        mc_hor_ver20_sse2(src, dst, width, height)
+        mc_hor_ver20(src, dst, width, height)
     }
     #[inline(always)]
     fn ver<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
-        mc_hor_ver02_sse2(src, dst, width, height)
+        mc_hor_ver02(src, dst, width, height)
     }
     #[inline(always)]
     fn cen<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
-        mc_hor_ver22_sse2(src, dst, width, height)
+        mc_hor_ver22(src, dst, width, height)
     }
     #[inline(always)]
     fn avg<A: RefSamples, B: RefSamples>(
@@ -664,12 +664,12 @@ impl crate::common::mc::McLeaves for Sse2Leaves {
         width: usize,
         height: usize,
     ) {
-        pixel_avg_sse2(dst, a, b, width, height)
+        pixel_avg(dst, a, b, width, height)
     }
 }
 
 /// Public safe entry point for SSE2 luma quarter-pel MC.
-pub fn mc_luma_sse2<S: RefSamples + Copy>(
+pub fn mc_luma<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     mv_x: i16,
@@ -728,7 +728,7 @@ mod tests {
             scalar_pixel_avg(&mut cur_scalar, &ca, &cb, w, h);
 
             let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, 10 * STRIDE + 8, STRIDE);
-            pixel_avg_sse2(&mut cur_simd, &ca, &cb, w, h);
+            pixel_avg(&mut cur_simd, &ca, &cb, w, h);
 
             assert_eq!(dst_scalar, dst_simd, "pixel_avg mismatch at {w}x{h}");
         }
@@ -757,7 +757,7 @@ mod tests {
                     }
 
                     let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, dst_c, STRIDE);
-                    mc_chroma_sse2(&src, &mut cur_simd, dx, dy, w, h);
+                    mc_chroma(&src, &mut cur_simd, dx, dy, w, h);
 
                     assert_eq!(
                         dst_scalar, dst_simd,
@@ -788,7 +788,7 @@ mod tests {
             scalar_hor_ver20(&src, &mut cur_scalar, w, h);
 
             let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, dst_c, STRIDE);
-            mc_hor_ver20_sse2(&src, &mut cur_simd, w, h);
+            mc_hor_ver20(&src, &mut cur_simd, w, h);
 
             assert_eq!(dst_scalar, dst_simd, "mc_hor_ver20 mismatch at {w}x{h}");
         }
@@ -814,7 +814,7 @@ mod tests {
             scalar_hor_ver02(&src, &mut cur_scalar, w, h);
 
             let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, dst_c, STRIDE);
-            mc_hor_ver02_sse2(&src, &mut cur_simd, w, h);
+            mc_hor_ver02(&src, &mut cur_simd, w, h);
 
             assert_eq!(dst_scalar, dst_simd, "mc_hor_ver02 mismatch at {w}x{h}");
         }
@@ -840,7 +840,7 @@ mod tests {
             scalar_hor_ver22(&src, &mut cur_scalar, w, h);
 
             let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, dst_c, STRIDE);
-            mc_hor_ver22_sse2(&src, &mut cur_simd, w, h);
+            mc_hor_ver22(&src, &mut cur_simd, w, h);
 
             assert_eq!(dst_scalar, dst_simd, "mc_hor_ver22 mismatch at {w}x{h}");
         }
@@ -865,7 +865,7 @@ mod tests {
                     scalar_luma(&src, &mut cur_scalar, qx, qy, w, h);
 
                     let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, dst_c, STRIDE);
-                    mc_luma_sse2(&src, &mut cur_simd, qx, qy, w, h);
+                    mc_luma(&src, &mut cur_simd, qx, qy, w, h);
 
                     assert_eq!(
                         dst_scalar, dst_simd,

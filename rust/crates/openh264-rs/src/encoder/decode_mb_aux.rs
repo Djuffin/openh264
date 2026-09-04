@@ -33,6 +33,12 @@ use crate::encoder::svc_encode_mb::g_kuiDequantCoeff;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 use crate::encoder::rec_view::RecCursor;
 
+/// The kernel set the dispatch sites below call: `simd::x86_64` by default,
+/// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
+/// site because the kernels share their names with the scalars in this module — which
+/// is the point of the naming, and the reason the module qualifier has to stay.
+use crate::simd::kernels;
+
 /// Inverse 4x4 Hadamard of the luma DC block, then scale by the
 /// dequantisation multiplier. The qp >= 12 path (the qp < 12 path is
 /// [`ihadamard_4x4_dc`] + [`dequant_luma_dc_4x4`]).
@@ -98,16 +104,15 @@ pub fn dequant_four_4x4(res: &mut [i16; 64], mf: &[u16; 8]) {
 ///
 /// C++: `WelsIDctRecI16x16Dc_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_rec_i16x16_dc(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc: &[i16; 16]) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_rec_i16x16_dc_sse2(rec, pred, dc);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_rec_i16x16_dc(rec, pred, dc);
         return;
     }
     idct_rec_i16x16_dc_c(rec, pred, dc);
 }
 
-/// The scalar body of [`idct_rec_i16x16_dc`], never dispatched. Kept separate so the SSE2
-/// parity tests have a reference that is guaranteed not to route back into
+/// The scalar body of [`idct_rec_i16x16_dc`], never dispatched. Kept separate so the parity
+/// tests have a reference that is guaranteed not to route back into
 /// the kernel under test.
 pub fn idct_rec_i16x16_dc_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc: &[i16; 16]) {
     for i in 0..16usize {
@@ -131,22 +136,21 @@ pub fn idct_rec_i16x16_dc_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>
 /// **That last sentence is a claim about the dispatched path, not only this one.**
 /// It was true of the `_c` body alone for a while: the SSE2 kernel this dispatches to
 /// on x86_64 ran its vertical pass in `epi16` and wrapped where this saturates, so the
-/// same stream decoded differently per architecture. `compute_idct_residuals_sse2`
+/// same stream decoded differently per architecture. `compute_idct_residuals`
 /// widened to `epi32` and the two now agree over the whole `i16` coefficient range,
 /// which `simd::x86_64::dct::tests` exercises rather than assumes.
 ///
 /// C++: `WelsIDctT4Rec_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_t4_rec_sse2(rec, pred, dct);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_t4_rec(rec, pred, dct);
         return;
     }
     idct_t4_rec_c(rec, pred, dct);
 }
 
-/// The scalar body of [`idct_t4_rec`], never dispatched. Kept separate so the SSE2
-/// parity tests have a reference that is guaranteed not to route back into
+/// The scalar body of [`idct_t4_rec`], never dispatched. Kept separate so the parity
+/// tests have a reference that is guaranteed not to route back into
 /// the kernel under test.
 pub fn idct_t4_rec_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
     let res = idct_t4_residual(dct);
@@ -166,16 +170,15 @@ pub fn idct_t4_rec_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: 
 /// arithmetic, one cursor: the sample is read where [`idct_t4_rec`] reads
 /// `pred`, and written where it writes `rec`.
 pub fn idct_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_t4_rec_in_place_sse2(rec, dct);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_t4_rec_in_place(rec, dct);
         return;
     }
     idct_t4_rec_in_place_c(rec, dct);
 }
 
-/// The scalar body of [`idct_t4_rec_in_place`], never dispatched. Kept separate so the SSE2
-/// parity tests have a reference that is guaranteed not to route back into
+/// The scalar body of [`idct_t4_rec_in_place`], never dispatched. Kept separate so the parity
+/// tests have a reference that is guaranteed not to route back into
 /// the kernel under test.
 pub fn idct_t4_rec_in_place_c(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
     let res = idct_t4_residual(dct);
@@ -229,29 +232,41 @@ fn idct_t4_residual(dct: &[i16; 16]) -> [[i32; 4]; 4] {
 ///
 /// C++: `WelsIDctFourT4Rec_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 64]) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_four_t4_rec_sse2(rec, pred, dct);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_four_t4_rec(rec, pred, dct);
         return;
     }
+    idct_four_t4_rec_c(rec, pred, dct);
+}
+
+/// The scalar body of [`idct_four_t4_rec`], never dispatched. Kept separate so the parity
+/// tests have a reference that is guaranteed not to route back into the kernel
+/// under test — which is why its inner calls name the `_c` bodies too.
+pub fn idct_four_t4_rec_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 64]) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-        idct_t4_rec(&mut rec.reborrow(dx, dy), &pred.advance(dx, dy), sub);
+        idct_t4_rec_c(&mut rec.reborrow(dx, dy), &pred.advance(dx, dy), sub);
     }
 }
 
 /// [`idct_t4_rec_in_place`] over the four 4x4 blocks of one 8x8 quadrant.
 pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_four_t4_rec_in_place_sse2(rec, dct);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_four_t4_rec_in_place(rec, dct);
         return;
     }
+    idct_four_t4_rec_in_place_c(rec, dct);
+}
+
+/// The scalar body of [`idct_four_t4_rec_in_place`], never dispatched. Kept separate so the parity
+/// tests have a reference that is guaranteed not to route back into the kernel
+/// under test — which is why its inner calls name the `_c` bodies too.
+pub fn idct_four_t4_rec_in_place_c(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-        idct_t4_rec_in_place(&mut rec.reborrow(dx, dy), sub);
+        idct_t4_rec_in_place_c(&mut rec.reborrow(dx, dy), sub);
     }
 }
 
@@ -279,11 +294,22 @@ pub fn idct_t4_rec_to_view(
     pred_stride: usize,
     dct: &[i16; 16],
 ) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_t4_rec_to_view_sse2(rec, pred, pred_stride, dct);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_t4_rec_to_view(rec, pred, pred_stride, dct);
         return;
     }
+    idct_t4_rec_to_view_c(rec, pred, pred_stride, dct);
+}
+
+/// The scalar body of [`idct_t4_rec_to_view`], never dispatched. Kept separate so the parity
+/// tests have a reference that is guaranteed not to route back into the kernel
+/// under test — which is why its inner calls name the `_c` bodies too.
+pub fn idct_t4_rec_to_view_c(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dct: &[i16; 16],
+) {
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
         let p: &[u8; 4] = pred[dy * pred_stride..][..4].try_into().unwrap();
@@ -302,16 +328,27 @@ pub fn idct_four_t4_rec_to_view(
     pred_stride: usize,
     dct: &[i16; 64],
 ) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_four_t4_rec_to_view_sse2(rec, pred, pred_stride, dct);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_four_t4_rec_to_view(rec, pred, pred_stride, dct);
         return;
     }
+    idct_four_t4_rec_to_view_c(rec, pred, pred_stride, dct);
+}
+
+/// The scalar body of [`idct_four_t4_rec_to_view`], never dispatched. Kept separate so the parity
+/// tests have a reference that is guaranteed not to route back into the kernel
+/// under test — which is why its inner calls name the `_c` bodies too.
+pub fn idct_four_t4_rec_to_view_c(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dct: &[i16; 64],
+) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
         let off = dy as usize * pred_stride + dx as usize;
-        idct_t4_rec_to_view(&rec.advance(dx, dy), &pred[off..], pred_stride, sub);
+        idct_t4_rec_to_view_c(&rec.advance(dx, dy), &pred[off..], pred_stride, sub);
     }
 }
 
@@ -322,11 +359,22 @@ pub fn idct_rec_i16x16_dc_to_view(
     pred_stride: usize,
     dc: &[i16; 16],
 ) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_rec_i16x16_dc_to_view_sse2(rec, pred, pred_stride, dc);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_rec_i16x16_dc_to_view(rec, pred, pred_stride, dc);
         return;
     }
+    idct_rec_i16x16_dc_to_view_c(rec, pred, pred_stride, dc);
+}
+
+/// The scalar body of [`idct_rec_i16x16_dc_to_view`], never dispatched. Kept separate so the parity
+/// tests have a reference that is guaranteed not to route back into the kernel
+/// under test — which is why its inner calls name the `_c` bodies too.
+pub fn idct_rec_i16x16_dc_to_view_c(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dc: &[i16; 16],
+) {
     for i in 0..16usize {
         let p: &[u8; 16] = pred[i * pred_stride..][..16].try_into().unwrap();
         let mut out = [0u8; 16];
@@ -343,11 +391,17 @@ pub fn idct_rec_i16x16_dc_to_view(
 /// rows, which `RecCursor`'s by-value `row`/`write_row` pair does without ever
 /// naming a `&mut [u8]`.
 pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_t4_rec_in_place_view_sse2(rec, dct);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_t4_rec_in_place_view(rec, dct);
         return;
     }
+    idct_t4_rec_in_place_view_c(rec, dct);
+}
+
+/// The scalar body of [`idct_t4_rec_in_place_view`], never dispatched. Kept separate so the parity
+/// tests have a reference that is guaranteed not to route back into the kernel
+/// under test — which is why its inner calls name the `_c` bodies too.
+pub fn idct_t4_rec_in_place_view_c(rec: &RecCursor<'_>, dct: &[i16; 16]) {
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
         let cur = rec.row::<4>(dy as isize, 0);
@@ -361,15 +415,21 @@ pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
 
 /// [`idct_t4_rec_in_place_view`] over the four 4x4 blocks of one 8x8 quadrant.
 pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_four_t4_rec_in_place_view_sse2(rec, dct);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_four_t4_rec_in_place_view(rec, dct);
         return;
     }
+    idct_four_t4_rec_in_place_view_c(rec, dct);
+}
+
+/// The scalar body of [`idct_four_t4_rec_in_place_view`], never dispatched. Kept separate so the parity
+/// tests have a reference that is guaranteed not to route back into the kernel
+/// under test — which is why its inner calls name the `_c` bodies too.
+pub fn idct_four_t4_rec_in_place_view_c(rec: &RecCursor<'_>, dct: &[i16; 64]) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-        idct_t4_rec_in_place_view(&rec.advance(dx, dy), sub);
+        idct_t4_rec_in_place_view_c(&rec.advance(dx, dy), sub);
     }
 }
 
@@ -380,15 +440,21 @@ pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
 /// `OutputPMbWithoutConstructCsRsNoCopy` passes `pDecY` as both `pDst` and
 /// `pPred`. One cursor, one stride, no pair.
 pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_t4_rec_on_mb_in_place_view_sse2(rec, dct);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_t4_rec_on_mb_in_place_view(rec, dct);
         return;
     }
+    idct_t4_rec_on_mb_in_place_view_c(rec, dct);
+}
+
+/// The scalar body of [`idct_t4_rec_on_mb_in_place_view`], never dispatched. Kept separate so the parity
+/// tests have a reference that is guaranteed not to route back into the kernel
+/// under test — which is why its inner calls name the `_c` bodies too.
+pub fn idct_t4_rec_on_mb_in_place_view_c(rec: &RecCursor<'_>, dct: &[i16; 256]) {
     const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
     for (k, &(dx, dy)) in QUADS.iter().enumerate() {
         let sub: &[i16; 64] = (&dct[k << 6..][..64]).try_into().unwrap();
-        idct_four_t4_rec_in_place_view(&rec.advance(dx, dy), sub);
+        idct_four_t4_rec_in_place_view_c(&rec.advance(dx, dy), sub);
     }
 }
 
@@ -478,11 +544,10 @@ pub fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: 
     fl.pfDequantizationFour4x4 = dequant_four_4x4;
     fl.pfDequantizationIHadamard4x4 = dequant_ihadamard_4x4;
 
-    #[cfg(target_arch = "x86_64")]
     if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
-        fl.pfDequantization4x4 = crate::simd::kernels::quant::dequant_4x4_sse2;
-        fl.pfDequantizationFour4x4 = crate::simd::kernels::quant::dequant_four_4x4_sse2;
-        fl.pfDequantizationIHadamard4x4 = crate::simd::kernels::quant::dequant_ihadamard_4x4_sse2;
+        fl.pfDequantization4x4 = kernels::quant::dequant_4x4;
+        fl.pfDequantizationFour4x4 = kernels::quant::dequant_four_4x4;
+        fl.pfDequantizationIHadamard4x4 = kernels::quant::dequant_ihadamard_4x4;
     }
 }
 

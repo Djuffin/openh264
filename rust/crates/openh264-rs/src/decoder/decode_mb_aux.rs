@@ -28,6 +28,12 @@ pub fn WelsClip1(iX: i32) -> u8 {
 // span is a function of the stride and the block size alone.
 
 use crate::safe::plane::PlaneCursorMut;
+
+/// The kernel set the dispatch sites below call: `simd::x86_64` by default,
+/// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
+/// site because the kernels share their names with the scalars in this module — which
+/// is the point of the naming, and the reason the module qualifier has to stay.
+use crate::simd::kernels;
 pub use crate::decoder::decode_slice::{g_kuiScan8};
 
 /// 4x4 inverse integer DCT of `rs`, added to the prediction block at `pred` and
@@ -40,9 +46,8 @@ pub use crate::decoder::decode_slice::{g_kuiScan8};
 /// truncation of the horizontal pass's output**: `iSrc` is an `int16_t[16]` there
 /// and the sums can exceed `i16`, so the truncation is observable and load-bearing.
 pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::dct::idct_res_add_pred_sse2(pred, rs);
+    if crate::simd::has_simd() {
+        kernels::dct::idct_res_add_pred(pred, rs);
         return;
     }
     idct_res_add_pred_c(pred, rs);

@@ -12,6 +12,12 @@
 
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples};
 
+/// The kernel set the dispatch sites below call: `simd::x86_64` by default,
+/// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
+/// site because the kernels share their names with the scalars in this module — which
+/// is the point of the naming, and the reason the module qualifier has to stay.
+use crate::simd::kernels;
+
 // Function pointer signatures matching mc.h.
 pub type PWelsMcFunc =
     fn(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, mv_x: i16, mv_y: i16, width: usize, height: usize);
@@ -308,9 +314,8 @@ pub fn pixel_avg<A: RefSamples, B: RefSamples>(
     width: usize,
     height: usize,
 ) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::mc::pixel_avg_sse2(dst, a, b, width, height);
+    if crate::simd::has_simd() {
+        kernels::mc::pixel_avg(dst, a, b, width, height);
         return;
     }
     pixel_avg_c(dst, a, b, width, height);
@@ -343,9 +348,8 @@ pub fn mc_hor_ver20<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::mc::mc_hor_ver20_sse2(src, dst, width, height);
+    if crate::simd::has_simd() {
+        kernels::mc::mc_hor_ver20(src, dst, width, height);
         return;
     }
     mc_hor_ver20_c(src, dst, width, height);
@@ -394,9 +398,8 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::mc::mc_hor_ver02_sse2(src, dst, width, height);
+    if crate::simd::has_simd() {
+        kernels::mc::mc_hor_ver02(src, dst, width, height);
         return;
     }
     mc_hor_ver02_c(src, dst, width, height);
@@ -451,9 +454,8 @@ pub fn mc_hor_ver22<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::mc::mc_hor_ver22_sse2(src, dst, width, height);
+    if crate::simd::has_simd() {
+        kernels::mc::mc_hor_ver22(src, dst, width, height);
         return;
     }
     mc_hor_ver22_c(src, dst, width, height);
@@ -836,9 +838,8 @@ pub fn mc_luma<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::mc::mc_luma_sse2(src, dst, mv_x, mv_y, width, height);
+    if crate::simd::has_simd() {
+        kernels::mc::mc_luma(src, dst, mv_x, mv_y, width, height);
         return;
     }
     mc_luma_c(src, dst, mv_x, mv_y, width, height);
@@ -906,9 +907,8 @@ pub fn mc_chroma<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    #[cfg(target_arch = "x86_64")]
-    if crate::simd::has_sse2() {
-        crate::simd::kernels::mc::mc_chroma_sse2(src, dst, mv_x, mv_y, width, height);
+    if crate::simd::has_simd() {
+        kernels::mc::mc_chroma(src, dst, mv_x, mv_y, width, height);
         return;
     }
     mc_chroma_c(src, dst, mv_x, mv_y, width, height);
@@ -1267,14 +1267,14 @@ fn block_span(stride: usize, width: usize, height: usize) -> usize {
 /// scalar or SSE2 for every motion-compensated block. This port does not: `md.rs:582`
 /// states it outright — "MC and the half-pel filters are called directly, not via
 /// `sMcFuncs`" — and `grep` for the six field names below finds no read anywhere
-/// outside this file. The live dispatch is the per-call `crate::simd::has_sse2()` test
+/// outside this file. The live dispatch is the per-call `crate::simd::has_simd()` test
 /// in `mc_luma`/`mc_chroma`/`pixel_avg` and the half-pel filters (`:312`, `:347`,
 /// `:398`, `:455`, `:773`, `:843`).
 ///
 /// Two consequences, both real and neither fixed by editing this function:
 ///
 /// - A host that restricts `uiCpuFlag` to force scalar MC does not get it. The slots
-///   go scalar; the code that runs consults `has_sse2()`, which answers from the
+///   go scalar; the code that runs consults `has_simd()`, which answers from the
 ///   process-wide probe (`simd/mod.rs`), not from this argument.
 /// - The `init_mc_func_cpu_flags` test below is a faithful test of *this function* and
 ///   of nothing downstream of it. It is not evidence that MC dispatch is gated.
@@ -1285,14 +1285,13 @@ fn block_span(stride: usize, width: usize, height: usize) -> usize {
 /// threading the context's flag into the direct calls — one mechanism instead of two.
 pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, uiCpuFlag: u32) {
     *pMcFuncs = SMcFunc::default();
-    #[cfg(target_arch = "x86_64")]
     if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
-        pMcFuncs.pfLumaHalfpelHor = |s, d, w, h| crate::simd::kernels::mc::mc_hor_ver20_sse2(s, d, w, h);
-        pMcFuncs.pfLumaHalfpelVer = |s, d, w, h| crate::simd::kernels::mc::mc_hor_ver02_sse2(s, d, w, h);
-        pMcFuncs.pfLumaHalfpelCen = |s, d, w, h| crate::simd::kernels::mc::mc_hor_ver22_sse2(s, d, w, h);
-        pMcFuncs.pfSampleAveraging = |dst, a, b, w, h| crate::simd::kernels::mc::pixel_avg_sse2(dst, a, b, w, h);
-        pMcFuncs.pMcChromaFunc = |s, d, mx, my, w, h| crate::simd::kernels::mc::mc_chroma_sse2(s, d, mx, my, w, h);
-        pMcFuncs.pMcLumaFunc = |s, d, mx, my, w, h| crate::simd::kernels::mc::mc_luma_sse2(s, d, mx, my, w, h);
+        pMcFuncs.pfLumaHalfpelHor = |s, d, w, h| kernels::mc::mc_hor_ver20(s, d, w, h);
+        pMcFuncs.pfLumaHalfpelVer = |s, d, w, h| kernels::mc::mc_hor_ver02(s, d, w, h);
+        pMcFuncs.pfLumaHalfpelCen = |s, d, w, h| kernels::mc::mc_hor_ver22(s, d, w, h);
+        pMcFuncs.pfSampleAveraging = |dst, a, b, w, h| kernels::mc::pixel_avg(dst, a, b, w, h);
+        pMcFuncs.pMcChromaFunc = |s, d, mx, my, w, h| kernels::mc::mc_chroma(s, d, mx, my, w, h);
+        pMcFuncs.pMcLumaFunc = |s, d, mx, my, w, h| kernels::mc::mc_luma(s, d, mx, my, w, h);
     }
 }
 
@@ -1534,18 +1533,16 @@ mod tests {
             }
         }
 
-        #[cfg(target_arch = "x86_64")]
         {
             let mut sse2_base = SMcFunc::default();
             InitMcFunc(&mut sse2_base, WELS_CPU_SSE2);
             let sse2_want = addrs(&sse2_base);
-            for (i, (got, expected)) in sse2_want.into_iter().zip(scalar_want).enumerate() {
-                assert_ne!(
-                    got, expected,
-                    "SSE2 flag should install a SIMD function for slot {}",
-                    NAMES[i]
-                );
-            }
+            // The `assert_ne!` that stood here — "the SSE2 flag installs something other
+            // than the scalar" — is gone with the other two wiring assertions: under the
+            // scalar `simd::kernels` alias it would compare two distinct forwards to the
+            // same body and pass while nothing was accelerated. That property is now
+            // `simd::tests::every_kernel_is_named_by_a_dispatch_site`, which asks it of
+            // the kernels rather than of two function-pointer addresses.
 
             let sse2_flags: [u32; 6] = [
                 WELS_CPU_SSE2,

@@ -291,7 +291,7 @@ pub fn deblock_chroma_eq4_16(
 /// The luma bS<4 filter over an edge. Preconditions as the intrinsic twin's: the
 /// cross-line step must be the cursor's own stride, which the direction guard alone
 /// does not establish; the `debug_assert!`s are what keep that true.
-pub fn deblock_luma_lt4_sse2(
+pub fn deblock_luma_lt4(
     pix: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,
@@ -348,8 +348,8 @@ pub fn deblock_luma_lt4_sse2(
     }
 }
 
-/// The luma bS==4 filter over an edge. Preconditions as [`deblock_luma_lt4_sse2`].
-pub fn deblock_luma_eq4_sse2(pix: &mut impl PlaneSamples, step_x: isize, step_y: isize, alpha: i32, beta: i32) {
+/// The luma bS==4 filter over an edge. Preconditions as [`deblock_luma_lt4`].
+pub fn deblock_luma_eq4(pix: &mut impl PlaneSamples, step_x: isize, step_y: isize, alpha: i32, beta: i32) {
     if step_y == 1 {
         debug_assert_eq!(step_x, pix.stride() as isize);
         let p3 = pix.row_n::<16>(-4, 0);
@@ -402,8 +402,8 @@ pub fn deblock_luma_eq4_sse2(pix: &mut impl PlaneSamples, step_x: isize, step_y:
 }
 
 /// The chroma bS<4 filter over an edge of both chroma planes. Preconditions as
-/// [`deblock_luma_lt4_sse2`], checked on both planes.
-pub fn deblock_chroma_lt4_sse2(
+/// [`deblock_luma_lt4`], checked on both planes.
+pub fn deblock_chroma_lt4(
     cb: &mut impl PlaneSamples,
     cr: &mut impl PlaneSamples,
     step_x: isize,
@@ -489,8 +489,8 @@ pub fn deblock_chroma_lt4_sse2(
 }
 
 /// The chroma bS==4 filter over an edge of both chroma planes. Preconditions as
-/// [`deblock_chroma_lt4_sse2`].
-pub fn deblock_chroma_eq4_sse2(
+/// [`deblock_chroma_lt4`].
+pub fn deblock_chroma_eq4(
     cb: &mut impl PlaneSamples,
     cr: &mut impl PlaneSamples,
     step_x: isize,
@@ -610,7 +610,7 @@ mod tests {
                 &tc,
             );
 
-            deblock_luma_lt4_sse2(
+            deblock_luma_lt4(
                 &mut plane_simd.cursor_mut(8, 8),
                 step_x,
                 step_y,
@@ -650,7 +650,7 @@ mod tests {
                 beta,
             );
 
-            deblock_luma_eq4_sse2(
+            deblock_luma_eq4(
                 &mut plane_simd.cursor_mut(8, 8),
                 step_x,
                 step_y,
@@ -694,7 +694,7 @@ mod tests {
                 &tc,
             );
 
-            deblock_chroma_lt4_sse2(
+            deblock_chroma_lt4(
                 &mut cb_simd.cursor_mut(4, 4),
                 &mut cr_simd.cursor_mut(4, 4),
                 step_x,
@@ -743,7 +743,7 @@ mod tests {
                 beta,
             );
 
-            deblock_chroma_eq4_sse2(
+            deblock_chroma_eq4(
                 &mut cb_simd.cursor_mut(4, 4),
                 &mut cr_simd.cursor_mut(4, 4),
                 step_x,

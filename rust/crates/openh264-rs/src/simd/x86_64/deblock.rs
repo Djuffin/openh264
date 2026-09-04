@@ -17,7 +17,7 @@ use crate::safe::plane::PlaneSamples;
 /// Vectorized 16-line Luma bS < 4 (Lt4) filter across contiguous sample rows.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn deblock_luma_lt4_16_sse2(
+pub unsafe fn deblock_luma_lt4_16(
     p2: &mut [u8; 16],
     p1: &mut [u8; 16],
     p0: &mut [u8; 16],
@@ -152,7 +152,7 @@ pub unsafe fn deblock_luma_lt4_16_sse2(
 /// Vectorized 16-line Luma bS == 4 (Eq4) filter across contiguous sample rows.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn deblock_luma_eq4_16_sse2(
+pub unsafe fn deblock_luma_eq4_16(
     p3: &[u8; 16],
     p2: &mut [u8; 16],
     p1: &mut [u8; 16],
@@ -345,7 +345,7 @@ pub unsafe fn deblock_luma_eq4_16_sse2(
 /// Vectorized 16-line Chroma bS < 4 (Lt4) filter across contiguous sample rows.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn deblock_chroma_lt4_16_sse2(
+pub unsafe fn deblock_chroma_lt4_16(
     p1: &[u8; 16],
     p0: &mut [u8; 16],
     q0: &mut [u8; 16],
@@ -430,7 +430,7 @@ pub unsafe fn deblock_chroma_lt4_16_sse2(
 /// Vectorized 16-line Chroma bS == 4 (Eq4) filter across contiguous sample rows.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn deblock_chroma_eq4_16_sse2(
+pub unsafe fn deblock_chroma_eq4_16(
     p1: &[u8; 16],
     p0: &mut [u8; 16],
     q0: &mut [u8; 16],
@@ -517,7 +517,7 @@ pub unsafe fn deblock_chroma_eq4_16_sse2(
 /// pitch than the `iStride` it passes, still satisfies `step_y == 1`, so the scalar
 /// fallback is not taken and this reads and writes the wrong samples. No current
 /// caller violates it; the `debug_assert!` is what keeps that true.
-pub fn deblock_luma_lt4_sse2(
+pub fn deblock_luma_lt4(
     pix: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,
@@ -538,7 +538,7 @@ pub fn deblock_luma_lt4_sse2(
         let mut q2 = pix.row_n::<16>(2, 0);
 
         unsafe {
-            deblock_luma_lt4_16_sse2(
+            deblock_luma_lt4_16(
                 &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, alpha, beta, tc,
             );
         }
@@ -566,7 +566,7 @@ pub fn deblock_luma_lt4_sse2(
 
         let [_, ref mut t1, ref mut t2, ref mut t3, ref mut t4, ref mut t5, ref mut t6, _] = t;
         unsafe {
-            deblock_luma_lt4_16_sse2(
+            deblock_luma_lt4_16(
                 t1, t2, t3, t4, t5, t6, alpha, beta, tc,
             );
         }
@@ -604,7 +604,7 @@ pub fn deblock_luma_lt4_sse2(
 /// pitch than the `iStride` it passes, still satisfies `step_y == 1`, so the scalar
 /// fallback is not taken and this reads and writes the wrong samples. No current
 /// caller violates it; the `debug_assert!` is what keeps that true.
-pub fn deblock_luma_eq4_sse2(
+pub fn deblock_luma_eq4(
     pix: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,
@@ -626,7 +626,7 @@ pub fn deblock_luma_eq4_sse2(
         let q3 = pix.row_n::<16>(3, 0);
 
         unsafe {
-            deblock_luma_eq4_16_sse2(
+            deblock_luma_eq4_16(
                 &p3, &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, &q3, alpha, beta,
             );
         }
@@ -656,7 +656,7 @@ pub fn deblock_luma_eq4_sse2(
 
         let [ref t0, ref mut t1, ref mut t2, ref mut t3, ref mut t4, ref mut t5, ref mut t6, ref t7] = t;
         unsafe {
-            deblock_luma_eq4_16_sse2(
+            deblock_luma_eq4_16(
                 t0, t1, t2, t3, t4, t5, t6, t7,
                 alpha, beta,
             );
@@ -695,7 +695,7 @@ pub fn deblock_luma_eq4_sse2(
 /// pitch than the `iStride` it passes, still satisfies `step_y == 1`, so the scalar
 /// fallback is not taken and this reads and writes the wrong samples. No current
 /// caller violates it; the `debug_assert!` is what keeps that true.
-pub fn deblock_chroma_lt4_sse2(
+pub fn deblock_chroma_lt4(
     cb: &mut impl PlaneSamples,
     cr: &mut impl PlaneSamples,
     step_x: isize,
@@ -734,7 +734,7 @@ pub fn deblock_chroma_lt4_sse2(
         q1[8..].copy_from_slice(&cr_q1);
 
         unsafe {
-            deblock_chroma_lt4_16_sse2(&p1, &mut p0, &mut q0, &q1, alpha, beta, tc);
+            deblock_chroma_lt4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta, tc);
         }
 
         cb_p0.copy_from_slice(&p0[..8]);
@@ -769,7 +769,7 @@ pub fn deblock_chroma_lt4_sse2(
 
         let [ref t0, ref mut t1, ref mut t2, ref t3] = t;
         unsafe {
-            deblock_chroma_lt4_16_sse2(t0, t1, t2, t3, alpha, beta, tc);
+            deblock_chroma_lt4_16(t0, t1, t2, t3, alpha, beta, tc);
         }
 
         for y in 0..8 {
@@ -810,7 +810,7 @@ pub fn deblock_chroma_lt4_sse2(
 /// pitch than the `iStride` it passes, still satisfies `step_y == 1`, so the scalar
 /// fallback is not taken and this reads and writes the wrong samples. No current
 /// caller violates it; the `debug_assert!` is what keeps that true.
-pub fn deblock_chroma_eq4_sse2(
+pub fn deblock_chroma_eq4(
     cb: &mut impl PlaneSamples,
     cr: &mut impl PlaneSamples,
     step_x: isize,
@@ -848,7 +848,7 @@ pub fn deblock_chroma_eq4_sse2(
         q1[8..].copy_from_slice(&cr_q1);
 
         unsafe {
-            deblock_chroma_eq4_16_sse2(&p1, &mut p0, &mut q0, &q1, alpha, beta);
+            deblock_chroma_eq4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta);
         }
 
         cb_p0.copy_from_slice(&p0[..8]);
@@ -883,7 +883,7 @@ pub fn deblock_chroma_eq4_sse2(
 
         let [ref t0, ref mut t1, ref mut t2, ref t3] = t;
         unsafe {
-            deblock_chroma_eq4_16_sse2(t0, t1, t2, t3, alpha, beta);
+            deblock_chroma_eq4_16(t0, t1, t2, t3, alpha, beta);
         }
 
         for y in 0..8 {
@@ -950,7 +950,7 @@ mod tests {
                 &tc,
             );
 
-            deblock_luma_lt4_sse2(
+            deblock_luma_lt4(
                 &mut plane_simd.cursor_mut(8, 8),
                 step_x,
                 step_y,
@@ -990,7 +990,7 @@ mod tests {
                 beta,
             );
 
-            deblock_luma_eq4_sse2(
+            deblock_luma_eq4(
                 &mut plane_simd.cursor_mut(8, 8),
                 step_x,
                 step_y,
@@ -1034,7 +1034,7 @@ mod tests {
                 &tc,
             );
 
-            deblock_chroma_lt4_sse2(
+            deblock_chroma_lt4(
                 &mut cb_simd.cursor_mut(4, 4),
                 &mut cr_simd.cursor_mut(4, 4),
                 step_x,
@@ -1083,7 +1083,7 @@ mod tests {
                 beta,
             );
 
-            deblock_chroma_eq4_sse2(
+            deblock_chroma_eq4(
                 &mut cb_simd.cursor_mut(4, 4),
                 &mut cr_simd.cursor_mut(4, 4),
                 step_x,

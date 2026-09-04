@@ -2,6 +2,13 @@
 //! reference, the `core::arch` intrinsics in `simd::x86_64`, and — when built with
 //! `--features wide` — the `wide`-crate kernels in `simd::wide`.
 //!
+//! **Both SIMD columns are optional, and for the same reason.** `simd::x86_64` does
+//! not exist off x86_64 and `simd::wide` does not exist without the feature, so a row
+//! carries whichever of the two this build has and the table prints `-` for the other.
+//! On aarch64 with `--features wide` that makes this a scalar-versus-wide instrument,
+//! which is the only comparison there is to make there — and the one worth making,
+//! since those lanes lower to NEON.
+//!
 //! One process, one set of inputs, three closures per row. Every row is checked
 //! before it is timed: each implementation runs once on its own fresh copy of the
 //! inputs and the three checksums must agree, or the row is reported as a mismatch
@@ -25,7 +32,9 @@
 //! Environment knobs: `BENCH_REPEATS` (default 7), `BENCH_BLOCK_MS` (default 20),
 //! `BENCH_FILTER=<substring>` to run only matching rows.
 
-#![allow(non_snake_case, unused_variables)]
+// `unused_mut`: each row owns one input set per column, so the columns this build
+// does not have leave their `let mut` bindings unread.
+#![allow(non_snake_case, unused_variables, unused_mut)]
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -40,6 +49,7 @@ use openh264_rs::encoder::get_intra_predictor as ipred;
 use openh264_rs::encoder::rec_view::RecCursor;
 use openh264_rs::encoder::sample as satd_ref;
 use openh264_rs::safe::plane::{PaddedPlane, PlaneCursor, PlaneCursorMut};
+#[cfg(target_arch = "x86_64")]
 use openh264_rs::simd::x86_64 as isa;
 #[cfg(feature = "wide")]
 use openh264_rs::simd::wide as wd;
@@ -50,7 +60,8 @@ use openh264_rs::simd::wide as wd;
 
 struct Row {
     name: &'static str,
-    /// ns per call: scalar, intrinsics, wide (`None` when not built).
+    /// ns per call: scalar, intrinsics, wide. Either SIMD column is `None` when
+    /// this build has no such module — see the header.
     ns: [Option<f64>; 3],
     /// The three checksums agreed.
     consistent: bool,
@@ -90,7 +101,7 @@ fn time_one<F: FnMut(bool) -> u64>(mut f: F) -> f64 {
 /// Checks the three implementations agree, then times each. A closure is called
 /// with `true` once, to produce a checksum of its whole output; with `false` in the
 /// timed loops, where it returns something cheap the optimiser cannot drop.
-fn run3<S, I, W>(rows: &mut Vec<Row>, name: &'static str, mut scalar: S, mut intrinsics: I, wide: Option<W>)
+fn run3<S, I, W>(rows: &mut Vec<Row>, name: &'static str, mut scalar: S, intrinsics: Option<I>, wide: Option<W>)
 where
     S: FnMut(bool) -> u64,
     I: FnMut(bool) -> u64,
@@ -101,28 +112,38 @@ where
             return;
         }
     }
-    let mut wide = wide;
+    let (mut intrinsics, mut wide) = (intrinsics, wide);
     let c_scalar = scalar(true);
-    let c_isa = intrinsics(true);
+    let c_isa = intrinsics.as_mut().map(|i| i(true));
     let c_wide = wide.as_mut().map(|w| w(true));
-    let consistent = c_scalar == c_isa && c_wide.map_or(true, |c| c == c_scalar);
+    // The scalar is the reference, so an absent column is vacuously consistent with
+    // it — never "equal to zero", which is what comparing the `Option`s would say.
+    let consistent = c_isa.map_or(true, |c| c == c_scalar) && c_wide.map_or(true, |c| c == c_scalar);
     if !consistent {
-        eprintln!(" MISMATCH {name}: scalar {c_scalar:#x} intrinsics {c_isa:#x} wide {c_wide:x?}");
+        eprintln!(" MISMATCH {name}: scalar {c_scalar:#x} intrinsics {c_isa:x?} wide {c_wide:x?}");
     }
     let ns_s = time_one(&mut scalar);
-    let ns_i = time_one(&mut intrinsics);
+    let ns_i = intrinsics.as_mut().map(|i| time_one(i));
     let ns_w = wide.as_mut().map(|w| time_one(w));
-    rows.push(Row { name, ns: [Some(ns_s), Some(ns_i), ns_w], consistent });
+    rows.push(Row { name, ns: [Some(ns_s), ns_i, ns_w], consistent });
     eprint!(".");
 }
 
-/// A `run3` row whose wide arm exists only under the feature.
+/// A `run3` row whose two SIMD arms each exist only where their module does.
+///
+/// The `#[cfg]`s sit on the statements rather than inside the argument list because
+/// that is what keeps `$isa` from being name-resolved at all on a target with no
+/// `simd::x86_64` — a cfg-stripped statement takes its whole expression with it.
 macro_rules! row {
     ($rows:expr, $name:expr, $scalar:expr, $isa:expr, $wide:expr) => {{
-        #[cfg(feature = "wide")]
-        run3(&mut $rows, $name, $scalar, $isa, Some($wide));
-        #[cfg(not(feature = "wide"))]
-        run3(&mut $rows, $name, $scalar, $isa, None::<fn(bool) -> u64>);
+        #[cfg(all(target_arch = "x86_64", feature = "wide"))]
+        run3(&mut $rows, $name, $scalar, Some($isa), Some($wide));
+        #[cfg(all(target_arch = "x86_64", not(feature = "wide")))]
+        run3(&mut $rows, $name, $scalar, Some($isa), None::<fn(bool) -> u64>);
+        #[cfg(all(not(target_arch = "x86_64"), feature = "wide"))]
+        run3(&mut $rows, $name, $scalar, None::<fn(bool) -> u64>, Some($wide));
+        #[cfg(all(not(target_arch = "x86_64"), not(feature = "wide")))]
+        run3(&mut $rows, $name, $scalar, None::<fn(bool) -> u64>, None::<fn(bool) -> u64>);
     }};
 }
 
@@ -226,25 +247,25 @@ fn sad_rows(rows: &mut Vec<Row>) {
     let (a, b) = (p.ca(), p.cb());
     row!(*rows, "sad 16x16",
         |_| sample_sad::<16, 16, _>(&black_box(a), &black_box(b)) as u64,
-        |_| isa::sad::sample_sad_16x16_sse2(&black_box(a), &black_box(b)) as u64,
-        |_| wd::sad::sample_sad_16x16_sse2(&black_box(a), &black_box(b)) as u64);
+        |_| isa::sad::sample_sad_16x16(&black_box(a), &black_box(b)) as u64,
+        |_| wd::sad::sample_sad_16x16(&black_box(a), &black_box(b)) as u64);
     row!(*rows, "sad 8x8",
         |_| sample_sad::<8, 8, _>(&black_box(a), &black_box(b)) as u64,
-        |_| isa::sad::sample_sad_8x8_sse2(&black_box(a), &black_box(b)) as u64,
-        |_| wd::sad::sample_sad_8x8_sse2(&black_box(a), &black_box(b)) as u64);
+        |_| isa::sad::sample_sad_8x8(&black_box(a), &black_box(b)) as u64,
+        |_| wd::sad::sample_sad_8x8(&black_box(a), &black_box(b)) as u64);
     row!(*rows, "sad 4x4",
         |_| sample_sad::<4, 4, _>(&black_box(a), &black_box(b)) as u64,
-        |_| isa::sad::sample_sad_4x4_sse2(&black_box(a), &black_box(b)) as u64,
-        |_| wd::sad::sample_sad_4x4_sse2(&black_box(a), &black_box(b)) as u64);
+        |_| isa::sad::sample_sad_4x4(&black_box(a), &black_box(b)) as u64,
+        |_| wd::sad::sample_sad_4x4(&black_box(a), &black_box(b)) as u64);
     let four = |s: &mut [i32; 4]| (s[0] as u64) | (s[1] as u64) << 16 | (s[2] as u64) << 32 | (s[3] as u64) << 48;
     row!(*rows, "sad-four 16x16",
         |_| { let mut s = [0; 4]; sample_sad_four::<16, 16, _>(&black_box(a), &black_box(b), &mut s); four(&mut s) },
-        |_| { let mut s = [0; 4]; isa::sad::sample_sad_four_16x16_sse2(&black_box(a), &black_box(b), &mut s); four(&mut s) },
-        |_| { let mut s = [0; 4]; wd::sad::sample_sad_four_16x16_sse2(&black_box(a), &black_box(b), &mut s); four(&mut s) });
+        |_| { let mut s = [0; 4]; isa::sad::sample_sad_four_16x16(&black_box(a), &black_box(b), &mut s); four(&mut s) },
+        |_| { let mut s = [0; 4]; wd::sad::sample_sad_four_16x16(&black_box(a), &black_box(b), &mut s); four(&mut s) });
     row!(*rows, "sad-four 8x8",
         |_| { let mut s = [0; 4]; sample_sad_four::<8, 8, _>(&black_box(a), &black_box(b), &mut s); four(&mut s) },
-        |_| { let mut s = [0; 4]; isa::sad::sample_sad_four_8x8_sse2(&black_box(a), &black_box(b), &mut s); four(&mut s) },
-        |_| { let mut s = [0; 4]; wd::sad::sample_sad_four_8x8_sse2(&black_box(a), &black_box(b), &mut s); four(&mut s) });
+        |_| { let mut s = [0; 4]; isa::sad::sample_sad_four_8x8(&black_box(a), &black_box(b), &mut s); four(&mut s) },
+        |_| { let mut s = [0; 4]; wd::sad::sample_sad_four_8x8(&black_box(a), &black_box(b), &mut s); four(&mut s) });
 }
 
 fn satd_rows(rows: &mut Vec<Row>) {
@@ -252,53 +273,53 @@ fn satd_rows(rows: &mut Vec<Row>) {
     let (a, b) = (p.ca(), p.cb());
     row!(*rows, "satd 4x4",
         |_| satd_ref::satd_4x4(&black_box(a), &black_box(b)) as u64,
-        |_| isa::satd::satd_4x4_sse2(&black_box(a), &black_box(b)) as u64,
-        |_| wd::satd::satd_4x4_sse2(&black_box(a), &black_box(b)) as u64);
+        |_| isa::satd::satd_4x4(&black_box(a), &black_box(b)) as u64,
+        |_| wd::satd::satd_4x4(&black_box(a), &black_box(b)) as u64);
     row!(*rows, "satd 8x8",
         |_| satd_ref::satd_8x8(&black_box(a), &black_box(b)) as u64,
-        |_| isa::satd::satd_8x8_sse2(&black_box(a), &black_box(b)) as u64,
-        |_| wd::satd::satd_8x8_sse2(&black_box(a), &black_box(b)) as u64);
+        |_| isa::satd::satd_8x8(&black_box(a), &black_box(b)) as u64,
+        |_| wd::satd::satd_8x8(&black_box(a), &black_box(b)) as u64);
     row!(*rows, "satd 16x16",
         |_| satd_ref::satd_16x16(&black_box(a), &black_box(b)) as u64,
-        |_| isa::satd::satd_16x16_sse2(&black_box(a), &black_box(b)) as u64,
-        |_| wd::satd::satd_16x16_sse2(&black_box(a), &black_box(b)) as u64);
+        |_| isa::satd::satd_16x16(&black_box(a), &black_box(b)) as u64,
+        |_| wd::satd::satd_16x16(&black_box(a), &black_box(b)) as u64);
 }
 
 fn mc_rows(rows: &mut Vec<Row>) {
     let (mut s0, mut s1, mut s2) = (Planes::new(), Planes::new(), Planes::new());
     row!(*rows, "mc pixel_avg 16x16",
         |c| { let (a, b) = (cur(black_box(&s0.a)), cur(black_box(&s0.b))); mc::pixel_avg_c(&mut cur_mut(&mut s0.out), &black_box(a), &black_box(b), 16, 16); out_sum(&s0.out, c) },
-        |c| { let (a, b) = (cur(black_box(&s1.a)), cur(black_box(&s1.b))); isa::mc::pixel_avg_sse2(&mut cur_mut(&mut s1.out), &black_box(a), &black_box(b), 16, 16); out_sum(&s1.out, c) },
-        |c| { let (a, b) = (cur(black_box(&s2.a)), cur(black_box(&s2.b))); wd::mc::pixel_avg_sse2(&mut cur_mut(&mut s2.out), &black_box(a), &black_box(b), 16, 16); out_sum(&s2.out, c) });
+        |c| { let (a, b) = (cur(black_box(&s1.a)), cur(black_box(&s1.b))); isa::mc::pixel_avg(&mut cur_mut(&mut s1.out), &black_box(a), &black_box(b), 16, 16); out_sum(&s1.out, c) },
+        |c| { let (a, b) = (cur(black_box(&s2.a)), cur(black_box(&s2.b))); wd::mc::pixel_avg(&mut cur_mut(&mut s2.out), &black_box(a), &black_box(b), 16, 16); out_sum(&s2.out, c) });
     row!(*rows, "mc hor_ver20 16x16",
         |c| { let a = cur(black_box(&s0.a)); mc::mc_hor_ver20_c(&a, &mut cur_mut(&mut s0.out), 16, 16); out_sum(&s0.out, c) },
-        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_hor_ver20_sse2(&a, &mut cur_mut(&mut s1.out), 16, 16); out_sum(&s1.out, c) },
-        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_hor_ver20_sse2(&a, &mut cur_mut(&mut s2.out), 16, 16); out_sum(&s2.out, c) });
+        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_hor_ver20(&a, &mut cur_mut(&mut s1.out), 16, 16); out_sum(&s1.out, c) },
+        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_hor_ver20(&a, &mut cur_mut(&mut s2.out), 16, 16); out_sum(&s2.out, c) });
     row!(*rows, "mc hor_ver02 16x16",
         |c| { let a = cur(black_box(&s0.a)); mc::mc_hor_ver02_c(&a, &mut cur_mut(&mut s0.out), 16, 16); out_sum(&s0.out, c) },
-        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_hor_ver02_sse2(&a, &mut cur_mut(&mut s1.out), 16, 16); out_sum(&s1.out, c) },
-        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_hor_ver02_sse2(&a, &mut cur_mut(&mut s2.out), 16, 16); out_sum(&s2.out, c) });
+        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_hor_ver02(&a, &mut cur_mut(&mut s1.out), 16, 16); out_sum(&s1.out, c) },
+        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_hor_ver02(&a, &mut cur_mut(&mut s2.out), 16, 16); out_sum(&s2.out, c) });
     row!(*rows, "mc hor_ver22 16x16",
         |c| { let a = cur(black_box(&s0.a)); mc::mc_hor_ver22_c(&a, &mut cur_mut(&mut s0.out), 16, 16); out_sum(&s0.out, c) },
-        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_hor_ver22_sse2(&a, &mut cur_mut(&mut s1.out), 16, 16); out_sum(&s1.out, c) },
-        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_hor_ver22_sse2(&a, &mut cur_mut(&mut s2.out), 16, 16); out_sum(&s2.out, c) });
+        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_hor_ver22(&a, &mut cur_mut(&mut s1.out), 16, 16); out_sum(&s1.out, c) },
+        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_hor_ver22(&a, &mut cur_mut(&mut s2.out), 16, 16); out_sum(&s2.out, c) });
     row!(*rows, "mc hor_ver02 8x8",
         |c| { let a = cur(black_box(&s0.a)); mc::mc_hor_ver02_c(&a, &mut cur_mut(&mut s0.out), 8, 8); out_sum(&s0.out, c) },
-        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_hor_ver02_sse2(&a, &mut cur_mut(&mut s1.out), 8, 8); out_sum(&s1.out, c) },
-        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_hor_ver02_sse2(&a, &mut cur_mut(&mut s2.out), 8, 8); out_sum(&s2.out, c) });
+        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_hor_ver02(&a, &mut cur_mut(&mut s1.out), 8, 8); out_sum(&s1.out, c) },
+        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_hor_ver02(&a, &mut cur_mut(&mut s2.out), 8, 8); out_sum(&s2.out, c) });
     // Quarter-pel (1, 3): the horizontal filter averaged with the centre filter.
     row!(*rows, "mc luma qpel(1,3) 16x16",
         |c| { let a = cur(black_box(&s0.a)); mc::mc_luma_c(&a, &mut cur_mut(&mut s0.out), black_box(1), black_box(3), 16, 16); out_sum(&s0.out, c) },
-        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_luma_sse2(&a, &mut cur_mut(&mut s1.out), black_box(1), black_box(3), 16, 16); out_sum(&s1.out, c) },
-        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_luma_sse2(&a, &mut cur_mut(&mut s2.out), black_box(1), black_box(3), 16, 16); out_sum(&s2.out, c) });
+        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_luma(&a, &mut cur_mut(&mut s1.out), black_box(1), black_box(3), 16, 16); out_sum(&s1.out, c) },
+        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_luma(&a, &mut cur_mut(&mut s2.out), black_box(1), black_box(3), 16, 16); out_sum(&s2.out, c) });
     row!(*rows, "mc chroma (3,5) 8x8",
         |c| { let a = cur(black_box(&s0.a)); mc::mc_chroma_with_frag_mv(&a, &mut cur_mut(&mut s0.out), black_box(3), black_box(5), 8, 8); out_sum(&s0.out, c) },
-        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_chroma_sse2(&a, &mut cur_mut(&mut s1.out), black_box(3), black_box(5), 8, 8); out_sum(&s1.out, c) },
-        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_chroma_sse2(&a, &mut cur_mut(&mut s2.out), black_box(3), black_box(5), 8, 8); out_sum(&s2.out, c) });
+        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_chroma(&a, &mut cur_mut(&mut s1.out), black_box(3), black_box(5), 8, 8); out_sum(&s1.out, c) },
+        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_chroma(&a, &mut cur_mut(&mut s2.out), black_box(3), black_box(5), 8, 8); out_sum(&s2.out, c) });
     row!(*rows, "mc chroma (3,5) 4x4",
         |c| { let a = cur(black_box(&s0.a)); mc::mc_chroma_with_frag_mv(&a, &mut cur_mut(&mut s0.out), black_box(3), black_box(5), 4, 4); out_sum(&s0.out, c) },
-        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_chroma_sse2(&a, &mut cur_mut(&mut s1.out), black_box(3), black_box(5), 4, 4); out_sum(&s1.out, c) },
-        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_chroma_sse2(&a, &mut cur_mut(&mut s2.out), black_box(3), black_box(5), 4, 4); out_sum(&s2.out, c) });
+        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_chroma(&a, &mut cur_mut(&mut s1.out), black_box(3), black_box(5), 4, 4); out_sum(&s1.out, c) },
+        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_chroma(&a, &mut cur_mut(&mut s2.out), black_box(3), black_box(5), 4, 4); out_sum(&s2.out, c) });
 }
 
 fn dct_rows(rows: &mut Vec<Row>) {
@@ -308,29 +329,29 @@ fn dct_rows(rows: &mut Vec<Row>) {
     let sum64 = |d: &[i16; 64], c: bool| if c { fnv16(d) } else { d[0] as u16 as u64 };
     row!(*rows, "dct 4x4",
         |c| { let mut d = [0i16; 16]; enc_aux::dct_4x4(&mut d, &black_box(a), &black_box(b)); sum16(&d, c) },
-        |c| { let mut d = [0i16; 16]; isa::dct::dct_4x4_sse2(&mut d, &black_box(a), &black_box(b)); sum16(&d, c) },
-        |c| { let mut d = [0i16; 16]; wd::dct::dct_4x4_sse2(&mut d, &black_box(a), &black_box(b)); sum16(&d, c) });
+        |c| { let mut d = [0i16; 16]; isa::dct::dct_4x4(&mut d, &black_box(a), &black_box(b)); sum16(&d, c) },
+        |c| { let mut d = [0i16; 16]; wd::dct::dct_4x4(&mut d, &black_box(a), &black_box(b)); sum16(&d, c) });
     row!(*rows, "dct four 4x4",
         |c| { let mut d = [0i16; 64]; enc_aux::dct_four_4x4(&mut d, &black_box(a), &black_box(b)); sum64(&d, c) },
-        |c| { let mut d = [0i16; 64]; isa::dct::dct_four_4x4_sse2(&mut d, &black_box(a), &black_box(b)); sum64(&d, c) },
-        |c| { let mut d = [0i16; 64]; wd::dct::dct_four_4x4_sse2(&mut d, &black_box(a), &black_box(b)); sum64(&d, c) });
+        |c| { let mut d = [0i16; 64]; isa::dct::dct_four_4x4(&mut d, &black_box(a), &black_box(b)); sum64(&d, c) },
+        |c| { let mut d = [0i16; 64]; wd::dct::dct_four_4x4(&mut d, &black_box(a), &black_box(b)); sum64(&d, c) });
 
     // Residuals over the decoder's real range, on a fresh prediction per call.
     let res: [i16; 16] = coeffs(7, 2000);
     let (mut r0, mut r1, mut r2) = (Planes::new(), Planes::new(), Planes::new());
     row!(*rows, "idct t4 in place",
         |c| { dec_aux::idct_t4_rec_in_place_c(&mut cur_mut(&mut r0.out), black_box(&res)); out_sum(&r0.out, c) },
-        |c| { isa::dct::idct_t4_rec_in_place_sse2(&mut cur_mut(&mut r1.out), black_box(&res)); out_sum(&r1.out, c) },
-        |c| { wd::dct::idct_t4_rec_in_place_sse2(&mut cur_mut(&mut r2.out), black_box(&res)); out_sum(&r2.out, c) });
+        |c| { isa::dct::idct_t4_rec_in_place(&mut cur_mut(&mut r1.out), black_box(&res)); out_sum(&r1.out, c) },
+        |c| { wd::dct::idct_t4_rec_in_place(&mut cur_mut(&mut r2.out), black_box(&res)); out_sum(&r2.out, c) });
     row!(*rows, "idct res_add_pred (decoder)",
         |c| { idct_res_add_pred_c(&mut cur_mut(&mut r0.out), black_box(&res)); out_sum(&r0.out, c) },
-        |c| { isa::dct::idct_res_add_pred_sse2(&mut cur_mut(&mut r1.out), black_box(&res)); out_sum(&r1.out, c) },
-        |c| { wd::dct::idct_res_add_pred_sse2(&mut cur_mut(&mut r2.out), black_box(&res)); out_sum(&r2.out, c) });
+        |c| { isa::dct::idct_res_add_pred(&mut cur_mut(&mut r1.out), black_box(&res)); out_sum(&r1.out, c) },
+        |c| { wd::dct::idct_res_add_pred(&mut cur_mut(&mut r2.out), black_box(&res)); out_sum(&r2.out, c) });
     let dc: [i16; 16] = coeffs(9, 3000);
     row!(*rows, "idct i16x16 dc",
         |c| { let p = cur(black_box(&r0.b)); dec_aux::idct_rec_i16x16_dc_c(&mut cur_mut(&mut r0.out), &p, black_box(&dc)); out_sum(&r0.out, c) },
-        |c| { let p = cur(black_box(&r1.b)); isa::dct::idct_rec_i16x16_dc_sse2(&mut cur_mut(&mut r1.out), &p, black_box(&dc)); out_sum(&r1.out, c) },
-        |c| { let p = cur(black_box(&r2.b)); wd::dct::idct_rec_i16x16_dc_sse2(&mut cur_mut(&mut r2.out), &p, black_box(&dc)); out_sum(&r2.out, c) });
+        |c| { let p = cur(black_box(&r1.b)); isa::dct::idct_rec_i16x16_dc(&mut cur_mut(&mut r1.out), &p, black_box(&dc)); out_sum(&r1.out, c) },
+        |c| { let p = cur(black_box(&r2.b)); wd::dct::idct_rec_i16x16_dc(&mut cur_mut(&mut r2.out), &p, black_box(&dc)); out_sum(&r2.out, c) });
 }
 
 fn quant_rows(rows: &mut Vec<Row>) {
@@ -342,26 +363,26 @@ fn quant_rows(rows: &mut Vec<Row>) {
     let sum64 = |d: &[i16; 64], c: bool| if c { fnv16(d) } else { d[0] as u16 as u64 };
     row!(*rows, "quant 4x4",
         |c| { let mut d = black_box(in16); enc_aux::quant_4x4(&mut d, black_box(&ff), black_box(&mf)); sum16(&d, c) },
-        |c| { let mut d = black_box(in16); isa::quant::quant_4x4_sse2(&mut d, black_box(&ff), black_box(&mf)); sum16(&d, c) },
-        |c| { let mut d = black_box(in16); wd::quant::quant_4x4_sse2(&mut d, black_box(&ff), black_box(&mf)); sum16(&d, c) });
+        |c| { let mut d = black_box(in16); isa::quant::quant_4x4(&mut d, black_box(&ff), black_box(&mf)); sum16(&d, c) },
+        |c| { let mut d = black_box(in16); wd::quant::quant_4x4(&mut d, black_box(&ff), black_box(&mf)); sum16(&d, c) });
     row!(*rows, "quant four 4x4 max",
         |c| { let mut d = black_box(in64); let mut m = [0; 4]; enc_aux::quant_four_4x4_max(&mut d, black_box(&ff), black_box(&mf), &mut m); sum64(&d, c) ^ m[0] as u64 },
-        |c| { let mut d = black_box(in64); let mut m = [0; 4]; isa::quant::quant_four_4x4_max_sse2(&mut d, black_box(&ff), black_box(&mf), &mut m); sum64(&d, c) ^ m[0] as u64 },
-        |c| { let mut d = black_box(in64); let mut m = [0; 4]; wd::quant::quant_four_4x4_max_sse2(&mut d, black_box(&ff), black_box(&mf), &mut m); sum64(&d, c) ^ m[0] as u64 });
+        |c| { let mut d = black_box(in64); let mut m = [0; 4]; isa::quant::quant_four_4x4_max(&mut d, black_box(&ff), black_box(&mf), &mut m); sum64(&d, c) ^ m[0] as u64 },
+        |c| { let mut d = black_box(in64); let mut m = [0; 4]; wd::quant::quant_four_4x4_max(&mut d, black_box(&ff), black_box(&mf), &mut m); sum64(&d, c) ^ m[0] as u64 });
     let dq: [u16; 8] = [10, 13, 16, 13, 10, 13, 16, 13];
     row!(*rows, "dequant four 4x4",
         |c| { let mut d = black_box(in64); dec_aux::dequant_four_4x4(&mut d, black_box(&dq)); sum64(&d, c) },
-        |c| { let mut d = black_box(in64); isa::quant::dequant_four_4x4_sse2(&mut d, black_box(&dq)); sum64(&d, c) },
-        |c| { let mut d = black_box(in64); wd::quant::dequant_four_4x4_sse2(&mut d, black_box(&dq)); sum64(&d, c) });
+        |c| { let mut d = black_box(in64); isa::quant::dequant_four_4x4(&mut d, black_box(&dq)); sum64(&d, c) },
+        |c| { let mut d = black_box(in64); wd::quant::dequant_four_4x4(&mut d, black_box(&dq)); sum64(&d, c) });
     let mb: [i16; 241] = coeffs(17, 2000);
     row!(*rows, "hadamard t4 dc",
         |c| { let mut d = [0i16; 16]; enc_aux::hadamard_t4_dc(&mut d, black_box(&mb)); sum16(&d, c) },
-        |c| { let mut d = [0i16; 16]; isa::quant::hadamard_t4_dc_sse2(&mut d, black_box(&mb)); sum16(&d, c) },
-        |c| { let mut d = [0i16; 16]; wd::quant::hadamard_t4_dc_sse2(&mut d, black_box(&mb)); sum16(&d, c) });
+        |c| { let mut d = [0i16; 16]; isa::quant::hadamard_t4_dc(&mut d, black_box(&mb)); sum16(&d, c) },
+        |c| { let mut d = [0i16; 16]; wd::quant::hadamard_t4_dc(&mut d, black_box(&mb)); sum16(&d, c) });
     row!(*rows, "dequant ihadamard 4x4",
         |c| { let mut d = black_box(in16); dec_aux::dequant_ihadamard_4x4(&mut d, black_box(13)); sum16(&d, c) },
-        |c| { let mut d = black_box(in16); isa::quant::dequant_ihadamard_4x4_sse2(&mut d, black_box(13)); sum16(&d, c) },
-        |c| { let mut d = black_box(in16); wd::quant::dequant_ihadamard_4x4_sse2(&mut d, black_box(13)); sum16(&d, c) });
+        |c| { let mut d = black_box(in16); isa::quant::dequant_ihadamard_4x4(&mut d, black_box(13)); sum16(&d, c) },
+        |c| { let mut d = black_box(in16); wd::quant::dequant_ihadamard_4x4(&mut d, black_box(13)); sum16(&d, c) });
     // A typical quantised block: mostly zeros.
     let mut sparse = [0i16; 16];
     for (i, v) in sparse.iter_mut().enumerate() {
@@ -369,12 +390,12 @@ fn quant_rows(rows: &mut Vec<Row>) {
     }
     row!(*rows, "get_none_zero_count",
         |_| enc_aux::get_none_zero_count(black_box(&sparse)) as u64,
-        |_| isa::quant::get_none_zero_count_sse2(black_box(&sparse)) as u64,
-        |_| wd::quant::get_none_zero_count_sse2(black_box(&sparse)) as u64);
+        |_| isa::quant::get_none_zero_count(black_box(&sparse)) as u64,
+        |_| wd::quant::get_none_zero_count(black_box(&sparse)) as u64);
     row!(*rows, "calculate_single_ctr 4x4",
         |_| enc_aux::calculate_single_ctr_4x4(black_box(&sparse)) as u64,
-        |_| isa::score::calculate_single_ctr_4x4_sse2(black_box(&sparse)) as u64,
-        |_| wd::score::calculate_single_ctr_4x4_sse2(black_box(&sparse)) as u64);
+        |_| isa::score::calculate_single_ctr_4x4(black_box(&sparse)) as u64,
+        |_| wd::score::calculate_single_ctr_4x4(black_box(&sparse)) as u64);
 }
 
 fn copy_rows(rows: &mut Vec<Row>) {
@@ -386,12 +407,12 @@ fn copy_rows(rows: &mut Vec<Row>) {
     let sum = |d: &[u8], c: bool| if c { fnv(d) } else { d[ANCHOR] as u64 };
     row!(*rows, "copy 16x16",
         |c| { let (d, s) = (RecCursor::over_owned(&mut d0, ANCHOR, STRIDE), RecCursor::over_owned(black_box(&mut s0), ANCHOR, STRIDE)); enc_aux::WelsCopy16x16_c(&d, &s); sum(&d0, c) },
-        |c| { let (d, s) = (RecCursor::over_owned(&mut d1, ANCHOR, STRIDE), RecCursor::over_owned(black_box(&mut s1), ANCHOR, STRIDE)); isa::copy::copy_16x16_sse2(&d, &s); sum(&d1, c) },
-        |c| { let (d, s) = (RecCursor::over_owned(&mut d2, ANCHOR, STRIDE), RecCursor::over_owned(black_box(&mut s2), ANCHOR, STRIDE)); wd::copy::copy_16x16_sse2(&d, &s); sum(&d2, c) });
+        |c| { let (d, s) = (RecCursor::over_owned(&mut d1, ANCHOR, STRIDE), RecCursor::over_owned(black_box(&mut s1), ANCHOR, STRIDE)); isa::copy::copy_16x16(&d, &s); sum(&d1, c) },
+        |c| { let (d, s) = (RecCursor::over_owned(&mut d2, ANCHOR, STRIDE), RecCursor::over_owned(black_box(&mut s2), ANCHOR, STRIDE)); wd::copy::copy_16x16(&d, &s); sum(&d2, c) });
     row!(*rows, "copy 8x8",
         |c| { let (d, s) = (RecCursor::over_owned(&mut d0, ANCHOR, STRIDE), RecCursor::over_owned(black_box(&mut s0), ANCHOR, STRIDE)); enc_aux::WelsCopy8x8_c(&d, &s); sum(&d0, c) },
-        |c| { let (d, s) = (RecCursor::over_owned(&mut d1, ANCHOR, STRIDE), RecCursor::over_owned(black_box(&mut s1), ANCHOR, STRIDE)); isa::copy::copy_8x8_sse2(&d, &s); sum(&d1, c) },
-        |c| { let (d, s) = (RecCursor::over_owned(&mut d2, ANCHOR, STRIDE), RecCursor::over_owned(black_box(&mut s2), ANCHOR, STRIDE)); wd::copy::copy_8x8_sse2(&d, &s); sum(&d2, c) });
+        |c| { let (d, s) = (RecCursor::over_owned(&mut d1, ANCHOR, STRIDE), RecCursor::over_owned(black_box(&mut s1), ANCHOR, STRIDE)); isa::copy::copy_8x8(&d, &s); sum(&d1, c) },
+        |c| { let (d, s) = (RecCursor::over_owned(&mut d2, ANCHOR, STRIDE), RecCursor::over_owned(black_box(&mut s2), ANCHOR, STRIDE)); wd::copy::copy_8x8(&d, &s); sum(&d2, c) });
 }
 
 fn intra_rows(rows: &mut Vec<Row>) {
@@ -402,24 +423,24 @@ fn intra_rows(rows: &mut Vec<Row>) {
     let s16 = |p: &[u8; 16], c: bool| if c { fnv(p) } else { p[0] as u64 };
     row!(*rows, "intra 16x16 plane",
         |c| { let mut p = [0u8; 256]; ipred::WelsI16x16LumaPredPlane_c(&mut p, black_box(&rec)); s256(&p, c) },
-        |c| { let mut p = [0u8; 256]; isa::intra_pred::enc_i16x16_luma_pred_plane_sse2(&mut p, black_box(&rec)); s256(&p, c) },
-        |c| { let mut p = [0u8; 256]; wd::intra_pred::enc_i16x16_luma_pred_plane_sse2(&mut p, black_box(&rec)); s256(&p, c) });
+        |c| { let mut p = [0u8; 256]; isa::intra_pred::enc_i16x16_luma_pred_plane(&mut p, black_box(&rec)); s256(&p, c) },
+        |c| { let mut p = [0u8; 256]; wd::intra_pred::enc_i16x16_luma_pred_plane(&mut p, black_box(&rec)); s256(&p, c) });
     row!(*rows, "intra 16x16 dc",
         |c| { let mut p = [0u8; 256]; ipred::WelsI16x16LumaPredDc_c(&mut p, black_box(&rec)); s256(&p, c) },
-        |c| { let mut p = [0u8; 256]; isa::intra_pred::enc_i16x16_luma_pred_dc_sse2(&mut p, black_box(&rec)); s256(&p, c) },
-        |c| { let mut p = [0u8; 256]; wd::intra_pred::enc_i16x16_luma_pred_dc_sse2(&mut p, black_box(&rec)); s256(&p, c) });
+        |c| { let mut p = [0u8; 256]; isa::intra_pred::enc_i16x16_luma_pred_dc(&mut p, black_box(&rec)); s256(&p, c) },
+        |c| { let mut p = [0u8; 256]; wd::intra_pred::enc_i16x16_luma_pred_dc(&mut p, black_box(&rec)); s256(&p, c) });
     row!(*rows, "intra chroma plane",
         |c| { let mut p = [0u8; 64]; ipred::WelsIChromaPredPlane_c(&mut p, black_box(&rec)); s64(&p, c) },
-        |c| { let mut p = [0u8; 64]; isa::intra_pred::enc_chroma_pred_plane_sse2(&mut p, black_box(&rec)); s64(&p, c) },
-        |c| { let mut p = [0u8; 64]; wd::intra_pred::enc_chroma_pred_plane_sse2(&mut p, black_box(&rec)); s64(&p, c) });
+        |c| { let mut p = [0u8; 64]; isa::intra_pred::enc_chroma_pred_plane(&mut p, black_box(&rec)); s64(&p, c) },
+        |c| { let mut p = [0u8; 64]; wd::intra_pred::enc_chroma_pred_plane(&mut p, black_box(&rec)); s64(&p, c) });
     row!(*rows, "intra 4x4 dc",
         |c| { let mut p = [0u8; 16]; ipred::WelsI4x4LumaPredDc_c(&mut p, black_box(&rec)); s16(&p, c) },
-        |c| { let mut p = [0u8; 16]; isa::intra_pred::enc_i4x4_luma_pred_dc_sse2(&mut p, black_box(&rec)); s16(&p, c) },
-        |c| { let mut p = [0u8; 16]; wd::intra_pred::enc_i4x4_luma_pred_dc_sse2(&mut p, black_box(&rec)); s16(&p, c) });
+        |c| { let mut p = [0u8; 16]; isa::intra_pred::enc_i4x4_luma_pred_dc(&mut p, black_box(&rec)); s16(&p, c) },
+        |c| { let mut p = [0u8; 16]; wd::intra_pred::enc_i4x4_luma_pred_dc(&mut p, black_box(&rec)); s16(&p, c) });
     row!(*rows, "intra 4x4 ddl",
         |c| { let mut p = [0u8; 16]; ipred::WelsI4x4LumaPredDDL_c(&mut p, black_box(&rec)); s16(&p, c) },
-        |c| { let mut p = [0u8; 16]; isa::intra_pred::enc_i4x4_luma_pred_ddl_sse2(&mut p, black_box(&rec)); s16(&p, c) },
-        |c| { let mut p = [0u8; 16]; wd::intra_pred::enc_i4x4_luma_pred_ddl_sse2(&mut p, black_box(&rec)); s16(&p, c) });
+        |c| { let mut p = [0u8; 16]; isa::intra_pred::enc_i4x4_luma_pred_ddl(&mut p, black_box(&rec)); s16(&p, c) },
+        |c| { let mut p = [0u8; 16]; wd::intra_pred::enc_i4x4_luma_pred_ddl(&mut p, black_box(&rec)); s16(&p, c) });
 }
 
 fn deblock_rows(rows: &mut Vec<Row>) {
@@ -441,8 +462,8 @@ fn deblock_rows(rows: &mut Vec<Row>) {
         };
         row!(*rows, name,
             |c| { dbk::deblock_luma_lt4_scalar(&mut p0.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&p0, c) },
-            |c| { isa::deblock::deblock_luma_lt4_sse2(&mut p1.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&p1, c) },
-            |c| { wd::deblock::deblock_luma_lt4_sse2(&mut p2.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&p2, c) });
+            |c| { isa::deblock::deblock_luma_lt4(&mut p1.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&p1, c) },
+            |c| { wd::deblock::deblock_luma_lt4(&mut p2.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&p2, c) });
 
         let (mut p0, mut p1, mut p2) = (plane(43), plane(43), plane(43));
         let name: &'static str = if label == "horizontal edge" {
@@ -452,8 +473,8 @@ fn deblock_rows(rows: &mut Vec<Row>) {
         };
         row!(*rows, name,
             |c| { dbk::deblock_luma_eq4_scalar(&mut p0.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta)); sum(&p0, c) },
-            |c| { isa::deblock::deblock_luma_eq4_sse2(&mut p1.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta)); sum(&p1, c) },
-            |c| { wd::deblock::deblock_luma_eq4_sse2(&mut p2.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta)); sum(&p2, c) });
+            |c| { isa::deblock::deblock_luma_eq4(&mut p1.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta)); sum(&p1, c) },
+            |c| { wd::deblock::deblock_luma_eq4(&mut p2.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta)); sum(&p2, c) });
 
         let (mut b0, mut r0, mut b1, mut r1, mut b2, mut r2) =
             (plane(45), plane(46), plane(45), plane(46), plane(45), plane(46));
@@ -464,8 +485,8 @@ fn deblock_rows(rows: &mut Vec<Row>) {
         };
         row!(*rows, name,
             |c| { dbk::deblock_chroma_lt4_scalar(&mut b0.cursor_mut(4, 4), &mut r0.cursor_mut(4, 4), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&b0, c) ^ sum(&r0, c) },
-            |c| { isa::deblock::deblock_chroma_lt4_sse2(&mut b1.cursor_mut(4, 4), &mut r1.cursor_mut(4, 4), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&b1, c) ^ sum(&r1, c) },
-            |c| { wd::deblock::deblock_chroma_lt4_sse2(&mut b2.cursor_mut(4, 4), &mut r2.cursor_mut(4, 4), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&b2, c) ^ sum(&r2, c) });
+            |c| { isa::deblock::deblock_chroma_lt4(&mut b1.cursor_mut(4, 4), &mut r1.cursor_mut(4, 4), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&b1, c) ^ sum(&r1, c) },
+            |c| { wd::deblock::deblock_chroma_lt4(&mut b2.cursor_mut(4, 4), &mut r2.cursor_mut(4, 4), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&b2, c) ^ sum(&r2, c) });
     }
 }
 
@@ -486,9 +507,13 @@ fn main() {
     deblock_rows(&mut rows);
     eprintln!();
 
+    let has_isa = rows.iter().any(|r| r.ns[1].is_some());
     let has_wide = rows.iter().any(|r| r.ns[2].is_some());
     println!("=========================================================================================================");
     println!(" Per-kernel cost, ns per call, best of {} blocks of ~{} ms", repeats(), block_ms());
+    if !has_isa {
+        println!(" (no simd::x86_64 on this target: no intrin column)");
+    }
     if !has_wide {
         println!(" (built without --features wide: no wide column)");
     }
@@ -503,7 +528,10 @@ fn main() {
         (Some(a), Some(b)) if b > 0.0 => format!("{:.2}x", a / b),
         _ => "-".to_string(),
     };
-    let (mut ln_isa, mut ln_wide, mut ln_wi, mut n, mut mismatches) = (0.0f64, 0.0f64, 0.0f64, 0usize, 0usize);
+    // One accumulator per ratio, so a missing column drops its own mean and not the
+    // other two: on aarch64 `intrin/sc` has no rows and `wide/sc` has all of them.
+    let (mut ln_isa, mut ln_wide, mut ln_wi) = (0.0f64, 0.0f64, 0.0f64);
+    let (mut n_isa, mut n_wide, mut n_wi, mut mismatches) = (0usize, 0usize, 0usize, 0usize);
     for r in &rows {
         let [s, i, w] = r.ns;
         println!(
@@ -519,28 +547,32 @@ fn main() {
         );
         if let (Some(s), Some(i)) = (s, i) {
             ln_isa += (s / i).ln();
-            if let Some(w) = w {
-                ln_wide += (s / w).ln();
-                ln_wi += (i / w).ln();
-            }
-            n += 1;
+            n_isa += 1;
+        }
+        if let (Some(s), Some(w)) = (s, w) {
+            ln_wide += (s / w).ln();
+            n_wide += 1;
+        }
+        if let (Some(i), Some(w)) = (i, w) {
+            ln_wi += (i / w).ln();
+            n_wi += 1;
         }
         if !r.consistent {
             mismatches += 1;
         }
     }
     println!("---------------------------------------------------------------------------------------------------------");
-    if n > 0 {
-        let g = |x: f64| (x / n as f64).exp();
+    let g = |x: f64, n: usize| if n > 0 { format!("{:.2}x", (x / n as f64).exp()) } else { "-".to_string() };
+    if n_isa > 0 || n_wide > 0 {
         println!(
-            " {:<38} {:>9} {:>9} {:>9}   {:>8.2}x {:>8} {:>8}",
+            " {:<38} {:>9} {:>9} {:>9}   {:>9} {:>9} {:>9}",
             "geometric mean of the ratios",
             "",
             "",
             "",
-            g(ln_isa),
-            if has_wide { format!("{:.2}x", g(ln_wide)) } else { "-".into() },
-            if has_wide { format!("{:.2}x", g(ln_wi)) } else { "-".into() }
+            g(ln_isa, n_isa),
+            g(ln_wide, n_wide),
+            g(ln_wi, n_wi)
         );
     }
     if mismatches > 0 {

@@ -2,7 +2,7 @@
 //!
 //! `OPENH264_NO_SIMD=1` is latched once per process (`simd::latch_cpu_features`),
 //! and it gates both halves of the dispatch: `WelsCPUFeatureDetect` feeds
-//! `uiCpuFlag`, which is what fills the `pfXxx` tables, and `has_sse2` is what the
+//! `uiCpuFlag`, which is what fills the `pfXxx` tables, and `has_simd` is what the
 //! directly-dispatched kernels ask. So the switch is all-or-nothing, and it cannot
 //! be flipped inside one run — each side gets its own child process.
 //!

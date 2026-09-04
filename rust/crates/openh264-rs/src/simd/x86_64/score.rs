@@ -2,7 +2,7 @@
 //!
 //! Translated from `codec/encoder/core/x86/score.asm`, of whose four kernels
 //! this file holds one. `WelsGetNoneZeroCount_sse2` lives next to the quantizers
-//! it is read with, in [`super::quant::get_none_zero_count_sse2`].
+//! it is read with, in [`super::quant::get_none_zero_count`].
 //!
 //! # Why the two scan kernels are not here
 //!
@@ -40,7 +40,7 @@ use core::arch::x86_64::*;
 /// `clamp(v, -128, 127)`, which is `0` only for `v == 0`. A truncating narrow
 /// would lose every multiple of 256.
 #[target_feature(enable = "sse2")]
-unsafe fn nonzero_mask_sse2(dct: &[i16; 16]) -> u32 {
+unsafe fn nonzero_mask(dct: &[i16; 16]) -> u32 {
     unsafe {
         let zero = _mm_setzero_si128();
         let v0 = _mm_loadu_si128(dct.as_ptr() as *const __m128i);
@@ -73,12 +73,12 @@ fn highest_set(m: u32) -> i32 {
 /// one iteration per non-zero coefficient rather than one per coefficient.
 ///
 /// The result depends on `dct` **only** through this mask, which is what lets
-/// `single_ctr_sse2_matches_the_scalar_for_every_mask` check all 65536 of them.
+/// `single_ctr_matches_the_scalar_for_every_mask` check all 65536 of them.
 #[target_feature(enable = "sse2")]
 unsafe fn calculate_single_ctr_4x4_sse2_impl(dct: &[i16; 16]) -> i32 {
     use crate::encoder::encode_mb_aux::KI_TRUN_TABLE;
 
-    let nz = unsafe { nonzero_mask_sse2(dct) };
+    let nz = unsafe { nonzero_mask(dct) };
 
     let mut single_ctr: i32 = 0;
     // The scalar's first loop: skip the trailing zeros above the top coefficient.
@@ -101,7 +101,7 @@ unsafe fn calculate_single_ctr_4x4_sse2_impl(dct: &[i16; 16]) -> i32 {
 
 /// See [`calculate_single_ctr_4x4_sse2_impl`].
 #[inline]
-pub fn calculate_single_ctr_4x4_sse2(dct: &[i16; 16]) -> i32 {
+pub fn calculate_single_ctr_4x4(dct: &[i16; 16]) -> i32 {
     unsafe { calculate_single_ctr_4x4_sse2_impl(dct) }
 }
 
@@ -120,11 +120,11 @@ mod tests {
     /// the scalar's per-coefficient walk with a walk over set bits, so the two
     /// share no structure that a sampled test could lean on.
     #[test]
-    fn single_ctr_sse2_matches_the_scalar_for_every_mask() {
+    fn single_ctr_matches_the_scalar_for_every_mask() {
         for mask in 0u32..=0xFFFF {
             let dct: [i16; 16] = core::array::from_fn(|i| ((mask >> i) & 1) as i16);
             assert_eq!(
-                calculate_single_ctr_4x4_sse2(&dct),
+                calculate_single_ctr_4x4(&dct),
                 calculate_single_ctr_4x4(&dct),
                 "mask {mask:#06x}"
             );
@@ -135,13 +135,13 @@ mod tests {
     /// low byte is zero has to stay non-zero. `256` is the smallest such value
     /// and `-256` its mirror; a `packuswb`/truncating kernel reports 0 for both.
     #[test]
-    fn single_ctr_sse2_sees_coefficients_a_truncating_narrow_would_lose() {
+    fn single_ctr_sees_coefficients_a_truncating_narrow_would_lose() {
         for &v in &[256i16, -256, 512, i16::MIN, 0x0100, 0x7F00] {
             for pos in 0..16 {
                 let mut dct = [0i16; 16];
                 dct[pos] = v;
                 assert_eq!(
-                    calculate_single_ctr_4x4_sse2(&dct),
+                    calculate_single_ctr_4x4(&dct),
                     calculate_single_ctr_4x4(&dct),
                     "value {v} at {pos}"
                 );
