@@ -248,18 +248,16 @@ unsafe fn transpose4_epi32(
     v2: __m128i,
     v3: __m128i,
 ) -> (__m128i, __m128i, __m128i, __m128i) {
-    unsafe {
-        let a = _mm_unpacklo_epi32(v0, v1);
-        let b = _mm_unpackhi_epi32(v0, v1);
-        let c = _mm_unpacklo_epi32(v2, v3);
-        let d = _mm_unpackhi_epi32(v2, v3);
-        (
-            _mm_unpacklo_epi64(a, c),
-            _mm_unpackhi_epi64(a, c),
-            _mm_unpacklo_epi64(b, d),
-            _mm_unpackhi_epi64(b, d),
-        )
-    }
+    let a = _mm_unpacklo_epi32(v0, v1);
+    let b = _mm_unpackhi_epi32(v0, v1);
+    let c = _mm_unpacklo_epi32(v2, v3);
+    let d = _mm_unpackhi_epi32(v2, v3);
+    (
+        _mm_unpacklo_epi64(a, c),
+        _mm_unpackhi_epi64(a, c),
+        _mm_unpacklo_epi64(b, d),
+        _mm_unpackhi_epi64(b, d),
+    )
 }
 
 /// Transposes four vectors whose **low four `i16` lanes** hold a row. The upper four
@@ -272,13 +270,11 @@ unsafe fn transpose4_epi16_lo(
     v2: __m128i,
     v3: __m128i,
 ) -> (__m128i, __m128i, __m128i, __m128i) {
-    unsafe {
-        let a = _mm_unpacklo_epi16(v0, v1);
-        let b = _mm_unpacklo_epi16(v2, v3);
-        let lo = _mm_unpacklo_epi32(a, b);
-        let hi = _mm_unpackhi_epi32(a, b);
-        (lo, _mm_srli_si128(lo, 8), hi, _mm_srli_si128(hi, 8))
-    }
+    let a = _mm_unpacklo_epi16(v0, v1);
+    let b = _mm_unpacklo_epi16(v2, v3);
+    let lo = _mm_unpacklo_epi32(a, b);
+    let hi = _mm_unpackhi_epi32(a, b);
+    (lo, _mm_srli_si128(lo, 8), hi, _mm_srli_si128(hi, 8))
 }
 
 /// 4x4 forward Hadamard transform of the sixteen luma DC coefficients.
@@ -361,18 +357,16 @@ unsafe fn ihadamard_butterfly_sse2(
     a2: __m128i,
     a3: __m128i,
 ) -> (__m128i, __m128i, __m128i, __m128i) {
-    unsafe {
-        let t0 = _mm_add_epi16(a0, a2);
-        let t1 = _mm_sub_epi16(a0, a2);
-        let t2 = _mm_sub_epi16(a1, a3);
-        let t3 = _mm_add_epi16(a1, a3);
-        (
-            _mm_add_epi16(t0, t3),
-            _mm_add_epi16(t1, t2),
-            _mm_sub_epi16(t1, t2),
-            _mm_sub_epi16(t0, t3),
-        )
-    }
+    let t0 = _mm_add_epi16(a0, a2);
+    let t1 = _mm_sub_epi16(a0, a2);
+    let t2 = _mm_sub_epi16(a1, a3);
+    let t3 = _mm_add_epi16(a1, a3);
+    (
+        _mm_add_epi16(t0, t3),
+        _mm_add_epi16(t1, t2),
+        _mm_sub_epi16(t1, t2),
+        _mm_sub_epi16(t0, t3),
+    )
 }
 
 /// In-place dequantization and inverse 4x4 Hadamard transform of the luma DC block.

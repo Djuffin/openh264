@@ -1203,14 +1203,14 @@ pub fn WelsInitIntraPredFuncs(pFuncList: &mut SWelsFuncPtrList, kuiCpuFlag: u32)
     #[cfg(target_arch = "x86_64")]
     if (kuiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
         use crate::simd::x86_64::intra_pred::*;
-        fl.pfGetLumaI16x16Pred[I16_PRED_V as usize] = Some(enc_i16x16_luma_pred_v_sse2);
-        fl.pfGetLumaI16x16Pred[I16_PRED_H as usize] = Some(enc_i16x16_luma_pred_h_sse2);
+        fl.pfGetLumaI16x16Pred[I16_PRED_V as usize] = Some(enc_i16x16_luma_pred_v);
+        fl.pfGetLumaI16x16Pred[I16_PRED_H as usize] = Some(enc_i16x16_luma_pred_h);
         fl.pfGetLumaI16x16Pred[I16_PRED_DC as usize] = Some(enc_i16x16_luma_pred_dc_sse2);
         fl.pfGetLumaI16x16Pred[I16_PRED_P as usize] = Some(enc_i16x16_luma_pred_plane_sse2);
 
         fl.pfGetChromaPred[C_PRED_DC as usize] = Some(enc_chroma_pred_dc);
         fl.pfGetChromaPred[C_PRED_H as usize] = Some(enc_chroma_pred_h);
-        fl.pfGetChromaPred[C_PRED_V as usize] = Some(enc_chroma_pred_v_sse2);
+        fl.pfGetChromaPred[C_PRED_V as usize] = Some(enc_chroma_pred_v);
         fl.pfGetChromaPred[C_PRED_P as usize] = Some(enc_chroma_pred_plane_sse2);
 
         fl.pfGetLumaI4x4Pred[I4_PRED_V as usize] = Some(enc_i4x4_luma_pred_v_sse2);

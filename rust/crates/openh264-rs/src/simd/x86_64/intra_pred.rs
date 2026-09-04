@@ -3,13 +3,18 @@
 //! Accelerated implementations for 16x16 luma, 8x8 chroma, and 4x4 luma intra predictors,
 //! serving both the encoder candidate generator and the decoder in-place reconstructor.
 //!
-//! **`_sse2` in a name here means the body contains intrinsics.** Eight predictors
-//! in this file do not and are named without the suffix: the chroma H/V/DC pair, the
-//! 4x4 luma V/H/DC decoder predictors. They are not redundant — they are word-wide
-//! rewrites of their scalar twins (a `u64`/`u32` load and store where the scalar does
-//! `copy_from_slice`/`fill`) and the SSE2 arms of the init tables install them
-//! deliberately — but they vectorize nothing, and a name that says `_sse2` sends a
-//! reader looking for a kernel that is not there.
+//! **`_sse2` in a name here means the body contains intrinsics**, directly or through
+//! one of the shared halves below. The predictors that vectorize nothing carry no
+//! suffix: the chroma V/H/DC pair, the 4x4 luma V/H/DC decoder predictors, and the
+//! 16x16 luma V/H pair and DC-128 that the `PredOut` collapse turned into plain row
+//! fills. They are not redundant — they are word-wide rewrites of their scalar twins,
+//! and the SSE2 arms of the init tables install them deliberately — but a name that
+//! says `_sse2` sends a reader looking for a kernel that is not there.
+//!
+//! The rule is enforced by `sse2_suffix_means_the_body_has_intrinsics` at the bottom of
+//! this file, not left to review: it was stated here and broken six times by the very
+//! refactor that stated it, because collapsing the `enc_`/`dec_` pairs swapped
+//! `_mm_storeu_si128` for `copy_from_slice` and nothing noticed.
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
@@ -99,24 +104,22 @@ unsafe fn i16x16_plane_fill_sse2<O: PredOut>(
     left_shift: i32,
     lt_shift: i32,
 ) {
-    unsafe {
-        let inc_minus = _mm_setr_epi16(-7, -6, -5, -4, -3, -2, -1, 0);
-        let inc = _mm_setr_epi16(1, 2, 3, 4, 5, 6, 7, 8);
-        let b_vec = _mm_set1_epi16(top_shift as i16);
-        let c_vec = _mm_set1_epi16(left_shift as i16);
-        let mut s_vec = _mm_set1_epi16((lt_shift + 16 - 7 * left_shift) as i16);
+    let inc_minus = _mm_setr_epi16(-7, -6, -5, -4, -3, -2, -1, 0);
+    let inc = _mm_setr_epi16(1, 2, 3, 4, 5, 6, 7, 8);
+    let b_vec = _mm_set1_epi16(top_shift as i16);
+    let c_vec = _mm_set1_epi16(left_shift as i16);
+    let mut s_vec = _mm_set1_epi16((lt_shift + 16 - 7 * left_shift) as i16);
 
-        let term_lo = _mm_mullo_epi16(b_vec, inc_minus);
-        let term_hi = _mm_mullo_epi16(b_vec, inc);
+    let term_lo = _mm_mullo_epi16(b_vec, inc_minus);
+    let term_hi = _mm_mullo_epi16(b_vec, inc);
 
-        for dy in 0..16 {
-            let row_lo = _mm_srai_epi16(_mm_add_epi16(term_lo, s_vec), 5);
-            let row_hi = _mm_srai_epi16(_mm_add_epi16(term_hi, s_vec), 5);
-            let mut row = [0u8; 16];
-            _mm_storeu_si128(row.as_mut_ptr() as *mut __m128i, _mm_packus_epi16(row_lo, row_hi));
-            out.put(dy, &row);
-            s_vec = _mm_add_epi16(s_vec, c_vec);
-        }
+    for dy in 0..16 {
+        let row_lo = _mm_srai_epi16(_mm_add_epi16(term_lo, s_vec), 5);
+        let row_hi = _mm_srai_epi16(_mm_add_epi16(term_hi, s_vec), 5);
+        let mut row = [0u8; 16];
+        _mm_storeu_si128(row.as_mut_ptr() as *mut __m128i, _mm_packus_epi16(row_lo, row_hi));
+        out.put(dy, &row);
+        s_vec = _mm_add_epi16(s_vec, c_vec);
     }
 }
 
@@ -197,19 +200,17 @@ unsafe fn chroma_plane_fill_sse2<O: PredOut>(
     left_shift: i32,
     lt_shift: i32,
 ) {
-    unsafe {
-        let mul_b = _mm_setr_epi16(-3, -2, -1, 0, 1, 2, 3, 4);
-        let b_vec = _mm_set1_epi16(top_shift as i16);
-        let c_vec = _mm_set1_epi16(left_shift as i16);
-        let mut s_vec = _mm_set1_epi16((lt_shift + 16 - 3 * left_shift) as i16);
-        let term = _mm_mullo_epi16(b_vec, mul_b);
+    let mul_b = _mm_setr_epi16(-3, -2, -1, 0, 1, 2, 3, 4);
+    let b_vec = _mm_set1_epi16(top_shift as i16);
+    let c_vec = _mm_set1_epi16(left_shift as i16);
+    let mut s_vec = _mm_set1_epi16((lt_shift + 16 - 3 * left_shift) as i16);
+    let term = _mm_mullo_epi16(b_vec, mul_b);
 
-        for dy in 0..8 {
-            let row_w = _mm_srai_epi16(_mm_add_epi16(term, s_vec), 5);
-            let row_b = _mm_packus_epi16(row_w, row_w);
-            out.put(dy, &(_mm_cvtsi128_si64(row_b) as u64).to_ne_bytes());
-            s_vec = _mm_add_epi16(s_vec, c_vec);
-        }
+    for dy in 0..8 {
+        let row_w = _mm_srai_epi16(_mm_add_epi16(term, s_vec), 5);
+        let row_b = _mm_packus_epi16(row_w, row_w);
+        out.put(dy, &(_mm_cvtsi128_si64(row_b) as u64).to_ne_bytes());
+        s_vec = _mm_add_epi16(s_vec, c_vec);
     }
 }
 
@@ -230,27 +231,27 @@ fn pred_h<const N: usize, S: RefSamples, O: PredOut>(src: &S, out: &mut O, rows:
 
 /// Vertical 16x16 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i16x16_luma_pred_v_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
+pub fn enc_i16x16_luma_pred_v(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     pred_v::<16, _, _>(rec, &mut Packed::<16>(pred), 16)
 }
 
 
 /// Vertical 16x16 predictor in place (decoder).
 #[inline]
-pub fn dec_i16x16_luma_pred_v_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i16x16_luma_pred_v(pred: &mut PlaneCursorMut<'_>) {
     let top = pred.row_n::<16>(-1, 0);
     fill_rows(pred, 16, &top)
 }
 
 /// Horizontal 16x16 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_i16x16_luma_pred_h_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
+pub fn enc_i16x16_luma_pred_h(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     pred_h::<16, _, _>(rec, &mut Packed::<16>(pred), 16)
 }
 
 /// Horizontal 16x16 predictor in place (decoder).
 #[inline]
-pub fn dec_i16x16_luma_pred_h_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i16x16_luma_pred_h(pred: &mut PlaneCursorMut<'_>) {
     for dy in 0..16 {
         let v = pred.at(-1, dy as isize);
         pred.put(dy, &[v; 16]);
@@ -283,7 +284,7 @@ pub fn dec_i16x16_luma_pred_dc_top_sse2(pred: &mut PlaneCursorMut<'_>) {
 
 /// DC NA 16x16 predictor (decoder).
 #[inline]
-pub fn dec_i16x16_luma_pred_dc_na_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i16x16_luma_pred_dc_na(pred: &mut PlaneCursorMut<'_>) {
     fill_rows(pred, 16, &[0x80u8; 16])
 }
 
@@ -310,7 +311,7 @@ pub fn dec_i16x16_luma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
 
 /// Vertical Chroma 8x8 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_chroma_pred_v_sse2(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
+pub fn enc_chroma_pred_v(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
     pred_v::<8, _, _>(rec, &mut Packed::<8>(pred), 8)
 }
 
@@ -678,14 +679,14 @@ mod tests {
         let mut pred_c = [0u8; 256];
         let mut pred_simd = [0u8; 256];
         WelsI16x16LumaPredV_c(&mut pred_c, &rec);
-        enc_i16x16_luma_pred_v_sse2(&mut pred_simd, &rec);
+        enc_i16x16_luma_pred_v(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "16x16 V mismatch");
 
         // H
         let mut pred_c = [0u8; 256];
         let mut pred_simd = [0u8; 256];
         WelsI16x16LumaPredH_c(&mut pred_c, &rec);
-        enc_i16x16_luma_pred_h_sse2(&mut pred_simd, &rec);
+        enc_i16x16_luma_pred_h(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "16x16 H mismatch");
 
         // DC
@@ -713,7 +714,7 @@ mod tests {
         let mut pred_c = [0u8; 64];
         let mut pred_simd = [0u8; 64];
         WelsIChromaPredV_c(&mut pred_c, &rec);
-        enc_chroma_pred_v_sse2(&mut pred_simd, &rec);
+        enc_chroma_pred_v(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "Chroma V mismatch");
 
         // H
@@ -852,8 +853,8 @@ mod tests {
     #[test]
     fn dec_i16x16_luma_pred_parity() {
         use crate::decoder::get_intra_predictor as dec;
-        assert_dec_parity("16x16 V", dec::i16x16_luma_pred_v, dec_i16x16_luma_pred_v_sse2);
-        assert_dec_parity("16x16 H", dec::i16x16_luma_pred_h, dec_i16x16_luma_pred_h_sse2);
+        assert_dec_parity("16x16 V", dec::i16x16_luma_pred_v, dec_i16x16_luma_pred_v);
+        assert_dec_parity("16x16 H", dec::i16x16_luma_pred_h, dec_i16x16_luma_pred_h);
         assert_dec_parity("16x16 DC", dec::i16x16_luma_pred_dc, dec_i16x16_luma_pred_dc_sse2);
         assert_dec_parity(
             "16x16 DC top",
@@ -863,7 +864,7 @@ mod tests {
         assert_dec_parity(
             "16x16 DC n/a",
             dec::i16x16_luma_pred_dc_na,
-            dec_i16x16_luma_pred_dc_na_sse2,
+            dec_i16x16_luma_pred_dc_na,
         );
         assert_dec_parity(
             "16x16 Plane",
@@ -887,5 +888,90 @@ mod tests {
         assert_dec_parity("4x4 V", dec::i4x4_luma_pred_v, dec_i4x4_luma_pred_v);
         assert_dec_parity("4x4 H", dec::i4x4_luma_pred_h, dec_i4x4_luma_pred_h);
         assert_dec_parity("4x4 DC", dec::i4x4_luma_pred_dc, dec_i4x4_luma_pred_dc);
+    }
+
+    /// **The `_sse2` naming rule, enforced rather than asserted in a comment.**
+    ///
+    /// The module header states it; this decides it. It reads this file's own source and
+    /// checks that every `pub fn` whose name ends in `_sse2` reaches at least one `_mm_*`
+    /// intrinsic — in its own body, or in a function it calls (one hop, which is how the
+    /// wrappers here delegate to their `_impl` and to the shared fills).
+    ///
+    /// Why a test and not a review habit: the rule was written into the header and broken
+    /// six times by the same commit that wrote it. The `PredOut` collapse replaced
+    /// `_mm_storeu_si128` with `copy_from_slice`, which is the same instruction and one
+    /// less `unsafe`, but it silently emptied `enc_i16x16_luma_pred_v_sse2`,
+    /// `dec_i16x16_luma_pred_v_sse2`, the `_h` pair, `dec_i16x16_luma_pred_dc_na_sse2`
+    /// and `enc_chroma_pred_v_sse2` of every intrinsic while leaving the suffix on. A
+    /// reader looking for a kernel would not have found one.
+    #[test]
+    fn sse2_suffix_means_the_body_has_intrinsics() {
+        let src = include_str!("intra_pred.rs");
+
+        // Body of the item starting at byte `i`, by brace matching.
+        fn body_at(s: &str, i: usize) -> &str {
+            let b = s.as_bytes();
+            let (mut depth, mut j, mut started) = (0usize, i, false);
+            while j < b.len() {
+                match b[j] {
+                    b'{' => {
+                        depth += 1;
+                        started = true;
+                    }
+                    // Only once an opening brace has been seen: a `fn ` match inside a
+                    // comment can otherwise reach a closing brace first and underflow.
+                    b'}' if started => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return &s[i..=j];
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            &s[i..]
+        }
+
+        // Every `fn` in the file, by name, so a one-hop call can be resolved.
+        let mut bodies: Vec<(String, &str)> = Vec::new();
+        for (off, _) in src.match_indices("fn ") {
+            let after = &src[off + 3..];
+            let name: String = after
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                bodies.push((name, body_at(src, off)));
+            }
+        }
+        let intrinsics = |b: &str| b.contains("_mm_");
+
+        let mut offenders = Vec::new();
+        for (name, body) in bodies.iter().filter(|(n, _)| n.ends_with("_sse2")) {
+            if intrinsics(body) {
+                continue;
+            }
+            // One hop: any function this body *names as a whole identifier* that reaches
+            // an intrinsic. Substring matching is not enough — `..._dc_na_sse2` contains
+            // `..._dc`, so a plain `contains` lets an empty kernel borrow a sibling's
+            // intrinsics and the check passes on a body that has none.
+            let called: std::collections::HashSet<&str> = body
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|t| !t.is_empty())
+                .collect();
+            let reaches = bodies.iter().any(|(callee, cbody)| {
+                callee != name && called.contains(callee.as_str()) && intrinsics(cbody)
+            });
+            if !reaches {
+                offenders.push(name.clone());
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these are named `_sse2` but reach no `_mm_*` intrinsic — drop the suffix or \
+             implement the kernel (see the module header): {offenders:?}"
+        );
     }
 }

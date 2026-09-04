@@ -398,11 +398,8 @@ mod tests {
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        // SAFETY: guarded by the `is_x86_feature_detected!` return above.
-        unsafe {
-            assert_eq!(sample_sad_16x16_avx2(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
-            assert_eq!(sample_sad_16x8_avx2(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
-        }
+        assert_eq!(sample_sad_16x16_avx2(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
+        assert_eq!(sample_sad_16x8_avx2(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
     }
 
     #[test]
@@ -606,19 +603,16 @@ mod tests {
                 let c1 = PlaneCursor::new(&p1, anchor, 64);
                 let c2 = PlaneCursor::new(&p2, anchor, 64);
                 let at = format!("{name} @ {anchor}");
-                // SAFETY: guarded by the `is_x86_feature_detected!` return above.
-                unsafe {
-                    assert_eq!(
-                        sample_sad_16x16_avx2(&c1, &c2),
-                        sample_sad::<16, 16, _>(&c1, &c2),
-                        "16x16 avx2 {at}"
-                    );
-                    assert_eq!(
-                        sample_sad_16x8_avx2(&c1, &c2),
-                        sample_sad::<16, 8, _>(&c1, &c2),
-                        "16x8 avx2 {at}"
-                    );
-                }
+                assert_eq!(
+                    sample_sad_16x16_avx2(&c1, &c2),
+                    sample_sad::<16, 16, _>(&c1, &c2),
+                    "16x16 avx2 {at}"
+                );
+                assert_eq!(
+                    sample_sad_16x8_avx2(&c1, &c2),
+                    sample_sad::<16, 8, _>(&c1, &c2),
+                    "16x8 avx2 {at}"
+                );
             }
         }
     }
