@@ -10,11 +10,16 @@
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
+/// The NEON kernels. Compiled out under Miri, which cannot interpret them — see the
+/// module's own header — so that lane keeps the scalar forwards it always had.
+#[cfg(all(target_arch = "aarch64", not(miri)))]
+pub mod aarch64;
+
 #[cfg(feature = "wide")]
 pub mod wide;
 
 /// The scalar forwards, compiled only where they are what [`kernels`] names.
-#[cfg(any(feature = "scalar", not(any(target_arch = "x86_64", feature = "wide"))))]
+#[cfg(any(feature = "scalar", not(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri)), feature = "wide"))))]
 pub mod scalar;
 
 /// **The kernel set, and the whole of the dispatch.** Every direct call site and every
@@ -29,10 +34,11 @@ pub mod scalar;
 ///
 /// | build | resolves to | what runs |
 /// |---|---|---|
-/// | x86_64, default | [`x86_64`] | `core::arch` intrinsics |
+/// | x86_64, default | [`x86_64`] | `core::arch` SSE2 intrinsics |
+/// | aarch64, default | [`aarch64`] | `core::arch` NEON intrinsics, ported from upstream's arm64 asm |
 /// | `--features wide` | [`wide`] | portable `wide` lanes — NEON on aarch64 |
 /// | `--features scalar` | [`scalar`] | forwards to the scalar body |
-/// | no kernels for this target | [`scalar`] | likewise |
+/// | no kernels for this target, or Miri on aarch64 | [`scalar`] | likewise |
 ///
 /// `scalar` wins over `wide`, which wins over the default, so the two feature flags
 /// compose rather than conflict.
@@ -43,16 +49,18 @@ pub mod scalar;
 /// `--features scalar` is that flag. Selecting a kernel set is a build-time question,
 /// asked once here, and the sites carry no `#[cfg]` and no branch.
 ///
-/// The three modules export the same entry points with the same signatures, which
+/// The four modules export the same entry points with the same signatures, which
 /// `tests::the_kernel_sets_expose_the_same_entry_points` holds; the sites therefore do
-/// not change when the selection does, only this block does. [`x86_64`] and [`wide`]
-/// are both compiled whenever they can be, which is what lets
+/// not change when the selection does, only this block does. The intrinsic set for
+/// the host and [`wide`] are both compiled whenever they can be, which is what lets
 /// `benches/kernel_bench.rs` time the implementations of one kernel in one process.
 #[cfg(all(target_arch = "x86_64", not(feature = "wide"), not(feature = "scalar")))]
 pub use x86_64 as kernels;
+#[cfg(all(target_arch = "aarch64", not(miri), not(feature = "wide"), not(feature = "scalar")))]
+pub use aarch64 as kernels;
 #[cfg(all(feature = "wide", not(feature = "scalar")))]
 pub use wide as kernels;
-#[cfg(any(feature = "scalar", not(any(target_arch = "x86_64", feature = "wide"))))]
+#[cfg(any(feature = "scalar", not(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri)), feature = "wide"))))]
 pub use scalar as kernels;
 
 use crate::common::cpu_core::*;
@@ -65,7 +73,7 @@ use crate::common::cpu_core::*;
 /// unconditionally, clearing the word would take the `pfXxx` tables scalar and leave
 /// motion compensation, deblocking and the IDCTs on the vector kernels — a switch that
 /// half-applies is worse than none. `--features scalar` is the switch now, and it is
-/// the reference's own (`USE_ASM=No`); see [`arch_cpu_features`].
+/// the reference's own (`USE_ASM=No`); see the per-arch `arch_cpu_features`.
 ///
 /// Latching keeps this to one probe per process. Out-of-line initialiser so the
 /// steady-state read is an acquire load and a compare.
@@ -130,34 +138,46 @@ fn arch_cpu_features() -> u32 {
     flags
 }
 
-/// Off x86_64 the answer is a question about the build, not about the CPU.
+/// The aarch64 probe. Upstream's is `cpu.cpp`'s `WelsCPUFeatureDetect` for
+/// `HAVE_NEON_AARCH64`, which does no runtime detection at all — NEON is mandatory on
+/// every AArch64 CPU — and returns `WELS_CPU_VFPv3 | WELS_CPU_NEON`. This answers the
+/// same way, with one more bit.
 ///
 /// **`WELS_CPU_SSE2` names a slot here, not an instruction set.** It is upstream's
 /// flag word (`codec/common/src/cpu.cpp`), which the port keeps because the `pfXxx`
 /// tables are built from it exactly as the C++ builds them — but what the bit *means*
-/// to this port is "there is a vector kernel for this slot". [`wide`] is written in
-/// the `wide` crate's lane types throughout — no `core::arch`, every file
-/// `#![forbid(unsafe_code)]` — so it compiles and runs wherever the crate does, and on
-/// aarch64 LLVM lowers those lanes to NEON. Under `--features wide` the slots are
-/// filled on every target, so the bit is set on every target.
-///
-/// The kernels themselves say nothing about an instruction set: `deblock_luma_lt4` is
-/// that name in both modules, and the module path is the whole of the difference.
+/// to this port is "there is a vector kernel for this slot". Upstream's tables test
+/// `WELS_CPU_NEON` on arm64 and `WELS_CPU_SSE2` on x86 to install the same slots; the
+/// port's tables test the one bit on every target, so the aarch64 kernel set — or
+/// [`wide`], whose lanes lower to NEON here — reports it. `WELS_CPU_NEON` is set
+/// alongside because it is what the hardware is; nothing dispatches on it.
 ///
 /// **`WELS_CPU_AVX2` is deliberately left clear.** It is the one place a second
-/// runtime test picks a second kernel for a slot already filled, and off x86 there is
-/// no wider register file to pick it for: `wide` has no runtime dispatch, so its
-/// `_avx2` entry points are 128-bit bodies that step two rows. Installing them here
-/// would swap a kernel for a differently-shaped copy of itself, so the AVX2 slots keep
-/// the baseline kernel.
+/// runtime test picks a second kernel for a slot already filled, and there is no
+/// wider register file here to pick it for: neither set's `_avx2` entry points are a
+/// different kernel on this target.
 ///
-/// Without the feature there is no kernel set to point at — `simd::kernels` does not
-/// exist on this target — so every bit stays clear and every dispatch site takes its
-/// scalar fallback, as it always has.
+/// `--features scalar` is `USE_ASM=No`, as on x86_64: the word is `0` and the tables
+/// install their scalar arms. So is a Miri run without `--features wide`, where the
+/// NEON module is compiled out and `kernels` is the scalar set.
+#[cfg(target_arch = "aarch64")]
+fn arch_cpu_features() -> u32 {
+    let neon_kernels = cfg!(all(not(miri), not(feature = "wide")));
+    if cfg!(feature = "scalar") || !(neon_kernels || cfg!(feature = "wide")) {
+        return 0;
+    }
+    WELS_CPU_SSE2 | WELS_CPU_NEON
+}
+
+/// Off x86_64 and aarch64 the answer is a question about the build, not about the
+/// CPU: [`wide`] compiles and runs wherever the crate does, so under `--features
+/// wide` the slots are filled and `WELS_CPU_SSE2` — the slot bit, see above — is
+/// set. Without the feature there is no kernel set to point at, so every bit stays
+/// clear and every dispatch site takes its scalar fallback.
 ///
 /// Split out per arch rather than `#[cfg]`-ing a block inside one function, so that
 /// `flags` is only `mut` where it is actually mutated (`lib.rs` denies `unused_mut`).
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 fn arch_cpu_features() -> u32 {
     if cfg!(all(feature = "wide", not(feature = "scalar"))) { WELS_CPU_SSE2 } else { 0 }
 }
@@ -339,7 +359,7 @@ mod tests {
         }
 
         let mut unreached = Vec::new();
-        for module in ["x86_64", "wide"] {
+        for module in ["x86_64", "aarch64", "wide"] {
             for (name, file) in entry_points(module) {
                 if INTERNAL.contains(&name.as_str()) || used.contains(&name) {
                     continue;
@@ -354,13 +374,13 @@ mod tests {
         );
     }
 
-    /// The three kernel sets have to agree on their entry points, or `simd::kernels`
+    /// The four kernel sets have to agree on their entry points, or `simd::kernels`
     /// would resolve differently per build and a dispatch site would compile on one
     /// target and not another. Cheaper to learn here than from a cross-compile.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn the_kernel_sets_expose_the_same_entry_points() {
-        let sets: Vec<(&str, BTreeSet<String>)> = ["x86_64", "wide", "scalar"]
+        let sets: Vec<(&str, BTreeSet<String>)> = ["x86_64", "aarch64", "wide", "scalar"]
             .iter()
             .map(|m| {
                 let names = entry_points(m)

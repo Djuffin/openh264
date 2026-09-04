@@ -1,13 +1,12 @@
 //! Per-kernel timing of the three implementations of each SIMD kernel: the scalar
-//! reference, the `core::arch` intrinsics in `simd::x86_64`, and — when built with
-//! `--features wide` — the `wide`-crate kernels in `simd::wide`.
+//! reference, the `core::arch` intrinsics for the host — `simd::x86_64` or
+//! `simd::aarch64` — and, when built with `--features wide`, the `wide`-crate kernels
+//! in `simd::wide`.
 //!
-//! **Both SIMD columns are optional, and for the same reason.** `simd::x86_64` does
-//! not exist off x86_64 and `simd::wide` does not exist without the feature, so a row
-//! carries whichever of the two this build has and the table prints `-` for the other.
-//! On aarch64 with `--features wide` that makes this a scalar-versus-wide instrument,
-//! which is the only comparison there is to make there — and the one worth making,
-//! since those lanes lower to NEON.
+//! **Both SIMD columns are optional, and for the same reason.** The intrinsic module
+//! exists only on its own architecture and `simd::wide` does not exist without the
+//! feature, so a row carries whichever of the two this build has and the table prints
+//! `-` for the other. The `intrin` column is SSE2 on x86_64 and NEON on aarch64.
 //!
 //! One process, one set of inputs, three closures per row. Every row is checked
 //! before it is timed: each implementation runs once on its own fresh copy of the
@@ -51,6 +50,8 @@ use openh264_rs::encoder::sample as satd_ref;
 use openh264_rs::safe::plane::{PaddedPlane, PlaneCursor, PlaneCursorMut};
 #[cfg(target_arch = "x86_64")]
 use openh264_rs::simd::x86_64 as isa;
+#[cfg(all(target_arch = "aarch64", not(miri)))]
+use openh264_rs::simd::aarch64 as isa;
 #[cfg(feature = "wide")]
 use openh264_rs::simd::wide as wd;
 
@@ -133,16 +134,16 @@ where
 ///
 /// The `#[cfg]`s sit on the statements rather than inside the argument list because
 /// that is what keeps `$isa` from being name-resolved at all on a target with no
-/// `simd::x86_64` — a cfg-stripped statement takes its whole expression with it.
+/// intrinsic module — a cfg-stripped statement takes its whole expression with it.
 macro_rules! row {
     ($rows:expr, $name:expr, $scalar:expr, $isa:expr, $wide:expr) => {{
-        #[cfg(all(target_arch = "x86_64", feature = "wide"))]
+        #[cfg(all(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))), feature = "wide"))]
         run3(&mut $rows, $name, $scalar, Some($isa), Some($wide));
-        #[cfg(all(target_arch = "x86_64", not(feature = "wide")))]
+        #[cfg(all(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))), not(feature = "wide")))]
         run3(&mut $rows, $name, $scalar, Some($isa), None::<fn(bool) -> u64>);
-        #[cfg(all(not(target_arch = "x86_64"), feature = "wide"))]
+        #[cfg(all(not(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri)))), feature = "wide"))]
         run3(&mut $rows, $name, $scalar, None::<fn(bool) -> u64>, Some($wide));
-        #[cfg(all(not(target_arch = "x86_64"), not(feature = "wide")))]
+        #[cfg(all(not(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri)))), not(feature = "wide")))]
         run3(&mut $rows, $name, $scalar, None::<fn(bool) -> u64>, None::<fn(bool) -> u64>);
     }};
 }
@@ -512,7 +513,7 @@ fn main() {
     println!("=========================================================================================================");
     println!(" Per-kernel cost, ns per call, best of {} blocks of ~{} ms", repeats(), block_ms());
     if !has_isa {
-        println!(" (no simd::x86_64 on this target: no intrin column)");
+        println!(" (no intrinsic kernel set on this target: no intrin column)");
     }
     if !has_wide {
         println!(" (built without --features wide: no wide column)");

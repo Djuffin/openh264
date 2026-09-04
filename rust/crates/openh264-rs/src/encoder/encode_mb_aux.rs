@@ -297,7 +297,7 @@ pub fn hadamard_dc_span(a: &[i16], off: usize) -> &[i16; 241] {
 use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_4x4, copy_4x8, copy_8x16, copy_8x4, copy_8x8};
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut, SampleCursor};
 
-/// The kernel set the dispatch sites below call: `simd::x86_64` by default,
+/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
 /// site because the kernels share their names with the scalars in this module — which
 /// is the point of the naming, and the reason the module qualifier has to stay.

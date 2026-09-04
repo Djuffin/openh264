@@ -33,7 +33,7 @@ use crate::encoder::svc_encode_mb::g_kuiDequantCoeff;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 use crate::encoder::rec_view::RecCursor;
 
-/// The kernel set the dispatch sites below call: `simd::x86_64` by default,
+/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
 /// site because the kernels share their names with the scalars in this module — which
 /// is the point of the naming, and the reason the module qualifier has to stay.

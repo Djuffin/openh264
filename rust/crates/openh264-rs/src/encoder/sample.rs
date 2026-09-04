@@ -109,7 +109,7 @@ use crate::encoder::svc_mode_decision::{
 };
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
-/// The kernel set the dispatch sites below call: `simd::x86_64` by default,
+/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`, and `simd::scalar` on a target with neither.
 /// Imported rather than spelled in full at each site because the kernels share their
 /// names with the scalars in this module — which is the point of the naming, and the
