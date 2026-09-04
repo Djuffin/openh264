@@ -119,7 +119,7 @@ use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 /// byte-identically, without going through the table at all. The table exists for
 /// the runtime-indexed readers (the motion search hoists `[block_size]`, and
 /// `md_cost`/`me_cost`'s family selection).
-pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) {
+pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
     let sdf = &mut pFuncList.sSampleDealingFuncs;
 
     //pfSampleSad init
@@ -147,6 +147,32 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32) 
     sdf.pfSample4Sad[BLOCK_4x4] = Some(|a, b, sad| sample_sad_four::<4, 4, _>(a, b, sad));
     sdf.pfSample4Sad[BLOCK_8x4] = Some(|a, b, sad| sample_sad_four::<8, 4, _>(a, b, sad));
     sdf.pfSample4Sad[BLOCK_4x8] = Some(|a, b, sad| sample_sad_four::<4, 8, _>(a, b, sad));
+
+    #[cfg(target_arch = "x86_64")]
+    if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+        sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_16x16_sse2(a, b));
+        sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_16x8_sse2(a, b));
+        sdf.pfSampleSad[BLOCK_8x16] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_8x16_sse2(a, b));
+        sdf.pfSampleSad[BLOCK_8x8] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_8x8_sse2(a, b));
+
+        sdf.pfSample4Sad[BLOCK_16x16] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_16x16_sse2(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_16x8] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_16x8_sse2(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_8x16] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_8x16_sse2(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_8x8] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_8x8_sse2(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_4x4] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_4x4_sse2(a, b, sad));
+
+        sdf.pfSampleSatd[BLOCK_4x4] = Some(|a, b| crate::simd::x86_64::satd::satd_4x4_sse2(a, b));
+        sdf.pfSampleSatd[BLOCK_8x8] = Some(|a, b| crate::simd::x86_64::satd::satd_8x8_sse2(a, b));
+        sdf.pfSampleSatd[BLOCK_8x16] = Some(|a, b| crate::simd::x86_64::satd::satd_8x16_sse2(a, b));
+        sdf.pfSampleSatd[BLOCK_16x8] = Some(|a, b| crate::simd::x86_64::satd::satd_16x8_sse2(a, b));
+        sdf.pfSampleSatd[BLOCK_16x16] = Some(|a, b| crate::simd::x86_64::satd::satd_16x16_sse2(a, b));
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_AVX2) != 0 {
+        sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_16x16_avx2(a, b));
+        sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_16x8_avx2(a, b));
+    }
 
     // The five `pfIntra*Combined3*` slots were nulled here, as the C++ does. They
     // were never anything else on any target this port builds for, and the fields
@@ -212,13 +238,19 @@ mod tests {
     /// `Combined3` slots must be left NULL — `svc_base_layer_md` asserts on that.
     #[test]
     fn init_fills_sad_and_satd_and_clears_combined3() {
-        let mut fl = SWelsFuncPtrList::default();
-        WelsInitSampleSadFunc(&mut fl, 0);
+        for flags in [
+            0,
+            crate::common::cpu_core::WELS_CPU_SSE2,
+            crate::common::cpu_core::WELS_CPU_SSE2 | crate::common::cpu_core::WELS_CPU_AVX2,
+        ] {
+            let mut fl = SWelsFuncPtrList::default();
+            WelsInitSampleSadFunc(&mut fl, flags);
 
-        for b in [BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4, BLOCK_4x8] {
-            assert!(fl.sSampleDealingFuncs.pfSampleSad[b].is_some(), "sad[{b}]");
-            assert!(fl.sSampleDealingFuncs.pfSampleSatd[b].is_some(), "satd[{b}]");
-            assert!(fl.sSampleDealingFuncs.pfSample4Sad[b].is_some(), "sad4[{b}]");
+            for b in [BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4, BLOCK_4x8] {
+                assert!(fl.sSampleDealingFuncs.pfSampleSad[b].is_some(), "sad[{b}] flags={flags:#x}");
+                assert!(fl.sSampleDealingFuncs.pfSampleSatd[b].is_some(), "satd[{b}] flags={flags:#x}");
+                assert!(fl.sSampleDealingFuncs.pfSample4Sad[b].is_some(), "sad4[{b}] flags={flags:#x}");
+            }
         }
     }
 }
