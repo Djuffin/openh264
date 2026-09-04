@@ -9,7 +9,7 @@
 #![forbid(unsafe_code)]
 
 use wide::bytemuck::cast;
-use wide::{i16x16, i16x8, i8x16, CmpEq};
+use wide::{i16x16, i16x8, i8x16};
 
 use crate::encoder::encode_mb_aux::KI_TRUN_TABLE;
 
