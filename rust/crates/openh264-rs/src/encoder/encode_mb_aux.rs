@@ -842,6 +842,20 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
 
     #[cfg(target_arch = "x86_64")]
     if (uiCpuFlag & WELS_CPU_SSE2) != 0 {
+        // Both 16x16 slots take the unaligned kernel; `simd/x86_64/copy.rs`
+        // explains why upstream's aligned/not-aligned split is not reproduced.
+        f.pfCopy16x16Aligned = crate::simd::x86_64::copy::copy_16x16_sse2;
+        f.pfCopy16x16NotAligned = crate::simd::x86_64::copy::copy_16x16_sse2;
+        f.pfCopy16x8NotAligned = crate::simd::x86_64::copy::copy_16x8_sse2;
+        f.pfCopy8x16Aligned = crate::simd::x86_64::copy::copy_8x16_sse2;
+        f.pfCopy8x8Aligned = crate::simd::x86_64::copy::copy_8x8_sse2;
+
+        f.pfCalculateSingleCtr4x4 = crate::simd::x86_64::score::calculate_single_ctr_4x4_sse2;
+
+        // `pfScan4x4` and `pfScan4x4Ac` stay scalar on purpose: `scan_4x4_dc_ac`
+        // already compiles to a shorter shuffle sequence than `score.asm`'s, for
+        // the reason `simd/x86_64/score.rs` sets out.
+
         f.pfDctT4 = WelsDctT4_sse2;
         f.pfDctFourT4 = WelsDctFourT4_sse2;
         f.pfTransformHadamard4x4Dc = crate::simd::x86_64::quant::hadamard_t4_dc_sse2;
@@ -860,7 +874,54 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
+    /// Every slot [`WelsInitEncodingFuncs`] has an SSE2 kernel for must actually
+    /// change when the SSE2 bit is set — the failure this catches is a kernel
+    /// that is written, tested, and then never reached, which is how the two
+    /// Hadamard "kernels" that were the scalar copied verbatim went unnoticed.
+    ///
+    /// The second list is the other half of the same statement: those slots are
+    /// scalar *by decision*, not by omission, and wiring an SSE2 kernel into one
+    /// of them should have to come here and say so.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn every_encoding_slot_with_an_sse2_kernel_is_wired() {
+        use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+
+        let mut scalar = SWelsFuncPtrList::default();
+        WelsInitEncodingFuncs(&mut scalar, 0);
+        let mut sse2 = SWelsFuncPtrList::default();
+        WelsInitEncodingFuncs(&mut sse2, WELS_CPU_SSE2);
+
+        let accelerated: [(&str, usize, usize); 14] = [
+            ("pfCopy16x16Aligned", scalar.pfCopy16x16Aligned as usize, sse2.pfCopy16x16Aligned as usize),
+            ("pfCopy16x16NotAligned", scalar.pfCopy16x16NotAligned as usize, sse2.pfCopy16x16NotAligned as usize),
+            ("pfCopy16x8NotAligned", scalar.pfCopy16x8NotAligned as usize, sse2.pfCopy16x8NotAligned as usize),
+            ("pfCopy8x16Aligned", scalar.pfCopy8x16Aligned as usize, sse2.pfCopy8x16Aligned as usize),
+            ("pfCopy8x8Aligned", scalar.pfCopy8x8Aligned as usize, sse2.pfCopy8x8Aligned as usize),
+            ("pfCalculateSingleCtr4x4", scalar.pfCalculateSingleCtr4x4 as usize, sse2.pfCalculateSingleCtr4x4 as usize),
+            ("pfDctT4", scalar.pfDctT4 as usize, sse2.pfDctT4 as usize),
+            ("pfDctFourT4", scalar.pfDctFourT4 as usize, sse2.pfDctFourT4 as usize),
+            ("pfTransformHadamard4x4Dc", scalar.pfTransformHadamard4x4Dc as usize, sse2.pfTransformHadamard4x4Dc as usize),
+            ("pfGetNoneZeroCount", scalar.pfGetNoneZeroCount as usize, sse2.pfGetNoneZeroCount as usize),
+            ("pfQuantization4x4", scalar.pfQuantization4x4 as usize, sse2.pfQuantization4x4 as usize),
+            ("pfQuantizationDc4x4", scalar.pfQuantizationDc4x4 as usize, sse2.pfQuantizationDc4x4 as usize),
+            ("pfQuantizationFour4x4", scalar.pfQuantizationFour4x4 as usize, sse2.pfQuantizationFour4x4 as usize),
+            ("pfQuantizationFour4x4Max", scalar.pfQuantizationFour4x4Max as usize, sse2.pfQuantizationFour4x4Max as usize),
+        ];
+        for (name, a, b) in accelerated {
+            assert_ne!(a, b, "{name} is the same function with and without SSE2");
+        }
+
+        // Scalar by decision, not by omission.
+        for (name, a, b) in [
+            ("pfScan4x4", scalar.pfScan4x4 as usize, sse2.pfScan4x4 as usize),
+            ("pfScan4x4Ac", scalar.pfScan4x4Ac as usize, sse2.pfScan4x4Ac as usize),
+        ] {
+            assert_eq!(a, b, "{name} gained an SSE2 kernel — see simd/x86_64/score.rs first");
+        }
+    }
+
     /// The DCT kernels are generic over [`SampleCursor`], and the source operand
     /// reaches them as a `RecCursor` over a shared interior-mutable plane rather
     /// than as a `PlaneCursor` over a slice — because the source picture is
