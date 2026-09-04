@@ -154,18 +154,37 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
         sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_16x8_sse2(a, b));
         sdf.pfSampleSad[BLOCK_8x16] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_8x16_sse2(a, b));
         sdf.pfSampleSad[BLOCK_8x8] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_8x8_sse2(a, b));
+        // **The three small shapes upstream leaves scalar on x86, and why they are not.**
+        // `BLOCK_4x4` is a gap against upstream, which installs `WelsSampleSad4x4_mmx`
+        // here (`sample.cpp`'s `X86_ASM` arm). `BLOCK_8x4` and `BLOCK_4x8` have no x86
+        // kernel upstream at all, so filling them puts this port ahead of it — which is
+        // safe to do because SAD is an exact integer cost: the parity tests in
+        // `simd::x86_64::sad` assert these agree with `sample_sad::<W, H>` bit for bit
+        // over five input distributions and four anchors, so mode decision sees the
+        // same numbers and picks the same modes. The kernels were already written and
+        // tested; only the table entry was missing.
+        sdf.pfSampleSad[BLOCK_4x4] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_4x4_sse2(a, b));
+        sdf.pfSampleSad[BLOCK_8x4] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_8x4_sse2(a, b));
+        sdf.pfSampleSad[BLOCK_4x8] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_4x8_sse2(a, b));
 
         sdf.pfSample4Sad[BLOCK_16x16] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_16x16_sse2(a, b, sad));
         sdf.pfSample4Sad[BLOCK_16x8] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_16x8_sse2(a, b, sad));
         sdf.pfSample4Sad[BLOCK_8x16] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_8x16_sse2(a, b, sad));
         sdf.pfSample4Sad[BLOCK_8x8] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_8x8_sse2(a, b, sad));
         sdf.pfSample4Sad[BLOCK_4x4] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_4x4_sse2(a, b, sad));
+        // No upstream x86 kernel for these two shapes either; see the note above.
+        sdf.pfSample4Sad[BLOCK_8x4] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_8x4_sse2(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_4x8] = Some(|a, b, sad| crate::simd::x86_64::sad::sample_sad_four_4x8_sse2(a, b, sad));
 
         sdf.pfSampleSatd[BLOCK_4x4] = Some(|a, b| crate::simd::x86_64::satd::satd_4x4_sse2(a, b));
         sdf.pfSampleSatd[BLOCK_8x8] = Some(|a, b| crate::simd::x86_64::satd::satd_8x8_sse2(a, b));
         sdf.pfSampleSatd[BLOCK_8x16] = Some(|a, b| crate::simd::x86_64::satd::satd_8x16_sse2(a, b));
         sdf.pfSampleSatd[BLOCK_16x8] = Some(|a, b| crate::simd::x86_64::satd::satd_16x8_sse2(a, b));
         sdf.pfSampleSatd[BLOCK_16x16] = Some(|a, b| crate::simd::x86_64::satd::satd_16x16_sse2(a, b));
+        // As above: no upstream x86 SATD for 8x4 or 4x8, and SATD is an exact integer
+        // cost, so installing the port's own is byte-neutral.
+        sdf.pfSampleSatd[BLOCK_8x4] = Some(|a, b| crate::simd::x86_64::satd::satd_8x4_sse2(a, b));
+        sdf.pfSampleSatd[BLOCK_4x8] = Some(|a, b| crate::simd::x86_64::satd::satd_4x8_sse2(a, b));
     }
 
     // **Two conditions, and they are different questions.** `uiCpuFlag` is the host's
@@ -241,6 +260,59 @@ mod tests {
             sum16x16 += satd_8x8(&ca.advance(dx, dy), &cb.advance(dx, dy));
         }
         assert_eq!(satd_16x16(&ca, &cb), sum16x16);
+    }
+
+    /// **Every SSE2 slot is actually SSE2.** Seven kernels — the 4x4, 8x4 and 4x8 SADs,
+    /// the 8x4 and 4x8 four-point SADs, and the 8x4 and 4x8 SATDs — were written and
+    /// parity-tested but never installed, so the tables handed out the scalar on a
+    /// machine that had the SIMD sitting right there. Nothing caught that, because a
+    /// kernel with a green parity test and no table entry looks exactly like a kernel
+    /// that is in use.
+    ///
+    /// So compare the whole table against itself: under `WELS_CPU_SSE2` every one of
+    /// these slots must hold a *different* function than it does at `uiCpuFlag == 0`.
+    /// A slot that stops being wired fails here by name.
+    ///
+    /// Function-pointer identity is the comparison, with the caveat on
+    /// `common/mc.rs`'s `init_mc_func_cpu_flags`: both addresses come from the same
+    /// `WelsInitSampleSadFunc` instantiation, and Miri mints a fresh synthetic address
+    /// per reification, so it is excluded.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn every_sse2_sad_and_satd_slot_is_wired() {
+        const SHAPES: [(usize, &str); 7] = [
+            (BLOCK_16x16, "16x16"),
+            (BLOCK_16x8, "16x8"),
+            (BLOCK_8x16, "8x16"),
+            (BLOCK_8x8, "8x8"),
+            (BLOCK_4x4, "4x4"),
+            (BLOCK_8x4, "8x4"),
+            (BLOCK_4x8, "4x8"),
+        ];
+
+        let mut scalar = SWelsFuncPtrList::default();
+        WelsInitSampleSadFunc(&mut scalar, 0);
+        let mut sse2 = SWelsFuncPtrList::default();
+        WelsInitSampleSadFunc(&mut sse2, crate::common::cpu_core::WELS_CPU_SSE2);
+
+        let (a, b) = (&scalar.sSampleDealingFuncs, &sse2.sSampleDealingFuncs);
+        for (slot, name) in SHAPES {
+            assert_ne!(
+                a.pfSampleSad[slot].map(|f| f as usize),
+                b.pfSampleSad[slot].map(|f| f as usize),
+                "pfSampleSad[{name}] is the same function with and without SSE2"
+            );
+            assert_ne!(
+                a.pfSample4Sad[slot].map(|f| f as usize),
+                b.pfSample4Sad[slot].map(|f| f as usize),
+                "pfSample4Sad[{name}] is the same function with and without SSE2"
+            );
+            assert_ne!(
+                a.pfSampleSatd[slot].map(|f| f as usize),
+                b.pfSampleSatd[slot].map(|f| f as usize),
+                "pfSampleSatd[{name}] is the same function with and without SSE2"
+            );
+        }
     }
 
     /// Every slot the mode-decision layer indexes must be filled, and the five
