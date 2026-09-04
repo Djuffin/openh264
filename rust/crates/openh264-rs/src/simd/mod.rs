@@ -40,9 +40,10 @@ use crate::common::cpu_core::*;
 /// to fold into its callers.
 #[inline]
 pub fn detect_cpu_features() -> u32 {
-    let cached = CPU_FEATURES.load(Ordering::Relaxed);
-    if cached != 0 {
-        return cached & !CPU_FEATURES_LATCHED;
+    // `Acquire` here pairs with the `Release` in `latch_cpu_features`, so a thread that
+    // sees the ready flag also sees the word stored before it was set.
+    if CPU_FEATURES_READY.load(Ordering::Acquire) {
+        return CPU_FEATURES.load(Ordering::Relaxed);
     }
     latch_cpu_features()
 }
@@ -56,9 +57,11 @@ fn latch_cpu_features() -> u32 {
     } else {
         arch_cpu_features()
     };
-    // Racing callers compute the same word from the same inputs, so the store is
-    // idempotent and needs no compare-exchange.
-    CPU_FEATURES.store(flags | CPU_FEATURES_LATCHED, Ordering::Relaxed);
+    // Racing callers compute the same word from the same inputs, so both stores are
+    // idempotent and neither needs a compare-exchange. The word goes first and the flag
+    // second, under `Release`, so no reader can see the flag without the word.
+    CPU_FEATURES.store(flags, Ordering::Relaxed);
+    CPU_FEATURES_READY.store(true, Ordering::Release);
     flags
 }
 
@@ -102,15 +105,25 @@ fn arch_cpu_features() -> u32 {
     0
 }
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-/// Bit 31, which no `WELS_CPU_*` flag uses (the highest is
-/// `WELS_CPU_CACHELINE_64 = 0x4000_0000`), marks the word as computed — so that a
-/// genuine all-scalar answer of `0` is distinguishable from "not yet asked".
-const CPU_FEATURES_LATCHED: u32 = 1 << 31;
-
-/// The process-wide feature word. See [`detect_cpu_features`] for why it is latched.
+/// The process-wide feature word, and whether it has been computed yet.
+///
+/// **Two cells, not a sentinel bit inside the word.** This used to mark the word as
+/// computed by setting bit 31, on the stated premise that no `WELS_CPU_*` flag used it.
+/// The premise was false: `WELS_CPU_CACHELINE_128` is `0x8000_0000`
+/// (`common/cpu_core.rs:49`), and upstream's `WelsCPUFeatureDetect` genuinely sets it —
+/// `codec/common/src/cpu.cpp:207` does `uiCPU |= WELS_CPU_CACHELINE_128` when CLFLUSH
+/// reports a 128-byte line. The read path masked that bit off unconditionally, so on the
+/// day `arch_cpu_features` learns to report cache-line size the flag would have read back
+/// as never-set for the life of the process, on hardware where it is set, with nothing to
+/// fail. A separate cell cannot collide with any flag, whichever bit a future one takes,
+/// so the whole class of bug is gone rather than moved to a different bit.
+///
+/// The flag needs `0` to remain a legitimate answer, which it is: `arch_cpu_features`
+/// returns `0` on every non-x86_64 target and under `OPENH264_NO_SIMD=1`.
 static CPU_FEATURES: AtomicU32 = AtomicU32::new(0);
+static CPU_FEATURES_READY: AtomicBool = AtomicBool::new(false);
 
 /// Returns true if SSE2 is supported and not disabled by `OPENH264_NO_SIMD=1`.
 #[inline(always)]
