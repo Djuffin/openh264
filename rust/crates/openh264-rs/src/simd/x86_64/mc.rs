@@ -639,8 +639,8 @@ pub fn mc_hor_ver22_sse2<S: RefSamples + Copy>(
 
 /// **The SSE2 leaf set** — `McLeaves` with the three real kernels in this file.
 ///
-/// The twelve quarter-pel composites live once, in `common/mc.rs`; this is the whole
-/// of what used to be ~250 lines of second copy. See [`crate::common::mc::McLeaves`].
+/// The twelve quarter-pel composites live once, in `common/mc.rs`; this is the whole of
+/// the SSE2 side of them. See [`crate::common::mc::McLeaves`].
 pub struct Sse2Leaves;
 
 impl crate::common::mc::McLeaves for Sse2Leaves {

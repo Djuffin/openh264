@@ -577,13 +577,12 @@ pub fn deblock_luma_lt4_sse2(
             }
         }
 
-        // **Write back only the columns the filter can modify** (review §7). The
-        // transposed span read above is 8 (resp. 4) columns wide because the kernel
-        // needs the outer taps, but the loop above only assigns the inner ones, and
-        // the scalar twin writes exactly those. Storing the whole span put the
-        // untouched outer columns back with the values just read — value-neutral, but
-        // it made this kernel's write contract wider than the scalar it must match,
-        // and at `iEdge == 0` those outer columns are the *previous macroblock's*.
+        // **Write back only the columns the filter can modify.** The span read above is
+        // wider because the kernel needs the outer taps, but only the inner columns are
+        // assigned, and the scalar twin writes exactly those. Storing the whole span
+        // would be value-neutral yet widen this kernel's write contract past the scalar
+        // it must match — and at `iEdge == 0` the outer columns belong to the previous
+        // macroblock.
         for i in 0..16 {
             let seg: &[u8; 4] = rows[i][2..6].try_into().expect("p1..q1");
             pix.set_row_n::<4>(i as isize, -2, seg);
@@ -669,13 +668,12 @@ pub fn deblock_luma_eq4_sse2(
             }
         }
 
-        // **Write back only the columns the filter can modify** (review §7). The
-        // transposed span read above is 8 (resp. 4) columns wide because the kernel
-        // needs the outer taps, but the loop above only assigns the inner ones, and
-        // the scalar twin writes exactly those. Storing the whole span put the
-        // untouched outer columns back with the values just read — value-neutral, but
-        // it made this kernel's write contract wider than the scalar it must match,
-        // and at `iEdge == 0` those outer columns are the *previous macroblock's*.
+        // **Write back only the columns the filter can modify.** The span read above is
+        // wider because the kernel needs the outer taps, but only the inner columns are
+        // assigned, and the scalar twin writes exactly those. Storing the whole span
+        // would be value-neutral yet widen this kernel's write contract past the scalar
+        // it must match — and at `iEdge == 0` the outer columns belong to the previous
+        // macroblock.
         for i in 0..16 {
             let seg: &[u8; 6] = rows[i][1..7].try_into().expect("p2..q2");
             pix.set_row_n::<6>(i as isize, -3, seg);
@@ -781,13 +779,12 @@ pub fn deblock_chroma_lt4_sse2(
             cr_rows[y][2] = t[2][y + 8];
         }
 
-        // **Write back only the columns the filter can modify** (review §7). The
-        // transposed span read above is 8 (resp. 4) columns wide because the kernel
-        // needs the outer taps, but the loop above only assigns the inner ones, and
-        // the scalar twin writes exactly those. Storing the whole span put the
-        // untouched outer columns back with the values just read — value-neutral, but
-        // it made this kernel's write contract wider than the scalar it must match,
-        // and at `iEdge == 0` those outer columns are the *previous macroblock's*.
+        // **Write back only the columns the filter can modify.** The span read above is
+        // wider because the kernel needs the outer taps, but only the inner columns are
+        // assigned, and the scalar twin writes exactly those. Storing the whole span
+        // would be value-neutral yet widen this kernel's write contract past the scalar
+        // it must match — and at `iEdge == 0` the outer columns belong to the previous
+        // macroblock.
         for i in 0..8 {
             let cb_seg: &[u8; 2] = cb_rows[i][1..3].try_into().expect("p0, q0");
             let cr_seg: &[u8; 2] = cr_rows[i][1..3].try_into().expect("p0, q0");
@@ -896,13 +893,12 @@ pub fn deblock_chroma_eq4_sse2(
             cr_rows[y][2] = t[2][y + 8];
         }
 
-        // **Write back only the columns the filter can modify** (review §7). The
-        // transposed span read above is 8 (resp. 4) columns wide because the kernel
-        // needs the outer taps, but the loop above only assigns the inner ones, and
-        // the scalar twin writes exactly those. Storing the whole span put the
-        // untouched outer columns back with the values just read — value-neutral, but
-        // it made this kernel's write contract wider than the scalar it must match,
-        // and at `iEdge == 0` those outer columns are the *previous macroblock's*.
+        // **Write back only the columns the filter can modify.** The span read above is
+        // wider because the kernel needs the outer taps, but only the inner columns are
+        // assigned, and the scalar twin writes exactly those. Storing the whole span
+        // would be value-neutral yet widen this kernel's write contract past the scalar
+        // it must match — and at `iEdge == 0` the outer columns belong to the previous
+        // macroblock.
         for i in 0..8 {
             let cb_seg: &[u8; 2] = cb_rows[i][1..3].try_into().expect("p0, q0");
             let cr_seg: &[u8; 2] = cr_rows[i][1..3].try_into().expect("p0, q0");

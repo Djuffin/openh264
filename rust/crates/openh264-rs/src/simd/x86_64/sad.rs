@@ -441,25 +441,16 @@ mod tests {
     }
 
     // ========================================================================
-    // Input and anchor coverage (review §14).
+    // Input and anchor coverage.
     //
-    // The three tests above do reach all sixteen public kernels, but each of them at
-    // exactly **one anchor** (`64 * 8 + 8`, so both cursors sit at the same 8-byte
-    // aligned offset) over **one input pattern** (two arithmetic ramps). A kernel that
-    // handled some other alignment wrongly, or whose lanes only disagree on inputs a
-    // ramp never produces, passes all three.
+    // The three tests above reach all sixteen kernels, but each at one anchor over one
+    // input pattern, so a kernel wrong at another alignment — or only on inputs a ramp
+    // never produces — passes them all.
     //
-    // The sweep below runs every kernel over four anchors chosen to land on each
-    // residue class mod 8 — so the aligned and the three unaligned cases are all
-    // exercised — and five input distributions: two ramps, uniform noise, an
-    // all-`0xFF`/all-`0x00` pair that maximises every absolute difference, and a
-    // near-identical pair where almost every difference is zero. The second and third
-    // are the ends of the accumulator's range, which is where a `psadbw` accumulation
-    // that widened or saturated wrongly would show.
-    //
-    // The four-point kernels get the same treatment; their `(dx, dy)` probes read
-    // outside the block, so the anchor sweep is doing more work for them than for the
-    // single-point ones.
+    // The sweep below runs every kernel over four anchors, one per residue class mod 8,
+    // and five distributions. The all-`0xFF`/all-`0x00` pair and the near-identical
+    // pair are the ends of the accumulator's range, where a `psadbw` accumulation that
+    // widened or saturated wrongly would show.
     // ========================================================================
 
     /// A 64-bit LCG, so a failing seed is replayable.

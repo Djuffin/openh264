@@ -262,16 +262,13 @@ mod tests {
         assert_eq!(satd_16x16(&ca, &cb), sum16x16);
     }
 
-    /// **Every SSE2 slot is actually SSE2.** Seven kernels — the 4x4, 8x4 and 4x8 SADs,
-    /// the 8x4 and 4x8 four-point SADs, and the 8x4 and 4x8 SATDs — were written and
-    /// parity-tested but never installed, so the tables handed out the scalar on a
-    /// machine that had the SIMD sitting right there. Nothing caught that, because a
-    /// kernel with a green parity test and no table entry looks exactly like a kernel
-    /// that is in use.
+    /// **Every SSE2 slot is actually SSE2.** A kernel with a green parity test and no
+    /// table entry looks exactly like one in use, so nothing else here would notice a
+    /// slot quietly handing out the scalar.
     ///
-    /// So compare the whole table against itself: under `WELS_CPU_SSE2` every one of
-    /// these slots must hold a *different* function than it does at `uiCpuFlag == 0`.
-    /// A slot that stops being wired fails here by name.
+    /// The table is compared against itself: under `WELS_CPU_SSE2` every one of these
+    /// slots must hold a *different* function than at `uiCpuFlag == 0`, so a slot that
+    /// stops being wired fails by name.
     ///
     /// Function-pointer identity is the comparison, with the caveat on
     /// `common/mc.rs`'s `init_mc_func_cpu_flags`: both addresses come from the same

@@ -468,7 +468,7 @@ fn scratch() -> [u8; 256] {
 
 
 // ============================================================================
-// The quarter-pel composites, once (review §11)
+// The quarter-pel composites, once
 // ============================================================================
 
 /// **The three half-pel leaves and the averaging step, as one substitutable set.**
@@ -478,18 +478,11 @@ fn scratch() -> [u8; 256] {
 /// `McHorVer22` (centre) and `McSampleAvg`, at fixed offsets the standard fixes.
 /// Only those four do arithmetic, and only they have an SSE2 form worth writing.
 ///
-/// This file used to carry the twelve composites and `simd/x86_64/mc.rs` a verbatim
-/// second copy with `_sse2` appended to every call inside — ~250 lines whose only
-/// content was which leaf set to reach. Both copies now share these bodies and differ
-/// in `L`. What that trades away is real and worth naming: a structural mistake in a
-/// composite can no longer be caught by comparing the two spellings, because there is
-/// one spelling. What it buys is that the two can no longer *drift* — which is the
-/// failure the parity tests could not see either, since they would have agreed with
-/// whichever copy they were pointed at.
-///
-/// The leaves stay individually tested against each other, which is where the
-/// arithmetic lives; `mc_luma_parity` still compares the two instantiations across all
-/// sixteen quarter-pel positions, so a leaf that disagrees still fails.
+/// The scalar and SSE2 chains share these bodies and differ only in `L`, so they cannot
+/// drift apart. The trade is that a structural mistake in a composite can no longer be
+/// caught by comparing two spellings, because there is one; the leaves stay
+/// individually tested, and `mc_luma_parity` compares the two instantiations across all
+/// sixteen quarter-pel positions.
 pub trait McLeaves {
     /// `McHorVer20` — the horizontal half-pel filter.
     fn hor<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
