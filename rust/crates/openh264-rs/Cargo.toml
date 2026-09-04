@@ -21,11 +21,12 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 # pulls in nothing, and the comparison harness keeps the one thing it needs.
 [dependencies]
 # **Off by default, so the shipped library still has no dependencies.** `--features
-# wide` compiles `src/simd/wide/`, a second set of SIMD kernels written against the
+# wide` compiles `src/simd/wide/`, a further set of SIMD kernels written against the
 # `wide` crate's portable lane types instead of `core::arch` intrinsics, and points
-# `simd::kernels` at it so every dispatch site takes the wide kernel. Both kernel
-# sets are always compiled under the feature, which is what lets
-# `benches/kernel_bench.rs` time scalar, intrinsics and wide in one binary.
+# `simd::kernels` at it so every dispatch site takes the wide kernel — in place of
+# the SSE2 set on x86_64 and the NEON set on aarch64. The host's intrinsic set is
+# still compiled under the feature, which is what lets `benches/kernel_bench.rs`
+# time scalar, intrinsics and wide in one binary.
 #
 # Pinned exactly, because the numbers in the README's *Performance* section are a claim
 # about a particular version: on x86_64 they are `wide`'s SSE2 fallbacks, on aarch64 what

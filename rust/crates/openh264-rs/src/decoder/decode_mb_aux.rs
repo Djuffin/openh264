@@ -29,7 +29,7 @@ pub fn WelsClip1(iX: i32) -> u8 {
 
 use crate::safe::plane::PlaneCursorMut;
 
-/// The kernel set the dispatch sites below call: `simd::x86_64` by default,
+/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
 /// site because the kernels share their names with the scalars in this module — which
 /// is the point of the naming, and the reason the module qualifier has to stay.

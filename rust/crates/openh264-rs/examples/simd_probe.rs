@@ -8,72 +8,75 @@
 //! then read `target/release/examples/simd_probe-*.s`. Not a program worth running;
 //! `main` calls each probe once so nothing is dead.
 //!
-//! Each half is present only where its module is: the `isa` probes off x86_64 have
-//! nothing to probe, the `wide` probes need the feature. On aarch64 with
-//! `--features wide` this emits the `wide` half alone, which is how you read what
-//! those lanes lowered to — NEON there rather than SSE2.
+//! Each half is present only where its module is: the `isa` probes are the SSE2
+//! kernels on x86_64 and the NEON kernels on aarch64, and nothing elsewhere; the
+//! `wide` probes need the feature. On aarch64 with `--features wide` this emits both
+//! halves, which is how you read the hand-written NEON next to what `wide`'s lanes
+//! lowered to.
 
-// A build with neither probe set — off x86_64, without `--features wide` — emits no
-// probes at all, so main's fixtures go unread. That is the honest outcome for a codegen
-// instrument on a target with no kernels to read the codegen of.
+// A build with neither probe set — off x86_64 and aarch64, without `--features wide`
+// — emits no probes at all, so main's fixtures go unread. That is the honest outcome
+// for a codegen instrument on a target with no kernels to read the codegen of.
 #![allow(non_snake_case, unused_imports, unused_variables, unused_mut)]
 
 use openh264_rs::safe::plane::{PlaneCursor, PlaneCursorMut};
 #[cfg(target_arch = "x86_64")]
 use openh264_rs::simd::x86_64 as isa;
+#[cfg(all(target_arch = "aarch64", not(miri)))]
+use openh264_rs::simd::aarch64 as isa;
 #[cfg(feature = "wide")]
 use openh264_rs::simd::wide as wd;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub fn probe_isa_sad_16x16(a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) -> i32 {
     isa::sad::sample_sad_16x16(a, b)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub fn probe_isa_satd_4x4(a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) -> i32 {
     isa::satd::satd_4x4(a, b)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub fn probe_isa_dequant_ihadamard(res: &mut [i16; 16], mf: u16) {
     isa::quant::dequant_ihadamard_4x4(res, mf)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub fn probe_isa_hadamard_t4_dc(out: &mut [i16; 16], dct: &[i16; 241]) {
     isa::quant::hadamard_t4_dc(out, dct)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub fn probe_isa_quant_4x4(d: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
     isa::quant::quant_4x4(d, ff, mf)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub fn probe_isa_dct_4x4(d: &mut [i16; 16], a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) {
     isa::dct::dct_4x4(d, a, b)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub fn probe_isa_pixel_avg_16x16(dst: &mut PlaneCursorMut<'_>, a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) {
     isa::mc::pixel_avg(dst, a, b, 16, 16)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub fn probe_isa_hor_ver02_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
@@ -144,7 +147,7 @@ fn main() {
     let (ff, mf) = ([1i16; 8], [2i16; 8]);
     #[allow(unused_mut)]
     let mut total = 0i32;
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
     {
         total += probe_isa_sad_16x16(&ca, &cb) + probe_isa_satd_4x4(&ca, &cb);
         probe_isa_dequant_ihadamard(&mut d, 3);

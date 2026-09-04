@@ -19,9 +19,9 @@ and compared byte for byte, and that sweep is a gate, not a report.
 | Decoder | 58 conformance streams decode to the same frames as the reference; parity suites for parse-only decoding, no-delay decoding, error concealment, error reporting, resolution and reference-count changes, and a malformed-stream corpus refereed against the C++ decoder |
 | Tests | 657 unit and integration tests in release, 664 in debug, plus compile-fail doctests pinning the crate's `unsafe` boundary |
 | Upstream's own tests | Cisco's `test/api` gtest suite runs against the Rust shared library; one row is allowlisted, by design (see *Deliberate divergences*) |
-| Unsafe code | 82 of 118 source files are `#![forbid(unsafe_code)]`, which the compiler checks on every build; what remains is the C-ABI boundary in `src/api/`, the intrinsics in `src/simd/x86_64/`, and a handful of audited sites, each tagged with `#[allow(unsafe_code)]` and a reason |
+| Unsafe code | 81 of 128 source files are `#![forbid(unsafe_code)]`, which the compiler checks on every build; what remains is the C-ABI boundary in `src/api/`, the intrinsics in `src/simd/x86_64/` and `src/simd/aarch64/`, and a handful of audited sites, each tagged with `#[allow(unsafe_code)]` and a reason |
 | Dependencies | none; `libc` only as a dev-dependency for the benches that load the C++ library |
-| SIMD | Two kernel sets behind one alias, each a parity port of the scalar beside it. `src/simd/x86_64/` is the default on x86_64: 85 SSE2 kernels plus an AVX2 pair for 16-wide SAD, across SAD/SATD, motion compensation, forward and inverse DCT, quantization, intra prediction, deblocking, macroblock copies and CAVLC scoring — **1.43x** on the encoder there. `--features wide` swaps in `src/simd/wide/`, the same entry points written in the `wide` crate's portable lane types, which dispatches on **every** target: on aarch64 it is the port's only SIMD tier, and it is **1.33x** per kernel but **0.93x** end to end (see *Performance*). No hand-written NEON, MMX or LSX |
+| SIMD | Three kernel sets behind one alias, each a parity port of the scalar beside it, plus the scalar forwards. `src/simd/x86_64/` is the default on x86_64: 85 SSE2 kernels plus an AVX2 pair for 16-wide SAD, across SAD/SATD, motion compensation, forward and inverse DCT, quantization, intra prediction, deblocking, macroblock copies and CAVLC scoring — **1.43x** on the encoder there. `src/simd/aarch64/` is the default on aarch64: the same entry points as NEON intrinsics, transcribed from upstream's own arm64 assembly — **2.50x** per kernel and **1.45x** on the encoder on an Apple M1, bit-identical with the C++ on every row (see *Performance*). `--features wide` swaps in `src/simd/wide/`, the same entry points written in the `wide` crate's portable lane types, which dispatches on **every** target. No MMX or LSX |
 
 ## Layout
 
@@ -33,13 +33,14 @@ rust/
 │   ├── src/decoder/             codec/decoder — likewise
 │   ├── src/processing/          codec/processing — the pre-processing plugins
 │   ├── src/common/              codec/common — SAD/SATD, MC, intra prediction, deblocking, tracing
-│   ├── src/simd/                CPU feature detection and three kernel sets: x86_64/ (core::arch intrinsics),
-│   │                            wide/ (the `wide` crate, safe, behind `--features wide`) and scalar/ (forwards,
-│   │                            so a target with neither still resolves); simd::kernels aliases the selected one
+│   ├── src/simd/                CPU feature detection and four kernel sets: x86_64/ (SSE2 intrinsics),
+│   │                            aarch64/ (NEON intrinsics, ported from upstream's arm64 asm), wide/ (the `wide`
+│   │                            crate, safe, behind `--features wide`) and scalar/ (forwards, so a target with
+│   │                            none of the others still resolves); simd::kernels aliases the selected one
 │   ├── src/safe/                the safe vocabulary the codec is written in (see below)
 │   ├── tests/                   integration tests, incl. conformance and parity suites
 │   ├── benches/                 c_vs_rust_bench and decode_1080p_bench (both load the C++ .dylib),
-│   │                            and kernel_bench (per kernel: scalar, intrinsics, wide), Rust only
+│   │                            and kernel_bench (per kernel: scalar, the host's intrinsics, wide), Rust only
 │   └── examples/portref.rs      the port's answer for one malformed-corpus entry
 └── tools/
     ├── gates.sh                 the gate battery: commit | family | session | full | exit
@@ -142,8 +143,8 @@ tables install their scalar arm too. One flag, the whole tier, and the suite run
 each way:
 
 ```bash
-cargo test --release                      # 657 pass, on whatever kernels this target has
-cargo test --release --features scalar    # the same 657, same bytes, no kernels at all
+cargo test --release                      # on whatever kernels this target has: SSE2 on x86_64, NEON on aarch64
+cargo test --release --features scalar    # the same tests, same bytes, no kernels at all
 cargo test --release --features wide      # the same again, on the portable kernels
 ```
 
@@ -151,14 +152,14 @@ A kernel that is written but never reached is the failure this arrangement is
 most exposed to — a slot can be left pointing at the scalar and nothing observable
 changes, because the output of a parity port *is* the scalar's output — so
 reachability is asserted, not assumed. `every_kernel_is_named_by_a_dispatch_site`
-reads the source and requires every entry point of `simd::x86_64` and `simd::wide`
-to be named through the `simd::kernels` alias somewhere outside `src/simd/`, or to
-be on a short list of module-internal workers. That list is the only hand-kept part
-and it fails closed: a new kernel nothing dispatches is not on it. The bug is not
-hypothetical — it has happened twice here, to two Hadamard "kernels" that were the
-scalar copied verbatim and to the `BLOCK_4x4`/`8x4`/`4x8` SAD slots, whose kernels
-were written and tested with no table entry.
-`the_kernel_sets_expose_the_same_entry_points` is the other half: the three sets
+reads the source and requires every entry point of `simd::x86_64`, `simd::aarch64`
+and `simd::wide` to be named through the `simd::kernels` alias somewhere outside
+`src/simd/`, or to be on a short list of module-internal workers. That list is the
+only hand-kept part and it fails closed: a new kernel nothing dispatches is not on
+it. The bug is not hypothetical — it has happened twice here, to two Hadamard
+"kernels" that were the scalar copied verbatim and to the `BLOCK_4x4`/`8x4`/`4x8`
+SAD slots, whose kernels were written and tested with no table entry.
+`the_kernel_sets_expose_the_same_entry_points` is the other half: the four sets
 must agree, or a dispatch site would compile on one target and not another.
 
 **The benches** double as referees: `c_vs_rust_bench` encodes every row through
@@ -187,14 +188,14 @@ nor a reference build; `c_vs_rust_bench` is the whole-encoder one and needs both
 
 ```bash
 cd rust/crates/openh264-rs
-cargo bench --bench kernel_bench --features wide     # scalar, intrinsics and wide, one table
+cargo bench --bench kernel_bench --features wide     # scalar, the host's intrinsics and wide, one table
 cargo bench --bench c_vs_rust_bench                  # this target's kernels, against the C++
 cargo bench --bench c_vs_rust_bench --features scalar # the same rows with no kernels at all
 ```
 
-Single-threaded, one slice, best of two alternating passes, on a host reporting
-SSE2 through AVX2 — the default build against the same build with `--features
-scalar`:
+Single-threaded, one slice, best of two alternating passes, on an x86_64 host
+reporting SSE2 through AVX2 — the default build against the same build with
+`--features scalar`:
 
 | clip | scalar fps | SIMD fps | speedup |
 |---|---:|---:|---:|
@@ -223,40 +224,69 @@ threading recovers some of the same wall clock. And it is the encoder;
 the shared kernels in `src/common/` serve the decoder too, but the decode path
 has not been measured this way.
 
-### The portable tier, and what it does on aarch64
+### aarch64: the NEON set
 
-`--features wide` points every dispatch site at `src/simd/wide/` instead of
-`src/simd/x86_64/`. Those kernels are `wide`-crate lane types throughout — no
+`src/simd/aarch64/` is the default there, and it is the same table measured the
+same way — single-threaded, one slice, best of two alternating passes, the default
+build against `--features scalar` — on an Apple M1:
+
+| clip | scalar fps | NEON fps | speedup |
+|---|---:|---:|---:|
+| 320x240 QVGA high-contrast | 1696 | 2656 | 1.57x |
+| 320x240 QVGA mandelbrot | 803 | 1376 | 1.71x |
+| 640x480 VGA SMPTE bars | 2076 | 2169 | 1.04x |
+| 640x480 VGA mandelbrot | 322 | 554 | 1.72x |
+| 1280x720 720p SMPTE bars | 579 | 668 | 1.15x |
+| 1280x720 720p mandelbrot | 154 | 262 | 1.70x |
+| | | geometric mean | **1.45x** |
+
+Over all fifteen rows of `c_vs_rust_bench` the geometric mean is 1.30x, with the
+same spread and for the same reason: flat colour fields spend their time where there
+are no kernels. Every row's bitstream hashes identically to the C++'s, which on this
+target is the reference's own NEON assembly — so the table is also the check that
+the transcription is exact. Per kernel, `kernel_bench` puts the NEON set at
+**2.50x** the scalar (geometric mean over 41 kernels), from 8.1x on the chroma MC
+and 6-7x on the DC IDCT, the intra plane predictors and the horizontal deblocking
+filters, down to parity on the 16x16 copy and the dequantiser, where LLVM's
+auto-vectorised scalar is already the same instructions.
+
+The kernels are transcriptions of `codec/*/arm64/*_aarch64_neon.S`, and each file's
+header says where it departs from its asm. There are four such places, and every
+one is a 16-bit lane in the asm that wraps where the C's `int` does not — the
+quantiser's biased magnitude, the two IDCTs' passes, the centre MC filter's
+horizontal pass — widened here so the byte-parity contract holds over the whole
+input range; the unit tests drive each one to the end of that range. Against the
+C++ itself the port encodes at 0.55x on this target, which is the same picture as
+on x86_64: the kernels are now equal, and what remains is the scaffolding around them.
+
+### The portable tier
+
+`--features wide` points every dispatch site at `src/simd/wide/` instead of the
+host's intrinsic set. Those kernels are `wide`-crate lane types throughout — no
 `core::arch`, every file `#![forbid(unsafe_code)]` — so unlike the intrinsics they
 are reachable on any target, and on aarch64 LLVM lowers their lanes to NEON. On
 x86_64 they keep about 88% of what the intrinsics buy — 1.35x on the encoder
 against the intrinsics' 1.42x, the gap being the SAD family, where the portable API
 has no `psadbw` and pays seven operations a row instead of two.
 
-On an Apple M1 the two numbers point in opposite directions, and the gap between
-them is the result:
+On the M1 they are **1.34x** per kernel against the scalar and **0.54x** against
+the NEON set, and before the NEON set existed they measured **0.93x** on the encoder
+end to end. The kernels that lose are the ones the encoder spends its time in: the
+half-pel MC filters run at 0.27x-0.60x of the scalar and the SATDs at 0.58x-0.73x,
+against wins of 2.7x-5.1x on the intra plane predictors, the horizontal deblocking
+filters, the quantisers and the i16x16 DC IDCT — which are called far less often.
+The cause is that `simd/wide/` is shaped around what SSE2 *lacks*: it emulates
+`pavgb` as `(a | b) - ((a ^ b) >> 1)` and spells permutes as array casts, because the
+SSE2 baseline has neither. NEON has `urhadd` and `tbl`, and the hand-written set uses
+them — so on aarch64 those emulations are overhead paid against kernels that never
+needed them. **A `wide` port that wins here would have to be written to what NEON
+has, not to what SSE2 is missing.**
 
-| | scalar | wide | wide/scalar |
-|---|---:|---:|---:|
-| per kernel, geometric mean over 41 kernels | | | **1.33x** |
-| encoder, geometric mean over six clips | 927 fps | 877 fps | **0.93x** |
-
-The kernels that lose are the ones the encoder spends its time in. The half-pel MC
-filters run at 0.27x-0.60x and the SATDs at 0.58x-0.72x, against wins of 2.7x-5.1x
-on the intra plane predictors, the horizontal deblocking filters, the quantisers and
-the i16x16 DC IDCT — which are called far less often. The cause is that `simd/wide/`
-is shaped around what SSE2 *lacks*: it emulates `pavgb` as `(a | b) - ((a ^ b) >> 1)`
-and spells permutes as array casts, because the SSE2 baseline has neither. NEON has
-`vrhadd` and `tbl`, and LLVM already reaches for them when it auto-vectorises the
-scalar loop — so on aarch64 those emulations are overhead paid against a scalar
-version that was never really scalar. **A `wide` port that wins here would have to be
-written to what NEON has, not to what SSE2 is missing.**
-
-The bytes hold either way: all six clips and all 30 `c_vs_rust_bench` rows are
-identical with the wide kernels dispatched, and the benches fail if they are not.
+The bytes hold either way: all `c_vs_rust_bench` rows are identical with the wide
+kernels dispatched, and the benches fail if they are not.
 
 ```bash
-cargo bench --bench kernel_bench --features wide       # the per-kernel table above
+cargo bench --bench kernel_bench --features wide       # scalar, the host's intrinsics and wide, one table
 ```
 
 Against the C++ reference rather than against itself, use `c_vs_rust_bench`, which
@@ -315,11 +345,14 @@ ones a user can observe:
 
 ## Not ported, on purpose
 
-- **Hand-written SIMD outside x86_64.** Upstream's NEON and LSX kernels are not
-  translated, so on Apple Silicon the reference (which dispatches NEON) is faster
-  than the port on every row. What does run there is `--features wide`: the portable
-  kernels dispatch on any target, and on aarch64 they are measured rather than
-  assumed — they currently lose to the scalar, and *Performance* says why.
+- **Upstream's arm64 kernels outside the ten families the port has slots for.**
+  `src/simd/aarch64/` covers every entry point `src/simd/x86_64/` has, and upstream's
+  arm64 tree has kernels the port's tables have no slot for: the decoder's
+  directional I4x4 predictors and the `DC_TOP`/`DC_LEFT` variants (scalar here on
+  every target, as on x86_64), the `Intra*Combined3` SAD/SATD searches (whose slots
+  the port deleted), the boundary-strength calculator, `ExpandPicture`, and the VAA,
+  down-sampler and adaptive-quantisation families. 32-bit ARM NEON and LoongArch
+  LSX are not translated at all.
 - **MMX.** Upstream keeps four kernels in MMX only — the 8-wide macroblock copies
   and the decoder's i4x4 directional predictors. MMX aliases the x87 register file,
   so every kernel has to be paired with an `emms` and the whole tier has to agree
