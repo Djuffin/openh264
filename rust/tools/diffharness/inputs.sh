@@ -24,7 +24,9 @@ loopfile() {
   local yuv=$1 w=$2 h=$3 want=$4
   local fsz nsrc reps i
   fsz=$((w * h * 3 / 2))
-  nsrc=$(($(stat -f%z "$yuv") / fsz))
+  local raw_sz
+  raw_sz=$(stat -c%s "$yuv" 2>/dev/null || stat -f%z "$yuv" 2>/dev/null || wc -c < "$yuv")
+  nsrc=$((raw_sz / fsz))
   reps=$(((want + nsrc - 1) / nsrc))
   LOOP_FRAMES=$((nsrc * reps))
   LOOP_PATH="$HERE/out/$(basename "$yuv" .yuv)_loop${LOOP_FRAMES}.yuv"

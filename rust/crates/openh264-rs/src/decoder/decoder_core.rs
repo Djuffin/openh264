@@ -1811,7 +1811,7 @@ pub fn GetCPUCount() -> i32 {
 /// Matches `uint32_t WelsCPUFeatureDetect (int32_t* pCPUFlag)` in `decoder.cpp`.
 pub fn WelsCPUFeatureDetect(pCpuCores: &mut i32) -> u32 {
     *pCpuCores = GetCPUCount();
-    0
+    crate::simd::detect_cpu_features()
 }
 
 /// Fill data fields in default for decoder context.
@@ -4530,7 +4530,10 @@ mod tests {
             {
                 assert_eq!(GetCPUCount(), 1);
                 let mut cpu_cores = 0;
-                assert_eq!(WelsCPUFeatureDetect(&mut cpu_cores), 0);
+                assert_eq!(
+                    WelsCPUFeatureDetect(&mut cpu_cores),
+                    crate::simd::detect_cpu_features()
+                );
                 assert_eq!(cpu_cores, 1);
                 // `WelsOpenDecoder` on a real context is the success path
                 // `Initialize` takes.

@@ -98,8 +98,8 @@ rust_rc=$?
 [ "$cxx_rc"  -ne 0 ] && echo "  !! cxx_enc  exited $cxx_rc  — see $OUT/c_$TAG.log"
 [ "$rust_rc" -ne 0 ] && echo "  !! rust_enc exited $rust_rc — see $OUT/r_$TAG.log"
 
-cs=$(stat -f%z "$OUT/c_$TAG.264" 2>/dev/null || echo -1)
-rs=$(stat -f%z "$OUT/r_$TAG.264" 2>/dev/null || echo -1)
+cs=$(stat -c%s "$OUT/c_$TAG.264" 2>/dev/null || stat -f%z "$OUT/c_$TAG.264" 2>/dev/null || echo -1)
+rs=$(stat -c%s "$OUT/r_$TAG.264" 2>/dev/null || stat -f%z "$OUT/r_$TAG.264" 2>/dev/null || echo -1)
 echo "=== $TAG ==="
 echo "  C++  : $cs bytes"
 echo "  Rust : $rs bytes"
@@ -116,6 +116,6 @@ fi
 # Sanity: does the Rust stream decode with the reference decoder?
 if [ "$rs" -gt 0 ]; then
   "$ROOT/h264dec" "$OUT/r_$TAG.264" "$OUT/r_$TAG.yuv" >"$OUT/r_$TAG.dec.log" 2>&1
-  echo "  Rust stream decodes to $(stat -f%z "$OUT/r_$TAG.yuv" 2>/dev/null || echo 0) bytes YUV"
+  echo "  Rust stream decodes to $(stat -c%s "$OUT/r_$TAG.yuv" 2>/dev/null || stat -f%z "$OUT/r_$TAG.yuv" 2>/dev/null || echo 0) bytes YUV"
 fi
 exit $rc
