@@ -17,11 +17,11 @@ and compared byte for byte, and that sweep is a gate, not a report.
 |---|---|
 | Encoder | byte-identical with the C++ across 1043 harness configurations in both build profiles: every rate-control mode, both entropy coders, all four slice modes, 1 to 4 threads, all 52 QPs, long-term reference with feedback, all parameter-set strategies, 1 to 4 spatial layers with denoise, background detection, and screen content |
 | Decoder | 58 conformance streams decode to the same frames as the reference; parity suites for parse-only decoding, no-delay decoding, error concealment, error reporting, resolution and reference-count changes, and a malformed-stream corpus refereed against the C++ decoder |
-| Tests | about 600 unit and integration tests, plus compile-fail doctests pinning the crate's `unsafe` boundary |
+| Tests | 657 unit and integration tests in release, 664 in debug, plus compile-fail doctests pinning the crate's `unsafe` boundary |
 | Upstream's own tests | Cisco's `test/api` gtest suite runs against the Rust shared library; one row is allowlisted, by design (see *Deliberate divergences*) |
-| Unsafe code | 70 of 87 source files are `#![forbid(unsafe_code)]`; what remains is the C-ABI boundary in `src/api/` and a handful of audited sites, each tagged, counted, and ratcheted |
+| Unsafe code | 70 of 99 source files are `#![forbid(unsafe_code)]`; what remains is the C-ABI boundary in `src/api/`, the intrinsics in `src/simd/`, and a handful of audited sites, each tagged, counted, and ratcheted |
 | Dependencies | none; `libc` only as a dev-dependency for the benches that load the C++ library |
-| SIMD | none; the port is scalar throughout |
+| SIMD | x86_64 only: 85 SSE2 kernels plus an AVX2 pair for 16-wide SAD, across SAD/SATD, motion compensation, forward and inverse DCT, quantization, intra prediction, deblocking, macroblock copies and CAVLC scoring. Every one is a parity port of the scalar beside it. **1.43x** on the encoder, geometric mean over six clips (see *Performance*). No NEON, MMX or LSX |
 
 ## Layout
 
@@ -33,9 +33,11 @@ rust/
 │   ├── src/decoder/             codec/decoder — likewise
 │   ├── src/processing/          codec/processing — the pre-processing plugins
 │   ├── src/common/              codec/common — SAD/SATD, MC, intra prediction, deblocking, tracing
+│   ├── src/simd/                CPU feature detection, and x86_64/ — grouped as codec/*/x86/*.asm is
 │   ├── src/safe/                the safe vocabulary the codec is written in (see below)
 │   ├── tests/                   integration tests, incl. conformance and parity suites
-│   ├── benches/                 c_vs_rust_bench (encoder, loads the C++ .dylib) and decode_1080p_bench
+│   ├── benches/                 c_vs_rust_bench and decode_1080p_bench (both load the C++ .dylib),
+│   │                            and simd_vs_scalar_bench (Rust only, needs no reference build)
 │   └── examples/portref.rs      the port's answer for one malformed-corpus entry
 └── tools/
     ├── gates.sh                 the gate battery: commit | family | session | full | exit
@@ -126,9 +128,34 @@ malformed corpus by return code, buffer status and frame hashes.
 loopback through the .dylib, and Cisco's gtest suite against it, ratcheted against
 `gtest_known_failures.txt`).
 
+**The SIMD kernels** are held to the same standard as the port itself, one level
+down: each is a parity port of the scalar beside it, checked against that scalar
+directly by a unit test — exhaustively where the input space allows it, and over
+the full `i16` range where it does not, because a kernel that agrees on small
+coefficients and diverges at the extremes would pass a sampled test and corrupt a
+real stream. `OPENH264_NO_SIMD=1` clears the feature word at its one latch, which
+turns off both halves of the dispatch (the `uiCpuFlag` that fills the `pfXxx`
+tables, and the `has_sse2` the directly-dispatched kernels ask), so the whole tier
+is one switch and the suites run both ways:
+
+```bash
+cargo test --release                        # 657 pass
+OPENH264_NO_SIMD=1 cargo test --release     # the same 657, same bytes
+```
+
+A kernel that is written but never reached is the failure this arrangement is
+most exposed to — a table slot can be left pointing at the scalar and nothing
+observable changes — so the slot tables are asserted, not assumed:
+`every_sse2_sad_and_satd_slot_is_wired` and
+`every_encoding_slot_with_an_sse2_kernel_is_wired` build the table twice, with and
+without the SSE2 bit, and require every accelerated slot to differ. Both carry a
+second list of slots that are scalar *by decision*, which must stay equal.
+
 **The benches** double as referees: `c_vs_rust_bench` encodes every row through
 both libraries in one process and prints the SHA-1 of each stream next to the
 timing; a row that is not bit-identical is reported as such and fails the run.
+`simd_vs_scalar_bench` does the same for the SIMD switch and exits non-zero if any
+bitstream differs.
 
 **The gate battery** ties it together:
 
@@ -141,6 +168,45 @@ bash rust/tools/gates.sh exit      # + benches, Miri over the integration tests,
 
 Byte parity is the definition of done. A change that moves any sweep tally is
 wrong by definition and is reverted, not explained.
+
+## Performance
+
+```bash
+cd rust/crates/openh264-rs
+cargo bench --bench simd_vs_scalar_bench      # needs ffmpeg; needs no reference build
+```
+
+Single-threaded, one slice, best of two alternating passes, on a host reporting
+SSE2 through AVX2:
+
+| clip | scalar fps | SIMD fps | speedup |
+|---|---:|---:|---:|
+| 320x240 QVGA high-contrast | 1271 | 2041 | 1.61x |
+| 320x240 QVGA mandelbrot | 587 | 966 | 1.65x |
+| 640x480 VGA SMPTE bars | 1912 | 2165 | 1.13x |
+| 640x480 VGA mandelbrot | 235 | 380 | 1.62x |
+| 1280x720 720p SMPTE bars | 498 | 564 | 1.13x |
+| 1280x720 720p mandelbrot | 119 | 183 | 1.55x |
+| | | geometric mean | **1.43x** |
+
+All six bitstreams hash identically with the kernels on and off; the bench fails
+if they do not.
+
+**The spread is the result, not noise.** SMPTE bars is flat colour fields, so most
+macroblocks resolve to skip or static and the time goes to mode decision and
+entropy coding, which have no kernels. Mandelbrot forces full residual work on
+every block, which is where the kernels are. 13% to 65% is the honest range for
+"how much does the SIMD tier buy", and which end a real clip lands on depends on
+its content, not on the port.
+
+Two things the table does not say. It is single-threaded on purpose, to keep
+scheduling out of the measurement — `BENCH_THREADS=4` gives a smaller ratio,
+because threading recovers some of the same wall clock. And it is the encoder;
+the shared kernels in `src/common/` serve the decoder too, but the decode path
+has not been measured this way.
+
+Against the C++ reference rather than against itself, use `c_vs_rust_bench`, which
+needs the reference library built first.
 
 ## The safety posture
 
@@ -155,10 +221,21 @@ middle of an array, the port passes the array and an index; where it aliases one
 allocation through two pointers, the port owns it once and hands out views.
 
 `unsafe` is confined to the C ABI in `src/api/` (the vtable thunks and the raw
-option blobs `codec_api.h` defines), one `unsafe impl Sync` at the reconstruction
-seam, and test instruments. Multi-threaded encoding forks with
-`std::thread::scope`; the context the workers share is `Sync` by construction,
-which the compiler checks at the fork.
+option blobs `codec_api.h` defines), the intrinsics in `src/simd/`, one
+`unsafe impl Sync` at the reconstruction seam, and test instruments.
+Multi-threaded encoding forks with `std::thread::scope`; the context the workers
+share is `Sync` by construction, which the compiler checks at the fork.
+
+`src/simd/` is the one place `unsafe` is load-bearing rather than a boundary, so
+the kernels are shaped to keep it small: each takes its bounds check on the safe
+side and its pointer arithmetic on the unsafe side, never both in the same
+expression. The macroblock copies are the clearest case — `RecCursor::block_span`
+validates the whole block as one slice in safe code and states the invariant the
+kernel relies on (`row y, column x` is at `y * stride + x`), and the `unsafe`
+body does nothing but stride through what it was handed. The property is that a
+wrong span becomes a panic and not a read past the plane, which is a claim a test
+can hold: a mutant `block_span` one row's width short is caught by a block sized
+to that gap.
 
 Three instruments keep it that way: `tools/unsafe_ratchet.sh` counts raw pointers,
 `unsafe fn`s and `unsafe` blocks per file against a committed baseline and fails on
@@ -183,11 +260,26 @@ ones a user can observe:
 
 ## Not ported, on purpose
 
-- SIMD. Upstream's NEON, SSE and LSX kernels are not translated; the port is scalar
-  everywhere. Byte parity holds because upstream's SIMD kernels are bit-exact with
-  its C kernels on every path the harness runs; relative speed is a different
-  question, and on Apple Silicon the reference (which dispatches NEON) is faster
-  than the port on some rows.
+- **SIMD outside x86_64.** Upstream's NEON and LSX kernels are not translated, so
+  on Apple Silicon the reference (which dispatches NEON) is still faster than the
+  port on some rows. The x86_64 tier *is* ported and is described above.
+- **MMX.** Upstream keeps four kernels in MMX only — the 8-wide macroblock copies
+  and the decoder's i4x4 directional predictors. MMX aliases the x87 register file,
+  so every kernel has to be paired with an `emms` and the whole tier has to agree
+  about it; the copies are instead written with `movq` in its SSE2 encoding, which
+  is the same move without the state.
+- **Two SSE2 kernels that lose to the compiler**, both written, checked against the
+  scalar, measured, and then dropped rather than shipped. `WelsScan4x4DcAc_sse2`'s
+  transcription is 21 instructions against the scalar's 13, because `movdqu` lets
+  LLVM issue the second load at a 7-word offset and skip the `pextrw`/`pinsrw` chain
+  the asm needs after its `movdqa`. `WelsNonZeroCount_sse2`'s `pminub` and the
+  scalar's `pcmpeqb`/`pandn` are the same ten instructions, and LLVM folded the
+  dispatch branch away on the grounds that both arms were the same code. Each
+  decision is recorded at the scalar it applies to, with the numbers and the
+  command to re-check them.
+- **The SSSE3, SSE4.x and wider AVX2 tiers**, and the VAA, feature-search,
+  downsampler and denoise kernel families. `src/simd/x86_64/` is SSE2 plus one AVX2
+  pair; the rest of upstream's x86 tree is still scalar here.
 - Upstream's threaded decoder. The decoder is single-threaded; every instance is
   independent and the multithreading test exercises instances on separate threads.
 - `METHOD_IMAGE_ROTATE` and `METHOD_COLORSPACE_CONVERT`, two processing methods the
