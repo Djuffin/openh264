@@ -1746,7 +1746,7 @@ pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
 
         #[cfg(target_arch = "x86_64")]
         if (cpu_flag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
-            pCtx.pIdctResAddPredFunc = Some(crate::simd::x86_64::dct::idct_res_add_pred_sse2);
+            pCtx.pIdctResAddPredFunc = Some(crate::simd::kernels::dct::idct_res_add_pred_sse2);
         }
 
         // 4. Intra Prediction
@@ -1811,7 +1811,7 @@ pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
                 I16_PRED_DC, I16_PRED_DC_128, I16_PRED_DC_T, I16_PRED_H, I16_PRED_P, I16_PRED_V,
                 I4_PRED_DC, I4_PRED_H, I4_PRED_V,
             };
-            use crate::simd::x86_64::intra_pred::*;
+            use crate::simd::kernels::intra_pred::*;
 
             pCtx.pGetI16x16LumaPredFunc[I16_PRED_V] = Some(dec_i16x16_luma_pred_v);
             pCtx.pGetI16x16LumaPredFunc[I16_PRED_H] = Some(dec_i16x16_luma_pred_h);

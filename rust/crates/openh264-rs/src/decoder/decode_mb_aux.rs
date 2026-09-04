@@ -42,7 +42,7 @@ pub use crate::decoder::decode_slice::{g_kuiScan8};
 pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_res_add_pred_sse2(pred, rs);
+        crate::simd::kernels::dct::idct_res_add_pred_sse2(pred, rs);
         return;
     }
     idct_res_add_pred_c(pred, rs);

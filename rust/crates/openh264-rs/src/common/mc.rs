@@ -310,7 +310,7 @@ pub fn pixel_avg<A: RefSamples, B: RefSamples>(
 ) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::mc::pixel_avg_sse2(dst, a, b, width, height);
+        crate::simd::kernels::mc::pixel_avg_sse2(dst, a, b, width, height);
         return;
     }
     pixel_avg_c(dst, a, b, width, height);
@@ -345,7 +345,7 @@ pub fn mc_hor_ver20<S: RefSamples + Copy>(
 ) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::mc::mc_hor_ver20_sse2(src, dst, width, height);
+        crate::simd::kernels::mc::mc_hor_ver20_sse2(src, dst, width, height);
         return;
     }
     mc_hor_ver20_c(src, dst, width, height);
@@ -396,7 +396,7 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
 ) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::mc::mc_hor_ver02_sse2(src, dst, width, height);
+        crate::simd::kernels::mc::mc_hor_ver02_sse2(src, dst, width, height);
         return;
     }
     mc_hor_ver02_c(src, dst, width, height);
@@ -453,7 +453,7 @@ pub fn mc_hor_ver22<S: RefSamples + Copy>(
 ) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::mc::mc_hor_ver22_sse2(src, dst, width, height);
+        crate::simd::kernels::mc::mc_hor_ver22_sse2(src, dst, width, height);
         return;
     }
     mc_hor_ver22_c(src, dst, width, height);
@@ -838,7 +838,7 @@ pub fn mc_luma<S: RefSamples + Copy>(
 ) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::mc::mc_luma_sse2(src, dst, mv_x, mv_y, width, height);
+        crate::simd::kernels::mc::mc_luma_sse2(src, dst, mv_x, mv_y, width, height);
         return;
     }
     mc_luma_c(src, dst, mv_x, mv_y, width, height);
@@ -908,7 +908,7 @@ pub fn mc_chroma<S: RefSamples + Copy>(
 ) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::mc::mc_chroma_sse2(src, dst, mv_x, mv_y, width, height);
+        crate::simd::kernels::mc::mc_chroma_sse2(src, dst, mv_x, mv_y, width, height);
         return;
     }
     mc_chroma_c(src, dst, mv_x, mv_y, width, height);
@@ -1287,12 +1287,12 @@ pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, uiCpuFlag: u32) {
     *pMcFuncs = SMcFunc::default();
     #[cfg(target_arch = "x86_64")]
     if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
-        pMcFuncs.pfLumaHalfpelHor = |s, d, w, h| crate::simd::x86_64::mc::mc_hor_ver20_sse2(s, d, w, h);
-        pMcFuncs.pfLumaHalfpelVer = |s, d, w, h| crate::simd::x86_64::mc::mc_hor_ver02_sse2(s, d, w, h);
-        pMcFuncs.pfLumaHalfpelCen = |s, d, w, h| crate::simd::x86_64::mc::mc_hor_ver22_sse2(s, d, w, h);
-        pMcFuncs.pfSampleAveraging = |dst, a, b, w, h| crate::simd::x86_64::mc::pixel_avg_sse2(dst, a, b, w, h);
-        pMcFuncs.pMcChromaFunc = |s, d, mx, my, w, h| crate::simd::x86_64::mc::mc_chroma_sse2(s, d, mx, my, w, h);
-        pMcFuncs.pMcLumaFunc = |s, d, mx, my, w, h| crate::simd::x86_64::mc::mc_luma_sse2(s, d, mx, my, w, h);
+        pMcFuncs.pfLumaHalfpelHor = |s, d, w, h| crate::simd::kernels::mc::mc_hor_ver20_sse2(s, d, w, h);
+        pMcFuncs.pfLumaHalfpelVer = |s, d, w, h| crate::simd::kernels::mc::mc_hor_ver02_sse2(s, d, w, h);
+        pMcFuncs.pfLumaHalfpelCen = |s, d, w, h| crate::simd::kernels::mc::mc_hor_ver22_sse2(s, d, w, h);
+        pMcFuncs.pfSampleAveraging = |dst, a, b, w, h| crate::simd::kernels::mc::pixel_avg_sse2(dst, a, b, w, h);
+        pMcFuncs.pMcChromaFunc = |s, d, mx, my, w, h| crate::simd::kernels::mc::mc_chroma_sse2(s, d, mx, my, w, h);
+        pMcFuncs.pMcLumaFunc = |s, d, mx, my, w, h| crate::simd::kernels::mc::mc_luma_sse2(s, d, mx, my, w, h);
     }
 }
 

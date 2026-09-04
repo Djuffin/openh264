@@ -24,8 +24,15 @@
 //! |---|---|
 //! | `FFMPEG` | path to the ffmpeg binary (default: `ffmpeg` on `PATH`) |
 //! | `BENCH_FRAMES=<n>` | cap every configuration's frame count at `n` |
-//! | `BENCH_THREADS=<n>` | `iMultipleThreadIdc` (default `1`, so the kernels are what varies) |
+//! | `BENCH_THREADS=<n>` | `iMultipleThreadIdc`, and one slice per thread above 1 (default `1`) |
 //! | `BENCH_REPEATS=<n>` | runs per side (default `2`); the best frame rate wins |
+//! | `BENCH_WIDE_EXE=<path>` | a build of this bench with `--features wide`; adds a third, "wide" side |
+//!
+//! **The wide side is a different binary**, because `--features wide` moves the
+//! `simd::kernels` alias at compile time. Build it with
+//! `cargo bench --no-run --features wide --bench simd_vs_scalar_bench`, take the
+//! executable path Cargo prints, and pass it here; the parent spawns it as a child
+//! exactly as it spawns itself, so the three sides are compared on equal terms.
 
 #![allow(non_snake_case)]
 
@@ -141,9 +148,19 @@ unsafe fn encode_clip(path: &Path, w: i32, h: i32, frames: usize, threads: u16) 
     param.sSpatialLayers[0].iVideoHeight = h;
     param.sSpatialLayers[0].fFrameRate = 30.0;
     param.sSpatialLayers[0].iSpatialBitrate = 2_000_000;
+    // One slice at one thread, and one slice **per** thread above that.
+    // openh264's encode threading is slice-parallel, so `iMultipleThreadIdc`
+    // over a single slice is a no-op — measured, not assumed: at
+    // `SM_SINGLE_SLICE` the four-thread run reproduced the one-thread run's
+    // throughput to within a percent on every row.
     let arg = &mut param.sSpatialLayers[0].sSliceArgument;
-    arg.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
-    arg.uiSliceNum = 1;
+    if threads > 1 {
+        arg.uiSliceMode = SliceModeEnum::SM_FIXEDSLCNUM_SLICE;
+        arg.uiSliceNum = threads as u32;
+    } else {
+        arg.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
+        arg.uiSliceNum = 1;
+    }
     assert_eq!(unsafe { (vtbl.InitializeExt)(enc, &param) }, 0, "InitializeExt {w}x{h}");
 
     let mut bs = SFrameBSInfo::default();
@@ -189,14 +206,35 @@ fn run_as_child(frame_cap: Option<usize>, threads: u16) {
 // Parent
 // ============================================================================
 
-fn spawn_side(no_simd: bool, frame_cap: Option<usize>, threads: u16) -> (u32, Vec<RunResult>) {
-    let exe = std::env::current_exe().expect("current_exe");
+/// Which kernel set a child runs. `Wide` is a different executable — see the header.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Scalar,
+    Simd,
+    Wide,
+}
+
+impl Side {
+    fn label(self) -> &'static str {
+        match self {
+            Side::Scalar => "scalar",
+            Side::Simd => "SIMD  ",
+            Side::Wide => "wide  ",
+        }
+    }
+}
+
+fn spawn_side(side: Side, wide_exe: Option<&Path>, frame_cap: Option<usize>, threads: u16) -> (u32, Vec<RunResult>) {
+    let exe = match side {
+        Side::Wide => wide_exe.expect("BENCH_WIDE_EXE").to_path_buf(),
+        _ => std::env::current_exe().expect("current_exe"),
+    };
     let mut cmd = Command::new(exe);
     cmd.env("BENCH_SIMD_CHILD", "1").env("BENCH_THREADS", threads.to_string());
     if let Some(c) = frame_cap {
         cmd.env("BENCH_FRAMES", c.to_string());
     }
-    if no_simd {
+    if side == Side::Scalar {
         cmd.env("OPENH264_NO_SIMD", "1");
     } else {
         cmd.env_remove("OPENH264_NO_SIMD");
@@ -205,7 +243,7 @@ fn spawn_side(no_simd: bool, frame_cap: Option<usize>, threads: u16) -> (u32, Ve
     assert!(
         out.status.success(),
         "child ({}) failed: {}\n{}",
-        if no_simd { "scalar" } else { "SIMD" },
+        side.label().trim(),
         out.status,
         String::from_utf8_lossy(&out.stderr)
     );
@@ -259,9 +297,21 @@ fn main() {
     }
 
     let repeats: usize = std::env::var("BENCH_REPEATS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    let wide_exe: Option<PathBuf> = std::env::var_os("BENCH_WIDE_EXE").map(PathBuf::from);
+    if let Some(p) = &wide_exe {
+        assert!(p.is_file(), "BENCH_WIDE_EXE={} is not a file", p.display());
+    }
+    let sides: Vec<Side> = if wide_exe.is_some() {
+        vec![Side::Scalar, Side::Simd, Side::Wide]
+    } else {
+        vec![Side::Scalar, Side::Simd]
+    };
 
     println!("========================================================================================");
-    println!(" Rust encoder throughput: SIMD kernels on vs. OPENH264_NO_SIMD=1");
+    println!(
+        " Rust encoder throughput: SIMD kernels on vs. OPENH264_NO_SIMD=1{}",
+        if wide_exe.is_some() { " vs. the wide-crate kernels" } else { "" }
+    );
     println!("========================================================================================");
 
     for (i, (pattern, label, w, h, nominal)) in CONFIGS.iter().enumerate() {
@@ -271,31 +321,21 @@ fn main() {
     }
     println!();
 
-    // Alternate the order across repeats so neither side always runs first, and
-    // keep the best of each — a slow run is noise, a fast one is not.
-    let (mut simd_best, mut scalar_best): (Vec<RunResult>, Vec<RunResult>) = (Vec::new(), Vec::new());
-    let (mut simd_flags, mut scalar_flags) = (0u32, 0u32);
+    // Rotate the order across repeats so no side always runs first, and keep the
+    // best of each — a slow run is noise, a fast one is not.
+    let mut best: Vec<Vec<RunResult>> = (0..sides.len()).map(|_| Vec::new()).collect();
+    let mut flags = vec![0u32; sides.len()];
     for pass in 0..repeats.max(1) {
-        let scalar_first = pass % 2 == 1;
-        let order = if scalar_first { [true, false] } else { [false, true] };
-        for no_simd in order {
-            println!(
-                " pass {}/{}: {} side ...",
-                pass + 1,
-                repeats.max(1),
-                if no_simd { "scalar" } else { "SIMD  " }
-            );
-            let (flags, rows) = spawn_side(no_simd, frame_cap, threads);
-            let (best, best_flags) = if no_simd {
-                (&mut scalar_best, &mut scalar_flags)
+        for k in 0..sides.len() {
+            let idx = (k + pass) % sides.len();
+            let side = sides[idx];
+            println!(" pass {}/{}: {} side ...", pass + 1, repeats.max(1), side.label());
+            let (f, rows) = spawn_side(side, wide_exe.as_deref(), frame_cap, threads);
+            flags[idx] = f;
+            if best[idx].is_empty() {
+                best[idx] = rows;
             } else {
-                (&mut simd_best, &mut simd_flags)
-            };
-            *best_flags = flags;
-            if best.is_empty() {
-                *best = rows;
-            } else {
-                for (b, r) in best.iter_mut().zip(rows) {
+                for (b, r) in best[idx].iter_mut().zip(rows) {
                     if r.fps > b.fps {
                         *b = r;
                     }
@@ -306,54 +346,100 @@ fn main() {
 
     println!();
     println!(" threads: {threads}   passes: {}   best-of reported", repeats.max(1));
-    println!(" SIMD child   CPU flags {simd_flags:#010x}  ({})", feature_names(simd_flags));
-    println!(" scalar child CPU flags {scalar_flags:#010x}  ({})", feature_names(scalar_flags));
-    assert_eq!(scalar_flags, 0, "OPENH264_NO_SIMD=1 did not clear the feature word");
+    for (k, side) in sides.iter().enumerate() {
+        println!(" {} child CPU flags {:#010x}  ({})", side.label(), flags[k], feature_names(flags[k]));
+    }
+    assert_eq!(flags[0], 0, "OPENH264_NO_SIMD=1 did not clear the feature word");
     println!();
-    println!(
-        " {:<30} {:>6}  {:>11}  {:>11}  {:>8}  {:>10}",
-        "configuration", "frames", "scalar fps", "SIMD fps", "speedup", "bitstream"
-    );
-    println!("----------------------------------------------------------------------------------------");
+
+    let has_wide = sides.len() == 3;
+    if has_wide {
+        println!(
+            " {:<30} {:>6}  {:>10} {:>10} {:>10}  {:>8} {:>8} {:>9}  {:>10}",
+            "configuration", "frames", "scalar fps", "SIMD fps", "wide fps", "SIMD/sc", "wide/sc", "wide/SIMD", "bitstream"
+        );
+        println!("--------------------------------------------------------------------------------------------------------------");
+    } else {
+        println!(
+            " {:<30} {:>6}  {:>11}  {:>11}  {:>8}  {:>10}",
+            "configuration", "frames", "scalar fps", "SIMD fps", "speedup", "bitstream"
+        );
+        println!("----------------------------------------------------------------------------------------");
+    }
 
     let mut mismatched = 0usize;
-    let (mut sum_scalar, mut sum_simd) = (0.0f64, 0.0f64);
+    let mut sums = vec![0.0f64; sides.len()];
+    let mut ln = [0.0f64; 3]; // SIMD/scalar, wide/scalar, wide/SIMD
     for (i, (_, label, _, _, nominal)) in CONFIGS.iter().enumerate() {
         let frames = frame_cap.map_or(*nominal, |c| c.min(*nominal));
-        let (s, v) = (&scalar_best[i], &simd_best[i]);
-        let same = s.sha1 == v.sha1 && s.bytes == v.bytes;
+        let s = &best[0][i];
+        let v = &best[1][i];
+        let same = best.iter().all(|b| b[i].sha1 == s.sha1 && b[i].bytes == s.bytes);
         if !same {
             mismatched += 1;
         }
-        sum_scalar += s.fps;
-        sum_simd += v.fps;
+        for k in 0..sides.len() {
+            sums[k] += best[k][i].fps;
+        }
+        ln[0] += (v.fps / s.fps).ln();
+        if has_wide {
+            let w = &best[2][i];
+            ln[1] += (w.fps / s.fps).ln();
+            ln[2] += (w.fps / v.fps).ln();
+            println!(
+                " {:<30} {:>6}  {:>10.1} {:>10.1} {:>10.1}  {:>7.2}x {:>7.2}x {:>8.2}x  {:>10}",
+                label,
+                frames,
+                s.fps,
+                v.fps,
+                w.fps,
+                v.fps / s.fps,
+                w.fps / s.fps,
+                w.fps / v.fps,
+                if same { "identical" } else { "DIFFERS" }
+            );
+        } else {
+            println!(
+                " {:<30} {:>6}  {:>11.1}  {:>11.1}  {:>7.2}x  {:>10}",
+                label,
+                frames,
+                s.fps,
+                v.fps,
+                v.fps / s.fps,
+                if same { "identical" } else { "DIFFERS" }
+            );
+        }
+    }
+    let n = CONFIGS.len() as f64;
+    let g = |x: f64| (x / n).exp();
+    if has_wide {
+        println!("--------------------------------------------------------------------------------------------------------------");
         println!(
-            " {:<30} {:>6}  {:>11.1}  {:>11.1}  {:>7.2}x  {:>10}",
-            label,
-            frames,
-            s.fps,
-            v.fps,
-            v.fps / s.fps,
-            if same { "identical" } else { "DIFFERS" }
+            " {:<30} {:>6}  {:>10.1} {:>10.1} {:>10.1}  {:>7.2}x {:>7.2}x {:>8.2}x",
+            "mean (ratios are geometric)",
+            "",
+            sums[0] / n,
+            sums[1] / n,
+            sums[2] / n,
+            g(ln[0]),
+            g(ln[1]),
+            g(ln[2])
+        );
+    } else {
+        println!("----------------------------------------------------------------------------------------");
+        println!(
+            " {:<30} {:>6}  {:>11.1}  {:>11.1}  {:>7.2}x",
+            "mean (speedup is geometric)",
+            "",
+            sums[0] / n,
+            sums[1] / n,
+            g(ln[0])
         );
     }
-    println!("----------------------------------------------------------------------------------------");
-    let n = CONFIGS.len() as f64;
-    let geomean = ((0..CONFIGS.len())
-        .map(|i| (simd_best[i].fps / scalar_best[i].fps).ln())
-        .sum::<f64>()
-        / n)
-        .exp();
-    println!(
-        " {:<30} {:>6}  {:>11.1}  {:>11.1}  {:>7.2}x",
-        "mean (speedup is geometric)", "", sum_scalar / n, sum_simd / n, geomean
-    );
 
     if mismatched > 0 {
         eprintln!();
-        eprintln!(
-            " {mismatched} configuration(s) produced different bitstreams with and without SIMD."
-        );
+        eprintln!(" {mismatched} configuration(s) produced different bitstreams across the sides.");
         eprintln!(" Every kernel here is a parity port, so this is a bug, not a tuning result.");
         std::process::exit(1);
     }

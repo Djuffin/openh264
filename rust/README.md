@@ -33,11 +33,13 @@ rust/
 │   ├── src/decoder/             codec/decoder — likewise
 │   ├── src/processing/          codec/processing — the pre-processing plugins
 │   ├── src/common/              codec/common — SAD/SATD, MC, intra prediction, deblocking, tracing
-│   ├── src/simd/                CPU feature detection, and x86_64/ — grouped as codec/*/x86/*.asm is
+│   ├── src/simd/                CPU feature detection; x86_64/ (core::arch intrinsics) and wide/ (the `wide` crate,
+│   │                            safe, behind `--features wide`); simd::kernels aliases the selected set
 │   ├── src/safe/                the safe vocabulary the codec is written in (see below)
 │   ├── tests/                   integration tests, incl. conformance and parity suites
 │   ├── benches/                 c_vs_rust_bench and decode_1080p_bench (both load the C++ .dylib),
-│   │                            and simd_vs_scalar_bench (Rust only, needs no reference build)
+│   │                            simd_vs_scalar_bench (kernels on/off/wide) and kernel_bench (per kernel), Rust only
+│   ├── docs/simd_wide_vs_intrinsics.md the intrinsics-vs-wide measurement
 │   └── examples/portref.rs      the port's answer for one malformed-corpus entry
 └── tools/
     ├── gates.sh                 the gate battery: commit | family | session | full | exit
