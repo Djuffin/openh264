@@ -381,11 +381,20 @@ the wrong samples. No current caller violates it.
 
 ## 8. `has_sse2()` latches a stale answer that `detect_cpu_features()` does not
 
-> **Resolved.** `simd/mod.rs` now holds one `AtomicU32` feature word behind both
-> entry points. `detect_cpu_features()` computes it once (bit 31, which no `WELS_CPU_*`
-> flag uses, marks it computed, so a genuine all-scalar `0` is distinguishable from
-> "not asked yet"), and `has_sse2()` / the new `has_avx2()` are one-line reads of it.
-> The `SSE2_CACHED` half-latch is gone.
+> **Resolved.** `simd/mod.rs` now holds one feature word behind both entry points.
+> `detect_cpu_features()` computes it once and `has_sse2()` / the new `has_avx2()` are
+> one-line reads of it. The `SSE2_CACHED` half-latch is gone.
+>
+> **The first version of this marked the word as computed by setting bit 31**, on the
+> stated premise that no `WELS_CPU_*` flag used it. A follow-up review of the commit
+> found that false: `WELS_CPU_CACHELINE_128` is `0x8000_0000`
+> (`common/cpu_core.rs:49`), and upstream's `WelsCPUFeatureDetect` sets it for real —
+> `codec/common/src/cpu.cpp:207` ORs it in when CLFLUSH reports a 128-byte line. The
+> read path masked that bit off unconditionally, so the day `arch_cpu_features` learns
+> to report cache-line size the flag would have read back as never-set for the life of
+> the process, on hardware where it is set, with nothing to fail. The marker is a
+> separate `AtomicBool` now, which no future flag can collide with whichever bit it
+> takes; `Release` on the flag after the word, `Acquire` on the read.
 >
 > The trade is that `OPENH264_NO_SIMD` becomes a process-start switch rather than a
 > per-call one, which is what it already was in practice: `grep` finds three hits, all
