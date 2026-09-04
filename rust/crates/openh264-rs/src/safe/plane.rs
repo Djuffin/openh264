@@ -554,6 +554,14 @@ impl RefSamples for PlaneCursor<'_> {
 pub trait PlaneSamples: RefSamples {
     /// Writes the sample at `(dx, dy)` from the anchor.
     fn set(&mut self, dx: isize, dy: isize, v: u8);
+
+    /// Writes `N` contiguous samples starting at `(dx0, dy)`.
+    #[inline]
+    fn set_row_n<const N: usize>(&mut self, dy: isize, dx0: isize, val: &[u8; N]) {
+        for (i, &v) in val.iter().enumerate() {
+            self.set(dx0 + i as isize, dy, v);
+        }
+    }
 }
 
 
@@ -824,6 +832,12 @@ impl PlaneSamples for PlaneCursorMut<'_> {
     #[inline]
     fn set(&mut self, dx: isize, dy: isize, v: u8) {
         PlaneCursorMut::set(self, dx, dy, v)
+    }
+
+    #[inline]
+    fn set_row_n<const N: usize>(&mut self, dy: isize, dx0: isize, val: &[u8; N]) {
+        let r = self.row_mut(dy, dx0, N);
+        r.copy_from_slice(val);
     }
 }
 

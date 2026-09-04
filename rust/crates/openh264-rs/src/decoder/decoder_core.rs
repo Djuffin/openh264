@@ -1803,6 +1803,32 @@ pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
             Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddl_top),
             Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vl_top),
         ];
+
+        #[cfg(target_arch = "x86_64")]
+        if (cpu_flag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+            use crate::decoder::decoder_context::{
+                C_PRED_DC, C_PRED_H, C_PRED_P, C_PRED_V,
+                I16_PRED_DC, I16_PRED_DC_128, I16_PRED_DC_T, I16_PRED_H, I16_PRED_P, I16_PRED_V,
+                I4_PRED_DC, I4_PRED_H, I4_PRED_V,
+            };
+            use crate::simd::x86_64::intra_pred::*;
+
+            pCtx.pGetI16x16LumaPredFunc[I16_PRED_V] = Some(dec_i16x16_luma_pred_v_sse2);
+            pCtx.pGetI16x16LumaPredFunc[I16_PRED_H] = Some(dec_i16x16_luma_pred_h_sse2);
+            pCtx.pGetI16x16LumaPredFunc[I16_PRED_DC] = Some(dec_i16x16_luma_pred_dc_sse2);
+            pCtx.pGetI16x16LumaPredFunc[I16_PRED_P] = Some(dec_i16x16_luma_pred_plane_sse2);
+            pCtx.pGetI16x16LumaPredFunc[I16_PRED_DC_T] = Some(dec_i16x16_luma_pred_dc_top_sse2);
+            pCtx.pGetI16x16LumaPredFunc[I16_PRED_DC_128] = Some(dec_i16x16_luma_pred_dc_na_sse2);
+
+            pCtx.pGetIChromaPredFunc[C_PRED_DC] = Some(dec_chroma_pred_dc_sse2);
+            pCtx.pGetIChromaPredFunc[C_PRED_H] = Some(dec_chroma_pred_h_sse2);
+            pCtx.pGetIChromaPredFunc[C_PRED_V] = Some(dec_chroma_pred_v_sse2);
+            pCtx.pGetIChromaPredFunc[C_PRED_P] = Some(dec_chroma_pred_plane_sse2);
+
+            pCtx.pGetI4x4LumaPredFunc[I4_PRED_V] = Some(dec_i4x4_luma_pred_v_sse2);
+            pCtx.pGetI4x4LumaPredFunc[I4_PRED_H] = Some(dec_i4x4_luma_pred_h_sse2);
+            pCtx.pGetI4x4LumaPredFunc[I4_PRED_DC] = Some(dec_i4x4_luma_pred_dc_sse2);
+        }
     }
 }
 

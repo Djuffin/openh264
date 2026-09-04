@@ -78,6 +78,23 @@ pub fn deblock_luma_lt4(
     beta: i32,
     tc: &[i8; 4],
 ) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        crate::simd::x86_64::deblock::deblock_luma_lt4_sse2(pix, step_x, step_y, alpha, beta, tc);
+        return;
+    }
+    #[allow(unreachable_code)]
+    deblock_luma_lt4_scalar(pix, step_x, step_y, alpha, beta, tc);
+}
+
+pub fn deblock_luma_lt4_scalar(
+    pix: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+    tc: &[i8; 4],
+) {
     for i in 0..16isize {
         let b = i * step_y;
         let tc0 = tc[(i >> 2) as usize] as i32;
@@ -121,6 +138,22 @@ pub fn deblock_luma_lt4(
 /// be read at `j * step_x` (`p3`/`q3` only on the strong-filter branch); `p2..q2`
 /// may be written; lines advance by `step_y`.
 pub fn deblock_luma_eq4(
+    pix: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        crate::simd::x86_64::deblock::deblock_luma_eq4_sse2(pix, step_x, step_y, alpha, beta);
+        return;
+    }
+    #[allow(unreachable_code)]
+    deblock_luma_eq4_scalar(pix, step_x, step_y, alpha, beta);
+}
+
+pub fn deblock_luma_eq4_scalar(
     pix: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,
@@ -219,6 +252,24 @@ pub fn deblock_chroma_lt4(
     beta: i32,
     tc: &[i8; 4],
 ) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        crate::simd::x86_64::deblock::deblock_chroma_lt4_sse2(cb, cr, step_x, step_y, alpha, beta, tc);
+        return;
+    }
+    #[allow(unreachable_code)]
+    deblock_chroma_lt4_scalar(cb, cr, step_x, step_y, alpha, beta, tc);
+}
+
+pub fn deblock_chroma_lt4_scalar(
+    cb: &mut impl PlaneSamples,
+    cr: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+    tc: &[i8; 4],
+) {
     for i in 0..8isize {
         let b = i * step_y;
         let tc0 = tc[(i >> 1) as usize] as i32;
@@ -233,6 +284,23 @@ pub fn deblock_chroma_lt4(
 /// strong (bS == 4) chroma filter across 8 lines, on separate Cb and Cr planes.
 /// Reach as [`deblock_chroma_lt4`].
 pub fn deblock_chroma_eq4(
+    cb: &mut impl PlaneSamples,
+    cr: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        crate::simd::x86_64::deblock::deblock_chroma_eq4_sse2(cb, cr, step_x, step_y, alpha, beta);
+        return;
+    }
+    #[allow(unreachable_code)]
+    deblock_chroma_eq4_scalar(cb, cr, step_x, step_y, alpha, beta);
+}
+
+pub fn deblock_chroma_eq4_scalar(
     cb: &mut impl PlaneSamples,
     cr: &mut impl PlaneSamples,
     step_x: isize,
