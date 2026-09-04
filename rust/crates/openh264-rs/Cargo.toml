@@ -29,6 +29,10 @@ name = "c_vs_rust_bench"
 harness = false
 
 [[bench]]
+name = "simd_vs_scalar_bench"
+harness = false
+
+[[bench]]
 name = "decode_1080p_bench"
 harness = false
 
