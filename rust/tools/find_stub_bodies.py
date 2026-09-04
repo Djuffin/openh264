@@ -26,12 +26,11 @@ C++ body that is absent from the Rust body is worth a look every time.
 the same name collapse into one row: `CWelsDecoder::GetOption` (53 statements) is
 invisible behind `CWelsH264SVCEncoder::GetOption` (230). Anything the decoder's
 version calls and the encoder's does not is therefore un-diffable by this tool. Read
-`port_census.py --classify` and the reference beside it when the name is a method.
+the C++ and the port side by side when the name is a method.
 
 Exit status is always 0; this is a reading aid, not a gate.
 """
 
-import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -147,14 +146,35 @@ def rust_bodies(files):
 # worse — matched a *different* Rust function that happened to share the name, which
 # is what happened here: the C++ `DecodeParser` was compared against a vtable
 # trampoline and came out clean while the real thunk returned `dsErrorFree` and
-# wrote nothing. One table, shared with `port_census.py`, so the two tools cannot
-# disagree about what corresponds to what.
-_census = importlib.util.spec_from_file_location(
-    "port_census", Path(__file__).resolve().parent / "port_census.py"
-)
-_mod = importlib.util.module_from_spec(_census)
-_census.loader.exec_module(_mod)
-ALIASES = _mod.ALIASES
+# wrote nothing.
+#
+# The table used to be imported from `port_census.py` so the two tools could not
+# disagree about what corresponds to what. That tool is gone, so the table lives here
+# now — it is the only thing this one ever took from it.
+ALIASES = {
+    # The C-ABI thunk layer. Upstream's public entry points are C++ methods on
+    # `CWelsDecoder` / `CWelsH264SVCEncoder`; the port's are `extern "C"` thunks
+    # named for the vtable slot, with the work in a safe `Decoder`/`Encoder`
+    # method underneath. `codec_api.rs`'s slot table is the correspondence.
+    "Initialize": "decoder_init_c",
+    "Uninitialize": "decoder_uninit_c",
+    "DecodeFrame": "decoder_decode_frame_c",
+    "DecodeFrameNoDelay": "decoder_decode_frame_nodelay_c",
+    "DecodeFrame2": "decoder_decode_frame2_c",
+    "DecodeFrameEx": "decoder_decode_frame_ex_c",
+    "DecodeParser": "decoder_decode_parser_c",
+    "FlushFrame": "decoder_flush_frame_c",
+    "SetOption": "decoder_set_opt_c",
+    "GetOption": "decoder_get_opt_c",
+    "InitializeExt": "encoder_initialize_ext_c",
+    "EncodeFrame": "encoder_encode_frame_c",
+    "EncodeParameterSets": "encoder_encode_parameter_sets_c",
+    "ForceIntraFrame": "encoder_force_intra_frame_c",
+    "GetDefaultParams": "encoder_get_default_params_c",
+    # Types and their methods, renamed when the port folded a C++ class into a
+    # Rust struct with a different name.
+    "SParserBsInfo": "ParseOnlyBsBuffers",
+}
 
 
 def calls(body):

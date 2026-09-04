@@ -12,8 +12,8 @@
 #
 # `CWelsH264SVCEncoder::TraceParamInfo` and `::LogStatistics` are pure `WelsLog`
 # formatting. Not one byte of their output reaches a bitstream, so **every gate
-# this repo owns is blind to them**: the sweeps compare `.264` files, the ratchet
-# counts pointers, Miri interprets memory. Both bodies were empty in this port
+# this repo owns is blind to them**: the sweeps compare `.264` files, the tests
+# compare frames, Miri interprets memory. Both bodies were empty in this port
 # from the beginning and stayed empty through eight phases, and nothing said so
 # (F100). A missing log is a missing observable, and the only instrument that can
 # see one is a second encoder to compare against — which this repo already has.

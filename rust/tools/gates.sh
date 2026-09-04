@@ -3,7 +3,7 @@
 #
 #   usage: rust/tools/gates.sh [level]
 #
-#     commit   build --all-targets + cargo test (debug + release) + ratchet (~2 min)
+#     commit   build --all-targets + cargo test (debug + release)            (~2 min)
 #     family   commit + diffharness sweeps st/mt/def/sl in BOTH profiles  (~5 min)
 #     session  family + Miri --lib, NO benches — the Phase 9 session close
 #              (D-gate-4, 2026-08-22; re-architected under D-gate-6, 2026-08-24,
@@ -100,7 +100,7 @@ cpu_of() {  # $1 = a file `times` wrote; echoes children user+sys, whole seconds
 # the Miri step's own compile is minutes. What meets it is parallelism the
 # machine already has:
 #
-#   native lane (this shell):  build, tests, ratchet, census, both sweeps
+#   native lane (this shell):  build, tests, both sweeps
 #   miri lane   (background):  one compile, then FOUR concurrent
 #                              `cargo miri test` shards — the CAVLC and
 #                              size-limited encode probes are one shard each
@@ -349,56 +349,12 @@ run_miri() {  # $1 = log slug, $2 = description, $3 = extra MIRIFLAGS, $4.. = ar
 }
 
 # ---------------------------------------------------------------------------
-# 2. The unsafe ratchet (plan §7.1).
+# 2. The unsafe instruments stood here and are gone with their tools: the ratchet
+# (§7.1), the pinned unsafe census (2a) and the duplicate census (2b). What still
+# holds the line on `unsafe` is the compiler — `#![forbid(unsafe_code)]` at the top
+# of every file that can carry it, which is checked on every build rather than by a
+# gate. `find_dup_types.sh` remains as a hand-run duplicate audit.
 # ---------------------------------------------------------------------------
-hdr "unsafe ratchet"
-if bash "$HERE/unsafe_ratchet.sh" check; then
-  pass "unsafe ratchet: no per-file increase"
-else
-  fail "unsafe ratchet: a file x metric increased"
-fi
-
-# ---------------------------------------------------------------------------
-# 2a. The **pinned unsafe census** (plan step E2, added S11.50).
-#
-# The ratchet above is a ratchet: it refuses per-file *increases* and lets a
-# checkpoint trade one shape for another. This is the equality test beside it —
-# every remaining `#[allow(unsafe_code)]` outside `src/api/` is enumerated in
-# tools/unsafe_census.txt by file and category, and a tree that does not match
-# fails, in either direction. D-exit-4's floor is a list, and a number cannot say
-# whether the thing that stayed is the thing that was ruled to stay.
-#
-# Seen red four ways at the commit that added it: an untagged new allow, a
-# *tagged* new allow in a real category (which a count-only check passes), a
-# retired row still pinned, and — the compiler's own half — an allow inside a
-# `#![forbid]` file, which is E0453 before this tool runs at all.
-# ---------------------------------------------------------------------------
-hdr "unsafe census"
-if bash "$HERE/unsafe_census.sh" check > "$LOGS/unsafe_census.log" 2>&1; then
-  pass "unsafe census: $(grep -vc '^#' "$HERE/unsafe_census.txt") pinned rows match"
-else
-  sed -n '1,40p' "$LOGS/unsafe_census.log"
-  fail "unsafe census: the tree's unsafe posture changed — see $LOGS/unsafe_census.log"
-fi
-
-# ---------------------------------------------------------------------------
-# 2b. The duplicate census (plan §7.2, added Phase 5 session A).
-#
-# Three instruments, zero-or-allowlisted: duplicate declarations, type laundering
-# by double cast, and duplicate function bodies. It runs at `commit` level because
-# a second declaration of one entity is cheap to introduce and expensive to find
-# later — F21 was a drifted third copy of one C++ function, F22 a second copy that
-# dropped a null guard, and neither moved a byte on any stream this project owns.
-# The allowlist is rust/tools/census_allowlist.txt and it carries the reason and
-# the owning phase step per entry.
-# ---------------------------------------------------------------------------
-hdr "duplicate census"
-if bash "$HERE/census.sh" > "$LOGS/census.log" 2>&1; then
-  pass "duplicate census: $(grep -cE '^(type|alias|table|budget) ' "$HERE/census_allowlist.txt") allowlisted, nothing new"
-else
-  sed -n '1,60p' "$LOGS/census.log"
-  fail "duplicate census: a new duplicate or a budget increase — see $LOGS/census.log"
-fi
 
 [ "$LEVEL" = commit ] && { LEVEL_DONE=1; }
 
@@ -968,8 +924,6 @@ skip "fuzz corpus replay: the fuzz crate (Phase 0 T7) was never built — no cor
 #                        nothing on a fully cached build, so unlike the benches
 #                        its emptiness is not a signal and is not checked  sound
 #   run_cargo_test       PIPESTATUS[0] + parsed totals + the ignored set   sound
-#   unsafe_ratchet.sh    direct exit status, no pipeline                   sound
-#   unsafe_census.sh     direct exit status, output redirected to a log     sound
 #   diffharness build.sh redirect, not a pipe                              sound
 #   sweep_gate           PIPESTATUS[0] + tally corroboration (fixed here)  sound
 #   decode / encode bench PIPESTATUS[0] + [2] + MISMATCH/DIFFER (fixed)    sound

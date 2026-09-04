@@ -404,8 +404,8 @@ sweep_bg() {
   # (`kiRefMbQp - kiCurMbQp <= DELTA_QP_BGD_THD`) only starts discriminating once rate
   # control has moved the QP around, which takes several VGOPs.
   #
-  # `t=4` is not optional. `WelsMdBackgroundMbEnc` runs *in-fork* (the census marks it
-  # so), and `VaaBackgroundMbDataUpdate` writes the current source picture through raw
+  # `t=4` is not optional. `WelsMdBackgroundMbEnc` runs *in-fork*, and
+  # `VaaBackgroundMbDataUpdate` writes the current source picture through raw
   # roots from inside a slice thread; a single-threaded-only preset would referee the
   # arithmetic and none of the threading.
   for spec in "res/Static_152_100.yuv 152 100" \

@@ -19,7 +19,7 @@ and compared byte for byte, and that sweep is a gate, not a report.
 | Decoder | 58 conformance streams decode to the same frames as the reference; parity suites for parse-only decoding, no-delay decoding, error concealment, error reporting, resolution and reference-count changes, and a malformed-stream corpus refereed against the C++ decoder |
 | Tests | 657 unit and integration tests in release, 664 in debug, plus compile-fail doctests pinning the crate's `unsafe` boundary |
 | Upstream's own tests | Cisco's `test/api` gtest suite runs against the Rust shared library; one row is allowlisted, by design (see *Deliberate divergences*) |
-| Unsafe code | 70 of 99 source files are `#![forbid(unsafe_code)]`; what remains is the C-ABI boundary in `src/api/`, the intrinsics in `src/simd/`, and a handful of audited sites, each tagged, counted, and ratcheted |
+| Unsafe code | 82 of 118 source files are `#![forbid(unsafe_code)]`, which the compiler checks on every build; what remains is the C-ABI boundary in `src/api/`, the intrinsics in `src/simd/x86_64/`, and a handful of audited sites, each tagged with `#[allow(unsafe_code)]` and a reason |
 | Dependencies | none; `libc` only as a dev-dependency for the benches that load the C++ library |
 | SIMD | Two kernel sets behind one alias, each a parity port of the scalar beside it. `src/simd/x86_64/` is the default on x86_64: 85 SSE2 kernels plus an AVX2 pair for 16-wide SAD, across SAD/SATD, motion compensation, forward and inverse DCT, quantization, intra prediction, deblocking, macroblock copies and CAVLC scoring — **1.43x** on the encoder there. `--features wide` swaps in `src/simd/wide/`, the same entry points written in the `wide` crate's portable lane types, which dispatches on **every** target: on aarch64 it is the port's only SIMD tier, and it is **1.33x** per kernel but **0.93x** end to end (see *Performance*). No hand-written NEON, MMX or LSX |
 
@@ -46,8 +46,7 @@ rust/
     ├── diffharness/             the byte-parity harness: two drivers, compare.sh, sweep.sh, referees
     ├── abi_harness/             the shared library driven through dlopen as a consumer would; upstream's gtest suite against it
     ├── ecref/                   the C++ decoder's answer for the malformed corpus
-    ├── unsafe_ratchet.sh, unsafe_census.sh, census.sh                      the unsafe and duplicate instruments
-    ├── port_census.py, find_stub_bodies.py, find_dup_types.sh              the port-completeness audits
+    ├── find_stub_bodies.py, find_dup_types.sh                              the port-completeness audits
     └── perfpair.py              interleaved A/B benchmarking
 ```
 
@@ -171,7 +170,7 @@ the SHA-1 column is what says the sets agree.
 **The gate battery** ties it together:
 
 ```bash
-bash rust/tools/gates.sh commit    # build --all-targets, cargo test in both profiles, the unsafe ratchet   (~2 min)
+bash rust/tools/gates.sh commit    # build --all-targets, cargo test in both profiles                       (~2 min)
 bash rust/tools/gates.sh family    # + the differential sweeps in both profiles                            (~5 min)
 bash rust/tools/gates.sh session   # + a Miri lane over the library
 bash rust/tools/gates.sh exit      # + benches, Miri over the integration tests, the three C-ABI gates
@@ -293,12 +292,12 @@ wrong span becomes a panic and not a read past the plane, which is a claim a tes
 can hold: a mutant `block_span` one row's width short is caught by a block sized
 to that gap.
 
-Three instruments keep it that way: `tools/unsafe_ratchet.sh` counts raw pointers,
-`unsafe fn`s and `unsafe` blocks per file against a committed baseline and fails on
-any increase; `tools/unsafe_census.sh` pins the exact list of remaining
-`#[allow(unsafe_code)]` sites by category; `tools/census.sh` fails on any duplicate
-type, table or function declaration. A count that must move for a deliberate
-change is regenerated in the same commit, with the reason.
+**The compiler keeps it that way.** `#![forbid(unsafe_code)]` sits at the top of
+every file that can carry it — 82 of 118 — so adding an `unsafe` block to one is a
+build error, not a report someone has to read. The 12 files that cannot are the
+C-ABI boundary, the intrinsics and the audited sites, and each `#[allow(unsafe_code)]`
+in them carries its category and its reason at the site. `tools/find_dup_types.sh`
+is a hand-run duplicate audit beside that.
 
 ## Deliberate divergences
 
@@ -359,8 +358,7 @@ rule. The port's output on them is the reference's own majority output.
   express has no referee, and a port without a referee is a guess.
 - Keep the C++ names and cite the C++ lines; port bodies whole, never stub them
   (`tools/find_stub_bodies.py` diffs each Rust body's call set against its C++
-  original, and `tools/port_census.py --classify` lists every C++ function with no
-  port and why).
+  original).
 - Run `gates.sh commit` before every commit and `gates.sh family` before anything
   that touches a coding path.
 
