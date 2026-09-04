@@ -1164,7 +1164,7 @@ pub fn WelsI16x16LumaPredH_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
 /// `get_intra_predictor.cpp:614`. Installs the scalar predictor tables. The SIMD
 /// overrides that follow in the C++ are all guarded by `kuiCpuFlag & WELS_CPU_*`,
 /// which is 0 on every target this port builds for, so none are translated.
-pub fn WelsInitIntraPredFuncs(pFuncList: &mut SWelsFuncPtrList, _kuiCpuFlag: u32) {
+pub fn WelsInitIntraPredFuncs(pFuncList: &mut SWelsFuncPtrList, kuiCpuFlag: u32) {
     let fl = pFuncList;
 
     fl.pfGetLumaI16x16Pred[I16_PRED_V as usize] = Some(WelsI16x16LumaPredV_c);
@@ -1199,6 +1199,30 @@ pub fn WelsInitIntraPredFuncs(pFuncList: &mut SWelsFuncPtrList, _kuiCpuFlag: u32
     fl.pfGetChromaPred[C_PRED_DC_L as usize] = Some(WelsIChromaPredDcLeft_c);
     fl.pfGetChromaPred[C_PRED_DC_T as usize] = Some(WelsIChromaPredDcTop_c);
     fl.pfGetChromaPred[C_PRED_DC_128 as usize] = Some(WelsIChromaPredDcNA_c);
+
+    #[cfg(target_arch = "x86_64")]
+    if (kuiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+        use crate::simd::x86_64::intra_pred::*;
+        fl.pfGetLumaI16x16Pred[I16_PRED_V as usize] = Some(enc_i16x16_luma_pred_v_sse2);
+        fl.pfGetLumaI16x16Pred[I16_PRED_H as usize] = Some(enc_i16x16_luma_pred_h_sse2);
+        fl.pfGetLumaI16x16Pred[I16_PRED_DC as usize] = Some(enc_i16x16_luma_pred_dc_sse2);
+        fl.pfGetLumaI16x16Pred[I16_PRED_P as usize] = Some(enc_i16x16_luma_pred_plane_sse2);
+
+        fl.pfGetChromaPred[C_PRED_DC as usize] = Some(enc_chroma_pred_dc_sse2);
+        fl.pfGetChromaPred[C_PRED_H as usize] = Some(enc_chroma_pred_h_sse2);
+        fl.pfGetChromaPred[C_PRED_V as usize] = Some(enc_chroma_pred_v_sse2);
+        fl.pfGetChromaPred[C_PRED_P as usize] = Some(enc_chroma_pred_plane_sse2);
+
+        fl.pfGetLumaI4x4Pred[I4_PRED_V as usize] = Some(enc_i4x4_luma_pred_v_sse2);
+        fl.pfGetLumaI4x4Pred[I4_PRED_H as usize] = Some(enc_i4x4_luma_pred_h_sse2);
+        fl.pfGetLumaI4x4Pred[I4_PRED_DC as usize] = Some(enc_i4x4_luma_pred_dc_sse2);
+        fl.pfGetLumaI4x4Pred[I4_PRED_DDL as usize] = Some(enc_i4x4_luma_pred_ddl_sse2);
+        fl.pfGetLumaI4x4Pred[I4_PRED_DDR as usize] = Some(enc_i4x4_luma_pred_ddr_sse2);
+        fl.pfGetLumaI4x4Pred[I4_PRED_VL as usize] = Some(enc_i4x4_luma_pred_vl_sse2);
+        fl.pfGetLumaI4x4Pred[I4_PRED_VR as usize] = Some(enc_i4x4_luma_pred_vr_sse2);
+        fl.pfGetLumaI4x4Pred[I4_PRED_HU as usize] = Some(enc_i4x4_luma_pred_hu_sse2);
+        fl.pfGetLumaI4x4Pred[I4_PRED_HD as usize] = Some(enc_i4x4_luma_pred_hd_sse2);
+    }
 }
 
 #[cfg(test)]

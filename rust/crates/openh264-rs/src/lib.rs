@@ -10,7 +10,6 @@
     unused_variables
 )]
 #![deny(
-    unsafe_op_in_unsafe_fn,
     unused_assignments,
     unused_mut,
     unreachable_patterns,

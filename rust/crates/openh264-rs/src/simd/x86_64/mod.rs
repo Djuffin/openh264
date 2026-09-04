@@ -4,3 +4,5 @@ pub mod satd;
 pub mod mc;
 pub mod dct;
 pub mod quant;
+pub mod intra_pred;
+pub mod deblock;
