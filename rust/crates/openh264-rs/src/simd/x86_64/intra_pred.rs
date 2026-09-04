@@ -2,6 +2,14 @@
 //!
 //! Accelerated implementations for 16x16 luma, 8x8 chroma, and 4x4 luma intra predictors,
 //! serving both the encoder candidate generator and the decoder in-place reconstructor.
+//!
+//! **`_sse2` in a name here means the body contains intrinsics.** Eight predictors
+//! in this file do not and are named without the suffix: the chroma H/V/DC pair, the
+//! 4x4 luma V/H/DC decoder predictors. They are not redundant — they are word-wide
+//! rewrites of their scalar twins (a `u64`/`u32` load and store where the scalar does
+//! `copy_from_slice`/`fill`) and the SSE2 arms of the init tables install them
+//! deliberately — but they vectorize nothing, and a name that says `_sse2` sends a
+//! reader looking for a kernel that is not there.
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
@@ -15,212 +23,88 @@ use crate::safe::plane::{PlaneCursorMut, RefSamples};
 // 16x16 Luma Intra Prediction (SSE2)
 // ============================================================================
 
-/// Vertical 16x16 predictor for packed candidate buffer (encoder).
-#[inline]
-pub fn enc_i16x16_luma_pred_v_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
-    let top = rec.row_n::<16>(-1, 0);
-    // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        enc_i16x16_luma_pred_v_sse2_impl(pred, &top);
+// ============================================================================
+// The enc/dec pairs, once (review §11)
+// ============================================================================
+
+/// **Where a predictor's rows go — the only thing that differed between the pairs.**
+///
+/// Seven predictor families were written twice here, `enc_*` and `dec_*`, for 263 of
+/// this file's lines. The neighbour reads were already identical in substance on both
+/// sides (`RefSamples::at` and `row_n`, which `RecCursor` and `PlaneCursorMut` both
+/// implement) and so was every line of arithmetic; the pairs diverged only at the
+/// store — the encoder fills a packed candidate buffer at a fixed pitch, the decoder
+/// writes back through the same cursor it read from.
+///
+/// So the bodies are generic over this trait and the two entry points are three lines
+/// each. The stores are `copy_from_slice` over a fixed-size array rather than
+/// `_mm_storeu_si128`, which is the same instruction and one less `unsafe`.
+///
+/// The decoder side reads its neighbours and writes its rows through one cursor, so a
+/// body cannot hold `&S` and `&mut O` to it at once. Every collapsed body is therefore
+/// split the way the arithmetic already was: read and compute from `&S` first, then
+/// write. The two phases were already in that order in all fourteen originals.
+trait PredOut {
+    /// Writes `row` as row `dy` of the destination.
+    fn put<const N: usize>(&mut self, dy: usize, row: &[u8; N]);
+}
+
+/// The encoder's packed candidate buffer — `W` bytes per row, `W * W` long, the
+/// `sMemPredMb` arena shape.
+struct Packed<'a, const W: usize>(&'a mut [u8]);
+
+impl<const W: usize> PredOut for Packed<'_, W> {
+    #[inline(always)]
+    fn put<const N: usize>(&mut self, dy: usize, row: &[u8; N]) {
+        self.0[dy * W..][..N].copy_from_slice(row);
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
-unsafe fn enc_i16x16_luma_pred_v_sse2_impl(pred: &mut [u8; 256], top: &[u8; 16]) {
-    let v = _mm_loadu_si128(top.as_ptr() as *const __m128i);
-    for y in 0..16 {
-        _mm_storeu_si128(pred.as_mut_ptr().add(y * 16) as *mut __m128i, v);
+impl PredOut for PlaneCursorMut<'_> {
+    #[inline(always)]
+    fn put<const N: usize>(&mut self, dy: usize, row: &[u8; N]) {
+        self.row_mut(dy as isize, 0, N).copy_from_slice(row);
     }
 }
 
-/// Vertical 16x16 predictor in place (decoder).
-#[inline]
-pub fn dec_i16x16_luma_pred_v_sse2(pred: &mut PlaneCursorMut<'_>) {
-    let top: [u8; 16] = pred.row(-1, 0, 16).try_into().unwrap();
-    // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        let v = _mm_loadu_si128(top.as_ptr() as *const __m128i);
-        for dy in 0..16 {
-            _mm_storeu_si128(pred.row_mut(dy, 0, 16).as_mut_ptr() as *mut __m128i, v);
-        }
+/// Fills `rows` rows of `N` bytes with one value — V, H, DC and the DC variants all
+/// reduce to this once their mean or their source row is known.
+#[inline(always)]
+fn fill_rows<const N: usize, O: PredOut>(out: &mut O, rows: usize, row: &[u8; N]) {
+    for dy in 0..rows {
+        out.put(dy, row);
     }
 }
 
-/// Horizontal 16x16 predictor for packed candidate buffer (encoder).
-#[inline]
-pub fn enc_i16x16_luma_pred_h_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
-    // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        for y in 0..16 {
-            let val = rec.at(-1, y as isize);
-            let v = _mm_set1_epi8(val as i8);
-            _mm_storeu_si128(pred.as_mut_ptr().add(y * 16) as *mut __m128i, v);
-        }
-    }
-}
-
-/// Horizontal 16x16 predictor in place (decoder).
-#[inline]
-pub fn dec_i16x16_luma_pred_h_sse2(pred: &mut PlaneCursorMut<'_>) {
-    // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        for dy in 0..16 {
-            let val = pred.at(-1, dy);
-            let v = _mm_set1_epi8(val as i8);
-            _mm_storeu_si128(pred.row_mut(dy, 0, 16).as_mut_ptr() as *mut __m128i, v);
-        }
-    }
-}
-
-/// DC 16x16 predictor for packed candidate buffer (encoder).
-#[inline]
-pub fn enc_i16x16_luma_pred_dc_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
-    let top = rec.row_n::<16>(-1, 0);
-    // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        let top_v = _mm_loadu_si128(top.as_ptr() as *const __m128i);
-        let sad = _mm_sad_epu8(top_v, _mm_setzero_si128());
-        let sum_top = _mm_cvtsi128_si32(sad) + _mm_extract_epi16(sad, 4);
-
-        let mut sum_left = 0i32;
-        for y in 0..16 {
-            sum_left += rec.at(-1, y as isize) as i32;
-        }
-
-        let mean = ((16 + sum_top + sum_left) >> 5) as u8;
-        let v = _mm_set1_epi8(mean as i8);
-        for y in 0..16 {
-            _mm_storeu_si128(pred.as_mut_ptr().add(y * 16) as *mut __m128i, v);
-        }
-    }
-}
-
-/// DC 16x16 predictor in place (decoder).
-#[inline]
-pub fn dec_i16x16_luma_pred_dc_sse2(pred: &mut PlaneCursorMut<'_>) {
-    let top: [u8; 16] = pred.row(-1, 0, 16).try_into().unwrap();
-    // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        let top_v = _mm_loadu_si128(top.as_ptr() as *const __m128i);
-        let sad = _mm_sad_epu8(top_v, _mm_setzero_si128());
-        let sum_top = _mm_cvtsi128_si32(sad) + _mm_extract_epi16(sad, 4);
-
-        let mut sum_left = 0i32;
-        for y in 0..16 {
-            sum_left += pred.at(-1, y as isize) as i32;
-        }
-
-        let mean = ((16 + sum_top + sum_left) >> 5) as u8;
-        let v = _mm_set1_epi8(mean as i8);
-        for dy in 0..16 {
-            _mm_storeu_si128(pred.row_mut(dy, 0, 16).as_mut_ptr() as *mut __m128i, v);
-        }
-    }
-}
-
-/// DC Top 16x16 predictor (decoder).
-#[inline]
-pub fn dec_i16x16_luma_pred_dc_top_sse2(pred: &mut PlaneCursorMut<'_>) {
-    let top: [u8; 16] = pred.row(-1, 0, 16).try_into().unwrap();
-    // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        let top_v = _mm_loadu_si128(top.as_ptr() as *const __m128i);
-        let sad = _mm_sad_epu8(top_v, _mm_setzero_si128());
-        let sum_top = _mm_cvtsi128_si32(sad) + _mm_extract_epi16(sad, 4);
-        let mean = ((8 + sum_top) >> 4) as u8;
-        let v = _mm_set1_epi8(mean as i8);
-        for dy in 0..16 {
-            _mm_storeu_si128(pred.row_mut(dy, 0, 16).as_mut_ptr() as *mut __m128i, v);
-        }
-    }
-}
-
-/// DC NA 16x16 predictor (decoder).
-#[inline]
-pub fn dec_i16x16_luma_pred_dc_na_sse2(pred: &mut PlaneCursorMut<'_>) {
-    // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        let v = _mm_set1_epi8(0x80u8 as i8);
-        for dy in 0..16 {
-            _mm_storeu_si128(pred.row_mut(dy, 0, 16).as_mut_ptr() as *mut __m128i, v);
-        }
-    }
-}
-
-/// Plane 16x16 predictor for packed candidate buffer (encoder).
-#[inline]
-pub fn enc_i16x16_luma_pred_plane_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
+/// `(lt_shift, top_shift, left_shift)` for the 16x16 plane predictor.
+///
+/// C++: `WelsI16x16LumaPredPlane_c`, `codec/common/src/intra_pred_common.cpp`.
+#[inline(always)]
+fn i16x16_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
     let mut top_sum: i32 = 0;
     let mut left_sum: i32 = 0;
     for i in 0..8isize {
-        top_sum += (i as i32 + 1)
-            * (rec.at(8 + i, -1) as i32 - rec.at(6 - i, -1) as i32);
-        left_sum += (i as i32 + 1)
-            * (rec.at(-1, 8 + i) as i32 - rec.at(-1, 6 - i) as i32);
+        top_sum += (i as i32 + 1) * (src.at(8 + i, -1) as i32 - src.at(6 - i, -1) as i32);
+        left_sum += (i as i32 + 1) * (src.at(-1, 8 + i) as i32 - src.at(-1, 6 - i) as i32);
     }
-
-    let lt_shift = (rec.at(-1, 15) as i32 + rec.at(15, -1) as i32) << 4;
-    let top_shift = (5 * top_sum + 32) >> 6;
-    let left_shift = (5 * left_sum + 32) >> 6;
-
-    // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        enc_i16x16_luma_pred_plane_sse2_impl(pred, lt_shift, top_shift, left_shift);
-    }
+    let lt_shift = (src.at(-1, 15) as i32 + src.at(15, -1) as i32) << 4;
+    ((5 * top_sum + 32) >> 6, (5 * left_sum + 32) >> 6, lt_shift)
 }
 
-#[cfg(target_arch = "x86_64")]
+/// The 16x16 plane fill, from the three coefficients.
 #[target_feature(enable = "sse2")]
-unsafe fn enc_i16x16_luma_pred_plane_sse2_impl(
-    pred: &mut [u8; 256],
-    lt_shift: i32,
+unsafe fn i16x16_plane_fill_sse2<O: PredOut>(
+    out: &mut O,
     top_shift: i32,
     left_shift: i32,
+    lt_shift: i32,
 ) {
-    let inc_minus = _mm_setr_epi16(-7, -6, -5, -4, -3, -2, -1, 0);
-    let inc = _mm_setr_epi16(1, 2, 3, 4, 5, 6, 7, 8);
-    let b_vec = _mm_set1_epi16(top_shift as i16);
-    let c_vec = _mm_set1_epi16(left_shift as i16);
-    let s_init = lt_shift + 16 - 7 * left_shift;
-    let mut s_vec = _mm_set1_epi16(s_init as i16);
-
-    let term_lo = _mm_mullo_epi16(b_vec, inc_minus);
-    let term_hi = _mm_mullo_epi16(b_vec, inc);
-
-    for y in 0..16 {
-        let row_lo = _mm_srai_epi16(_mm_add_epi16(term_lo, s_vec), 5);
-        let row_hi = _mm_srai_epi16(_mm_add_epi16(term_hi, s_vec), 5);
-        let row = _mm_packus_epi16(row_lo, row_hi);
-        _mm_storeu_si128(pred.as_mut_ptr().add(y * 16) as *mut __m128i, row);
-        s_vec = _mm_add_epi16(s_vec, c_vec);
-    }
-}
-
-/// Plane 16x16 predictor in place (decoder).
-#[inline]
-pub fn dec_i16x16_luma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
-    let mut top_sum: i32 = 0;
-    let mut left_sum: i32 = 0;
-    for i in 0..8isize {
-        top_sum += (i as i32 + 1)
-            * (pred.at(8 + i, -1) as i32 - pred.at(6 - i, -1) as i32);
-        left_sum += (i as i32 + 1)
-            * (pred.at(-1, 8 + i) as i32 - pred.at(-1, 6 - i) as i32);
-    }
-
-    let lt_shift = (pred.at(-1, 15) as i32 + pred.at(15, -1) as i32) << 4;
-    let top_shift = (5 * top_sum + 32) >> 6;
-    let left_shift = (5 * left_sum + 32) >> 6;
-
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let inc_minus = _mm_setr_epi16(-7, -6, -5, -4, -3, -2, -1, 0);
         let inc = _mm_setr_epi16(1, 2, 3, 4, 5, 6, 7, 8);
         let b_vec = _mm_set1_epi16(top_shift as i16);
         let c_vec = _mm_set1_epi16(left_shift as i16);
-        let s_init = lt_shift + 16 - 7 * left_shift;
-        let mut s_vec = _mm_set1_epi16(s_init as i16);
+        let mut s_vec = _mm_set1_epi16((lt_shift + 16 - 7 * left_shift) as i16);
 
         let term_lo = _mm_mullo_epi16(b_vec, inc_minus);
         let term_hi = _mm_mullo_epi16(b_vec, inc);
@@ -228,11 +112,196 @@ pub fn dec_i16x16_luma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
         for dy in 0..16 {
             let row_lo = _mm_srai_epi16(_mm_add_epi16(term_lo, s_vec), 5);
             let row_hi = _mm_srai_epi16(_mm_add_epi16(term_hi, s_vec), 5);
-            let row = _mm_packus_epi16(row_lo, row_hi);
-            _mm_storeu_si128(pred.row_mut(dy, 0, 16).as_mut_ptr() as *mut __m128i, row);
+            let mut row = [0u8; 16];
+            _mm_storeu_si128(row.as_mut_ptr() as *mut __m128i, _mm_packus_epi16(row_lo, row_hi));
+            out.put(dy, &row);
             s_vec = _mm_add_epi16(s_vec, c_vec);
         }
     }
+}
+
+/// The 16x16 DC mean over whichever of the two neighbour edges the variant uses.
+///
+/// C++: `WelsI16x16LumaPredDc_c` and its `_T`/`_NA` siblings — one body, because the
+/// three differ only in which sums are in scope and what they are rounded by.
+#[target_feature(enable = "sse2")]
+unsafe fn i16x16_dc_mean_sse2<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
+    unsafe {
+        let sum_top = if use_top {
+            let top = src.row_n::<16>(-1, 0);
+            let sad = _mm_sad_epu8(
+                _mm_loadu_si128(top.as_ptr() as *const __m128i),
+                _mm_setzero_si128(),
+            );
+            _mm_cvtsi128_si32(sad) + _mm_extract_epi16(sad, 4)
+        } else {
+            0
+        };
+        let sum_left = if use_left {
+            (0..16).map(|y| src.at(-1, y as isize) as i32).sum()
+        } else {
+            0
+        };
+        match (use_top, use_left) {
+            (true, true) => ((16 + sum_top + sum_left) >> 5) as u8,
+            (true, false) => ((8 + sum_top) >> 4) as u8,
+            (false, true) => ((8 + sum_left) >> 4) as u8,
+            (false, false) => 0x80,
+        }
+    }
+}
+
+/// The four 4x4-quadrant means of the 8x8 chroma DC predictor, as the two row values
+/// the top and bottom halves are filled with.
+///
+/// C++: `WelsIChromaPredDc_c`.
+#[inline(always)]
+fn chroma_dc_rows<S: RefSamples>(src: &S) -> ([u8; 8], [u8; 8]) {
+    let top = src.row_n::<8>(-1, 0);
+    let sum_top0: i32 = (0..4).map(|i| top[i] as i32).sum();
+    let sum_top1: i32 = (0..4).map(|i| top[i + 4] as i32).sum();
+    let sum_left0: i32 = (0..4).map(|y| src.at(-1, y as isize) as i32).sum();
+    let sum_left1: i32 = (0..4).map(|y| src.at(-1, (y + 4) as isize) as i32).sum();
+
+    let mean1 = ((sum_top0 + sum_left0 + 4) >> 3) as u8;
+    let mean2 = ((sum_top1 + 2) >> 2) as u8;
+    let mean3 = ((sum_left1 + 2) >> 2) as u8;
+    let mean4 = ((sum_top1 + sum_left1 + 4) >> 3) as u8;
+
+    (
+        [mean1, mean1, mean1, mean1, mean2, mean2, mean2, mean2],
+        [mean3, mean3, mean3, mean3, mean4, mean4, mean4, mean4],
+    )
+}
+
+/// `(top_shift, left_shift, lt_shift)` for the 8x8 chroma plane predictor.
+///
+/// C++: `WelsIChromaPredPlane_c`.
+#[inline(always)]
+fn chroma_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
+    let mut top_sum: i32 = 0;
+    let mut left_sum: i32 = 0;
+    for i in 0..4isize {
+        top_sum += (i as i32 + 1) * (src.at(4 + i, -1) as i32 - src.at(2 - i, -1) as i32);
+        left_sum += (i as i32 + 1) * (src.at(-1, 4 + i) as i32 - src.at(-1, 2 - i) as i32);
+    }
+    let lt_shift = (src.at(-1, 7) as i32 + src.at(7, -1) as i32) << 4;
+    ((17 * top_sum + 16) >> 5, (17 * left_sum + 16) >> 5, lt_shift)
+}
+
+/// The 8x8 chroma plane fill, from the three coefficients.
+#[target_feature(enable = "sse2")]
+unsafe fn chroma_plane_fill_sse2<O: PredOut>(
+    out: &mut O,
+    top_shift: i32,
+    left_shift: i32,
+    lt_shift: i32,
+) {
+    unsafe {
+        let mul_b = _mm_setr_epi16(-3, -2, -1, 0, 1, 2, 3, 4);
+        let b_vec = _mm_set1_epi16(top_shift as i16);
+        let c_vec = _mm_set1_epi16(left_shift as i16);
+        let mut s_vec = _mm_set1_epi16((lt_shift + 16 - 3 * left_shift) as i16);
+        let term = _mm_mullo_epi16(b_vec, mul_b);
+
+        for dy in 0..8 {
+            let row_w = _mm_srai_epi16(_mm_add_epi16(term, s_vec), 5);
+            let row_b = _mm_packus_epi16(row_w, row_w);
+            out.put(dy, &(_mm_cvtsi128_si64(row_b) as u64).to_ne_bytes());
+            s_vec = _mm_add_epi16(s_vec, c_vec);
+        }
+    }
+}
+
+/// Fills every row with the neighbour row above — the V predictors, at either width.
+#[inline(always)]
+fn pred_v<const N: usize, S: RefSamples, O: PredOut>(src: &S, out: &mut O, rows: usize) {
+    let top = src.row_n::<N>(-1, 0);
+    fill_rows(out, rows, &top);
+}
+
+/// Fills each row with its own left neighbour — the H predictors, at either width.
+#[inline(always)]
+fn pred_h<const N: usize, S: RefSamples, O: PredOut>(src: &S, out: &mut O, rows: usize) {
+    for dy in 0..rows {
+        out.put(dy, &[src.at(-1, dy as isize); N]);
+    }
+}
+
+/// Vertical 16x16 predictor for packed candidate buffer (encoder).
+#[inline]
+pub fn enc_i16x16_luma_pred_v_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
+    pred_v::<16, _, _>(rec, &mut Packed::<16>(pred), 16)
+}
+
+
+/// Vertical 16x16 predictor in place (decoder).
+#[inline]
+pub fn dec_i16x16_luma_pred_v_sse2(pred: &mut PlaneCursorMut<'_>) {
+    let top = pred.row_n::<16>(-1, 0);
+    fill_rows(pred, 16, &top)
+}
+
+/// Horizontal 16x16 predictor for packed candidate buffer (encoder).
+#[inline]
+pub fn enc_i16x16_luma_pred_h_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
+    pred_h::<16, _, _>(rec, &mut Packed::<16>(pred), 16)
+}
+
+/// Horizontal 16x16 predictor in place (decoder).
+#[inline]
+pub fn dec_i16x16_luma_pred_h_sse2(pred: &mut PlaneCursorMut<'_>) {
+    for dy in 0..16 {
+        let v = pred.at(-1, dy as isize);
+        pred.put(dy, &[v; 16]);
+    }
+}
+
+/// DC 16x16 predictor for packed candidate buffer (encoder).
+#[inline]
+pub fn enc_i16x16_luma_pred_dc_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
+    // unsafe-cat: simd-kernel(x86_64)
+    let mean = unsafe { i16x16_dc_mean_sse2(rec, true, true) };
+    fill_rows(&mut Packed::<16>(pred), 16, &[mean; 16])
+}
+
+/// DC 16x16 predictor in place (decoder).
+#[inline]
+pub fn dec_i16x16_luma_pred_dc_sse2(pred: &mut PlaneCursorMut<'_>) {
+    // unsafe-cat: simd-kernel(x86_64)
+    let mean = unsafe { i16x16_dc_mean_sse2(pred, true, true) };
+    fill_rows(pred, 16, &[mean; 16])
+}
+
+/// DC Top 16x16 predictor (decoder).
+#[inline]
+pub fn dec_i16x16_luma_pred_dc_top_sse2(pred: &mut PlaneCursorMut<'_>) {
+    // unsafe-cat: simd-kernel(x86_64)
+    let mean = unsafe { i16x16_dc_mean_sse2(pred, true, false) };
+    fill_rows(pred, 16, &[mean; 16])
+}
+
+/// DC NA 16x16 predictor (decoder).
+#[inline]
+pub fn dec_i16x16_luma_pred_dc_na_sse2(pred: &mut PlaneCursorMut<'_>) {
+    fill_rows(pred, 16, &[0x80u8; 16])
+}
+
+/// Plane 16x16 predictor for packed candidate buffer (encoder).
+#[inline]
+pub fn enc_i16x16_luma_pred_plane_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
+    let (top_shift, left_shift, lt_shift) = i16x16_plane_coeffs(rec);
+    // unsafe-cat: simd-kernel(x86_64)
+    unsafe { i16x16_plane_fill_sse2(&mut Packed::<16>(pred), top_shift, left_shift, lt_shift) }
+}
+
+
+/// Plane 16x16 predictor in place (decoder).
+#[inline]
+pub fn dec_i16x16_luma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
+    let (top_shift, left_shift, lt_shift) = i16x16_plane_coeffs(pred);
+    // unsafe-cat: simd-kernel(x86_64)
+    unsafe { i16x16_plane_fill_sse2(pred, top_shift, left_shift, lt_shift) }
 }
 
 // ============================================================================
@@ -242,201 +311,71 @@ pub fn dec_i16x16_luma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
 /// Vertical Chroma 8x8 predictor for packed candidate buffer (encoder).
 #[inline]
 pub fn enc_chroma_pred_v_sse2(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
-    let top = rec.row_n::<8>(-1, 0);
-    // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        let top_u64 = *(top.as_ptr() as *const i64);
-        let v = _mm_set1_epi64x(top_u64);
-        for y in 0..4 {
-            _mm_storeu_si128(pred.as_mut_ptr().add(y * 16) as *mut __m128i, v);
-        }
-    }
+    pred_v::<8, _, _>(rec, &mut Packed::<8>(pred), 8)
 }
 
 /// Vertical Chroma 8x8 predictor in place (decoder).
 #[inline]
-pub fn dec_chroma_pred_v_sse2(pred: &mut PlaneCursorMut<'_>) {
-    let top: [u8; 8] = pred.row(-1, 0, 8).try_into().unwrap();
-    let top_u64 = u64::from_ne_bytes(top);
-    for dy in 0..8 {
-        let row: &mut [u8; 8] = pred.row_mut(dy, 0, 8).try_into().unwrap();
-        *row = top_u64.to_ne_bytes();
-    }
+pub fn dec_chroma_pred_v(pred: &mut PlaneCursorMut<'_>) {
+    let top = pred.row_n::<8>(-1, 0);
+    fill_rows(pred, 8, &top)
 }
 
 /// Horizontal Chroma 8x8 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_chroma_pred_h_sse2(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
-    for y in 0..8 {
-        let val = rec.at(-1, y as isize);
-        let v = val as u64 * 0x0101_0101_0101_0101u64;
-        let row: &mut [u8; 8] = (&mut pred[y * 8..][..8]).try_into().unwrap();
-        *row = v.to_ne_bytes();
-    }
+pub fn enc_chroma_pred_h(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
+    pred_h::<8, _, _>(rec, &mut Packed::<8>(pred), 8)
 }
 
 /// Horizontal Chroma 8x8 predictor in place (decoder).
 #[inline]
-pub fn dec_chroma_pred_h_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_chroma_pred_h(pred: &mut PlaneCursorMut<'_>) {
     for dy in 0..8 {
-        let val = pred.at(-1, dy);
-        let v = val as u64 * 0x0101_0101_0101_0101u64;
-        let row: &mut [u8; 8] = pred.row_mut(dy, 0, 8).try_into().unwrap();
-        *row = v.to_ne_bytes();
+        let v = pred.at(-1, dy as isize);
+        pred.put(dy, &[v; 8]);
     }
 }
 
 /// DC Chroma 8x8 predictor for packed candidate buffer (encoder).
 #[inline]
-pub fn enc_chroma_pred_dc_sse2(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
-    let top = rec.row_n::<8>(-1, 0);
-    let mut sum_top0 = 0i32;
-    let mut sum_top1 = 0i32;
-    for i in 0..4 {
-        sum_top0 += top[i] as i32;
-        sum_top1 += top[i + 4] as i32;
+pub fn enc_chroma_pred_dc(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
+    let (top, bot) = chroma_dc_rows(rec);
+    let out = &mut Packed::<8>(pred);
+    for dy in 0..4 {
+        out.put(dy, &top);
     }
-    let mut sum_left0 = 0i32;
-    let mut sum_left1 = 0i32;
-    for y in 0..4 {
-        sum_left0 += rec.at(-1, y as isize) as i32;
-        sum_left1 += rec.at(-1, (y + 4) as isize) as i32;
-    }
-
-    let mean1 = ((sum_top0 + sum_left0 + 4) >> 3) as u8;
-    let mean2 = ((sum_top1 + 2) >> 2) as u8;
-    let mean3 = ((sum_left1 + 2) >> 2) as u8;
-    let mean4 = ((sum_top1 + sum_left1 + 4) >> 3) as u8;
-
-    let top_mean = u64::from_ne_bytes([mean1, mean1, mean1, mean1, mean2, mean2, mean2, mean2]);
-    let bot_mean = u64::from_ne_bytes([mean3, mean3, mean3, mean3, mean4, mean4, mean4, mean4]);
-
-    for y in 0..4 {
-        let row: &mut [u8; 8] = (&mut pred[y * 8..][..8]).try_into().unwrap();
-        *row = top_mean.to_ne_bytes();
-    }
-    for y in 4..8 {
-        let row: &mut [u8; 8] = (&mut pred[y * 8..][..8]).try_into().unwrap();
-        *row = bot_mean.to_ne_bytes();
+    for dy in 4..8 {
+        out.put(dy, &bot);
     }
 }
 
 /// DC Chroma 8x8 predictor in place (decoder).
 #[inline]
-pub fn dec_chroma_pred_dc_sse2(pred: &mut PlaneCursorMut<'_>) {
-    let top: [u8; 8] = pred.row(-1, 0, 8).try_into().unwrap();
-    let mut sum_top0 = 0i32;
-    let mut sum_top1 = 0i32;
-    for i in 0..4 {
-        sum_top0 += top[i] as i32;
-        sum_top1 += top[i + 4] as i32;
-    }
-    let mut sum_left0 = 0i32;
-    let mut sum_left1 = 0i32;
-    for y in 0..4 {
-        sum_left0 += pred.at(-1, y as isize) as i32;
-        sum_left1 += pred.at(-1, (y + 4) as isize) as i32;
-    }
-
-    let mean1 = ((sum_top0 + sum_left0 + 4) >> 3) as u8;
-    let mean2 = ((sum_top1 + 2) >> 2) as u8;
-    let mean3 = ((sum_left1 + 2) >> 2) as u8;
-    let mean4 = ((sum_top1 + sum_left1 + 4) >> 3) as u8;
-
-    let top_mean = u64::from_ne_bytes([mean1, mean1, mean1, mean1, mean2, mean2, mean2, mean2]);
-    let bot_mean = u64::from_ne_bytes([mean3, mean3, mean3, mean3, mean4, mean4, mean4, mean4]);
-
+pub fn dec_chroma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
+    let (top, bot) = chroma_dc_rows(pred);
     for dy in 0..4 {
-        let row: &mut [u8; 8] = pred.row_mut(dy, 0, 8).try_into().unwrap();
-        *row = top_mean.to_ne_bytes();
+        pred.put(dy, &top);
     }
     for dy in 4..8 {
-        let row: &mut [u8; 8] = pred.row_mut(dy, 0, 8).try_into().unwrap();
-        *row = bot_mean.to_ne_bytes();
+        pred.put(dy, &bot);
     }
 }
 
 /// Plane Chroma 8x8 predictor for packed candidate buffer (encoder).
 #[inline]
 pub fn enc_chroma_pred_plane_sse2(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
-    let mut top_sum: i32 = 0;
-    let mut left_sum: i32 = 0;
-    for i in 0..4isize {
-        top_sum += (i as i32 + 1)
-            * (rec.at(4 + i, -1) as i32 - rec.at(2 - i, -1) as i32);
-        left_sum += (i as i32 + 1)
-            * (rec.at(-1, 4 + i) as i32 - rec.at(-1, 2 - i) as i32);
-    }
-
-    let lt_shift = (rec.at(-1, 7) as i32 + rec.at(7, -1) as i32) << 4;
-    let top_shift = (17 * top_sum + 16) >> 5;
-    let left_shift = (17 * left_sum + 16) >> 5;
-
+    let (top_shift, left_shift, lt_shift) = chroma_plane_coeffs(rec);
     // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        enc_chroma_pred_plane_sse2_impl(pred, lt_shift, top_shift, left_shift);
-    }
+    unsafe { chroma_plane_fill_sse2(&mut Packed::<8>(pred), top_shift, left_shift, lt_shift) }
 }
 
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
-unsafe fn enc_chroma_pred_plane_sse2_impl(
-    pred: &mut [u8; 64],
-    lt_shift: i32,
-    top_shift: i32,
-    left_shift: i32,
-) {
-    let mul_b = _mm_setr_epi16(-3, -2, -1, 0, 1, 2, 3, 4);
-    let b_vec = _mm_set1_epi16(top_shift as i16);
-    let c_vec = _mm_set1_epi16(left_shift as i16);
-    let s_init = lt_shift + 16 - 3 * left_shift;
-    let mut s_vec = _mm_set1_epi16(s_init as i16);
-    let term = _mm_mullo_epi16(b_vec, mul_b);
-
-    for y in 0..8 {
-        let row_w = _mm_srai_epi16(_mm_add_epi16(term, s_vec), 5);
-        let row_b = _mm_packus_epi16(row_w, row_w);
-        let row_u64 = _mm_cvtsi128_si64(row_b) as u64;
-        let dst: &mut [u8; 8] = (&mut pred[y * 8..][..8]).try_into().unwrap();
-        *dst = row_u64.to_ne_bytes();
-        s_vec = _mm_add_epi16(s_vec, c_vec);
-    }
-}
 
 /// Plane Chroma 8x8 predictor in place (decoder).
 #[inline]
 pub fn dec_chroma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
-    let mut top_sum: i32 = 0;
-    let mut left_sum: i32 = 0;
-    for i in 0..4isize {
-        top_sum += (i as i32 + 1)
-            * (pred.at(4 + i, -1) as i32 - pred.at(2 - i, -1) as i32);
-        left_sum += (i as i32 + 1)
-            * (pred.at(-1, 4 + i) as i32 - pred.at(-1, 2 - i) as i32);
-    }
-
-    let lt_shift = (pred.at(-1, 7) as i32 + pred.at(7, -1) as i32) << 4;
-    let top_shift = (17 * top_sum + 16) >> 5;
-    let left_shift = (17 * left_sum + 16) >> 5;
-
+    let (top_shift, left_shift, lt_shift) = chroma_plane_coeffs(pred);
     // unsafe-cat: simd-kernel(x86_64)
-    unsafe {
-        let mul_b = _mm_setr_epi16(-3, -2, -1, 0, 1, 2, 3, 4);
-        let b_vec = _mm_set1_epi16(top_shift as i16);
-        let c_vec = _mm_set1_epi16(left_shift as i16);
-        let s_init = lt_shift + 16 - 3 * left_shift;
-        let mut s_vec = _mm_set1_epi16(s_init as i16);
-        let term = _mm_mullo_epi16(b_vec, mul_b);
-
-        for dy in 0..8 {
-            let row_w = _mm_srai_epi16(_mm_add_epi16(term, s_vec), 5);
-            let row_b = _mm_packus_epi16(row_w, row_w);
-            let row_u64 = _mm_cvtsi128_si64(row_b) as u64;
-            let dst: &mut [u8; 8] = pred.row_mut(dy, 0, 8).try_into().unwrap();
-            *dst = row_u64.to_ne_bytes();
-            s_vec = _mm_add_epi16(s_vec, c_vec);
-        }
-    }
+    unsafe { chroma_plane_fill_sse2(pred, top_shift, left_shift, lt_shift) }
 }
 
 // ============================================================================
@@ -449,7 +388,7 @@ pub fn enc_i4x4_luma_pred_v_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let top = rec.row_n::<4>(-1, 0);
     // unsafe-cat: simd-kernel(x86_64)
     unsafe {
-        let t_u32 = *(top.as_ptr() as *const i32);
+        let t_u32 = i32::from_ne_bytes(top);
         let v = _mm_set1_epi32(t_u32);
         _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
     }
@@ -457,7 +396,7 @@ pub fn enc_i4x4_luma_pred_v_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 
 /// Vertical 4x4 predictor in place (decoder).
 #[inline]
-pub fn dec_i4x4_luma_pred_v_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i4x4_luma_pred_v(pred: &mut PlaneCursorMut<'_>) {
     let top: [u8; 4] = pred.row(-1, 0, 4).try_into().unwrap();
     let t_u32 = u32::from_ne_bytes(top);
     for dy in 0..4 {
@@ -482,7 +421,7 @@ pub fn enc_i4x4_luma_pred_h_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 
 /// Horizontal 4x4 predictor in place (decoder).
 #[inline]
-pub fn dec_i4x4_luma_pred_h_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i4x4_luma_pred_h(pred: &mut PlaneCursorMut<'_>) {
     for dy in 0..4 {
         let val = pred.at(-1, dy);
         let row: &mut [u8; 4] = pred.row_mut(dy, 0, 4).try_into().unwrap();
@@ -509,7 +448,7 @@ pub fn enc_i4x4_luma_pred_dc_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 
 /// DC 4x4 predictor in place (decoder).
 #[inline]
-pub fn dec_i4x4_luma_pred_dc_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i4x4_luma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
     let top: [u8; 4] = pred.row(-1, 0, 4).try_into().unwrap();
     let mut sum = 4i32;
     for y in 0..4 {
@@ -781,14 +720,14 @@ mod tests {
         let mut pred_c = [0u8; 64];
         let mut pred_simd = [0u8; 64];
         WelsIChromaPredH_c(&mut pred_c, &rec);
-        enc_chroma_pred_h_sse2(&mut pred_simd, &rec);
+        enc_chroma_pred_h(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "Chroma H mismatch");
 
         // DC
         let mut pred_c = [0u8; 64];
         let mut pred_simd = [0u8; 64];
         WelsIChromaPredDc_c(&mut pred_c, &rec);
-        enc_chroma_pred_dc_sse2(&mut pred_simd, &rec);
+        enc_chroma_pred_dc(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "Chroma DC mismatch");
 
         // Plane
@@ -867,5 +806,86 @@ mod tests {
         WelsI4x4LumaPredHU_c(&mut pred_c, &rec);
         enc_i4x4_luma_pred_hu_sse2(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 HU mismatch");
+    }
+
+    // ========================================================================
+    // The decoder-side predictors (review §14).
+    //
+    // The three tests above cover the twelve `enc_*` kernels — the encoder's packed
+    // candidate buffers — and nothing covered the thirteen `dec_*` ones, which are the
+    // in-place reconstructors the decoder installs at `decoder_core.rs:1817..1830`.
+    // They are a different shape, not a different arithmetic: the encoder writes a
+    // dense `[u8; N]` candidate, the decoder writes back into the picture through a
+    // `PlaneCursorMut` whose neighbours are the samples it just read. That shape is
+    // exactly where an off-by-one row or column hides, so these compare the *whole
+    // allocation* of two identically built planes rather than the block.
+    //
+    // The reference on the other side is `decoder::get_intra_predictor`, which has no
+    // SIMD dispatch of its own — the SSE2 kernels are installed over it in the table,
+    // never called from it — so no assertion here can route back into the kernel under
+    // test.
+    // ========================================================================
+
+    /// Two planes with identical content, both padded, for an in-place kernel pair.
+    fn twin_pred_planes() -> (PaddedPlane, PaddedPlane) {
+        (test_plane(32, 32, 16, 64), test_plane(32, 32, 16, 64))
+    }
+
+    /// Runs `scalar` and `simd` on twin planes anchored at `(8, 8)` and compares every
+    /// byte of both allocations.
+    fn assert_dec_parity(
+        name: &str,
+        scalar: fn(&mut PlaneCursorMut<'_>),
+        simd: fn(&mut PlaneCursorMut<'_>),
+    ) {
+        let (mut pa, mut pb) = twin_pred_planes();
+        assert_eq!(pa.as_slice(), pb.as_slice(), "{name}: twins started out different");
+        scalar(&mut pa.cursor_mut(8, 8));
+        simd(&mut pb.cursor_mut(8, 8));
+        assert_eq!(
+            pa.as_slice(),
+            pb.as_slice(),
+            "{name}: SSE2 and scalar disagree somewhere in the allocation"
+        );
+    }
+
+    #[test]
+    fn dec_i16x16_luma_pred_parity() {
+        use crate::decoder::get_intra_predictor as dec;
+        assert_dec_parity("16x16 V", dec::i16x16_luma_pred_v, dec_i16x16_luma_pred_v_sse2);
+        assert_dec_parity("16x16 H", dec::i16x16_luma_pred_h, dec_i16x16_luma_pred_h_sse2);
+        assert_dec_parity("16x16 DC", dec::i16x16_luma_pred_dc, dec_i16x16_luma_pred_dc_sse2);
+        assert_dec_parity(
+            "16x16 DC top",
+            dec::i16x16_luma_pred_dc_top,
+            dec_i16x16_luma_pred_dc_top_sse2,
+        );
+        assert_dec_parity(
+            "16x16 DC n/a",
+            dec::i16x16_luma_pred_dc_na,
+            dec_i16x16_luma_pred_dc_na_sse2,
+        );
+        assert_dec_parity(
+            "16x16 Plane",
+            dec::i16x16_luma_pred_plane,
+            dec_i16x16_luma_pred_plane_sse2,
+        );
+    }
+
+    #[test]
+    fn dec_chroma_pred_parity() {
+        use crate::decoder::get_intra_predictor as dec;
+        assert_dec_parity("Chroma V", dec::chroma_pred_v, dec_chroma_pred_v);
+        assert_dec_parity("Chroma H", dec::chroma_pred_h, dec_chroma_pred_h);
+        assert_dec_parity("Chroma DC", dec::chroma_pred_dc, dec_chroma_pred_dc);
+        assert_dec_parity("Chroma Plane", dec::chroma_pred_plane, dec_chroma_pred_plane_sse2);
+    }
+
+    #[test]
+    fn dec_i4x4_luma_pred_parity() {
+        use crate::decoder::get_intra_predictor as dec;
+        assert_dec_parity("4x4 V", dec::i4x4_luma_pred_v, dec_i4x4_luma_pred_v);
+        assert_dec_parity("4x4 H", dec::i4x4_luma_pred_h, dec_i4x4_luma_pred_h);
+        assert_dec_parity("4x4 DC", dec::i4x4_luma_pred_dc, dec_i4x4_luma_pred_dc);
     }
 }

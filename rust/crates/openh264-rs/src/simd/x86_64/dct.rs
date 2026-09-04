@@ -171,28 +171,70 @@ unsafe fn add_res_and_clip_sse2(pred_4bytes: [u8; 4], res: __m128i) -> [u8; 4] {
     }
 }
 
+/// Sign-extends the four live `i16` lanes in the low half of `v` to four `i32` lanes.
+///
+/// SSE2 has no `pmovsxwd` — that is SSE4.1 — so duplicate each word into a pair and
+/// shift the pair down arithmetically: `[a b c d …]` becomes `[a a b b]` and then
+/// `[a b c d]` as `i32`, sign carried by the shift.
+#[target_feature(enable = "sse2")]
+unsafe fn widen_lo_i16_to_i32_sse2(v: __m128i) -> __m128i {
+    unsafe { _mm_srai_epi32(_mm_unpacklo_epi16(v, v), 16) }
+}
+
 /// Computes the 4x4 IDCT residual vectors for 4 rows using SSE2.
+///
+/// # The vertical pass runs in `i32`, unlike upstream's asm
+///
+/// The horizontal pass truncates to `i16` in both this and the scalar
+/// (`decoder/decode_mb_aux.rs:38-42` calls that truncation load-bearing, and it is —
+/// `iSrc` is an `int16_t[16]` in the C++), so `s0..s12` below span the full `i16`
+/// range and `s0 + s8` can overflow 16 bits. This pass used to run in `epi16` and did
+/// overflow: with `rs[0] = rs[8] = 20000` and a zero prediction, the scalar computes
+/// `t1 = 40000`, `>> 6 = 625`, `WelsClip1 → 255`, while the 16-bit lanes wrapped to
+/// `-25536`, `>> 6 = -399`, and `packus` saturated to `0`. Divergence was measured at
+/// 0/50000 blocks for `|coef| <= 4000`, 170/50000 at 5000 and 48132/50000 at 12000.
+/// Encoder round-trips never showed it — quantised coefficient sets stay consistent —
+/// but the decoder's come from the bitstream and need not.
+///
+/// Widening resolves that in favour of this port's own scalar, at the cost of a known
+/// divergence from `SSE2_IDCT_4x4P` (`codec/common/x86/dct.asm:450`), which is 16-bit
+/// (`paddw`/`psubw`) and has the same overflow. Note that upstream is not itself
+/// consistent here: its aarch64 kernel `IdctResAddPred_AArch64_neon`
+/// (`codec/decoder/core/arm64/block_add_aarch64_neon.S:70`) widens with `saddl`/`ssubl`
+/// and runs the column transform entirely on `.4s` lanes, matching its C scalar and
+/// this. So the choice is which of upstream's two answers to reproduce, and this port
+/// reproduces the one that agrees with its own scalar on every architecture.
 #[target_feature(enable = "sse2")]
 unsafe fn compute_idct_residuals_sse2(dct: &[i16; 16]) -> (__m128i, __m128i, __m128i, __m128i) {
     unsafe {
-        let s0 = idct_row_sse2(dct[0], dct[1], dct[2], dct[3]);
-        let s4 = idct_row_sse2(dct[4], dct[5], dct[6], dct[7]);
-        let s8 = idct_row_sse2(dct[8], dct[9], dct[10], dct[11]);
-        let s12 = idct_row_sse2(dct[12], dct[13], dct[14], dct[15]);
+        let s0 = widen_lo_i16_to_i32_sse2(idct_row_sse2(dct[0], dct[1], dct[2], dct[3]));
+        let s4 = widen_lo_i16_to_i32_sse2(idct_row_sse2(dct[4], dct[5], dct[6], dct[7]));
+        let s8 = widen_lo_i16_to_i32_sse2(idct_row_sse2(dct[8], dct[9], dct[10], dct[11]));
+        let s12 = widen_lo_i16_to_i32_sse2(idct_row_sse2(dct[12], dct[13], dct[14], dct[15]));
 
-        let c32 = _mm_set1_epi16(32);
+        let c32 = _mm_set1_epi32(32);
 
-        let t1_a = _mm_add_epi16(s0, s8);
-        let t2_a = _mm_add_epi16(s4, _mm_srai_epi16(s12, 1));
-        let res0 = _mm_srai_epi16(_mm_add_epi16(_mm_add_epi16(t1_a, t2_a), c32), 6);
-        let res3 = _mm_srai_epi16(_mm_add_epi16(_mm_sub_epi16(t1_a, t2_a), c32), 6);
+        let t1_a = _mm_add_epi32(s0, s8);
+        let t2_a = _mm_add_epi32(s4, _mm_srai_epi32(s12, 1));
+        let res0 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_a, t2_a), c32), 6);
+        let res3 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_a, t2_a), c32), 6);
 
-        let t1_b = _mm_sub_epi16(s0, s8);
-        let t2_b = _mm_sub_epi16(_mm_srai_epi16(s4, 1), s12);
-        let res1 = _mm_srai_epi16(_mm_add_epi16(_mm_add_epi16(t1_b, t2_b), c32), 6);
-        let res2 = _mm_srai_epi16(_mm_add_epi16(_mm_sub_epi16(t1_b, t2_b), c32), 6);
+        let t1_b = _mm_sub_epi32(s0, s8);
+        let t2_b = _mm_sub_epi32(_mm_srai_epi32(s4, 1), s12);
+        let res1 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_b, t2_b), c32), 6);
+        let res2 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_b, t2_b), c32), 6);
 
-        (res0, res1, res2, res3)
+        // Back to the `i16` lanes `add_res_and_clip_sse2` adds the prediction in. The
+        // signed saturation `packs` applies is unreachable and so exact: `|s*| <= 32768`
+        // bounds `|t1| <= 65536` and `|t2| <= 49152`, giving `|32 + t1 ± t2| <= 114720`
+        // and `|result| <= 1792` after the `>> 6`.
+        let zero = _mm_setzero_si128();
+        (
+            _mm_packs_epi32(res0, zero),
+            _mm_packs_epi32(res1, zero),
+            _mm_packs_epi32(res2, zero),
+            _mm_packs_epi32(res3, zero),
+        )
     }
 }
 
@@ -520,15 +562,22 @@ mod tests {
     };
     use crate::decoder::decode_mb_aux::idct_res_add_pred_c as idct_res_add_pred;
     use crate::safe::plane::PaddedPlane;
+    use crate::encoder::rec_view::shared_plane_for_test;
 
     fn lcg(seed: &mut u64) -> u8 {
         *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         ((*seed >> 32) & 0xFF) as u8
     }
 
+    /// Coefficients over the **full `i16` range**, which is the range the decoder
+    /// actually hands the IDCT: `rs` comes from the bitstream by way of dequantisation,
+    /// not from this port's own quantiser. This used to be capped at `|coef| <= 1000` —
+    /// a factor of five below where the 16-bit vertical pass began to diverge from the
+    /// scalar, so every assertion below passed while the kernel was wrong. See
+    /// `compute_idct_residuals_sse2`.
     fn lcg_i16(seed: &mut u64) -> i16 {
         *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        ((*seed >> 32) as i32 % 2000 - 1000) as i16
+        (*seed >> 32) as u16 as i16
     }
 
     #[test]
@@ -613,6 +662,40 @@ mod tests {
         }
     }
 
+    /// The exact case the 16-bit vertical pass got wrong, pinned so a future
+    /// "optimisation" back to `epi16` fails here instead of in someone's stream.
+    ///
+    /// `rs[0] = rs[8] = 20000` with a zero prediction puts `t1 = s0 + s8 = 40000` into
+    /// the vertical butterfly. In `i32` that is `(32 + 40000) >> 6 = 625`, clipped to
+    /// 255. In 16-bit lanes it wrapped to `-25536`, `>> 6 = -399`, and `packus`
+    /// saturated it to 0 — black where the scalar produces white.
+    #[test]
+    fn idct_vertical_pass_does_not_wrap_at_16_bits() {
+        let (w, h, pad, stride) = (16usize, 16usize, 16usize, 64usize);
+        let mut p_c = PaddedPlane::new(w, h, pad, stride);
+        let mut p_simd = PaddedPlane::new(w, h, pad, stride);
+        for y in 0..4isize {
+            for x in 0..4isize {
+                p_c.set(x, y, 0);
+                p_simd.set(x, y, 0);
+            }
+        }
+
+        let mut rs = [0i16; 16];
+        rs[0] = 20000;
+        rs[8] = 20000;
+
+        idct_res_add_pred(&mut p_c.cursor_mut(0, 0), &rs);
+        idct_res_add_pred_sse2(&mut p_simd.cursor_mut(0, 0), &rs);
+
+        assert_eq!(p_c.at(0, 0), 255, "the scalar reference itself moved");
+        for y in 0..4isize {
+            for x in 0..4isize {
+                assert_eq!(p_simd.at(x, y), p_c.at(x, y), "mismatch at ({x}, {y})");
+            }
+        }
+    }
+
     #[test]
     fn test_idct_t4_rec_parity() {
         let mut seed = 112233u64;
@@ -667,5 +750,214 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ========================================================================
+    // The reconstruction-seam entry points (review §14).
+    //
+    // Nine of the fourteen public kernels in this file had no test of their own.
+    // They are not dead — `encoder/svc_encode_mb.rs:472/485/577` and
+    // `encoder/svc_encode_slice.rs:1581/1595/1648/1652/1656` reach them through the
+    // wrappers at `encoder/decode_mb_aux.rs:255..356`. What existed instead were the
+    // `*_matches_the_plane_cursor_form` tests over in `encoder/decode_mb_aux.rs`, and
+    // on x86_64 *both* of their sides dispatch into this file: they pin the
+    // `RecCursor`-vs-`PlaneCursorMut` equivalence, not SSE2 against scalar.
+    //
+    // So each test below runs an `_sse2` kernel against `idct_t4_rec_c` /
+    // `idct_t4_rec_in_place_c` / `idct_rec_i16x16_dc_c`, which cannot route back here.
+    // The multi-block forms are referenced against the scalar applied *per block* at
+    // the sub-offsets rather than against this file's own four-block loop, so a
+    // transposed `(dx, dy)` or a stride mix-up in the hand-written `off`/`advance`
+    // arithmetic (`:342`, `:400`) is a failure and not a shared assumption.
+    //
+    // The whole allocation is compared, never just the block: a write one row or one
+    // column out of place has to fail rather than pass silently.
+    // ========================================================================
+
+    /// Two planes of identical geometry filled with the same noise, padding included —
+    /// so an out-of-block write shows up as an allocation difference.
+    fn twin_planes(seed: &mut u64) -> (PaddedPlane, PaddedPlane) {
+        let (w, h, pad, stride) = (32usize, 32usize, 16usize, 64usize);
+        let mut a = PaddedPlane::new(w, h, pad, stride);
+        let mut b = PaddedPlane::new(w, h, pad, stride);
+        for y in -(pad as isize)..(h + pad) as isize {
+            for x in -(pad as isize)..(w + pad) as isize {
+                let v = lcg(seed);
+                a.set(x, y, v);
+                b.set(x, y, v);
+            }
+        }
+        (a, b)
+    }
+
+    /// A flat prediction arena at `stride` — the shape `sMemPredMb` has.
+    fn noisy_pred(seed: &mut u64, stride: usize, rows: usize) -> Vec<u8> {
+        (0..stride * rows).map(|_| lcg(seed)).collect()
+    }
+
+    /// The same bytes as a plane, for the `PlaneCursorMut` scalar reference.
+    fn pred_as_plane(pred: &[u8], stride: usize, rows: usize) -> PaddedPlane {
+        let mut pp = PaddedPlane::new(stride, rows, 0, stride);
+        for y in 0..rows as isize {
+            for x in 0..stride as isize {
+                pp.set(x, y, pred[y as usize * stride + x as usize]);
+            }
+        }
+        pp
+    }
+
+    fn coeffs<const N: usize>(seed: &mut u64) -> [i16; N] {
+        core::array::from_fn(|_| lcg_i16(seed))
+    }
+
+    const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
+    const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
+
+    #[test]
+    fn idct_t4_rec_in_place_sse2_matches_the_scalar() {
+        let mut seed = 0x0DDB_1A5E_5BAD_5EEDu64;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 16] = coeffs(&mut seed);
+
+        idct_t4_rec_in_place(&mut pa.cursor_mut(5, 7), &dct);
+        idct_t4_rec_in_place_sse2(&mut pb.cursor_mut(5, 7), &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    #[test]
+    fn idct_four_t4_rec_sse2_matches_four_scalar_blocks() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 64] = coeffs(&mut seed);
+        let pred = noisy_pred(&mut seed, 16, 8);
+        let pp = pred_as_plane(&pred, 16, 8);
+
+        for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+            let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
+            idct_t4_rec(&mut pa.cursor_mut(6 + dx, 9 + dy), &pp.cursor(dx, dy), sub);
+        }
+        idct_four_t4_rec_sse2(&mut pb.cursor_mut(6, 9), &pp.cursor(0, 0), &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    #[test]
+    fn idct_four_t4_rec_in_place_sse2_matches_four_scalar_blocks() {
+        let mut seed = 0x8A5C_D789_635D_2DFFu64;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 64] = coeffs(&mut seed);
+
+        for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+            let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
+            idct_t4_rec_in_place(&mut pa.cursor_mut(6 + dx, 9 + dy), sub);
+        }
+        idct_four_t4_rec_in_place_sse2(&mut pb.cursor_mut(6, 9), &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    #[test]
+    fn idct_t4_rec_to_view_sse2_matches_the_scalar() {
+        let mut seed = 0x1D87_2E7F_0000_0001u64;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 16] = coeffs(&mut seed);
+        let pred = noisy_pred(&mut seed, 16, 4);
+        let pp = pred_as_plane(&pred, 16, 4);
+
+        idct_t4_rec(&mut pa.cursor_mut(5, 7), &pp.cursor(0, 0), &dct);
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_t4_rec_to_view_sse2(&view.cursor(5, 7), &pred, 16, &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    #[test]
+    fn idct_four_t4_rec_to_view_sse2_matches_four_scalar_blocks() {
+        let mut seed = 0x6C07_8965_0000_0001u64;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 64] = coeffs(&mut seed);
+        let pred = noisy_pred(&mut seed, 16, 8);
+        let pp = pred_as_plane(&pred, 16, 8);
+
+        for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+            let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
+            idct_t4_rec(&mut pa.cursor_mut(6 + dx, 9 + dy), &pp.cursor(dx, dy), sub);
+        }
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_four_t4_rec_to_view_sse2(&view.cursor(6, 9), &pred, 16, &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    #[test]
+    fn idct_t4_rec_in_place_view_sse2_matches_the_scalar() {
+        let mut seed = 0x41C6_4E6D_0000_0001u64;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 16] = coeffs(&mut seed);
+
+        idct_t4_rec_in_place(&mut pa.cursor_mut(5, 7), &dct);
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_t4_rec_in_place_view_sse2(&view.cursor(5, 7), &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    #[test]
+    fn idct_four_t4_rec_in_place_view_sse2_matches_four_scalar_blocks() {
+        let mut seed = 0x3C6E_F35F_0000_0001u64;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 64] = coeffs(&mut seed);
+
+        for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+            let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
+            idct_t4_rec_in_place(&mut pa.cursor_mut(6 + dx, 9 + dy), sub);
+        }
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_four_t4_rec_in_place_view_sse2(&view.cursor(6, 9), &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    /// The 16x16 form: four quadrants of four blocks, so a quadrant-level `(dx, dy)`
+    /// swap and a block-level one are both visible.
+    #[test]
+    fn idct_t4_rec_on_mb_in_place_view_sse2_matches_sixteen_scalar_blocks() {
+        let mut seed = 0x9E37_79B9_0000_0001u64;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dct: [i16; 256] = coeffs(&mut seed);
+
+        for (q, &(qx, qy)) in QUADS.iter().enumerate() {
+            for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+                let off = (q << 6) + (k << 4);
+                let sub: &[i16; 16] = (&dct[off..][..16]).try_into().unwrap();
+                idct_t4_rec_in_place(&mut pa.cursor_mut(4 + qx + dx, 6 + qy + dy), sub);
+            }
+        }
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_t4_rec_on_mb_in_place_view_sse2(&view.cursor(4, 6), &dct);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
+    }
+
+    #[test]
+    fn idct_rec_i16x16_dc_to_view_sse2_matches_the_scalar() {
+        let mut seed = 0xB502_6F5A_0000_0001u64;
+        let (mut pa, mut pb) = twin_planes(&mut seed);
+        let dc: [i16; 16] = coeffs(&mut seed);
+        let pred = noisy_pred(&mut seed, 16, 16);
+        let pp = pred_as_plane(&pred, 16, 16);
+
+        idct_rec_i16x16_dc(&mut pa.cursor_mut(5, 7), &pp.cursor(0, 0), &dc);
+
+        let view = shared_plane_for_test(&mut pb);
+        idct_rec_i16x16_dc_to_view_sse2(&view.cursor(5, 7), &pred, 16, &dc);
+
+        assert_eq!(pa.as_slice(), pb.as_slice());
     }
 }

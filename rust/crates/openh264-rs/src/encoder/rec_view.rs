@@ -288,6 +288,11 @@ impl<'a> RecCursor<'a> {
 }
 
 impl crate::safe::plane::PlaneSamples for RecCursor<'_> {
+    #[inline]
+    fn stride(&self) -> usize {
+        RecCursor::stride(self)
+    }
+
     /// `&mut self` to fit the trait, though the write itself needs only `&self`
     /// — the cursor value is the caller's, and what the seam withholds is a
     /// `&mut [u8]` into the plane, which this cannot produce.

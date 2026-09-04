@@ -168,8 +168,17 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
         sdf.pfSampleSatd[BLOCK_16x16] = Some(|a, b| crate::simd::x86_64::satd::satd_16x16_sse2(a, b));
     }
 
+    // **Two conditions, and they are different questions.** `uiCpuFlag` is the host's
+    // policy — a caller may restrict it, and `svc_mode_decision.rs:2371` passes `0` —
+    // while `has_avx2()` is the hardware fact. The kernels below are
+    // `#[target_feature(enable = "avx2")]` underneath and run `vpsadbw` with no test of
+    // their own, so the flag alone is not enough to install them: nothing stops a caller
+    // passing a word it made up, and the result would be SIGILL on a pre-Haswell part.
+    //
+    // This is the altitude the test belongs at. It is asked once, here, when the table
+    // is built — not on every candidate the mode-decision loop scores.
     #[cfg(target_arch = "x86_64")]
-    if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_AVX2) != 0 {
+    if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_AVX2) != 0 && crate::simd::has_avx2() {
         sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_16x16_avx2(a, b));
         sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| crate::simd::x86_64::sad::sample_sad_16x8_avx2(a, b));
     }

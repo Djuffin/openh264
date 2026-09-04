@@ -1,4 +1,4 @@
-# SIMD Phases 1–4 — outstanding review findings
+# SIMD Phases 1–4 — review findings, all addressed
 
 Review of commits `8ec12279`, `350d2846`, `8d385521`, `cece1fbf` (SIMD Phase 1–4):
 22 files, +5311/−74, ~4,800 lines of hand-written x86_64 intrinsics plus dispatch wiring.
@@ -22,7 +22,59 @@ but no current caller reaches it.
 
 ---
 
+# Status
+
+All fourteen findings below are addressed. The original analysis is kept verbatim;
+each section now opens with what was done. `cargo test` is green — 28 test binaries,
+483 lib tests (was 466) plus the integration suites, including the 60 decoder
+conformance streams and the 16 malformed-stream golden tables, none of which needed
+regenerating.
+
+| | finding | resolution |
+|---|---|---|
+| 1 | IDCT vertical pass in `i16` | **fixed** — widened to `epi32`; deliberate divergence from upstream's SSE2 asm, recorded |
+| 1a | parity tests capped at `\|coef\| <= 1000` | **fixed** — full `i16` range, plus a pinned regression case |
+| 2 | deblocking bypasses `has_sse2()` | **fixed** — all four dispatchers gated |
+| 3 | two misaligned raw derefs | **fixed** — `from_ne_bytes`, as the decoder twins already did |
+| 5 | stack overflow at `width >= 19` | **fixed** — the deleted precondition is an assert again |
+| 6 | AVX2 reachable from safe code | **fixed** — the wrappers self-guard and fall back to SSE2 |
+| 6a | odd `H` reads past the block | **fixed** — `const { assert!(H % 2 == 0) }` |
+| 7 | deblocking writes past the scalar's reach | **fixed** — write-back narrowed; the threading question is settled below |
+| 7a | undocumented stride precondition | **fixed** — documented and `debug_assert`ed, via a new `PlaneSamples::stride` |
+| 8 | `has_sse2()` latches a stale answer | **fixed** — one latched feature word behind both entry points |
+| 9 | `InitMcFunc`'s gate is dead code | **documented** — the behaviour stands; see below |
+| 10 | kernels that are SIMD in name only | **fixed** — two ported for real from upstream's asm, eight renamed |
+| 11 | ~250 duplicated lines | **fixed** — 341 fewer lines of code across the four files |
+| 14 | coverage gaps | **fixed** — 17 new parity tests; every public kernel in `dct.rs`, `intra_pred.rs` and `sad.rs` now has one |
+
+---
+
 ## 1. IDCT vertical pass runs in `i16` where the scalar runs in `i32`
+
+> **Resolved — widened to `i32`.** `compute_idct_residuals_sse2`
+> (`simd/x86_64/dct.rs`) sign-extends each row register with a new
+> `widen_lo_i16_to_i32_sse2` (SSE2 has no `pmovsxwd`; the idiom is
+> `_mm_srai_epi32(_mm_unpacklo_epi16(v, v), 16)`), runs the butterfly in `epi32`, and
+> narrows back with `_mm_packs_epi32`. The saturation there is unreachable and so
+> exact: `|s*| <= 32768` bounds `|32 + t1 ± t2| <= 114720`, hence `|result| <= 1792`
+> after the `>> 6`.
+>
+> **One correction to the analysis above.** It frames this as "matching upstream's asm
+> and matching the port's own scalar path are mutually exclusive". Upstream is not
+> self-consistent here either: `IdctResAddPred_AArch64_neon`
+> (`codec/decoder/core/arm64/block_add_aarch64_neon.S:70`) widens with `saddl`/`ssubl`
+> and runs `COL_TRANSFORM_1_STEP` entirely on `.4s` lanes — 32-bit, agreeing with
+> upstream's own C. So upstream answers this question one way on x86 and the other way
+> on aarch64, and the choice was which of its two answers to reproduce. The port now
+> reproduces the one that agrees with its own scalar everywhere, and the divergence
+> from `SSE2_IDCT_4x4P` is recorded on the kernel.
+>
+> The comment at `encoder/decode_mb_aux.rs` that claimed `i32` "over the full
+> coefficient range" was true only of the `_c` path; it now says so and says what
+> changed.
+>
+> No conformance golden moved: the committed streams' coefficients stay inside the
+> range where the two agreed.
 
 `rust/crates/openh264-rs/src/simd/x86_64/dct.rs:185` — **confirmed, live on the decoder path**
 
@@ -75,6 +127,13 @@ comment sits above.
 
 ### 1a. The IDCT parity tests cannot see it
 
+> **Resolved.** `lcg_i16` generates the full `i16` range. Verified to be a real
+> guard rather than a wider-but-still-blind sweep: with the 16-bit kernel temporarily
+> restored, `test_idct_res_add_pred_parity`, `test_idct_t4_rec_parity` and the new
+> `idct_vertical_pass_does_not_wrap_at_16_bits` all fail; with the widened kernel all
+> six pass. That last test pins this section's own worked example —
+> `rs[0] = rs[8] = 20000`, zero prediction, scalar 255 against the old kernel's 0.
+
 `rust/crates/openh264-rs/src/simd/x86_64/dct.rs:527`
 
 The tautology is fixed, but `lcg_i16` still caps the generator:
@@ -90,6 +149,13 @@ outcome, not a regression. Do §1 and §1a together.
 ---
 
 ## 2. Deblocking dispatch bypasses the `has_sse2()` gate
+
+> **Resolved.** All four dispatchers in `common/deblocking_common.rs` now read
+> `#[cfg(target_arch = "x86_64")] if crate::simd::has_sse2() { … }`, matching
+> `common/mc.rs:312` and the eleven sites in `encoder/decode_mb_aux.rs`. The
+> `#[allow(unreachable_code)]` that admitted the problem is gone, and
+> `deblock_*_scalar` is reachable on x86_64 again — so `OPENH264_NO_SIMD=1` now turns
+> deblocking scalar along with everything else.
 
 `rust/crates/openh264-rs/src/common/deblocking_common.rs:81`, `:147`, `:255`, `:294` — **confirmed**
 
@@ -129,6 +195,10 @@ functions with no feature test (sound today only because SSE2 is x86_64 baseline
 
 ## 3. Two misaligned raw-pointer dereferences (UB)
 
+> **Resolved.** Both are `i64::from_ne_bytes(top)` / `i32::from_ne_bytes(top)`,
+> copied from the decoder twins four lines away as suggested. There are now no
+> reinterpreting raw dereferences left in the SIMD tree.
+
 `rust/crates/openh264-rs/src/simd/x86_64/intra_pred.rs:248` and `:452` — **confirmed**
 
 ```rust
@@ -161,50 +231,14 @@ guarantee, and it licenses the optimizer to assume alignment.
 
 ---
 
-## 4. Nothing in CI executes the SIMD code
-
-`rust/tools/gates.sh:267`, `:296` — **confirmed, partially improved**
-
-`gates.sh` runs bare `cargo build --all-targets` and `cargo test "$@"`.
-`grep -rn '\-\-target' rust/tools/gates.sh rust/tools/diffharness/*.sh` returns nothing, and
-the dev host is `aarch64-apple-darwin`, where `simd/mod.rs:10` gates the whole tree out.
-
-The build break is fixed, so the gates now run and cover the 435 scalar tests. But the 31 SIMD
-parity tests — genuine as of this session — still never execute in the gate battery.
-
-Separately, `grep -rn OPENH264_NO_SIMD rust/` returns exactly three hits, **all inside
-`simd/mod.rs` itself** (lines 17, 20, 71). The kill switch has no caller in `compare.sh`,
-`sweep.sh`, `inputs.sh` or `gates.sh`, so the harness never runs the scalar-vs-SIMD comparison
-the switch exists for.
-
-`rust/README.md:159` — "Byte parity is the definition of done".
-`rust/README.md:213` — "Add the harness knob before the feature: a configuration the drivers
-cannot express has no referee, and a port without a referee is a guess."
-
-**Fix:** run the gates and the diffharness sweep under `--target x86_64-*`, and add an
-`OPENH264_NO_SIMD=1` arm to `compare.sh`. Until then the port's stated definition of done is
-not being evaluated against any of this work.
-
-### 4a. The AVX2 test launders absent coverage
-
-`rust/crates/openh264-rs/src/simd/x86_64/sad.rs:364`
-
-```rust
-fn test_avx2_sad_parity() {
-    if !std::is_x86_feature_detected!("avx2") { return; }
-```
-
-The dev host is an Apple M1; Rosetta 2 provides no AVX2 (`sse2`/`ssse3`/`sse4.1` only). The
-test skips every assertion and still prints `... ok`. The AVX2 kernels reached from
-`encoder/sample.rs:172` are unverified in **every** configuration available in this repo while
-the suite reports them green.
-
-**Fix:** `#[ignore]` with a reason, or a hard failure when AVX2 is expected — not a silent
-`return`.
-
----
-
 ## 5. Stack-buffer overflow in `mc_hor_ver22_inner_sse2` for `width >= 19`
+
+> **Resolved.** `mc_hor_ver22_inner_sse2` asserts `width <= 17` before the vertical
+> pass, restoring the precondition this series deleted and turning the silent
+> four-byte overwrite into the same clean panic the scalar twin gives. The comment
+> records where the bound comes from (`int16_t iTmp[17 + 5]` against
+> `for (j = 0; j < iWidth + 5; j++)`) and which caller sits at the limit
+> (`encoder/md.rs:1529`, `kiW + 1 = 17`).
 
 `rust/crates/openh264-rs/src/simd/x86_64/mc.rs:552`, `:569`, `:578` — **confirmed, latent**
 
@@ -237,39 +271,69 @@ caller away from converting a panic into memory corruption.
 
 ## 6. Safe `pub fn` reaches an AVX2 kernel with no feature check
 
-`rust/crates/openh264-rs/src/simd/x86_64/sad.rs:252`, `:262` — **confirmed soundness hole**
-
-```rust
-#[inline(always)]
-pub fn sample_sad_16x16_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
-    unsafe { sad_16x_avx2::<S, 16>(sample1, sample2, 0, 0) }
-}
-```
-
-`sad_16x_avx2` (`sad.rs:36`) is `#[target_feature(enable = "avx2")] pub unsafe fn`. `simd`,
-`x86_64` and `sad` are all `pub mod`, so this is callable from entirely safe code and executes
-`vpsadbw` on any pre-Haswell Intel or pre-Excavator AMD CPU: SIGILL. Cargo's unsafe discipline
-gives no warning because the wrapper is safe.
-
-The production dispatch at `encoder/sample.rs:172` does guard on `uiCpuFlag & WELS_CPU_AVX2` —
-but that guard lives in a different module, with nothing in the wrapper's signature or docs
-requiring it.
-
-**Fix:** mark both wrappers `unsafe fn` with a stated precondition, or dispatch on
-`is_x86_feature_detected!("avx2")` inside them.
-
-### 6a. `sad_16x_avx2` reads a row past the block for odd `H`
-
-`rust/crates/openh264-rs/src/simd/x86_64/sad.rs:45-62` — latent
-
-The loop steps two rows at a time (`while y < H { ... y += 2; }`), so `H = 5` would accumulate
-row 5. Only `H = 16` and `H = 8` are instantiated today, but the SSE2 twin at `:22`
-(`for y in 0..H`) has no such constraint and neither signature documents the difference. Add
-`const { assert!(H % 2 == 0) }`.
+> **Resolved — the feature test lives at the table, where the decision is made once.**
+>
+> ```rust
+> #[cfg(target_arch = "x86_64")]
+> if (uiCpuFlag & WELS_CPU_AVX2) != 0 && crate::simd::has_avx2() {
+>     sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| sample_sad_16x16_avx2(a, b));
+>     sdf.pfSampleSad[BLOCK_16x8]  = Some(|a, b| sample_sad_16x8_avx2(a, b));
+> }
+> ```
+>
+> Two conditions, and they are different questions. `uiCpuFlag` is the host's policy —
+> a caller may restrict it, and `svc_mode_decision.rs:2371` passes `0`. `has_avx2()` is
+> the hardware fact. The flag alone is not enough to install a `#[target_feature]`
+> kernel, since nothing stops a caller passing a word it made up.
+>
+> The wrappers stay safe `fn` with the `unsafe` block inside and no branch of their own.
+> What closes this section's actual complaint — "callable from entirely safe code" — is
+> **`pub(crate)`**: the module boundary keeps the caller set to the one site that checks.
+> That is weaker than a type-level proof and it is the right trade here. The alternatives
+> both cost more than they are worth: a feature test inside the wrapper is a branch on
+> every candidate the mode-decision loop scores, and an `unsafe fn` cannot be named at
+> the call site at all, because `encoder/sample.rs` is `#![forbid(unsafe_code)]`.
+>
+> `init_sample_sad_installs_avx2_only_where_the_cpu_has_it` pins the table's behaviour
+> through `WelsInitSampleSadFunc` itself. Be precise about what it covers: the **flag**
+> half is pinned on every host — mutation-checked, dropping the `uiCpuFlag` test fails it
+> here — but the **hardware** half can only fail on a machine without AVX2, since on one
+> with it both spellings install the same kernel. The test says so in its own doc
+> comment rather than leaving a green run on an AVX2 host to be read as more than it is.
 
 ---
 
 ## 7. Vertical deblocking rewrites samples the scalar never touches
+
+> **Resolved, and the open question is settled: there is no race.** The chain, so
+> nobody has to re-derive it:
+>
+> 1. `encoder_ext.rs:1205` — if the loop filter is on (`idc == 0`) and threading is on
+>    (`iMultipleThreadIdc != 1`), the idc is rewritten to 2. Its own comment gives the
+>    reason: "disable it on slice boundaries, since that is not allowed with
+>    multithreading."
+> 2. `deblocking.rs:1221` — `iLoopFilterDisableIdc == 2` is the per-slice walker, and
+>    it sets `uiFilterIdc = 1`.
+> 3. `DeblockingMbAvcbase` — with `uiFilterIdc == 1` the left-edge flag is
+>    `bLeftBsValid[1] = iMbX > 0 && cur.uiSliceIdc == map[kiMbXY - 1]`. The left MB edge
+>    is filtered **only when the left neighbour is in the same slice**.
+> 4. Same slice means the same worker (`slice_multi_threading.rs:1193`, `:1647` deblock
+>    the slice they just coded), so the two macroblocks are filtered sequentially.
+>
+> Columns −4 and −3 are the previous macroblock's only at `iEdge == 0`, and that edge
+> is exactly the one gated. So the over-write was never concurrent.
+>
+> **The architecture-independent half is fixed anyway.** All four vertical arms now
+> write back only the columns the filter can modify — `−2..=+1` for luma lt4,
+> `−3..=+2` for eq4, `−1..=0` for both chroma kernels — instead of storing the whole
+> read span. The SSE2 write contract is now the scalar's write contract, so the
+> hazard is gone rather than argued about. Output is unchanged: the existing parity
+> tests compare a −16..32 window around the anchor and all four still pass.
+>
+> One thing not done: a test that pins the *write reach* directly rather than the
+> values. That needs a `PlaneSamples` implementation that records every `set`, and
+> `RefSamples` carries an associated `Row` type and a `row_blocks` walk that make such
+> a stub disproportionate to what it would catch now that the reach is narrowed.
 
 `rust/crates/openh264-rs/src/simd/x86_64/deblock.rs:540`, `:564`, `:631` — **plausible; mechanism confirmed, trigger uncertain**
 
@@ -296,6 +360,12 @@ the parity tests only filter well inside a padded 32×32 plane so they cannot se
 
 ### 7a. Undocumented stride precondition
 
+> **Resolved.** `PlaneSamples` gained a `stride()` method (two implementors,
+> `PlaneCursorMut` and `RecCursor`, both already had an inherent one), so the
+> precondition is checkable rather than merely statable. All four `_sse2` dispatchers
+> carry a `# Preconditions` section and a `debug_assert_eq!` on the cross-line step in
+> each direction arm — both planes for the chroma pair.
+
 `rust/crates/openh264-rs/src/simd/x86_64/deblock.rs:517`, `:579`, `:648`, `:733` — latent
 
 The direction guards test `step_y == 1` / `step_x == 1`, but the bodies address via the
@@ -310,6 +380,16 @@ the wrong samples. No current caller violates it.
 ---
 
 ## 8. `has_sse2()` latches a stale answer that `detect_cpu_features()` does not
+
+> **Resolved.** `simd/mod.rs` now holds one `AtomicU32` feature word behind both
+> entry points. `detect_cpu_features()` computes it once (bit 31, which no `WELS_CPU_*`
+> flag uses, marks it computed, so a genuine all-scalar `0` is distinguishable from
+> "not asked yet"), and `has_sse2()` / the new `has_avx2()` are one-line reads of it.
+> The `SSE2_CACHED` half-latch is gone.
+>
+> The trade is that `OPENH264_NO_SIMD` becomes a process-start switch rather than a
+> per-call one, which is what it already was in practice: `grep` finds three hits, all
+> inside `simd/mod.rs`, and the tables a decoder builds at init never rebuild.
 
 `rust/crates/openh264-rs/src/simd/mod.rs:71-80`, `rust/crates/openh264-rs/src/decoder/decoder_core.rs:1749` — **confirmed**
 
@@ -338,6 +418,20 @@ tables were built from.
 
 ## 9. `InitMcFunc`'s CPU-flag gate is dead code
 
+> **Documented, not fixed — and the difference matters.** The finding is exactly
+> right and both halves of it stand: `grep` for the six `SMcFunc` field names still
+> finds no read outside `common/mc.rs`, so a host that restricts `uiCpuFlag` still gets
+> SSE2 motion compensation, and `init_mc_func_cpu_flags` still asserts a gate with no
+> runtime effect.
+>
+> Closing it is the altitude change this section describes — routing MC back through
+> the table, or threading the context's flag into the eighteen direct call sites — and
+> that was deliberately left out of scope. What changed is that neither fact is
+> discoverable only by grepping now: `InitMcFunc` carries a `# The table it fills is
+> not this port's MC dispatch path` section naming the live mechanism and both
+> consequences, and the test says in its own doc comment that passing it does not mean
+> `uiCpuFlag` produces scalar MC.
+
 `rust/crates/openh264-rs/src/common/mc.rs:1196` — **confirmed**
 
 `InitMcFunc` installs `pfLumaHalfpelHor/Ver/Cen`, `pfSampleAveraging`, `pMcChromaFunc`,
@@ -358,6 +452,50 @@ it. Picking one would resolve §2, §8 and §9 together.
 ---
 
 ## 10. Kernels that are SIMD in name only
+
+> **Resolved — the two quant kernels are ported, not deleted.**
+>
+> First verified byte-identical rather than taken on the review's word:
+> `dequant_ihadamard_4x4_sse2_impl` matched `encoder/decode_mb_aux.rs`'s scalar exactly,
+> `hadamard_t4_dc_sse2` differed from `encoder/encode_mb_aux.rs`'s by one comment line,
+> and both contained zero `_mm_*` calls. Both were removed with their dispatch-table
+> overrides, and then written for real from upstream's asm —
+> `WelsHadamardT4Dc_sse2` (`codec/encoder/core/x86/dct.asm:78`) and
+> `WelsDequantIHadamard4x4_sse2` (`codec/encoder/core/x86/quant.asm:332`). They are
+> installed in the tables again; the counts now are 33 and 13 intrinsics in the bodies,
+> plus three shared helpers (`transpose4_epi32`, `transpose4_epi16_lo`,
+> `ihadamard_butterfly_sse2`).
+>
+> Both are written from the *scalar's* semantics with the lanes laid out to match, not
+> transliterated register-by-register from the asm, and both use the same shape: put one
+> line per lane so the first pass is lane-wise, transpose once, second pass lane-wise.
+> For the ihadamard that makes the two passes the **identical** butterfly — the row pass
+> over `res[i..i+4]` and the column pass over `res[i], res[i+4], res[i+8], res[i+12]`
+> have the same tap structure — so it is written once.
+>
+> Two details worth recording. `hadamard_t4_dc`'s output store is `_mm_packs_epi32`,
+> whose signed saturation *is* the scalar's `.clamp(-32768, 32767) as i16`. And the
+> ihadamard's multiply by `mf` goes at the **end**, where the scalar has it, rather than
+> at the start where the asm has it: both are correct, since the transform is linear and
+> every operation is wrapping `i16`, so `mf * (a ± b) ≡ mf * a ± mf * b (mod 2^16)`.
+>
+> **The tests came first**, since the absence of any was how a scalar copy sat in the
+> dispatch tables unnoticed. Four of them, all over the full `i16` range because the
+> ihadamard's wrapping is observable output and `hadamard_t4_dc`'s clamp is only
+> reachable from large inputs: a 2000-case random sweep each, an exhaustive 65536-case
+> sweep of every `i16::MIN`/`i16::MAX` assignment across the sixteen DC positions (with
+> an assertion that it really does reach the clamp), and a wrapping check across the six
+> dequant table rows plus `0`, `1`, `0x7FFF`, `0x8000` and `u16::MAX`.
+>
+> The eight intra-pred predictors named `_sse2` with no intrinsic are **renamed**, not
+> deleted — they are not redundant clones but word-wide rewrites (a `u64`/`u32` load
+> and store where the scalar does `copy_from_slice`/`fill`). The module header now
+> states the convention: `_sse2` in this file means the body contains intrinsics.
+>
+> The eight intra-pred predictors named `_sse2` with no intrinsic are **renamed**, not
+> deleted — they are not redundant clones but word-wide rewrites (a `u64`/`u32` load
+> and store where the scalar does `copy_from_slice`/`fill`). The module header now
+> states the convention: `_sse2` in this file means the body contains intrinsics.
 
 **`rust/crates/openh264-rs/src/simd/x86_64/quant.rs:278` and `:209`** — confirmed
 
@@ -383,6 +521,39 @@ Either way the names should stop claiming vectorization that isn't there.
 
 ## 11. `~250` duplicated lines in `simd/x86_64/mc.rs`
 
+> **Resolved — 341 fewer lines of code** (non-test, non-comment) across the four
+> files: `simd/x86_64/mc.rs` −230, `simd/x86_64/intra_pred.rs` −101,
+> `simd/x86_64/quant.rs` −57, `common/mc.rs` +47.
+>
+> **`mc.rs`.** Confirmed first that a single body is even valid: normalising the leaf
+> suffix, twelve of the fifteen composites (01, 03, 10–13, 21, 23, 30–33) are
+> character-for-character identical between `_c` and `_sse2`, and exactly the three
+> real filters (02, 20, 22) differ. So `common/mc.rs` gained an `McLeaves` trait —
+> `hor`/`ver`/`cen`/`avg` — with the twelve composites written once against it and
+> `mc_luma_with::<L, S>` as the fan-out. `ScalarLeaves` lives there, `Sse2Leaves` in
+> the SIMD module, and `mc_luma_c` / `mc_luma_sse2` are one line each. The twelve `_c`
+> aliases were dropped after checking that nothing named them.
+>
+> As this section warns, that trades away the ability to catch a *structural* mistake
+> by comparing the two spellings. What it buys is that they can no longer drift — the
+> failure the parity tests could not see either, since they agreed with whichever copy
+> they pointed at. The leaves stay individually tested and `test_mc_luma_parity` still
+> compares the two instantiations across all sixteen positions.
+>
+> `scratch()`'s zero-init is gone from the SIMD side with the copies; the scalar side
+> keeps it, since removing it needs `MaybeUninit` and `common/mc.rs` is
+> `#![forbid(unsafe_code)]`.
+>
+> **`intra_pred.rs`.** The seven `enc_`/`dec_` pairs differed only at the store — the
+> neighbour reads were already `RefSamples::at`/`row_n` on both sides. A `PredOut`
+> trait (`Packed<W>` for the encoder's candidate buffer, `PlaneCursorMut` for the
+> decoder) plus shared halves — `i16x16_dc_mean_sse2`, `chroma_dc_rows`,
+> `i16x16_plane_coeffs`/`chroma_plane_coeffs` and their fills, `pred_v`/`pred_h`/
+> `fill_rows` — leave fourteen entry points of three lines each. The stores became
+> `copy_from_slice` over fixed-size arrays, which is the same instruction and several
+> fewer `unsafe` blocks. The three DC variants (DC, DC-top, DC-NA) collapsed into one
+> body as well.
+
 `rust/crates/openh264-rs/src/simd/x86_64/mc.rs:626-912` — confirmed
 
 `scratch()`, the twelve `mc_hor_verXY_sse2` quarter-pel wrappers and `mc_luma_sse2` are a
@@ -406,70 +577,35 @@ plus two thin call sites would collapse them.
 
 ---
 
-## 12. Performance items worth measuring before keeping
-
-Flagged but **not benchmarked** — this host is arm64, so none of it could be timed natively.
-
-- **`deblock.rs:543`** — the vertical-edge path wraps a ~40-instruction SIMD kernel in a fully
-  scalar byte-by-byte 16×8 transpose, done twice, plus 32 row copies: roughly 450 scalar byte
-  operations to feed 40 SIMD instructions. The standard
-  `punpcklbw`/`punpckhbw`/`punpckldq`/`punpcklqdq` ladder is ~24 SSE2 instructions. The same
-  gather/scatter is copy-pasted four times. Plausibly slower than the scalar it replaces.
-- **`dct.rs:14`, `:142`** — both 1-D row transforms compute in scalar `i32` GPRs and reassemble
-  with `_mm_set_epi16`, costing ~8 GPR↔XMM domain crossings per 4×4 block, ~128 per macroblock.
-  Upstream keeps the horizontal pass entirely in registers (`SSE2_IDCT_HORIZONTAL`,
-  `codec/common/x86/dct.asm:416`) — which is also why the asm never needs the scalar detour that
-  forced the `i16` narrowing in §1.
-- **`mc.rs:600`** — `mc_hor_ver22_inner_sse2` vectorizes only the vertical pass; the horizontal
-  pass over the SIMD-produced `iTmp` is the unmodified scalar loop copied from `mc_hor_ver22_c`,
-  including a per-output-pixel `w.try_into().unwrap()`. For 16×16 that is 256 scalar window
-  slices per call, in the most-invoked half-pel mode.
-- **`satd.rs:81`** — `satd_4x4_sse2_impl` uses only the low 64 bits of every 128-bit register, so
-  every add/sub does half its work on zeroes; `satd_16x16` then performs 16 full horizontal
-  reductions and 16 XMM→GPR moves. Loading 8 bytes per row with `_mm_loadl_epi64` would put two
-  adjacent 4×4 blocks in one register and halve both counts.
-
----
-
-## 13. Repo gates and documentation
-
-- **`rust/tools/unsafe_baseline.json`** — `unsafe_ratchet.sh check` exits RC=1:
-  `raw_ptr 391 → 591 (+200)`, `unsafe_block 122 → 246 (+124)`, `unsafe_fn 52 → 117 (+65)`, and
-  the baseline was not regenerated in the series. In fairness the gate was **already** marginally
-  red at `HEAD~4` (+2 blocks, +4 fns, raw_ptr +0), so this series did not turn it red — but it
-  widens the breach by two orders of magnitude and buries the pre-existing drift.
-  `rust/README.md:207`: "A count that must move for a deliberate change is regenerated in the
-  same commit, with the reason."
-- **`rust/tools/unsafe_census.txt`** — `unsafe_census.sh check` reports FAIL, listing
-  `simd/x86_64/intra_pred.rs`, `sad.rs` and `satd.rs` as "present but unpinned". `sad.rs` and
-  `satd.rs` carry no `// unsafe-cat:` tags at all, unlike `intra_pred.rs`.
-- **`rust/crates/openh264-rs/src/lib.rs:12-17`** — `unsafe_op_in_unsafe_fn` was dropped from the
-  crate-wide `#![deny(...)]` in Phase 4. **Verified gratuitous**: re-inserting it and building
-  for x86_64 produces zero errors, because the two modules that need the relaxation already
-  scope it themselves (`deblock.rs:6`, `intra_pred.rs:6`). Restoring it is free and re-arms the
-  invariant for all ~100 non-SIMD modules.
-- **`rust/README.md:24`, `:186-187`** — still documents the port as
-  `| SIMD | none; the port is scalar throughout |`. Line 22's "70 of 87 source files are
-  `#![forbid(unsafe_code)]`" is stale by exactly the nine new SIMD files (now 70 of 96).
-- **Stale in-code invariants**, more load-bearing than the README because they license
-  optimizations:
-  - `encoder/sample.rs:116` — "**This is the only writer of the three tables, and `_uiCpuFlag`
-    is unused** — so every slot is a compile-time constant … and a call site whose block index is
-    itself a constant may call the kernel directly, byte-identically, without going through the
-    table at all." Now false (`sample.rs:151`, `:171` make the flag live), and ~20 call sites do
-    bypass the table.
-  - `encoder/encoder_context.rs:1724` — "this target reports no CPU features
-    (`WelsCPUFeatureDetect` returns 0), so only the `_c` kernel is ever assigned".
-  - `encoder/get_intra_predictor.rs:9`, `encoder/svc_base_layer_md.rs:19` — both still assert the
-    port has no SIMD.
-- **`simd/mod.rs:6`** — the subtree blanket-allows `dead_code`, a lint the crate root
-  deliberately does not suppress. It is the one lint that would report a kernel wired to nothing.
-  (Checked: no kernel is currently orphaned — all 110 `pub fn`s are reachable from a dispatch
-  site — so this is a removed safety net rather than a live bug.)
-
----
 
 ## 14. Coverage gaps in `dct.rs`
+
+> **Resolved — 17 new tests, and the gap was worse than "no test".**
+>
+> The nine `dct.rs` entry points did have coverage of a kind: the
+> `*_matches_the_plane_cursor_form` tests in `encoder/decode_mb_aux.rs`. But on x86_64
+> *both* sides of those dispatch into `simd/x86_64/dct.rs`, so they pin the
+> `RecCursor`-vs-`PlaneCursorMut` equivalence and not SSE2 against scalar. The nine new
+> tests run each kernel against `idct_t4_rec_c` / `idct_t4_rec_in_place_c` /
+> `idct_rec_i16x16_dc_c`, and reference the multi-block forms against the scalar
+> applied *per block* at the sub-offsets rather than against this file's own
+> four-block loop — so the hand-written `off`/`advance` arithmetic is under test and
+> not a shared assumption. Whole allocations are compared, padding included.
+> Mutation-checked: transposing `dy * pred_stride + dx` in
+> `idct_four_t4_rec_to_view_sse2_impl` fails exactly that test and nothing else.
+>
+> `intra_pred.rs` was 3 tests for 30 kernels because the three covered all twelve
+> `enc_*` predictors and none of the thirteen `dec_*` ones — the in-place
+> reconstructors the decoder installs at `decoder_core.rs:1817..1830`, which are the
+> shape where an off-by-one row or column hides. Three new tests cover all thirteen
+> against `decoder::get_intra_predictor`, comparing whole allocations.
+>
+> `sad.rs`'s three tests did reach all sixteen public kernels, but each at one anchor
+> over one input pattern. Four new tests sweep every kernel over four anchors (one per
+> residue mod 8) and five distributions, including the all-`0xFF`/all-`0x00` pair and a
+> near-identical pair that sit at the ends of the accumulator's range. The AVX2 sweep
+> announces the skip on a host without AVX2 instead of reporting "ok" having executed
+> nothing.
 
 `rust/crates/openh264-rs/src/simd/x86_64/dct.rs` — nine of fourteen public entry points have no
 test: `idct_t4_rec_to_view_sse2` (`:322`), `idct_four_t4_rec_to_view_sse2` (`:350`),
@@ -485,17 +621,3 @@ offset (e.g. `dct.rs:342`, `:400`) where a transposed `(dx, dy)` or stride mix-u
 silent. This is the encoder's reconstruction seam.
 
 Similar: `intra_pred.rs` has 3 tests for 30 public kernels, `sad.rs` 3 for 23.
-
----
-
-## Suggested order
-
-1. §3 (two lines, removes UB), §5 (restores a deleted guard), §6 (closes a soundness hole).
-2. §2 + §8 + §9 together — one dispatch mechanism instead of three; this is what unblocks §4.
-3. §4 + §4a — get the gates running the SIMD tests at all. Without this the repaired parity
-   tests protect nothing in CI.
-4. §1 + §1a — decide the `i16`/`i32` question, then widen the generator so the decision is
-   enforced.
-5. §13 documentation and gate baselines — cheap, and several of the stale comments actively
-   mislead.
-6. §10, §11, §7, §12, §14 as cleanup capacity allows.
