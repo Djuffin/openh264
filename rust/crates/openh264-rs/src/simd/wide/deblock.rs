@@ -2,7 +2,7 @@
 //! luma bS<4 and bS==4 filters and the chroma pair, for both edge directions.
 //!
 //! The arithmetic is word-lane throughout and maps one-to-one: `max`/`min`,
-//! `simd_lt`/`simd_gt` (the `CmpLt`/`CmpGt` traits), shifts, and `blend` for the
+//! `simd_lt`/`simd_gt`, shifts, and `select` for the
 //! intrinsic file's `and`/`andnot`/`or` triples — the same three ops on an SSE2
 //! baseline, `pblendvb` where the build has SSE4.1. The early-outs use `none()`,
 //! which is `pmovmskb` on the mask.
@@ -12,7 +12,7 @@
 
 #![forbid(unsafe_code)]
 
-use wide::{i16x8, CmpGt, CmpLt};
+use wide::i16x8;
 
 use super::lanes::{load8, low8, narrow, widen_lo};
 use crate::safe::plane::PlaneSamples;
@@ -94,12 +94,12 @@ pub fn deblock_luma_lt4_16(
         let t_p1 = ((p2_16 + avg_p0q0) - (p1_16 << 1i32)) >> 1i32;
         let clip_p1 = t_p1.max(neg_tc0).min(tc0_vec);
         let new_p1_val = (p1_16 + clip_p1) & low_byte;
-        let p1_out = cond_p2p0.blend(new_p1_val, p1_16);
+        let p1_out = cond_p2p0.select(new_p1_val, p1_16);
 
         let t_q1 = ((q2_16 + avg_p0q0) - (q1_16 << 1i32)) >> 1i32;
         let clip_q1 = t_q1.max(neg_tc0).min(tc0_vec);
         let new_q1_val = (q1_16 + clip_q1) & low_byte;
-        let q1_out = cond_q2q0.blend(new_q1_val, q1_16);
+        let q1_out = cond_q2q0.select(new_q1_val, q1_16);
 
         let tc_i = tc0_vec - cond_p2p0 - cond_q2q0;
         let neg_tc_i = zero - tc_i;
@@ -110,10 +110,10 @@ pub fn deblock_luma_lt4_16(
         let deta = t_deta.max(neg_tc_i).min(tc_i);
 
         let p0_cand = (p0_16 + deta).min(max_u8).max(zero);
-        let p0_out = mask_filter.blend(p0_cand, p0_16);
+        let p0_out = mask_filter.select(p0_cand, p0_16);
 
         let q0_cand = (q0_16 - deta).min(max_u8).max(zero);
-        let q0_out = mask_filter.blend(q0_cand, q0_16);
+        let q0_out = mask_filter.select(q0_cand, q0_16);
 
         put(p0, offset, p0_out);
         put(q0, offset, q0_out);
@@ -177,13 +177,13 @@ pub fn deblock_luma_eq4_16(
         let q1_q2q0 = (p0_16 + q0_16 + q1_16 + q2_16 + two) >> 2i32;
         let q2_q2q0 = ((q3_16 << 1i32) + (q2_16 << 1i32) + q2_16 + q1_16 + q0_16 + p0_16 + four) >> 3i32;
 
-        let p0_out = mask_filter.blend(cond_p2p0.blend(p0_p2p0, p0_default), p0_16);
-        let p1_out = cond_p2p0.blend(p1_p2p0, p1_16);
-        let p2_out = cond_p2p0.blend(p2_p2p0, p2_16);
+        let p0_out = mask_filter.select(cond_p2p0.select(p0_p2p0, p0_default), p0_16);
+        let p1_out = cond_p2p0.select(p1_p2p0, p1_16);
+        let p2_out = cond_p2p0.select(p2_p2p0, p2_16);
 
-        let q0_out = mask_filter.blend(cond_q2q0.blend(q0_q2q0, q0_default), q0_16);
-        let q1_out = cond_q2q0.blend(q1_q2q0, q1_16);
-        let q2_out = cond_q2q0.blend(q2_q2q0, q2_16);
+        let q0_out = mask_filter.select(cond_q2q0.select(q0_q2q0, q0_default), q0_16);
+        let q1_out = cond_q2q0.select(q1_q2q0, q1_16);
+        let q2_out = cond_q2q0.select(q2_q2q0, q2_16);
 
         put(p0, offset, p0_out);
         put(p1, offset, p1_out);
@@ -242,8 +242,8 @@ pub fn deblock_chroma_lt4_16(
         let p0_cand = (p0_16 + deta).min(max_u8).max(zero);
         let q0_cand = (q0_16 - deta).min(max_u8).max(zero);
 
-        put(p0, offset, mask_filter.blend(p0_cand, p0_16));
-        put(q0, offset, mask_filter.blend(q0_cand, q0_16));
+        put(p0, offset, mask_filter.select(p0_cand, p0_16));
+        put(q0, offset, mask_filter.select(q0_cand, q0_16));
     }
 }
 
@@ -279,8 +279,8 @@ pub fn deblock_chroma_eq4_16(
         let p0_cand = ((p1_16 << 1i32) + p0_16 + q1_16 + two) >> 2i32;
         let q0_cand = ((q1_16 << 1i32) + q0_16 + p1_16 + two) >> 2i32;
 
-        put(p0, offset, mask_filter.blend(p0_cand, p0_16));
-        put(q0, offset, mask_filter.blend(q0_cand, q0_16));
+        put(p0, offset, mask_filter.select(p0_cand, p0_16));
+        put(q0, offset, mask_filter.select(q0_cand, q0_16));
     }
 }
 

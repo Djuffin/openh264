@@ -1,5 +1,5 @@
 //! The `wide`-crate kernel set — every kernel in [`super::x86_64`], written a second
-//! time against `wide` 1.3's lane types instead of `core::arch` intrinsics.
+//! time against `wide` 1.7's lane types instead of `core::arch` intrinsics.
 //!
 //! # Why a second copy exists
 //!
@@ -33,10 +33,11 @@
 //!     `pmaddwd`-against-ones reduce (`sad.rs`);
 //!   - no `pavgb`: the rounded average is `(a | b) - ((a ^ b) >> 1)` with the bit
 //!     that crosses a byte masked off (`mc.rs`);
-//!   - no lane permutes on integer vectors (`swizzle` is `pshufb`, an SSSE3
-//!     instruction, and scalar on the SSE2 baseline): the permutes are written as
-//!     array casts in [`lanes`] and left to LLVM to turn back into
-//!     `pshufd`/`pshuflw`/`punpck`;
+//!   - no *word*-lane permute: 1.7 has `u8x16::shuffle` (and `u8x32::swizzle`), which
+//!     is `pshufb` on SSSE3 and `tbl` on NEON, but every permute here moves 16-bit
+//!     lanes and would have to be spelled as a byte table with paired indices — and on
+//!     the SSE2 baseline `pshufb` does not exist anyway. They stay array casts in
+//!     [`lanes`], which LLVM turns back into `pshufd`/`pshuflw`/`punpck`;
 //!   - no runtime feature dispatch: `u8x32` is two SSE2 halves unless the whole
 //!     crate is built with `-C target-feature=+avx2`, so the `_avx2` entry points
 //!     here are 128-bit kernels that step two rows;
@@ -141,7 +142,7 @@ pub(crate) mod lanes {
         v.dot(i16x8::ONE).reduce_add()
     }
 
-    /// Lanes `4..8` set — the mask that selects a vector's upper half in `blend`.
+    /// Lanes `4..8` set — the mask that selects a vector's upper half in `select`.
     pub const HIGH_HALF: i16x8 = i16x8::new([0, 0, 0, 0, -1, -1, -1, -1]);
 
     /// Lanes `2, 3` and `6, 7` set — the upper pair of each four-lane group.

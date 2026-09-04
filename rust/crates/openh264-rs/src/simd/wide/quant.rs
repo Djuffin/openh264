@@ -13,7 +13,7 @@
 #![forbid(unsafe_code)]
 
 use wide::bytemuck::cast;
-use wide::{i16x8, i32x4, i32x8, u16x8, CmpEq};
+use wide::{i16x8, i32x4, i32x8, u16x8};
 
 use super::lanes::transpose4_lo;
 

@@ -4,7 +4,7 @@
 //!
 //! `psadbw` sums sixteen absolute byte differences into one word in a single
 //! instruction, and the intrinsic kernels are nothing but that and an add per row.
-//! `wide` 1.3 has no wrapper for it, so the difference here is `max - min` on
+//! `wide` 1.7 still has no wrapper for it, so the difference here is `max - min` on
 //! `u8x16` (three ops), zero-extended to two `i16x8` (two ops) and accumulated (two
 //! adds) — seven ops per row where the intrinsic uses two — with a `pmaddwd` reduce at
 //! the end. This is the family where the portable API pays most.

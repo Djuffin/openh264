@@ -34,7 +34,7 @@ fn hpass_abs(p: i16x8) -> i16x8 {
     let r = rotate_quads(p);
     let x = p + r;
     let y = p - r;
-    let z = QUAD_HIGH_PAIR.blend(y, x);
+    let z = QUAD_HIGH_PAIR.select(y, x);
     let zs = swap_adjacent(z);
     (z + zs).abs() + (z - zs).abs()
 }
@@ -62,8 +62,8 @@ fn satd_4x4_impl<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> 
     let w = m - ms; // [s2 - s3 | negated]
 
     // The intermediate rows, two per register, in the scalar's order.
-    let rows01 = HIGH_HALF.blend(v, t); // [s0 + s1 | s2 + s3]
-    let rows23 = HIGH_HALF.blend(u, w); // [s2 - s3 | s0 - s1]
+    let rows01 = HIGH_HALF.select(v, t); // [s0 + s1 | s2 + s3]
+    let rows23 = HIGH_HALF.select(u, w); // [s2 - s3 | s0 - s1]
 
     // Lanes peak at 4 * 4080 = 16320, inside `i16`; the sum is taken in `i32`.
     let doubled = hsum_i16(hpass_abs(rows01) + hpass_abs(rows23));
