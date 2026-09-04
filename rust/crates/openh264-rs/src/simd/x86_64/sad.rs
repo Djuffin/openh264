@@ -658,15 +658,19 @@ mod tests {
         let asked_for_avx2 = slot(WELS_CPU_SSE2 | WELS_CPU_AVX2);
         assert!(sse2_only.is_some() && asked_for_avx2.is_some());
 
-        if std::is_x86_feature_detected!("avx2") {
+        // **The oracle is `has_avx2()`, not `is_x86_feature_detected!`.** They are not the
+        // same question: the table arm consults the port's probe, which also honours
+        // `OPENH264_NO_SIMD=1`, so under the kill switch a host that *has* AVX2 must still
+        // get the SSE2 entry. Asking the CPU directly made this test fail there.
+        if crate::simd::has_avx2() {
             assert_ne!(
                 asked_for_avx2, sse2_only,
-                "this host has AVX2, so asking for it must change the installed kernel"
+                "has_avx2() is true, so asking for AVX2 must change the installed kernel"
             );
         } else {
             assert_eq!(
                 asked_for_avx2, sse2_only,
-                "this host has no AVX2, so the flag alone must not install an AVX2 kernel"
+                "has_avx2() is false, so the flag alone must not install an AVX2 kernel"
             );
         }
     }
