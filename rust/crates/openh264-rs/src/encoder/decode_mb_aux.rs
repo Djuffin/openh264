@@ -100,7 +100,7 @@ pub fn dequant_four_4x4(res: &mut [i16; 64], mf: &[u16; 8]) {
 pub fn idct_rec_i16x16_dc(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc: &[i16; 16]) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_rec_i16x16_dc_sse2(rec, pred, dc);
+        crate::simd::kernels::dct::idct_rec_i16x16_dc_sse2(rec, pred, dc);
         return;
     }
     idct_rec_i16x16_dc_c(rec, pred, dc);
@@ -139,7 +139,7 @@ pub fn idct_rec_i16x16_dc_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>
 pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_t4_rec_sse2(rec, pred, dct);
+        crate::simd::kernels::dct::idct_t4_rec_sse2(rec, pred, dct);
         return;
     }
     idct_t4_rec_c(rec, pred, dct);
@@ -168,7 +168,7 @@ pub fn idct_t4_rec_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: 
 pub fn idct_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_t4_rec_in_place_sse2(rec, dct);
+        crate::simd::kernels::dct::idct_t4_rec_in_place_sse2(rec, dct);
         return;
     }
     idct_t4_rec_in_place_c(rec, dct);
@@ -231,7 +231,7 @@ fn idct_t4_residual(dct: &[i16; 16]) -> [[i32; 4]; 4] {
 pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 64]) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_four_t4_rec_sse2(rec, pred, dct);
+        crate::simd::kernels::dct::idct_four_t4_rec_sse2(rec, pred, dct);
         return;
     }
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
@@ -245,7 +245,7 @@ pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc
 pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_four_t4_rec_in_place_sse2(rec, dct);
+        crate::simd::kernels::dct::idct_four_t4_rec_in_place_sse2(rec, dct);
         return;
     }
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
@@ -281,7 +281,7 @@ pub fn idct_t4_rec_to_view(
 ) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_t4_rec_to_view_sse2(rec, pred, pred_stride, dct);
+        crate::simd::kernels::dct::idct_t4_rec_to_view_sse2(rec, pred, pred_stride, dct);
         return;
     }
     let res = idct_t4_residual(dct);
@@ -304,7 +304,7 @@ pub fn idct_four_t4_rec_to_view(
 ) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_four_t4_rec_to_view_sse2(rec, pred, pred_stride, dct);
+        crate::simd::kernels::dct::idct_four_t4_rec_to_view_sse2(rec, pred, pred_stride, dct);
         return;
     }
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
@@ -324,7 +324,7 @@ pub fn idct_rec_i16x16_dc_to_view(
 ) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_rec_i16x16_dc_to_view_sse2(rec, pred, pred_stride, dc);
+        crate::simd::kernels::dct::idct_rec_i16x16_dc_to_view_sse2(rec, pred, pred_stride, dc);
         return;
     }
     for i in 0..16usize {
@@ -345,7 +345,7 @@ pub fn idct_rec_i16x16_dc_to_view(
 pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_t4_rec_in_place_view_sse2(rec, dct);
+        crate::simd::kernels::dct::idct_t4_rec_in_place_view_sse2(rec, dct);
         return;
     }
     let res = idct_t4_residual(dct);
@@ -363,7 +363,7 @@ pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
 pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_four_t4_rec_in_place_view_sse2(rec, dct);
+        crate::simd::kernels::dct::idct_four_t4_rec_in_place_view_sse2(rec, dct);
         return;
     }
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
@@ -382,7 +382,7 @@ pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
 pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
     #[cfg(target_arch = "x86_64")]
     if crate::simd::has_sse2() {
-        crate::simd::x86_64::dct::idct_t4_rec_on_mb_in_place_view_sse2(rec, dct);
+        crate::simd::kernels::dct::idct_t4_rec_on_mb_in_place_view_sse2(rec, dct);
         return;
     }
     const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
@@ -480,9 +480,9 @@ pub fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: 
 
     #[cfg(target_arch = "x86_64")]
     if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
-        fl.pfDequantization4x4 = crate::simd::x86_64::quant::dequant_4x4_sse2;
-        fl.pfDequantizationFour4x4 = crate::simd::x86_64::quant::dequant_four_4x4_sse2;
-        fl.pfDequantizationIHadamard4x4 = crate::simd::x86_64::quant::dequant_ihadamard_4x4_sse2;
+        fl.pfDequantization4x4 = crate::simd::kernels::quant::dequant_4x4_sse2;
+        fl.pfDequantizationFour4x4 = crate::simd::kernels::quant::dequant_four_4x4_sse2;
+        fl.pfDequantizationIHadamard4x4 = crate::simd::kernels::quant::dequant_ihadamard_4x4_sse2;
     }
 }
 

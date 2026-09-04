@@ -666,7 +666,7 @@ pub fn WelsDctT4_sse2(
     pPixel2: &crate::encoder::rec_view::RecCursor<'_>,
 ) {
     let dct: &mut [i16; 16] = (&mut pDct[..16]).try_into().unwrap();
-    crate::simd::x86_64::dct::dct_4x4_sse2(dct, pPixel1, pPixel2);
+    crate::simd::kernels::dct::dct_4x4_sse2(dct, pPixel1, pPixel2);
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -676,7 +676,7 @@ pub fn WelsDctFourT4_sse2(
     pPixel2: &crate::encoder::rec_view::RecCursor<'_>,
 ) {
     let dct: &mut [i16; 64] = (&mut pDct[..64]).try_into().unwrap();
-    crate::simd::x86_64::dct::dct_four_4x4_sse2(dct, pPixel1, pPixel2);
+    crate::simd::kernels::dct::dct_four_4x4_sse2(dct, pPixel1, pPixel2);
 }
 
 // ============================================================================
@@ -844,13 +844,13 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
     if (uiCpuFlag & WELS_CPU_SSE2) != 0 {
         // Both 16x16 slots take the unaligned kernel; `simd/x86_64/copy.rs`
         // explains why upstream's aligned/not-aligned split is not reproduced.
-        f.pfCopy16x16Aligned = crate::simd::x86_64::copy::copy_16x16_sse2;
-        f.pfCopy16x16NotAligned = crate::simd::x86_64::copy::copy_16x16_sse2;
-        f.pfCopy16x8NotAligned = crate::simd::x86_64::copy::copy_16x8_sse2;
-        f.pfCopy8x16Aligned = crate::simd::x86_64::copy::copy_8x16_sse2;
-        f.pfCopy8x8Aligned = crate::simd::x86_64::copy::copy_8x8_sse2;
+        f.pfCopy16x16Aligned = crate::simd::kernels::copy::copy_16x16_sse2;
+        f.pfCopy16x16NotAligned = crate::simd::kernels::copy::copy_16x16_sse2;
+        f.pfCopy16x8NotAligned = crate::simd::kernels::copy::copy_16x8_sse2;
+        f.pfCopy8x16Aligned = crate::simd::kernels::copy::copy_8x16_sse2;
+        f.pfCopy8x8Aligned = crate::simd::kernels::copy::copy_8x8_sse2;
 
-        f.pfCalculateSingleCtr4x4 = crate::simd::x86_64::score::calculate_single_ctr_4x4_sse2;
+        f.pfCalculateSingleCtr4x4 = crate::simd::kernels::score::calculate_single_ctr_4x4_sse2;
 
         // `pfScan4x4` and `pfScan4x4Ac` stay scalar on purpose: `scan_4x4_dc_ac`
         // already compiles to a shorter shuffle sequence than `score.asm`'s, for
@@ -858,12 +858,12 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
 
         f.pfDctT4 = WelsDctT4_sse2;
         f.pfDctFourT4 = WelsDctFourT4_sse2;
-        f.pfTransformHadamard4x4Dc = crate::simd::x86_64::quant::hadamard_t4_dc_sse2;
-        f.pfGetNoneZeroCount = crate::simd::x86_64::quant::get_none_zero_count_sse2;
-        f.pfQuantization4x4 = crate::simd::x86_64::quant::quant_4x4_sse2;
-        f.pfQuantizationDc4x4 = crate::simd::x86_64::quant::quant_4x4_dc_sse2;
-        f.pfQuantizationFour4x4 = crate::simd::x86_64::quant::quant_four_4x4_sse2;
-        f.pfQuantizationFour4x4Max = crate::simd::x86_64::quant::quant_four_4x4_max_sse2;
+        f.pfTransformHadamard4x4Dc = crate::simd::kernels::quant::hadamard_t4_dc_sse2;
+        f.pfGetNoneZeroCount = crate::simd::kernels::quant::get_none_zero_count_sse2;
+        f.pfQuantization4x4 = crate::simd::kernels::quant::quant_4x4_sse2;
+        f.pfQuantizationDc4x4 = crate::simd::kernels::quant::quant_4x4_dc_sse2;
+        f.pfQuantizationFour4x4 = crate::simd::kernels::quant::quant_four_4x4_sse2;
+        f.pfQuantizationFour4x4Max = crate::simd::kernels::quant::quant_four_4x4_max_sse2;
     }
 }
 

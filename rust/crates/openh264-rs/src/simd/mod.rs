@@ -10,6 +10,24 @@
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
+#[cfg(feature = "wide")]
+pub mod wide;
+
+/// **The kernel set the dispatch sites call.** Every `has_sse2()` arm and every
+/// `WELS_CPU_SSE2` table install spells its kernel as `crate::simd::kernels::…`, and
+/// this alias decides what that resolves to: the hand-written `core::arch` intrinsics
+/// in [`x86_64`] by default, or the `wide`-crate kernels in [`wide`] under
+/// `--features wide`. The two modules export the same names with the same signatures,
+/// so the sites do not change — only this line does.
+///
+/// Both modules are compiled whenever they can be; the feature only moves the alias.
+/// That is what lets `benches/kernel_bench.rs` time the three implementations of one
+/// kernel in one process.
+#[cfg(all(target_arch = "x86_64", not(feature = "wide")))]
+pub use x86_64 as kernels;
+#[cfg(feature = "wide")]
+pub use wide as kernels;
+
 use crate::common::cpu_core::*;
 
 /// Detects available CPU SIMD features, once per process.
