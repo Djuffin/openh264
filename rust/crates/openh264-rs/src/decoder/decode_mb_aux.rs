@@ -46,11 +46,7 @@ pub use crate::decoder::decode_slice::{g_kuiScan8};
 /// truncation of the horizontal pass's output**: `iSrc` is an `int16_t[16]` there
 /// and the sums can exceed `i16`, so the truncation is observable and load-bearing.
 pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_res_add_pred(pred, rs);
-        return;
-    }
-    idct_res_add_pred_c(pred, rs);
+    kernels::dct::idct_res_add_pred(pred, rs)
 }
 
 /// The scalar body of [`idct_res_add_pred`], never dispatched. Kept separate so

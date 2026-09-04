@@ -8,12 +8,11 @@
 //! [`super::kernels`] names — so it can never shadow a real kernel on a build that has
 //! one.
 //!
-//! **Nothing here is ever called on a correct build.** `simd::has_simd()` is false
-//! wherever this module is selected, because `arch_cpu_features` clears every bit on a
-//! target with no kernel set, so each dispatch site takes its scalar arm before
-//! reaching the alias. These bodies exist so the names resolve, and forward rather
-//! than `unreachable!()` so that a future kernel set which does set the bit gets
-//! correct output rather than a panic.
+//! **These run.** `--features scalar` is the port's `USE_ASM=No`, and on that build the
+//! twenty-two direct dispatch sites — motion compensation, deblocking, the IDCTs — call
+//! straight through here to the scalar body. The `pfXxx` tables do not: the feature word
+//! is `0`, so they install their scalar arm without going through a forward.
+//! `#[inline(always)]` on every one, so the hop costs nothing.
 //!
 //! Generated shape, one line each: same name, same signature, calls the scalar.
 

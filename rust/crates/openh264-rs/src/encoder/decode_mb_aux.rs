@@ -104,11 +104,7 @@ pub fn dequant_four_4x4(res: &mut [i16; 64], mf: &[u16; 8]) {
 ///
 /// C++: `WelsIDctRecI16x16Dc_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_rec_i16x16_dc(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc: &[i16; 16]) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_rec_i16x16_dc(rec, pred, dc);
-        return;
-    }
-    idct_rec_i16x16_dc_c(rec, pred, dc);
+    kernels::dct::idct_rec_i16x16_dc(rec, pred, dc)
 }
 
 /// The scalar body of [`idct_rec_i16x16_dc`], never dispatched. Kept separate so the parity
@@ -142,11 +138,7 @@ pub fn idct_rec_i16x16_dc_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>
 ///
 /// C++: `WelsIDctT4Rec_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_t4_rec(rec, pred, dct);
-        return;
-    }
-    idct_t4_rec_c(rec, pred, dct);
+    kernels::dct::idct_t4_rec(rec, pred, dct)
 }
 
 /// The scalar body of [`idct_t4_rec`], never dispatched. Kept separate so the parity
@@ -170,11 +162,7 @@ pub fn idct_t4_rec_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: 
 /// arithmetic, one cursor: the sample is read where [`idct_t4_rec`] reads
 /// `pred`, and written where it writes `rec`.
 pub fn idct_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_t4_rec_in_place(rec, dct);
-        return;
-    }
-    idct_t4_rec_in_place_c(rec, dct);
+    kernels::dct::idct_t4_rec_in_place(rec, dct)
 }
 
 /// The scalar body of [`idct_t4_rec_in_place`], never dispatched. Kept separate so the parity
@@ -232,11 +220,7 @@ fn idct_t4_residual(dct: &[i16; 16]) -> [[i32; 4]; 4] {
 ///
 /// C++: `WelsIDctFourT4Rec_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 64]) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_four_t4_rec(rec, pred, dct);
-        return;
-    }
-    idct_four_t4_rec_c(rec, pred, dct);
+    kernels::dct::idct_four_t4_rec(rec, pred, dct)
 }
 
 /// The scalar body of [`idct_four_t4_rec`], never dispatched. Kept separate so the parity
@@ -252,11 +236,7 @@ pub fn idct_four_t4_rec_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, 
 
 /// [`idct_t4_rec_in_place`] over the four 4x4 blocks of one 8x8 quadrant.
 pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_four_t4_rec_in_place(rec, dct);
-        return;
-    }
-    idct_four_t4_rec_in_place_c(rec, dct);
+    kernels::dct::idct_four_t4_rec_in_place(rec, dct)
 }
 
 /// The scalar body of [`idct_four_t4_rec_in_place`], never dispatched. Kept separate so the parity
@@ -294,11 +274,7 @@ pub fn idct_t4_rec_to_view(
     pred_stride: usize,
     dct: &[i16; 16],
 ) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_t4_rec_to_view(rec, pred, pred_stride, dct);
-        return;
-    }
-    idct_t4_rec_to_view_c(rec, pred, pred_stride, dct);
+    kernels::dct::idct_t4_rec_to_view(rec, pred, pred_stride, dct)
 }
 
 /// The scalar body of [`idct_t4_rec_to_view`], never dispatched. Kept separate so the parity
@@ -328,11 +304,7 @@ pub fn idct_four_t4_rec_to_view(
     pred_stride: usize,
     dct: &[i16; 64],
 ) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_four_t4_rec_to_view(rec, pred, pred_stride, dct);
-        return;
-    }
-    idct_four_t4_rec_to_view_c(rec, pred, pred_stride, dct);
+    kernels::dct::idct_four_t4_rec_to_view(rec, pred, pred_stride, dct)
 }
 
 /// The scalar body of [`idct_four_t4_rec_to_view`], never dispatched. Kept separate so the parity
@@ -359,11 +331,7 @@ pub fn idct_rec_i16x16_dc_to_view(
     pred_stride: usize,
     dc: &[i16; 16],
 ) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_rec_i16x16_dc_to_view(rec, pred, pred_stride, dc);
-        return;
-    }
-    idct_rec_i16x16_dc_to_view_c(rec, pred, pred_stride, dc);
+    kernels::dct::idct_rec_i16x16_dc_to_view(rec, pred, pred_stride, dc)
 }
 
 /// The scalar body of [`idct_rec_i16x16_dc_to_view`], never dispatched. Kept separate so the parity
@@ -391,11 +359,7 @@ pub fn idct_rec_i16x16_dc_to_view_c(
 /// rows, which `RecCursor`'s by-value `row`/`write_row` pair does without ever
 /// naming a `&mut [u8]`.
 pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_t4_rec_in_place_view(rec, dct);
-        return;
-    }
-    idct_t4_rec_in_place_view_c(rec, dct);
+    kernels::dct::idct_t4_rec_in_place_view(rec, dct)
 }
 
 /// The scalar body of [`idct_t4_rec_in_place_view`], never dispatched. Kept separate so the parity
@@ -415,11 +379,7 @@ pub fn idct_t4_rec_in_place_view_c(rec: &RecCursor<'_>, dct: &[i16; 16]) {
 
 /// [`idct_t4_rec_in_place_view`] over the four 4x4 blocks of one 8x8 quadrant.
 pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_four_t4_rec_in_place_view(rec, dct);
-        return;
-    }
-    idct_four_t4_rec_in_place_view_c(rec, dct);
+    kernels::dct::idct_four_t4_rec_in_place_view(rec, dct)
 }
 
 /// The scalar body of [`idct_four_t4_rec_in_place_view`], never dispatched. Kept separate so the parity
@@ -440,11 +400,7 @@ pub fn idct_four_t4_rec_in_place_view_c(rec: &RecCursor<'_>, dct: &[i16; 64]) {
 /// `OutputPMbWithoutConstructCsRsNoCopy` passes `pDecY` as both `pDst` and
 /// `pPred`. One cursor, one stride, no pair.
 pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
-    if crate::simd::has_simd() {
-        kernels::dct::idct_t4_rec_on_mb_in_place_view(rec, dct);
-        return;
-    }
-    idct_t4_rec_on_mb_in_place_view_c(rec, dct);
+    kernels::dct::idct_t4_rec_on_mb_in_place_view(rec, dct)
 }
 
 /// The scalar body of [`idct_t4_rec_on_mb_in_place_view`], never dispatched. Kept separate so the parity

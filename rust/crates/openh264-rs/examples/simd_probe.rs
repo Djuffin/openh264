@@ -13,7 +13,10 @@
 //! `--features wide` this emits the `wide` half alone, which is how you read what
 //! those lanes lowered to — NEON there rather than SSE2.
 
-#![allow(non_snake_case)]
+// A build with neither probe set — off x86_64, without `--features wide` — emits no
+// probes at all, so main's fixtures go unread. That is the honest outcome for a codegen
+// instrument on a target with no kernels to read the codegen of.
+#![allow(non_snake_case, unused_imports, unused_variables, unused_mut)]
 
 use openh264_rs::safe::plane::{PlaneCursor, PlaneCursorMut};
 #[cfg(target_arch = "x86_64")]

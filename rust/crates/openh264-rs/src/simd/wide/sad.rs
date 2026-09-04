@@ -529,9 +529,10 @@ mod tests {
         assert!(baseline.is_some() && asked_for_avx2.is_some());
 
         // **The oracle is `has_avx2()`, not `is_x86_feature_detected!`.** They are not the
-        // same question: the table arm consults the port's probe, which also honours
-        // `OPENH264_NO_SIMD=1`, so under the kill switch a host that *has* AVX2 must still
-        // get the SSE2 entry. Asking the CPU directly made this test fail there.
+        // same question: the table arm consults the port's probe, which answers from the
+        // build as well as the CPU — under `--features scalar` the feature word is `0`, so
+        // a host that *has* AVX2 must still get the baseline entry. Asking the CPU
+        // directly made this test fail there.
         if crate::simd::has_avx2() {
             assert_ne!(
                 asked_for_avx2, baseline,
