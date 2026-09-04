@@ -250,7 +250,23 @@ assert_align!(crate::encoder::wels_encoder_ext::SLevelInfo, 4);
 assert_size!(crate::encoder::wels_encoder_ext::SDeliveryStatus, 12);
 assert_align!(crate::encoder::wels_encoder_ext::SDeliveryStatus, 4);
 
-assert_size!(SEncoderStatistics, 88);
+/// **The one place in these headers where the C data model shows through.**
+/// `SEncoderStatistics` ends in three `unsigned long`s (`codec_app_def.h:767`),
+/// which is 8 bytes under LP64 — the Darwin/Linux hosts `abi_sizes.txt` was dumped
+/// on — and 4 under Windows' LLP64. The port's fields are `c_ulong`, so they already
+/// follow the platform; the pin has to follow it too instead of hard-coding the
+/// host that generated the dump. Everything up to and including `iStatisticsTs` is
+/// fixed-width, so the tail is the whole of the difference:
+///
+///   LP64   64 + 3*8 = 88            (`abi_sizes.txt:54`)
+///   LLP64  64 + 3*4 = 76, rounded up to the struct's 8-byte alignment = 80
+///
+/// The alignment and every offset pin below are the same on both — `iStatisticsTs`
+/// is an `int64_t` and carries the 8-byte alignment on its own.
+const SENCODER_STATISTICS_SIZE: usize =
+    (64 + 3 * size_of::<core::ffi::c_ulong>()).next_multiple_of(align_of::<SEncoderStatistics>());
+
+assert_size!(SEncoderStatistics, SENCODER_STATISTICS_SIZE);
 assert_align!(SEncoderStatistics, 8);
 assert_offset!(SEncoderStatistics, uiWidth, 0);
 assert_offset!(SEncoderStatistics, uiHeight, 4);
