@@ -58,7 +58,7 @@ fn pixel_avg_row(out: &mut [u8], a: &[u8], b: &[u8]) {
     }
 }
 
-pub fn pixel_avg_sse2<A: RefSamples, B: RefSamples>(
+pub fn pixel_avg<A: RefSamples, B: RefSamples>(
     dst: &mut PlaneCursorMut<'_>,
     a: &A,
     b: &B,
@@ -89,7 +89,7 @@ fn mc_chroma_row<const W: usize>(out: &mut [u8], r0: &[u8], r1: &[u8], w: [i16x8
     store_w::<W>(out, narrow(v, i16x8::ZERO));
 }
 
-pub fn mc_chroma_sse2<S: RefSamples + Copy>(
+pub fn mc_chroma<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     mv_x: i16,
@@ -168,7 +168,7 @@ fn htaps<const W: usize>(row: &[u8], col: usize) -> [i16x8; 6] {
     core::array::from_fn(|k| widen_lo(load_w::<W>(&row[col + k..])))
 }
 
-pub fn mc_hor_ver20_sse2<S: RefSamples + Copy>(
+pub fn mc_hor_ver20<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -236,7 +236,7 @@ fn mc_hor_ver02_w<const W: usize, S: RefSamples + Copy>(
     }
 }
 
-pub fn mc_hor_ver02_sse2<S: RefSamples + Copy>(
+pub fn mc_hor_ver02<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -279,7 +279,7 @@ pub fn mc_hor_ver02_sse2<S: RefSamples + Copy>(
 // Centre: McHorVer22
 // ============================================================================
 
-pub fn mc_hor_ver22_sse2<S: RefSamples + Copy>(
+pub fn mc_hor_ver22<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -344,15 +344,15 @@ pub struct WideLeaves;
 impl crate::common::mc::McLeaves for WideLeaves {
     #[inline(always)]
     fn hor<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
-        mc_hor_ver20_sse2(src, dst, width, height)
+        mc_hor_ver20(src, dst, width, height)
     }
     #[inline(always)]
     fn ver<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
-        mc_hor_ver02_sse2(src, dst, width, height)
+        mc_hor_ver02(src, dst, width, height)
     }
     #[inline(always)]
     fn cen<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
-        mc_hor_ver22_sse2(src, dst, width, height)
+        mc_hor_ver22(src, dst, width, height)
     }
     #[inline(always)]
     fn avg<A: RefSamples, B: RefSamples>(
@@ -362,11 +362,11 @@ impl crate::common::mc::McLeaves for WideLeaves {
         width: usize,
         height: usize,
     ) {
-        pixel_avg_sse2(dst, a, b, width, height)
+        pixel_avg(dst, a, b, width, height)
     }
 }
 
-pub fn mc_luma_sse2<S: RefSamples + Copy>(
+pub fn mc_luma<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     mv_x: i16,
@@ -381,7 +381,7 @@ pub fn mc_luma_sse2<S: RefSamples + Copy>(
 mod tests {
     use super::*;
     // These MUST be the `_c` scalar kernels, not the same-named dispatchers:
-    // the dispatchers route to the very SSE2 kernels under test, which would
+    // the dispatchers route to the very kernels under test, which would
     // make every assertion below a tautology.
     use crate::common::mc::{
         mc_chroma_with_frag_mv, mc_hor_ver02_c as scalar_hor_ver02,
@@ -421,7 +421,7 @@ mod tests {
             scalar_pixel_avg(&mut cur_scalar, &ca, &cb, w, h);
 
             let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, 10 * STRIDE + 8, STRIDE);
-            pixel_avg_sse2(&mut cur_simd, &ca, &cb, w, h);
+            pixel_avg(&mut cur_simd, &ca, &cb, w, h);
 
             assert_eq!(dst_scalar, dst_simd, "pixel_avg mismatch at {w}x{h}");
         }
@@ -450,7 +450,7 @@ mod tests {
                     }
 
                     let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, dst_c, STRIDE);
-                    mc_chroma_sse2(&src, &mut cur_simd, dx, dy, w, h);
+                    mc_chroma(&src, &mut cur_simd, dx, dy, w, h);
 
                     assert_eq!(
                         dst_scalar, dst_simd,
@@ -481,7 +481,7 @@ mod tests {
             scalar_hor_ver20(&src, &mut cur_scalar, w, h);
 
             let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, dst_c, STRIDE);
-            mc_hor_ver20_sse2(&src, &mut cur_simd, w, h);
+            mc_hor_ver20(&src, &mut cur_simd, w, h);
 
             assert_eq!(dst_scalar, dst_simd, "mc_hor_ver20 mismatch at {w}x{h}");
         }
@@ -507,7 +507,7 @@ mod tests {
             scalar_hor_ver02(&src, &mut cur_scalar, w, h);
 
             let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, dst_c, STRIDE);
-            mc_hor_ver02_sse2(&src, &mut cur_simd, w, h);
+            mc_hor_ver02(&src, &mut cur_simd, w, h);
 
             assert_eq!(dst_scalar, dst_simd, "mc_hor_ver02 mismatch at {w}x{h}");
         }
@@ -533,7 +533,7 @@ mod tests {
             scalar_hor_ver22(&src, &mut cur_scalar, w, h);
 
             let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, dst_c, STRIDE);
-            mc_hor_ver22_sse2(&src, &mut cur_simd, w, h);
+            mc_hor_ver22(&src, &mut cur_simd, w, h);
 
             assert_eq!(dst_scalar, dst_simd, "mc_hor_ver22 mismatch at {w}x{h}");
         }
@@ -558,7 +558,7 @@ mod tests {
                     scalar_luma(&src, &mut cur_scalar, qx, qy, w, h);
 
                     let mut cur_simd = PlaneCursorMut::new(&mut dst_simd, dst_c, STRIDE);
-                    mc_luma_sse2(&src, &mut cur_simd, qx, qy, w, h);
+                    mc_luma(&src, &mut cur_simd, qx, qy, w, h);
 
                     assert_eq!(
                         dst_scalar, dst_simd,

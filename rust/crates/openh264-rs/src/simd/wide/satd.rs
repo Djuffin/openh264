@@ -76,45 +76,45 @@ fn satd_4x4_impl<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> 
 // ============================================================================
 
 #[inline(always)]
-pub fn satd_4x4_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+pub fn satd_4x4<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     satd_4x4_impl(c1, c2)
 }
 
 #[inline(always)]
-pub fn satd_8x4_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    satd_4x4_sse2(c1, c2) + satd_4x4_sse2(&c1.advance(4, 0), &c2.advance(4, 0))
+pub fn satd_8x4<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    satd_4x4(c1, c2) + satd_4x4(&c1.advance(4, 0), &c2.advance(4, 0))
 }
 
 #[inline(always)]
-pub fn satd_4x8_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    satd_4x4_sse2(c1, c2) + satd_4x4_sse2(&c1.advance(0, 4), &c2.advance(0, 4))
+pub fn satd_4x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    satd_4x4(c1, c2) + satd_4x4(&c1.advance(0, 4), &c2.advance(0, 4))
 }
 
 #[inline(always)]
-pub fn satd_8x8_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    let mut satd = satd_4x4_sse2(c1, c2);
-    satd += satd_4x4_sse2(&c1.advance(4, 0), &c2.advance(4, 0));
-    satd += satd_4x4_sse2(&c1.advance(0, 4), &c2.advance(0, 4));
-    satd += satd_4x4_sse2(&c1.advance(4, 4), &c2.advance(4, 4));
+pub fn satd_8x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    let mut satd = satd_4x4(c1, c2);
+    satd += satd_4x4(&c1.advance(4, 0), &c2.advance(4, 0));
+    satd += satd_4x4(&c1.advance(0, 4), &c2.advance(0, 4));
+    satd += satd_4x4(&c1.advance(4, 4), &c2.advance(4, 4));
     satd
 }
 
 #[inline(always)]
-pub fn satd_16x8_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    satd_8x8_sse2(c1, c2) + satd_8x8_sse2(&c1.advance(8, 0), &c2.advance(8, 0))
+pub fn satd_16x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    satd_8x8(c1, c2) + satd_8x8(&c1.advance(8, 0), &c2.advance(8, 0))
 }
 
 #[inline(always)]
-pub fn satd_8x16_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    satd_8x8_sse2(c1, c2) + satd_8x8_sse2(&c1.advance(0, 8), &c2.advance(0, 8))
+pub fn satd_8x16<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    satd_8x8(c1, c2) + satd_8x8(&c1.advance(0, 8), &c2.advance(0, 8))
 }
 
 #[inline(always)]
-pub fn satd_16x16_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    let mut satd = satd_8x8_sse2(c1, c2);
-    satd += satd_8x8_sse2(&c1.advance(8, 0), &c2.advance(8, 0));
-    satd += satd_8x8_sse2(&c1.advance(0, 8), &c2.advance(0, 8));
-    satd += satd_8x8_sse2(&c1.advance(8, 8), &c2.advance(8, 8));
+pub fn satd_16x16<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    let mut satd = satd_8x8(c1, c2);
+    satd += satd_8x8(&c1.advance(8, 0), &c2.advance(8, 0));
+    satd += satd_8x8(&c1.advance(0, 8), &c2.advance(0, 8));
+    satd += satd_8x8(&c1.advance(8, 8), &c2.advance(8, 8));
     satd
 }
 
@@ -142,9 +142,9 @@ mod tests {
     fn test_satd_parity_identical() {
         let buf = [42u8; 64];
         let c = PlaneCursor::new(&buf, 0, 8);
-        assert_eq!(satd_4x4_sse2(&c, &c), 0);
-        assert_eq!(satd_8x8_sse2(&c, &c), 0);
-        assert_eq!(satd_4x4_sse2(&c, &c), satd_4x4(&c, &c));
+        assert_eq!(satd_4x4(&c, &c), 0);
+        assert_eq!(satd_8x8(&c, &c), 0);
+        assert_eq!(satd_4x4(&c, &c), satd_4x4(&c, &c));
     }
 
     #[test]
@@ -153,13 +153,13 @@ mod tests {
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        assert_eq!(satd_4x4_sse2(&c1, &c2), satd_4x4(&c1, &c2), "satd_4x4 mismatch");
-        assert_eq!(satd_8x4_sse2(&c1, &c2), satd_8x4(&c1, &c2), "satd_8x4 mismatch");
-        assert_eq!(satd_4x8_sse2(&c1, &c2), satd_4x8(&c1, &c2), "satd_4x8 mismatch");
-        assert_eq!(satd_8x8_sse2(&c1, &c2), satd_8x8(&c1, &c2), "satd_8x8 mismatch");
-        assert_eq!(satd_16x8_sse2(&c1, &c2), satd_16x8(&c1, &c2), "satd_16x8 mismatch");
-        assert_eq!(satd_8x16_sse2(&c1, &c2), satd_8x16(&c1, &c2), "satd_8x16 mismatch");
-        assert_eq!(satd_16x16_sse2(&c1, &c2), satd_16x16(&c1, &c2), "satd_16x16 mismatch");
+        assert_eq!(satd_4x4(&c1, &c2), satd_4x4(&c1, &c2), "satd_4x4 mismatch");
+        assert_eq!(satd_8x4(&c1, &c2), satd_8x4(&c1, &c2), "satd_8x4 mismatch");
+        assert_eq!(satd_4x8(&c1, &c2), satd_4x8(&c1, &c2), "satd_4x8 mismatch");
+        assert_eq!(satd_8x8(&c1, &c2), satd_8x8(&c1, &c2), "satd_8x8 mismatch");
+        assert_eq!(satd_16x8(&c1, &c2), satd_16x8(&c1, &c2), "satd_16x8 mismatch");
+        assert_eq!(satd_8x16(&c1, &c2), satd_8x16(&c1, &c2), "satd_8x16 mismatch");
+        assert_eq!(satd_16x16(&c1, &c2), satd_16x16(&c1, &c2), "satd_16x16 mismatch");
     }
 
     #[test]
@@ -174,7 +174,7 @@ mod tests {
             let c1 = PlaneCursor::new(&p1, 0, 4);
             let c2 = PlaneCursor::new(&p2, 0, 4);
             assert_eq!(
-                satd_4x4_sse2(&c1, &c2),
+                satd_4x4(&c1, &c2),
                 satd_4x4(&c1, &c2),
                 "mismatch at seed {seed}"
             );

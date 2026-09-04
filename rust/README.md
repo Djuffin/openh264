@@ -21,7 +21,7 @@ and compared byte for byte, and that sweep is a gate, not a report.
 | Upstream's own tests | Cisco's `test/api` gtest suite runs against the Rust shared library; one row is allowlisted, by design (see *Deliberate divergences*) |
 | Unsafe code | 70 of 99 source files are `#![forbid(unsafe_code)]`; what remains is the C-ABI boundary in `src/api/`, the intrinsics in `src/simd/`, and a handful of audited sites, each tagged, counted, and ratcheted |
 | Dependencies | none; `libc` only as a dev-dependency for the benches that load the C++ library |
-| SIMD | x86_64 only: 85 SSE2 kernels plus an AVX2 pair for 16-wide SAD, across SAD/SATD, motion compensation, forward and inverse DCT, quantization, intra prediction, deblocking, macroblock copies and CAVLC scoring. Every one is a parity port of the scalar beside it. **1.43x** on the encoder, geometric mean over six clips (see *Performance*). No NEON, MMX or LSX |
+| SIMD | Two kernel sets behind one alias, each a parity port of the scalar beside it. `src/simd/x86_64/` is the default on x86_64: 85 SSE2 kernels plus an AVX2 pair for 16-wide SAD, across SAD/SATD, motion compensation, forward and inverse DCT, quantization, intra prediction, deblocking, macroblock copies and CAVLC scoring — **1.43x** on the encoder there. `--features wide` swaps in `src/simd/wide/`, the same entry points written in the `wide` crate's portable lane types, which dispatches on **every** target: on aarch64 it is the port's only SIMD tier, and it is **1.33x** per kernel but **0.93x** end to end (see *Performance*). No hand-written NEON, MMX or LSX |
 
 ## Layout
 
@@ -33,13 +33,13 @@ rust/
 │   ├── src/decoder/             codec/decoder — likewise
 │   ├── src/processing/          codec/processing — the pre-processing plugins
 │   ├── src/common/              codec/common — SAD/SATD, MC, intra prediction, deblocking, tracing
-│   ├── src/simd/                CPU feature detection; x86_64/ (core::arch intrinsics) and wide/ (the `wide` crate,
-│   │                            safe, behind `--features wide`); simd::kernels aliases the selected set
+│   ├── src/simd/                CPU feature detection and three kernel sets: x86_64/ (core::arch intrinsics),
+│   │                            wide/ (the `wide` crate, safe, behind `--features wide`) and scalar/ (forwards,
+│   │                            so a target with neither still resolves); simd::kernels aliases the selected one
 │   ├── src/safe/                the safe vocabulary the codec is written in (see below)
 │   ├── tests/                   integration tests, incl. conformance and parity suites
 │   ├── benches/                 c_vs_rust_bench and decode_1080p_bench (both load the C++ .dylib),
 │   │                            simd_vs_scalar_bench (kernels on/off/wide) and kernel_bench (per kernel), Rust only
-│   ├── docs/simd_wide_vs_intrinsics.md the intrinsics-vs-wide measurement
 │   └── examples/portref.rs      the port's answer for one malformed-corpus entry
 └── tools/
     ├── gates.sh                 the gate battery: commit | family | session | full | exit
@@ -137,7 +137,7 @@ the full `i16` range where it does not, because a kernel that agrees on small
 coefficients and diverges at the extremes would pass a sampled test and corrupt a
 real stream. `OPENH264_NO_SIMD=1` clears the feature word at its one latch, which
 turns off both halves of the dispatch (the `uiCpuFlag` that fills the `pfXxx`
-tables, and the `has_sse2` the directly-dispatched kernels ask), so the whole tier
+tables, and the `has_simd` the directly-dispatched kernels ask), so the whole tier
 is one switch and the suites run both ways:
 
 ```bash
@@ -146,12 +146,18 @@ OPENH264_NO_SIMD=1 cargo test --release     # the same 657, same bytes
 ```
 
 A kernel that is written but never reached is the failure this arrangement is
-most exposed to — a table slot can be left pointing at the scalar and nothing
-observable changes — so the slot tables are asserted, not assumed:
-`every_sse2_sad_and_satd_slot_is_wired` and
-`every_encoding_slot_with_an_sse2_kernel_is_wired` build the table twice, with and
-without the SSE2 bit, and require every accelerated slot to differ. Both carry a
-second list of slots that are scalar *by decision*, which must stay equal.
+most exposed to — a slot can be left pointing at the scalar and nothing observable
+changes, because the output of a parity port *is* the scalar's output — so
+reachability is asserted, not assumed. `every_kernel_is_named_by_a_dispatch_site`
+reads the source and requires every entry point of `simd::x86_64` and `simd::wide`
+to be named through the `simd::kernels` alias somewhere outside `src/simd/`, or to
+be on a short list of module-internal workers. That list is the only hand-kept part
+and it fails closed: a new kernel nothing dispatches is not on it. The bug is not
+hypothetical — it has happened twice here, to two Hadamard "kernels" that were the
+scalar copied verbatim and to the `BLOCK_4x4`/`8x4`/`4x8` SAD slots, whose kernels
+were written and tested with no table entry.
+`the_kernel_sets_expose_the_same_entry_points` is the other half: the three sets
+must agree, or a dispatch site would compile on one target and not another.
 
 **The benches** double as referees: `c_vs_rust_bench` encodes every row through
 both libraries in one process and prints the SHA-1 of each stream next to the
@@ -206,6 +212,42 @@ scheduling out of the measurement — `BENCH_THREADS=4` gives a smaller ratio,
 because threading recovers some of the same wall clock. And it is the encoder;
 the shared kernels in `src/common/` serve the decoder too, but the decode path
 has not been measured this way.
+
+### The portable tier, and what it does on aarch64
+
+`--features wide` points every dispatch site at `src/simd/wide/` instead of
+`src/simd/x86_64/`. Those kernels are `wide`-crate lane types throughout — no
+`core::arch`, every file `#![forbid(unsafe_code)]` — so unlike the intrinsics they
+are reachable on any target, and on aarch64 LLVM lowers their lanes to NEON. On
+On x86_64 they keep about 88% of what the intrinsics buy — 1.35x on the encoder
+against the intrinsics' 1.42x, the gap being the SAD family, where the portable API
+has no `psadbw` and pays seven operations a row instead of two.
+
+On an Apple M1 the two numbers point in opposite directions, and the gap between
+them is the result:
+
+| | scalar | wide | wide/scalar |
+|---|---:|---:|---:|
+| per kernel, geometric mean over 41 kernels | | | **1.33x** |
+| encoder, geometric mean over six clips | 927 fps | 877 fps | **0.93x** |
+
+The kernels that lose are the ones the encoder spends its time in. The half-pel MC
+filters run at 0.27x-0.60x and the SATDs at 0.58x-0.72x, against wins of 2.7x-5.1x
+on the intra plane predictors, the horizontal deblocking filters, the quantisers and
+the i16x16 DC IDCT — which are called far less often. The cause is that `simd/wide/`
+is shaped around what SSE2 *lacks*: it emulates `pavgb` as `(a | b) - ((a ^ b) >> 1)`
+and spells permutes as array casts, because the SSE2 baseline has neither. NEON has
+`vrhadd` and `tbl`, and LLVM already reaches for them when it auto-vectorises the
+scalar loop — so on aarch64 those emulations are overhead paid against a scalar
+version that was never really scalar. **A `wide` port that wins here would have to be
+written to what NEON has, not to what SSE2 is missing.**
+
+The bytes hold either way: all six clips and all 30 `c_vs_rust_bench` rows are
+identical with the wide kernels dispatched, and the benches fail if they are not.
+
+```bash
+cargo bench --bench kernel_bench --features wide       # the per-kernel table above
+```
 
 Against the C++ reference rather than against itself, use `c_vs_rust_bench`, which
 needs the reference library built first.
@@ -262,9 +304,11 @@ ones a user can observe:
 
 ## Not ported, on purpose
 
-- **SIMD outside x86_64.** Upstream's NEON and LSX kernels are not translated, so
-  on Apple Silicon the reference (which dispatches NEON) is still faster than the
-  port on some rows. The x86_64 tier *is* ported and is described above.
+- **Hand-written SIMD outside x86_64.** Upstream's NEON and LSX kernels are not
+  translated, so on Apple Silicon the reference (which dispatches NEON) is faster
+  than the port on every row. What does run there is `--features wide`: the portable
+  kernels dispatch on any target, and on aarch64 they are measured rather than
+  assumed — they currently lose to the scalar, and *Performance* says why.
 - **MMX.** Upstream keeps four kernels in MMX only — the 8-wide macroblock copies
   and the decoder's i4x4 directional predictors. MMX aliases the x87 register file,
   so every kernel has to be paired with an `emms` and the whole tier has to agree

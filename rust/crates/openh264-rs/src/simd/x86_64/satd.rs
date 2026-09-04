@@ -7,7 +7,7 @@ use crate::safe::plane::RefSamples;
 
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
-unsafe fn abs_epi16_sse2(v: __m128i) -> __m128i {
+unsafe fn abs_epi16(v: __m128i) -> __m128i {
     unsafe {
         let sign = _mm_srai_epi16(v, 15);
         _mm_sub_epi16(_mm_xor_si128(v, sign), sign)
@@ -16,7 +16,7 @@ unsafe fn abs_epi16_sse2(v: __m128i) -> __m128i {
 
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
-unsafe fn sum_sub_sse2(a: &mut __m128i, b: &mut __m128i) {
+unsafe fn sum_sub(a: &mut __m128i, b: &mut __m128i) {
     unsafe {
         let tmp = *b;
         *b = _mm_add_epi16(*a, *b);
@@ -28,17 +28,17 @@ unsafe fn sum_sub_sse2(a: &mut __m128i, b: &mut __m128i) {
 /// in: r0, r1, r2, r3 -> out: r0, r2, r1, r3 (butterfly permutation).
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
-unsafe fn hdm4_sse2(
+unsafe fn hdm4(
     r0: &mut __m128i,
     r1: &mut __m128i,
     r2: &mut __m128i,
     r3: &mut __m128i,
 ) {
     unsafe {
-        sum_sub_sse2(r0, r1);
-        sum_sub_sse2(r2, r3);
-        sum_sub_sse2(r1, r3);
-        sum_sub_sse2(r0, r2);
+        sum_sub(r0, r1);
+        sum_sub(r2, r3);
+        sum_sub(r1, r3);
+        sum_sub(r0, r2);
     }
 }
 
@@ -109,7 +109,7 @@ pub unsafe fn satd_4x4_sse2_impl<A: RefSamples + Copy, B: RefSamples + Copy>(
         let mut d3 = _mm_sub_epi16(_mm_unpacklo_epi8(v1_3, zero), _mm_unpacklo_epi8(v2_3, zero));
 
         // 2. 1D Hadamard on rows
-        hdm4_sse2(&mut d0, &mut d1, &mut d2, &mut d3);
+        hdm4(&mut d0, &mut d1, &mut d2, &mut d3);
 
         // 3. Transpose 4x4 matrix
         let (c01, c23) = transpose_4x4_w(d0, d1, d2, d3);
@@ -119,13 +119,13 @@ pub unsafe fn satd_4x4_sse2_impl<A: RefSamples + Copy, B: RefSamples + Copy>(
         let mut col3 = _mm_srli_si128(c23, 8);
 
         // 4. 1D Hadamard on columns
-        hdm4_sse2(&mut col0, &mut col1, &mut col2, &mut col3);
+        hdm4(&mut col0, &mut col1, &mut col2, &mut col3);
 
         // 5. Absolute values and sum
-        let abs0 = abs_epi16_sse2(col0);
-        let abs1 = abs_epi16_sse2(col1);
-        let abs2 = abs_epi16_sse2(col2);
-        let abs3 = abs_epi16_sse2(col3);
+        let abs0 = abs_epi16(col0);
+        let abs1 = abs_epi16(col1);
+        let abs2 = abs_epi16(col2);
+        let abs3 = abs_epi16(col3);
 
         // Combine into two registers:
         let abs01 = _mm_unpacklo_epi64(abs0, abs1);
@@ -142,45 +142,45 @@ pub unsafe fn satd_4x4_sse2_impl<A: RefSamples + Copy, B: RefSamples + Copy>(
 // ============================================================================
 
 #[inline(always)]
-pub fn satd_4x4_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+pub fn satd_4x4<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     unsafe { satd_4x4_sse2_impl(c1, c2) }
 }
 
 #[inline(always)]
-pub fn satd_8x4_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    satd_4x4_sse2(c1, c2) + satd_4x4_sse2(&c1.advance(4, 0), &c2.advance(4, 0))
+pub fn satd_8x4<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    satd_4x4(c1, c2) + satd_4x4(&c1.advance(4, 0), &c2.advance(4, 0))
 }
 
 #[inline(always)]
-pub fn satd_4x8_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    satd_4x4_sse2(c1, c2) + satd_4x4_sse2(&c1.advance(0, 4), &c2.advance(0, 4))
+pub fn satd_4x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    satd_4x4(c1, c2) + satd_4x4(&c1.advance(0, 4), &c2.advance(0, 4))
 }
 
 #[inline(always)]
-pub fn satd_8x8_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    let mut satd = satd_4x4_sse2(c1, c2);
-    satd += satd_4x4_sse2(&c1.advance(4, 0), &c2.advance(4, 0));
-    satd += satd_4x4_sse2(&c1.advance(0, 4), &c2.advance(0, 4));
-    satd += satd_4x4_sse2(&c1.advance(4, 4), &c2.advance(4, 4));
+pub fn satd_8x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    let mut satd = satd_4x4(c1, c2);
+    satd += satd_4x4(&c1.advance(4, 0), &c2.advance(4, 0));
+    satd += satd_4x4(&c1.advance(0, 4), &c2.advance(0, 4));
+    satd += satd_4x4(&c1.advance(4, 4), &c2.advance(4, 4));
     satd
 }
 
 #[inline(always)]
-pub fn satd_16x8_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    satd_8x8_sse2(c1, c2) + satd_8x8_sse2(&c1.advance(8, 0), &c2.advance(8, 0))
+pub fn satd_16x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    satd_8x8(c1, c2) + satd_8x8(&c1.advance(8, 0), &c2.advance(8, 0))
 }
 
 #[inline(always)]
-pub fn satd_8x16_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    satd_8x8_sse2(c1, c2) + satd_8x8_sse2(&c1.advance(0, 8), &c2.advance(0, 8))
+pub fn satd_8x16<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    satd_8x8(c1, c2) + satd_8x8(&c1.advance(0, 8), &c2.advance(0, 8))
 }
 
 #[inline(always)]
-pub fn satd_16x16_sse2<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    let mut satd = satd_8x8_sse2(c1, c2);
-    satd += satd_8x8_sse2(&c1.advance(8, 0), &c2.advance(8, 0));
-    satd += satd_8x8_sse2(&c1.advance(0, 8), &c2.advance(0, 8));
-    satd += satd_8x8_sse2(&c1.advance(8, 8), &c2.advance(8, 8));
+pub fn satd_16x16<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    let mut satd = satd_8x8(c1, c2);
+    satd += satd_8x8(&c1.advance(8, 0), &c2.advance(8, 0));
+    satd += satd_8x8(&c1.advance(0, 8), &c2.advance(0, 8));
+    satd += satd_8x8(&c1.advance(8, 8), &c2.advance(8, 8));
     satd
 }
 
@@ -212,9 +212,9 @@ mod tests {
     fn test_satd_parity_identical() {
         let buf = [42u8; 64];
         let c = PlaneCursor::new(&buf, 0, 8);
-        assert_eq!(satd_4x4_sse2(&c, &c), 0);
-        assert_eq!(satd_8x8_sse2(&c, &c), 0);
-        assert_eq!(satd_4x4_sse2(&c, &c), satd_4x4(&c, &c));
+        assert_eq!(satd_4x4(&c, &c), 0);
+        assert_eq!(satd_8x8(&c, &c), 0);
+        assert_eq!(satd_4x4(&c, &c), satd_4x4(&c, &c));
     }
 
     #[test]
@@ -223,13 +223,13 @@ mod tests {
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        assert_eq!(satd_4x4_sse2(&c1, &c2), satd_4x4(&c1, &c2), "satd_4x4 mismatch");
-        assert_eq!(satd_8x4_sse2(&c1, &c2), satd_8x4(&c1, &c2), "satd_8x4 mismatch");
-        assert_eq!(satd_4x8_sse2(&c1, &c2), satd_4x8(&c1, &c2), "satd_4x8 mismatch");
-        assert_eq!(satd_8x8_sse2(&c1, &c2), satd_8x8(&c1, &c2), "satd_8x8 mismatch");
-        assert_eq!(satd_16x8_sse2(&c1, &c2), satd_16x8(&c1, &c2), "satd_16x8 mismatch");
-        assert_eq!(satd_8x16_sse2(&c1, &c2), satd_8x16(&c1, &c2), "satd_8x16 mismatch");
-        assert_eq!(satd_16x16_sse2(&c1, &c2), satd_16x16(&c1, &c2), "satd_16x16 mismatch");
+        assert_eq!(satd_4x4(&c1, &c2), satd_4x4(&c1, &c2), "satd_4x4 mismatch");
+        assert_eq!(satd_8x4(&c1, &c2), satd_8x4(&c1, &c2), "satd_8x4 mismatch");
+        assert_eq!(satd_4x8(&c1, &c2), satd_4x8(&c1, &c2), "satd_4x8 mismatch");
+        assert_eq!(satd_8x8(&c1, &c2), satd_8x8(&c1, &c2), "satd_8x8 mismatch");
+        assert_eq!(satd_16x8(&c1, &c2), satd_16x8(&c1, &c2), "satd_16x8 mismatch");
+        assert_eq!(satd_8x16(&c1, &c2), satd_8x16(&c1, &c2), "satd_8x16 mismatch");
+        assert_eq!(satd_16x16(&c1, &c2), satd_16x16(&c1, &c2), "satd_16x16 mismatch");
     }
 
     #[test]
@@ -244,7 +244,7 @@ mod tests {
             let c1 = PlaneCursor::new(&p1, 0, 4);
             let c2 = PlaneCursor::new(&p2, 0, 4);
             assert_eq!(
-                satd_4x4_sse2(&c1, &c2),
+                satd_4x4(&c1, &c2),
                 satd_4x4(&c1, &c2),
                 "mismatch at seed {seed}"
             );

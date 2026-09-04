@@ -49,7 +49,7 @@ fn store_i16(d: &mut [i16], v: i16x8) {
 
 /// C++: `WelsQuant4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn quant_4x4_sse2(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
+pub fn quant_4x4(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
     let (vff, vmf): (u16x8, u16x8) = (cast(*ff), cast(*mf));
     let q0 = quant_8(load_i16(&dct[..8]), vff, vmf);
     let q1 = quant_8(load_i16(&dct[8..]), vff, vmf);
@@ -59,7 +59,7 @@ pub fn quant_4x4_sse2(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
 
 /// C++: `WelsQuant4x4Dc_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn quant_4x4_dc_sse2(dct: &mut [i16; 16], ff: i16, mf: i16) {
+pub fn quant_4x4_dc(dct: &mut [i16; 16], ff: i16, mf: i16) {
     let (vff, vmf) = (u16x8::splat(ff as u16), u16x8::splat(mf as u16));
     let q0 = quant_8(load_i16(&dct[..8]), vff, vmf);
     let q1 = quant_8(load_i16(&dct[8..]), vff, vmf);
@@ -69,7 +69,7 @@ pub fn quant_4x4_dc_sse2(dct: &mut [i16; 16], ff: i16, mf: i16) {
 
 /// C++: `WelsQuantFour4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn quant_four_4x4_sse2(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
+pub fn quant_four_4x4(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
     let (vff, vmf): (u16x8, u16x8) = (cast(*ff), cast(*mf));
     for chunk in dct.chunks_exact_mut(8) {
         let q = quant_8(load_i16(chunk), vff, vmf);
@@ -79,7 +79,7 @@ pub fn quant_four_4x4_sse2(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
 
 /// C++: `WelsQuantFour4x4Max_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn quant_four_4x4_max_sse2(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8], max: &mut [i16; 4]) {
+pub fn quant_four_4x4_max(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8], max: &mut [i16; 4]) {
     let (vff, vmf): (u16x8, u16x8) = (cast(*ff), cast(*mf));
     for (k, block) in dct.chunks_exact_mut(16).enumerate() {
         let (q0, mag0) = quant_8_with_mag(load_i16(&block[..8]), vff, vmf);
@@ -97,7 +97,7 @@ pub fn quant_four_4x4_max_sse2(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]
 
 /// C++: `WelsDequant4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn dequant_4x4_sse2(res: &mut [i16; 16], mf: &[u16; 8]) {
+pub fn dequant_4x4(res: &mut [i16; 16], mf: &[u16; 8]) {
     let vmf: i16x8 = cast(*mf);
     let r0 = load_i16(&res[..8]) * vmf;
     let r1 = load_i16(&res[8..]) * vmf;
@@ -107,7 +107,7 @@ pub fn dequant_4x4_sse2(res: &mut [i16; 16], mf: &[u16; 8]) {
 
 /// C++: `WelsDequantFour4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn dequant_four_4x4_sse2(res: &mut [i16; 64], mf: &[u16; 8]) {
+pub fn dequant_four_4x4(res: &mut [i16; 64], mf: &[u16; 8]) {
     let vmf: i16x8 = cast(*mf);
     for chunk in res.chunks_exact_mut(8) {
         let r = load_i16(chunk) * vmf;
@@ -124,7 +124,7 @@ pub fn dequant_four_4x4_sse2(res: &mut [i16; 64], mf: &[u16; 8]) {
 /// `i16x8::to_bitmask` is one bit per word lane, so the popcount is the count of
 /// zero coefficients directly — the intrinsic kernel's byte mask needs a halving.
 #[inline]
-pub fn get_none_zero_count_sse2(level: &[i16; 16]) -> i32 {
+pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
     let zero_words = load_i16(&level[..8]).simd_eq(i16x8::ZERO).to_bitmask().count_ones()
         + load_i16(&level[8..]).simd_eq(i16x8::ZERO).to_bitmask().count_ones();
     16 - zero_words as i32
@@ -147,7 +147,7 @@ fn pack_i32(lo: i32x4, hi: i32x4) -> i16x8 {
 /// vector `k`, and the column pass is lane-wise again. `i32` throughout, saturating
 /// pack at the end, exactly as the scalar clamps.
 #[inline]
-pub fn hadamard_t4_dc_sse2(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
+pub fn hadamard_t4_dc(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
     let g = |a: usize, b: usize, c: usize, d: usize| {
         i32x4::new([dct[a] as i32, dct[b] as i32, dct[c] as i32, dct[d] as i32])
     };
@@ -196,7 +196,7 @@ fn ihadamard_butterfly(a0: i16x8, a1: i16x8, a2: i16x8, a3: i16x8) -> (i16x8, i1
 /// Transpose, butterfly, transpose, butterfly, multiply on the way out — the
 /// intrinsic kernel's shape, with every op wrapping as the C++'s `int16_t` does.
 #[inline]
-pub fn dequant_ihadamard_4x4_sse2(res: &mut [i16; 16], mf: u16) {
+pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
     let row = |k: usize| i16x8::new([res[4 * k], res[4 * k + 1], res[4 * k + 2], res[4 * k + 3], 0, 0, 0, 0]);
     let (c0, c1, c2, c3) = transpose4_lo(row(0), row(1), row(2), row(3));
     let (w0, w1, w2, w3) = ihadamard_butterfly(c0, c1, c2, c3);
@@ -237,7 +237,7 @@ mod tests {
             let mut block_simd = block_c;
 
             quant_4x4(&mut block_c, &ff, &mf);
-            quant_4x4_sse2(&mut block_simd, &ff, &mf);
+            quant_4x4(&mut block_simd, &ff, &mf);
 
             assert_eq!(block_simd, block_c);
         }
@@ -257,7 +257,7 @@ mod tests {
             let mut block_simd = block_c;
 
             quant_4x4_dc(&mut block_c, ff, mf);
-            quant_4x4_dc_sse2(&mut block_simd, ff, mf);
+            quant_4x4_dc(&mut block_simd, ff, mf);
 
             assert_eq!(block_simd, block_c);
         }
@@ -277,7 +277,7 @@ mod tests {
             let mut block_simd = block_c;
 
             quant_four_4x4(&mut block_c, &ff, &mf);
-            quant_four_4x4_sse2(&mut block_simd, &ff, &mf);
+            quant_four_4x4(&mut block_simd, &ff, &mf);
 
             assert_eq!(block_simd, block_c);
         }
@@ -300,7 +300,7 @@ mod tests {
             let mut max_simd = [0i16; 4];
 
             quant_four_4x4_max(&mut block_c, &ff, &mf, &mut max_c);
-            quant_four_4x4_max_sse2(&mut block_simd, &ff, &mf, &mut max_simd);
+            quant_four_4x4_max(&mut block_simd, &ff, &mf, &mut max_simd);
 
             assert_eq!(block_simd, block_c);
             assert_eq!(max_simd, max_c);
@@ -320,7 +320,7 @@ mod tests {
             let mut block_simd = block_c;
 
             dequant_4x4(&mut block_c, &mf);
-            dequant_4x4_sse2(&mut block_simd, &mf);
+            dequant_4x4(&mut block_simd, &mf);
 
             assert_eq!(block_simd, block_c);
         }
@@ -339,7 +339,7 @@ mod tests {
             let mut block_simd = block_c;
 
             dequant_four_4x4(&mut block_c, &mf);
-            dequant_four_4x4_sse2(&mut block_simd, &mf);
+            dequant_four_4x4(&mut block_simd, &mf);
 
             assert_eq!(block_simd, block_c);
         }
@@ -355,7 +355,7 @@ mod tests {
                 *v = if r % 3 == 0 { 0 } else { r };
             }
             let c_count = get_none_zero_count(&block);
-            let simd_count = get_none_zero_count_sse2(&block);
+            let simd_count = get_none_zero_count(&block);
             assert_eq!(simd_count, c_count);
         }
     }
@@ -375,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn hadamard_t4_dc_sse2_parity() {
+    fn hadamard_t4_dc_parity() {
         use crate::encoder::encode_mb_aux::hadamard_t4_dc;
 
         let mut seed = 0x2545_F491_4F6C_DD1Du64;
@@ -387,7 +387,7 @@ mod tests {
             let mut want = [0i16; 16];
             let mut got = [0i16; 16];
             hadamard_t4_dc(&mut want, &dct);
-            hadamard_t4_dc_sse2(&mut got, &dct);
+            hadamard_t4_dc(&mut got, &dct);
             assert_eq!(got, want);
         }
     }
@@ -396,7 +396,7 @@ mod tests {
     /// so drive it deliberately: all sixteen DC coefficients at `i16::MIN`/`MAX` puts
     /// every output past the clamp in both directions.
     #[test]
-    fn hadamard_t4_dc_sse2_saturates_like_the_scalar() {
+    fn hadamard_t4_dc_saturates_like_the_scalar() {
         use crate::encoder::encode_mb_aux::hadamard_t4_dc;
 
         const DC_IDX: [usize; 16] = [
@@ -412,7 +412,7 @@ mod tests {
             let mut want = [0i16; 16];
             let mut got = [0i16; 16];
             hadamard_t4_dc(&mut want, &dct);
-            hadamard_t4_dc_sse2(&mut got, &dct);
+            hadamard_t4_dc(&mut got, &dct);
             assert_eq!(got, want, "pattern {pattern:#018b}");
         }
 
@@ -428,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn dequant_ihadamard_4x4_sse2_parity() {
+    fn dequant_ihadamard_4x4_parity() {
         let mut seed = 0x8A5C_D789_635D_2DFFu64;
         // Every `mf` the dequant tables can produce, plus the ends of the range: the
         // multiply wraps, so a value near `u16::MAX` is a different test from a small one.
@@ -445,23 +445,23 @@ mod tests {
                 }
                 let mut got = want;
                 dequant_ihadamard_4x4(&mut want, mf);
-                dequant_ihadamard_4x4_sse2(&mut got, mf);
+                dequant_ihadamard_4x4(&mut got, mf);
                 assert_eq!(got, want, "mf = {mf}");
             }
         }
     }
 
-    /// The wrapping is load-bearing — the C++ is `int16_t` throughout — so pin that the
-    /// SSE2 kernel wraps rather than saturates, with inputs chosen to overflow every
+    /// The wrapping is load-bearing — the C++ is `int16_t` throughout — so pin that this
+    /// kernel wraps rather than saturates, with inputs chosen to overflow every
     /// intermediate.
     #[test]
-    fn dequant_ihadamard_4x4_sse2_wraps_like_the_scalar() {
+    fn dequant_ihadamard_4x4_wraps_like_the_scalar() {
         for &v in &[i16::MIN, i16::MAX, -1, 1] {
             for &mf in &[1u16, 2, 0x8000, u16::MAX] {
                 let mut want = [v; 16];
                 let mut got = [v; 16];
                 dequant_ihadamard_4x4(&mut want, mf);
-                dequant_ihadamard_4x4_sse2(&mut got, mf);
+                dequant_ihadamard_4x4(&mut got, mf);
                 assert_eq!(got, want, "v = {v}, mf = {mf}");
             }
         }

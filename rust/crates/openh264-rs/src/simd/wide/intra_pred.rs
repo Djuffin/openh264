@@ -150,19 +150,19 @@ pub fn dec_i16x16_luma_pred_h(pred: &mut PlaneCursorMut<'_>) {
 }
 
 #[inline]
-pub fn enc_i16x16_luma_pred_dc_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
+pub fn enc_i16x16_luma_pred_dc(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     let mean = i16x16_dc_mean(rec, true, true);
     fill_rows(&mut Packed::<16>(pred), 16, &[mean; 16])
 }
 
 #[inline]
-pub fn dec_i16x16_luma_pred_dc_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i16x16_luma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
     let mean = i16x16_dc_mean(pred, true, true);
     fill_rows(pred, 16, &[mean; 16])
 }
 
 #[inline]
-pub fn dec_i16x16_luma_pred_dc_top_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i16x16_luma_pred_dc_top(pred: &mut PlaneCursorMut<'_>) {
     let mean = i16x16_dc_mean(pred, true, false);
     fill_rows(pred, 16, &[mean; 16])
 }
@@ -173,13 +173,13 @@ pub fn dec_i16x16_luma_pred_dc_na(pred: &mut PlaneCursorMut<'_>) {
 }
 
 #[inline]
-pub fn enc_i16x16_luma_pred_plane_sse2(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
+pub fn enc_i16x16_luma_pred_plane(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     let (top_shift, left_shift, lt_shift) = i16x16_plane_coeffs(rec);
     i16x16_plane_fill(&mut Packed::<16>(pred), top_shift, left_shift, lt_shift)
 }
 
 #[inline]
-pub fn dec_i16x16_luma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_i16x16_luma_pred_plane(pred: &mut PlaneCursorMut<'_>) {
     let (top_shift, left_shift, lt_shift) = i16x16_plane_coeffs(pred);
     i16x16_plane_fill(pred, top_shift, left_shift, lt_shift)
 }
@@ -285,13 +285,13 @@ pub fn dec_chroma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
 }
 
 #[inline]
-pub fn enc_chroma_pred_plane_sse2(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
+pub fn enc_chroma_pred_plane(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
     let (top_shift, left_shift, lt_shift) = chroma_plane_coeffs(rec);
     chroma_plane_fill(&mut Packed::<8>(pred), top_shift, left_shift, lt_shift)
 }
 
 #[inline]
-pub fn dec_chroma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
+pub fn dec_chroma_pred_plane(pred: &mut PlaneCursorMut<'_>) {
     let (top_shift, left_shift, lt_shift) = chroma_plane_coeffs(pred);
     chroma_plane_fill(pred, top_shift, left_shift, lt_shift)
 }
@@ -301,7 +301,7 @@ pub fn dec_chroma_pred_plane_sse2(pred: &mut PlaneCursorMut<'_>) {
 // ============================================================================
 
 #[inline]
-pub fn enc_i4x4_luma_pred_v_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_v(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let top = rec.row_n::<4>(-1, 0);
     // The intrinsic kernel's `_mm_set1_epi32` and store: one dword to four lanes.
     *pred = cast(u32x4::splat(u32::from_ne_bytes(top)));
@@ -317,7 +317,7 @@ pub fn dec_i4x4_luma_pred_v(pred: &mut PlaneCursorMut<'_>) {
 }
 
 #[inline]
-pub fn enc_i4x4_luma_pred_h_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_h(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let l = |y: isize| rec.at(-1, y);
     let (l0, l1, l2, l3) = (l(0), l(1), l(2), l(3));
     *pred = [l0, l0, l0, l0, l1, l1, l1, l1, l2, l2, l2, l2, l3, l3, l3, l3];
@@ -333,7 +333,7 @@ pub fn dec_i4x4_luma_pred_h(pred: &mut PlaneCursorMut<'_>) {
 }
 
 #[inline]
-pub fn enc_i4x4_luma_pred_dc_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_dc(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let top = rec.row_n::<4>(-1, 0);
     let mut sum = 4i32;
     for y in 0..4 {
@@ -359,7 +359,7 @@ pub fn dec_i4x4_luma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
 }
 
 #[inline]
-pub fn enc_i4x4_luma_pred_ddl_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_ddl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let top = rec.row_n::<8>(-1, 0);
     let t = |i: usize| top[i] as i32;
     let ddl0 = ((2 + t(0) + t(2) + (t(1) << 1i32)) >> 2i32) as u8;
@@ -375,7 +375,7 @@ pub fn enc_i4x4_luma_pred_ddl_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 }
 
 #[inline]
-pub fn enc_i4x4_luma_pred_ddr_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_ddr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let lt = rec.at(-1, -1) as i32;
     let l0 = rec.at(-1, 0) as i32;
     let l1 = rec.at(-1, 1) as i32;
@@ -404,7 +404,7 @@ pub fn enc_i4x4_luma_pred_ddr_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 }
 
 #[inline]
-pub fn enc_i4x4_luma_pred_vr_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_vr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let lt = rec.at(-1, -1) as i32;
     let l0 = rec.at(-1, 0) as i32;
     let l1 = rec.at(-1, 1) as i32;
@@ -425,7 +425,7 @@ pub fn enc_i4x4_luma_pred_vr_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 }
 
 #[inline]
-pub fn enc_i4x4_luma_pred_hd_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_hd(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let lt = rec.at(-1, -1) as i32;
     let l0 = rec.at(-1, 0) as i32;
     let l1 = rec.at(-1, 1) as i32;
@@ -447,7 +447,7 @@ pub fn enc_i4x4_luma_pred_hd_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 }
 
 #[inline]
-pub fn enc_i4x4_luma_pred_vl_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_vl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let top = rec.row_n::<7>(-1, 0);
     let t = |i: usize| top[i] as i32;
     let vl0 = ((1 + t(0) + t(1)) >> 1i32) as u8;
@@ -464,7 +464,7 @@ pub fn enc_i4x4_luma_pred_vl_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 }
 
 #[inline]
-pub fn enc_i4x4_luma_pred_hu_sse2(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let l0 = rec.at(-1, 0) as i32;
     let l1 = rec.at(-1, 1) as i32;
     let l2 = rec.at(-1, 2) as i32;
@@ -500,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn test_i16x16_luma_pred_sse2_parity() {
+    fn test_i16x16_luma_pred_parity() {
         let mut p = test_plane(32, 32, 16, 64);
         let view = shared_plane_for_test(&mut p);
         let rec = view.cursor(0, 0);
@@ -523,19 +523,19 @@ mod tests {
         let mut pred_c = [0u8; 256];
         let mut pred_simd = [0u8; 256];
         WelsI16x16LumaPredDc_c(&mut pred_c, &rec);
-        enc_i16x16_luma_pred_dc_sse2(&mut pred_simd, &rec);
+        enc_i16x16_luma_pred_dc(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "16x16 DC mismatch");
 
         // Plane
         let mut pred_c = [0u8; 256];
         let mut pred_simd = [0u8; 256];
         WelsI16x16LumaPredPlane_c(&mut pred_c, &rec);
-        enc_i16x16_luma_pred_plane_sse2(&mut pred_simd, &rec);
+        enc_i16x16_luma_pred_plane(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "16x16 Plane mismatch");
     }
 
     #[test]
-    fn test_chroma_pred_sse2_parity() {
+    fn test_chroma_pred_parity() {
         let mut p = test_plane(32, 32, 16, 64);
         let view = shared_plane_for_test(&mut p);
         let rec = view.cursor(0, 0);
@@ -565,12 +565,12 @@ mod tests {
         let mut pred_c = [0u8; 64];
         let mut pred_simd = [0u8; 64];
         WelsIChromaPredPlane_c(&mut pred_c, &rec);
-        enc_chroma_pred_plane_sse2(&mut pred_simd, &rec);
+        enc_chroma_pred_plane(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "Chroma Plane mismatch");
     }
 
     #[test]
-    fn test_i4x4_luma_pred_sse2_parity() {
+    fn test_i4x4_luma_pred_parity() {
         let mut p = test_plane(32, 32, 16, 64);
         let view = shared_plane_for_test(&mut p);
         let rec = view.cursor(0, 0);
@@ -579,63 +579,63 @@ mod tests {
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredV_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_v_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_v(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 V mismatch");
 
         // H
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredH_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_h_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_h(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 H mismatch");
 
         // DC
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredDc_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_dc_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_dc(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 DC mismatch");
 
         // DDL
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredDDL_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_ddl_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_ddl(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 DDL mismatch");
 
         // DDR
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredDDR_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_ddr_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_ddr(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 DDR mismatch");
 
         // VR
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredVR_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_vr_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_vr(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 VR mismatch");
 
         // HD
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredHD_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_hd_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_hd(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 HD mismatch");
 
         // VL
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredVL_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_vl_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_vl(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 VL mismatch");
 
         // HU
         let mut pred_c = [0u8; 16];
         let mut pred_simd = [0u8; 16];
         WelsI4x4LumaPredHU_c(&mut pred_c, &rec);
-        enc_i4x4_luma_pred_hu_sse2(&mut pred_simd, &rec);
+        enc_i4x4_luma_pred_hu(&mut pred_simd, &rec);
         assert_eq!(pred_c, pred_simd, "4x4 HU mismatch");
     }
 
@@ -652,7 +652,7 @@ mod tests {
     // allocation* of two identically built planes rather than the block.
     //
     // The reference on the other side is `decoder::get_intra_predictor`, which has no
-    // SIMD dispatch of its own — the SSE2 kernels are installed over it in the table,
+    // SIMD dispatch of its own — these kernels are installed over it in the table,
     // never called from it — so no assertion here can route back into the kernel under
     // test.
     // ========================================================================
@@ -685,11 +685,11 @@ mod tests {
         use crate::decoder::get_intra_predictor as dec;
         assert_dec_parity("16x16 V", dec::i16x16_luma_pred_v, dec_i16x16_luma_pred_v);
         assert_dec_parity("16x16 H", dec::i16x16_luma_pred_h, dec_i16x16_luma_pred_h);
-        assert_dec_parity("16x16 DC", dec::i16x16_luma_pred_dc, dec_i16x16_luma_pred_dc_sse2);
+        assert_dec_parity("16x16 DC", dec::i16x16_luma_pred_dc, dec_i16x16_luma_pred_dc);
         assert_dec_parity(
             "16x16 DC top",
             dec::i16x16_luma_pred_dc_top,
-            dec_i16x16_luma_pred_dc_top_sse2,
+            dec_i16x16_luma_pred_dc_top,
         );
         assert_dec_parity(
             "16x16 DC n/a",
@@ -699,7 +699,7 @@ mod tests {
         assert_dec_parity(
             "16x16 Plane",
             dec::i16x16_luma_pred_plane,
-            dec_i16x16_luma_pred_plane_sse2,
+            dec_i16x16_luma_pred_plane,
         );
     }
 
@@ -709,7 +709,7 @@ mod tests {
         assert_dec_parity("Chroma V", dec::chroma_pred_v, dec_chroma_pred_v);
         assert_dec_parity("Chroma H", dec::chroma_pred_h, dec_chroma_pred_h);
         assert_dec_parity("Chroma DC", dec::chroma_pred_dc, dec_chroma_pred_dc);
-        assert_dec_parity("Chroma Plane", dec::chroma_pred_plane, dec_chroma_pred_plane_sse2);
+        assert_dec_parity("Chroma Plane", dec::chroma_pred_plane, dec_chroma_pred_plane);
     }
 
     #[test]

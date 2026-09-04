@@ -38,25 +38,25 @@ fn copy_block<const W: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>, h: usize
 
 /// C++: `WelsCopy16x16_sse2` / `WelsCopy16x16NotAligned_sse2`, `codec/common/x86/mb_copy.asm`.
 #[inline]
-pub fn copy_16x16_sse2(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
+pub fn copy_16x16(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     copy_block::<16>(dst, src, 16);
 }
 
 /// C++: `WelsCopy16x8NotAligned_sse2`, `codec/common/x86/mb_copy.asm:201`.
 #[inline]
-pub fn copy_16x8_sse2(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
+pub fn copy_16x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     copy_block::<16>(dst, src, 8);
 }
 
 /// The counterpart of `WelsCopy8x16_mmx`, `codec/common/x86/mb_copy.asm:245`.
 #[inline]
-pub fn copy_8x16_sse2(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
+pub fn copy_8x16(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     copy_block::<8>(dst, src, 16);
 }
 
 /// The counterpart of `WelsCopy8x8_mmx`, `codec/common/x86/mb_copy.asm:311`.
 #[inline]
-pub fn copy_8x8_sse2(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
+pub fn copy_8x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     copy_block::<8>(dst, src, 8);
 }
 
@@ -70,7 +70,7 @@ mod tests {
         (0..stride * rows).map(|i| (i as u8).wrapping_mul(37).wrapping_add(seed)).collect()
     }
 
-    /// Runs one shape through both the scalar slot body and the SSE2 kernel over
+    /// Runs one shape through both the scalar slot body and the kernel here, over
     /// identical planes, and requires the **whole plane** to match afterwards —
     /// not just the block. A kernel that ran a row long, or that walked the wrong
     /// stride, lands outside the block and only a whole-plane compare sees it.
@@ -93,12 +93,12 @@ mod tests {
     }
 
     #[test]
-    fn copy_sse2_matches_the_scalar_slots() {
+    fn copy_matches_the_scalar_slots() {
         for &stride in &[16usize, 24, 33, 64] {
-            check(16, 16, stride.max(20), WelsCopy16x16_c, copy_16x16_sse2);
-            check(16, 8, stride.max(20), WelsCopy16x8_c, copy_16x8_sse2);
-            check(8, 16, stride.max(12), WelsCopy8x16_c, copy_8x16_sse2);
-            check(8, 8, stride.max(12), WelsCopy8x8_c, copy_8x8_sse2);
+            check(16, 16, stride.max(20), WelsCopy16x16_c, copy_16x16);
+            check(16, 8, stride.max(20), WelsCopy16x8_c, copy_16x8);
+            check(8, 16, stride.max(12), WelsCopy8x16_c, copy_8x16);
+            check(8, 8, stride.max(12), WelsCopy8x8_c, copy_8x8);
         }
     }
 
@@ -107,9 +107,9 @@ mod tests {
     /// padding — the one geometry where an over-long store stays in bounds and
     /// still changes the answer.
     #[test]
-    fn copy_sse2_is_exact_when_rows_are_contiguous() {
-        check(16, 16, 16, WelsCopy16x16_c, copy_16x16_sse2);
-        check(8, 8, 8, WelsCopy8x8_c, copy_8x8_sse2);
+    fn copy_is_exact_when_rows_are_contiguous() {
+        check(16, 16, 16, WelsCopy16x16_c, copy_16x16);
+        check(8, 8, 8, WelsCopy8x8_c, copy_8x8);
     }
 
     /// The two operands do **not** have to share a stride, and the one call site
@@ -118,18 +118,18 @@ mod tests {
     /// destination and `RecCursor::over_owned(&mut sMemPredMb, .., 16)` — a
     /// stride-16 scratch array — as the source.
     ///
-    /// This is not hypothetical: a first cut of `copy_block_sse2` asserted the
+    /// This is not hypothetical: a first cut of `copy_block` asserted the
     /// strides equal, having only ever been run against the equal-stride shapes
     /// `check` builds, and it would have panicked on the first background
     /// macroblock. Nothing else in the suite reaches that path.
     #[test]
-    fn copy_sse2_walks_each_operand_on_its_own_stride() {
+    fn copy_walks_each_operand_on_its_own_stride() {
         for &(dw, sw) in &[(64usize, 16usize), (16, 64), (33, 16), (16, 16)] {
             for (w, h, scalar, simd) in [
-                (16usize, 16usize, WelsCopy16x16_c as fn(&RecCursor, &RecCursor), copy_16x16_sse2 as fn(&RecCursor, &RecCursor)),
-                (16, 8, WelsCopy16x8_c, copy_16x8_sse2),
-                (8, 16, WelsCopy8x16_c, copy_8x16_sse2),
-                (8, 8, WelsCopy8x8_c, copy_8x8_sse2),
+                (16usize, 16usize, WelsCopy16x16_c as fn(&RecCursor, &RecCursor), copy_16x16 as fn(&RecCursor, &RecCursor)),
+                (16, 8, WelsCopy16x8_c, copy_16x8),
+                (8, 16, WelsCopy8x16_c, copy_8x16),
+                (8, 8, WelsCopy8x8_c, copy_8x8),
             ] {
                 if dw < w || sw < w {
                     continue;
@@ -155,14 +155,14 @@ mod tests {
     /// forgot to add `w` for the last row would accept.
     #[test]
     #[should_panic(expected = "out of range")]
-    fn copy_sse2_rejects_a_block_whose_last_row_overruns() {
+    fn copy_rejects_a_block_whose_last_row_overruns() {
         let mut src = vec![0u8; 16 * 16];
         // 250 < the block's 256-byte span, but >= the 240 bytes a span missing
         // the last row's width would ask for.
         let mut dst = vec![0u8; 250];
         let s = RecCursor::over_owned(&mut src[..], 0, 16);
         let d = RecCursor::over_owned(&mut dst[..], 0, 16);
-        copy_16x16_sse2(&d, &s);
+        copy_16x16(&d, &s);
     }
 
     /// `block_span` is what turns an out-of-range block into a panic instead of
@@ -170,11 +170,11 @@ mod tests {
     /// than reading past the plane.
     #[test]
     #[should_panic(expected = "out of range")]
-    fn copy_sse2_panics_rather_than_running_off_the_plane() {
+    fn copy_panics_rather_than_running_off_the_plane() {
         let mut buf = vec![0u8; 16 * 16];
         let mut src = vec![0u8; 16 * 16];
         let s = RecCursor::over_owned(&mut src, 0, 16);
         let d = RecCursor::over_owned(&mut buf, 0, 16).advance(0, 8);
-        copy_16x16_sse2(&d, &s);
+        copy_16x16(&d, &s);
     }
 }

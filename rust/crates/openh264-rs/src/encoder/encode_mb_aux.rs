@@ -297,6 +297,12 @@ pub fn hadamard_dc_span(a: &[i16], off: usize) -> &[i16; 241] {
 use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_4x4, copy_4x8, copy_8x16, copy_8x4, copy_8x8};
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut, SampleCursor};
 
+/// The kernel set the dispatch sites below call: `simd::x86_64` by default,
+/// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
+/// site because the kernels share their names with the scalars in this module — which
+/// is the point of the naming, and the reason the module qualifier has to stay.
+use crate::simd::kernels;
+
 /// Residual of two 4x4 pixel blocks, then the 2-D forward integer DCT, into
 /// raster order.
 ///
@@ -659,24 +665,22 @@ pub fn WelsDctFourT4_c(
     dct_four_4x4(dct, pPixel1, pPixel2);
 }
 
-#[cfg(target_arch = "x86_64")]
 pub fn WelsDctT4_sse2(
     pDct: &mut [i16],
     pPixel1: &crate::encoder::rec_view::RecCursor<'_>,
     pPixel2: &crate::encoder::rec_view::RecCursor<'_>,
 ) {
     let dct: &mut [i16; 16] = (&mut pDct[..16]).try_into().unwrap();
-    crate::simd::kernels::dct::dct_4x4_sse2(dct, pPixel1, pPixel2);
+    kernels::dct::dct_4x4(dct, pPixel1, pPixel2);
 }
 
-#[cfg(target_arch = "x86_64")]
 pub fn WelsDctFourT4_sse2(
     pDct: &mut [i16],
     pPixel1: &crate::encoder::rec_view::RecCursor<'_>,
     pPixel2: &crate::encoder::rec_view::RecCursor<'_>,
 ) {
     let dct: &mut [i16; 64] = (&mut pDct[..64]).try_into().unwrap();
-    crate::simd::kernels::dct::dct_four_4x4_sse2(dct, pPixel1, pPixel2);
+    kernels::dct::dct_four_4x4(dct, pPixel1, pPixel2);
 }
 
 // ============================================================================
@@ -840,17 +844,16 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
     f.pfQuantizationFour4x4 = quant_four_4x4;
     f.pfQuantizationFour4x4Max = quant_four_4x4_max;
 
-    #[cfg(target_arch = "x86_64")]
     if (uiCpuFlag & WELS_CPU_SSE2) != 0 {
         // Both 16x16 slots take the unaligned kernel; `simd/x86_64/copy.rs`
         // explains why upstream's aligned/not-aligned split is not reproduced.
-        f.pfCopy16x16Aligned = crate::simd::kernels::copy::copy_16x16_sse2;
-        f.pfCopy16x16NotAligned = crate::simd::kernels::copy::copy_16x16_sse2;
-        f.pfCopy16x8NotAligned = crate::simd::kernels::copy::copy_16x8_sse2;
-        f.pfCopy8x16Aligned = crate::simd::kernels::copy::copy_8x16_sse2;
-        f.pfCopy8x8Aligned = crate::simd::kernels::copy::copy_8x8_sse2;
+        f.pfCopy16x16Aligned = kernels::copy::copy_16x16;
+        f.pfCopy16x16NotAligned = kernels::copy::copy_16x16;
+        f.pfCopy16x8NotAligned = kernels::copy::copy_16x8;
+        f.pfCopy8x16Aligned = kernels::copy::copy_8x16;
+        f.pfCopy8x8Aligned = kernels::copy::copy_8x8;
 
-        f.pfCalculateSingleCtr4x4 = crate::simd::kernels::score::calculate_single_ctr_4x4_sse2;
+        f.pfCalculateSingleCtr4x4 = kernels::score::calculate_single_ctr_4x4;
 
         // `pfScan4x4` and `pfScan4x4Ac` stay scalar on purpose: `scan_4x4_dc_ac`
         // already compiles to a shorter shuffle sequence than `score.asm`'s, for
@@ -858,12 +861,12 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
 
         f.pfDctT4 = WelsDctT4_sse2;
         f.pfDctFourT4 = WelsDctFourT4_sse2;
-        f.pfTransformHadamard4x4Dc = crate::simd::kernels::quant::hadamard_t4_dc_sse2;
-        f.pfGetNoneZeroCount = crate::simd::kernels::quant::get_none_zero_count_sse2;
-        f.pfQuantization4x4 = crate::simd::kernels::quant::quant_4x4_sse2;
-        f.pfQuantizationDc4x4 = crate::simd::kernels::quant::quant_4x4_dc_sse2;
-        f.pfQuantizationFour4x4 = crate::simd::kernels::quant::quant_four_4x4_sse2;
-        f.pfQuantizationFour4x4Max = crate::simd::kernels::quant::quant_four_4x4_max_sse2;
+        f.pfTransformHadamard4x4Dc = kernels::quant::hadamard_t4_dc;
+        f.pfGetNoneZeroCount = kernels::quant::get_none_zero_count;
+        f.pfQuantization4x4 = kernels::quant::quant_4x4;
+        f.pfQuantizationDc4x4 = kernels::quant::quant_4x4_dc;
+        f.pfQuantizationFour4x4 = kernels::quant::quant_four_4x4;
+        f.pfQuantizationFour4x4Max = kernels::quant::quant_four_4x4_max;
     }
 }
 
@@ -875,50 +878,24 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
 mod tests {
     use super::*;
 
-    /// Every slot [`WelsInitEncodingFuncs`] has an SSE2 kernel for must actually
-    /// change when the SSE2 bit is set — the failure this catches is a kernel
-    /// that is written, tested, and then never reached, which is how the two
-    /// Hadamard "kernels" that were the scalar copied verbatim went unnoticed.
-    ///
-    /// The second list is the other half of the same statement: those slots are
-    /// scalar *by decision*, not by omission, and wiring an SSE2 kernel into one
-    /// of them should have to come here and say so.
+    /// **`pfScan4x4` and `pfScan4x4Ac` are scalar by decision, not by omission.**
+    /// Both kernels were written, measured against the scalar, and dropped — the
+    /// reasons are at `simd/x86_64/score.rs`. Wiring one in should have to come here
+    /// and delete this test, rather than happening quietly.
     #[test]
-    #[cfg(target_arch = "x86_64")]
-    fn every_encoding_slot_with_an_sse2_kernel_is_wired() {
+    fn the_scan_slots_stay_scalar_under_the_simd_flag() {
         use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
         let mut scalar = SWelsFuncPtrList::default();
         WelsInitEncodingFuncs(&mut scalar, 0);
-        let mut sse2 = SWelsFuncPtrList::default();
-        WelsInitEncodingFuncs(&mut sse2, WELS_CPU_SSE2);
+        let mut simd = SWelsFuncPtrList::default();
+        WelsInitEncodingFuncs(&mut simd, WELS_CPU_SSE2);
 
-        let accelerated: [(&str, usize, usize); 14] = [
-            ("pfCopy16x16Aligned", scalar.pfCopy16x16Aligned as usize, sse2.pfCopy16x16Aligned as usize),
-            ("pfCopy16x16NotAligned", scalar.pfCopy16x16NotAligned as usize, sse2.pfCopy16x16NotAligned as usize),
-            ("pfCopy16x8NotAligned", scalar.pfCopy16x8NotAligned as usize, sse2.pfCopy16x8NotAligned as usize),
-            ("pfCopy8x16Aligned", scalar.pfCopy8x16Aligned as usize, sse2.pfCopy8x16Aligned as usize),
-            ("pfCopy8x8Aligned", scalar.pfCopy8x8Aligned as usize, sse2.pfCopy8x8Aligned as usize),
-            ("pfCalculateSingleCtr4x4", scalar.pfCalculateSingleCtr4x4 as usize, sse2.pfCalculateSingleCtr4x4 as usize),
-            ("pfDctT4", scalar.pfDctT4 as usize, sse2.pfDctT4 as usize),
-            ("pfDctFourT4", scalar.pfDctFourT4 as usize, sse2.pfDctFourT4 as usize),
-            ("pfTransformHadamard4x4Dc", scalar.pfTransformHadamard4x4Dc as usize, sse2.pfTransformHadamard4x4Dc as usize),
-            ("pfGetNoneZeroCount", scalar.pfGetNoneZeroCount as usize, sse2.pfGetNoneZeroCount as usize),
-            ("pfQuantization4x4", scalar.pfQuantization4x4 as usize, sse2.pfQuantization4x4 as usize),
-            ("pfQuantizationDc4x4", scalar.pfQuantizationDc4x4 as usize, sse2.pfQuantizationDc4x4 as usize),
-            ("pfQuantizationFour4x4", scalar.pfQuantizationFour4x4 as usize, sse2.pfQuantizationFour4x4 as usize),
-            ("pfQuantizationFour4x4Max", scalar.pfQuantizationFour4x4Max as usize, sse2.pfQuantizationFour4x4Max as usize),
-        ];
-        for (name, a, b) in accelerated {
-            assert_ne!(a, b, "{name} is the same function with and without SSE2");
-        }
-
-        // Scalar by decision, not by omission.
         for (name, a, b) in [
-            ("pfScan4x4", scalar.pfScan4x4 as usize, sse2.pfScan4x4 as usize),
-            ("pfScan4x4Ac", scalar.pfScan4x4Ac as usize, sse2.pfScan4x4Ac as usize),
+            ("pfScan4x4", scalar.pfScan4x4 as usize, simd.pfScan4x4 as usize),
+            ("pfScan4x4Ac", scalar.pfScan4x4Ac as usize, simd.pfScan4x4Ac as usize),
         ] {
-            assert_eq!(a, b, "{name} gained an SSE2 kernel — see simd/x86_64/score.rs first");
+            assert_eq!(a, b, "{name} gained a SIMD kernel — see simd/x86_64/score.rs first");
         }
     }
 

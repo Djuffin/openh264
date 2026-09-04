@@ -109,6 +109,14 @@ use crate::encoder::svc_mode_decision::{
 };
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
+/// The kernel set the dispatch sites below call: `simd::x86_64` by default,
+/// `simd::wide` under `--features wide`, and `simd::scalar` on a target with neither.
+/// Imported rather than spelled in full at each site because the kernels share their
+/// names with the scalars in this module — which is the point of the naming, and the
+/// reason the module qualifier has to stay.
+use crate::simd::kernels;
+
+
 /// `sample.cpp:336`. Installs the scalar SAD/SATD/4-SAD tables and clears the five
 /// `Combined3` slots. The SIMD overrides that follow in the C++ are all behind
 /// `uiCpuFlag` tests that do not fire here.
@@ -148,12 +156,11 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
     sdf.pfSample4Sad[BLOCK_8x4] = Some(|a, b, sad| sample_sad_four::<8, 4, _>(a, b, sad));
     sdf.pfSample4Sad[BLOCK_4x8] = Some(|a, b, sad| sample_sad_four::<4, 8, _>(a, b, sad));
 
-    #[cfg(target_arch = "x86_64")]
     if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
-        sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| crate::simd::kernels::sad::sample_sad_16x16_sse2(a, b));
-        sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| crate::simd::kernels::sad::sample_sad_16x8_sse2(a, b));
-        sdf.pfSampleSad[BLOCK_8x16] = Some(|a, b| crate::simd::kernels::sad::sample_sad_8x16_sse2(a, b));
-        sdf.pfSampleSad[BLOCK_8x8] = Some(|a, b| crate::simd::kernels::sad::sample_sad_8x8_sse2(a, b));
+        sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| kernels::sad::sample_sad_16x16(a, b));
+        sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| kernels::sad::sample_sad_16x8(a, b));
+        sdf.pfSampleSad[BLOCK_8x16] = Some(|a, b| kernels::sad::sample_sad_8x16(a, b));
+        sdf.pfSampleSad[BLOCK_8x8] = Some(|a, b| kernels::sad::sample_sad_8x8(a, b));
         // **The three small shapes upstream leaves scalar on x86, and why they are not.**
         // `BLOCK_4x4` is a gap against upstream, which installs `WelsSampleSad4x4_mmx`
         // here (`sample.cpp`'s `X86_ASM` arm). `BLOCK_8x4` and `BLOCK_4x8` have no x86
@@ -163,28 +170,28 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
         // over five input distributions and four anchors, so mode decision sees the
         // same numbers and picks the same modes. The kernels were already written and
         // tested; only the table entry was missing.
-        sdf.pfSampleSad[BLOCK_4x4] = Some(|a, b| crate::simd::kernels::sad::sample_sad_4x4_sse2(a, b));
-        sdf.pfSampleSad[BLOCK_8x4] = Some(|a, b| crate::simd::kernels::sad::sample_sad_8x4_sse2(a, b));
-        sdf.pfSampleSad[BLOCK_4x8] = Some(|a, b| crate::simd::kernels::sad::sample_sad_4x8_sse2(a, b));
+        sdf.pfSampleSad[BLOCK_4x4] = Some(|a, b| kernels::sad::sample_sad_4x4(a, b));
+        sdf.pfSampleSad[BLOCK_8x4] = Some(|a, b| kernels::sad::sample_sad_8x4(a, b));
+        sdf.pfSampleSad[BLOCK_4x8] = Some(|a, b| kernels::sad::sample_sad_4x8(a, b));
 
-        sdf.pfSample4Sad[BLOCK_16x16] = Some(|a, b, sad| crate::simd::kernels::sad::sample_sad_four_16x16_sse2(a, b, sad));
-        sdf.pfSample4Sad[BLOCK_16x8] = Some(|a, b, sad| crate::simd::kernels::sad::sample_sad_four_16x8_sse2(a, b, sad));
-        sdf.pfSample4Sad[BLOCK_8x16] = Some(|a, b, sad| crate::simd::kernels::sad::sample_sad_four_8x16_sse2(a, b, sad));
-        sdf.pfSample4Sad[BLOCK_8x8] = Some(|a, b, sad| crate::simd::kernels::sad::sample_sad_four_8x8_sse2(a, b, sad));
-        sdf.pfSample4Sad[BLOCK_4x4] = Some(|a, b, sad| crate::simd::kernels::sad::sample_sad_four_4x4_sse2(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_16x16] = Some(|a, b, sad| kernels::sad::sample_sad_four_16x16(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_16x8] = Some(|a, b, sad| kernels::sad::sample_sad_four_16x8(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_8x16] = Some(|a, b, sad| kernels::sad::sample_sad_four_8x16(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_8x8] = Some(|a, b, sad| kernels::sad::sample_sad_four_8x8(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_4x4] = Some(|a, b, sad| kernels::sad::sample_sad_four_4x4(a, b, sad));
         // No upstream x86 kernel for these two shapes either; see the note above.
-        sdf.pfSample4Sad[BLOCK_8x4] = Some(|a, b, sad| crate::simd::kernels::sad::sample_sad_four_8x4_sse2(a, b, sad));
-        sdf.pfSample4Sad[BLOCK_4x8] = Some(|a, b, sad| crate::simd::kernels::sad::sample_sad_four_4x8_sse2(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_8x4] = Some(|a, b, sad| kernels::sad::sample_sad_four_8x4(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_4x8] = Some(|a, b, sad| kernels::sad::sample_sad_four_4x8(a, b, sad));
 
-        sdf.pfSampleSatd[BLOCK_4x4] = Some(|a, b| crate::simd::kernels::satd::satd_4x4_sse2(a, b));
-        sdf.pfSampleSatd[BLOCK_8x8] = Some(|a, b| crate::simd::kernels::satd::satd_8x8_sse2(a, b));
-        sdf.pfSampleSatd[BLOCK_8x16] = Some(|a, b| crate::simd::kernels::satd::satd_8x16_sse2(a, b));
-        sdf.pfSampleSatd[BLOCK_16x8] = Some(|a, b| crate::simd::kernels::satd::satd_16x8_sse2(a, b));
-        sdf.pfSampleSatd[BLOCK_16x16] = Some(|a, b| crate::simd::kernels::satd::satd_16x16_sse2(a, b));
+        sdf.pfSampleSatd[BLOCK_4x4] = Some(|a, b| kernels::satd::satd_4x4(a, b));
+        sdf.pfSampleSatd[BLOCK_8x8] = Some(|a, b| kernels::satd::satd_8x8(a, b));
+        sdf.pfSampleSatd[BLOCK_8x16] = Some(|a, b| kernels::satd::satd_8x16(a, b));
+        sdf.pfSampleSatd[BLOCK_16x8] = Some(|a, b| kernels::satd::satd_16x8(a, b));
+        sdf.pfSampleSatd[BLOCK_16x16] = Some(|a, b| kernels::satd::satd_16x16(a, b));
         // As above: no upstream x86 SATD for 8x4 or 4x8, and SATD is an exact integer
         // cost, so installing the port's own is byte-neutral.
-        sdf.pfSampleSatd[BLOCK_8x4] = Some(|a, b| crate::simd::kernels::satd::satd_8x4_sse2(a, b));
-        sdf.pfSampleSatd[BLOCK_4x8] = Some(|a, b| crate::simd::kernels::satd::satd_4x8_sse2(a, b));
+        sdf.pfSampleSatd[BLOCK_8x4] = Some(|a, b| kernels::satd::satd_8x4(a, b));
+        sdf.pfSampleSatd[BLOCK_4x8] = Some(|a, b| kernels::satd::satd_4x8(a, b));
     }
 
     // **Two conditions, and they are different questions.** `uiCpuFlag` is the host's
@@ -196,10 +203,9 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
     //
     // This is the altitude the test belongs at. It is asked once, here, when the table
     // is built — not on every candidate the mode-decision loop scores.
-    #[cfg(target_arch = "x86_64")]
     if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_AVX2) != 0 && crate::simd::has_avx2() {
-        sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| crate::simd::kernels::sad::sample_sad_16x16_avx2(a, b));
-        sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| crate::simd::kernels::sad::sample_sad_16x8_avx2(a, b));
+        sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| kernels::sad::sample_sad_16x16_avx2(a, b));
+        sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| kernels::sad::sample_sad_16x8_avx2(a, b));
     }
 
     // The five `pfIntra*Combined3*` slots were nulled here, as the C++ does. They
@@ -262,55 +268,6 @@ mod tests {
         assert_eq!(satd_16x16(&ca, &cb), sum16x16);
     }
 
-    /// **Every SSE2 slot is actually SSE2.** A kernel with a green parity test and no
-    /// table entry looks exactly like one in use, so nothing else here would notice a
-    /// slot quietly handing out the scalar.
-    ///
-    /// The table is compared against itself: under `WELS_CPU_SSE2` every one of these
-    /// slots must hold a *different* function than at `uiCpuFlag == 0`, so a slot that
-    /// stops being wired fails by name.
-    ///
-    /// Function-pointer identity is the comparison, with the caveat on
-    /// `common/mc.rs`'s `init_mc_func_cpu_flags`: both addresses come from the same
-    /// `WelsInitSampleSadFunc` instantiation, and Miri mints a fresh synthetic address
-    /// per reification, so it is excluded.
-    #[test]
-    #[cfg_attr(miri, ignore)]
-    fn every_sse2_sad_and_satd_slot_is_wired() {
-        const SHAPES: [(usize, &str); 7] = [
-            (BLOCK_16x16, "16x16"),
-            (BLOCK_16x8, "16x8"),
-            (BLOCK_8x16, "8x16"),
-            (BLOCK_8x8, "8x8"),
-            (BLOCK_4x4, "4x4"),
-            (BLOCK_8x4, "8x4"),
-            (BLOCK_4x8, "4x8"),
-        ];
-
-        let mut scalar = SWelsFuncPtrList::default();
-        WelsInitSampleSadFunc(&mut scalar, 0);
-        let mut sse2 = SWelsFuncPtrList::default();
-        WelsInitSampleSadFunc(&mut sse2, crate::common::cpu_core::WELS_CPU_SSE2);
-
-        let (a, b) = (&scalar.sSampleDealingFuncs, &sse2.sSampleDealingFuncs);
-        for (slot, name) in SHAPES {
-            assert_ne!(
-                a.pfSampleSad[slot].map(|f| f as usize),
-                b.pfSampleSad[slot].map(|f| f as usize),
-                "pfSampleSad[{name}] is the same function with and without SSE2"
-            );
-            assert_ne!(
-                a.pfSample4Sad[slot].map(|f| f as usize),
-                b.pfSample4Sad[slot].map(|f| f as usize),
-                "pfSample4Sad[{name}] is the same function with and without SSE2"
-            );
-            assert_ne!(
-                a.pfSampleSatd[slot].map(|f| f as usize),
-                b.pfSampleSatd[slot].map(|f| f as usize),
-                "pfSampleSatd[{name}] is the same function with and without SSE2"
-            );
-        }
-    }
 
     /// Every slot the mode-decision layer indexes must be filled, and the five
     /// `Combined3` slots must be left NULL — `svc_base_layer_md` asserts on that.

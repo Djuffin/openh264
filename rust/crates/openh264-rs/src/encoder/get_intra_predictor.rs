@@ -43,6 +43,12 @@ use crate::encoder::svc_mode_decision::{
 };
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
+/// The kernel set the dispatch sites below call: `simd::x86_64` by default,
+/// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
+/// site because the kernels share their names with the scalars in this module — which
+/// is the point of the naming, and the reason the module qualifier has to stay.
+use crate::simd::kernels;
+
 #[inline(always)]
 fn WelsClip1(iX: i32) -> u8 {
     if (iX & !255) != 0 {
@@ -1200,28 +1206,27 @@ pub fn WelsInitIntraPredFuncs(pFuncList: &mut SWelsFuncPtrList, kuiCpuFlag: u32)
     fl.pfGetChromaPred[C_PRED_DC_T as usize] = Some(WelsIChromaPredDcTop_c);
     fl.pfGetChromaPred[C_PRED_DC_128 as usize] = Some(WelsIChromaPredDcNA_c);
 
-    #[cfg(target_arch = "x86_64")]
     if (kuiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
-        use crate::simd::kernels::intra_pred::*;
+        use kernels::intra_pred::*;
         fl.pfGetLumaI16x16Pred[I16_PRED_V as usize] = Some(enc_i16x16_luma_pred_v);
         fl.pfGetLumaI16x16Pred[I16_PRED_H as usize] = Some(enc_i16x16_luma_pred_h);
-        fl.pfGetLumaI16x16Pred[I16_PRED_DC as usize] = Some(enc_i16x16_luma_pred_dc_sse2);
-        fl.pfGetLumaI16x16Pred[I16_PRED_P as usize] = Some(enc_i16x16_luma_pred_plane_sse2);
+        fl.pfGetLumaI16x16Pred[I16_PRED_DC as usize] = Some(enc_i16x16_luma_pred_dc);
+        fl.pfGetLumaI16x16Pred[I16_PRED_P as usize] = Some(enc_i16x16_luma_pred_plane);
 
         fl.pfGetChromaPred[C_PRED_DC as usize] = Some(enc_chroma_pred_dc);
         fl.pfGetChromaPred[C_PRED_H as usize] = Some(enc_chroma_pred_h);
         fl.pfGetChromaPred[C_PRED_V as usize] = Some(enc_chroma_pred_v);
-        fl.pfGetChromaPred[C_PRED_P as usize] = Some(enc_chroma_pred_plane_sse2);
+        fl.pfGetChromaPred[C_PRED_P as usize] = Some(enc_chroma_pred_plane);
 
-        fl.pfGetLumaI4x4Pred[I4_PRED_V as usize] = Some(enc_i4x4_luma_pred_v_sse2);
-        fl.pfGetLumaI4x4Pred[I4_PRED_H as usize] = Some(enc_i4x4_luma_pred_h_sse2);
-        fl.pfGetLumaI4x4Pred[I4_PRED_DC as usize] = Some(enc_i4x4_luma_pred_dc_sse2);
-        fl.pfGetLumaI4x4Pred[I4_PRED_DDL as usize] = Some(enc_i4x4_luma_pred_ddl_sse2);
-        fl.pfGetLumaI4x4Pred[I4_PRED_DDR as usize] = Some(enc_i4x4_luma_pred_ddr_sse2);
-        fl.pfGetLumaI4x4Pred[I4_PRED_VL as usize] = Some(enc_i4x4_luma_pred_vl_sse2);
-        fl.pfGetLumaI4x4Pred[I4_PRED_VR as usize] = Some(enc_i4x4_luma_pred_vr_sse2);
-        fl.pfGetLumaI4x4Pred[I4_PRED_HU as usize] = Some(enc_i4x4_luma_pred_hu_sse2);
-        fl.pfGetLumaI4x4Pred[I4_PRED_HD as usize] = Some(enc_i4x4_luma_pred_hd_sse2);
+        fl.pfGetLumaI4x4Pred[I4_PRED_V as usize] = Some(enc_i4x4_luma_pred_v);
+        fl.pfGetLumaI4x4Pred[I4_PRED_H as usize] = Some(enc_i4x4_luma_pred_h);
+        fl.pfGetLumaI4x4Pred[I4_PRED_DC as usize] = Some(enc_i4x4_luma_pred_dc);
+        fl.pfGetLumaI4x4Pred[I4_PRED_DDL as usize] = Some(enc_i4x4_luma_pred_ddl);
+        fl.pfGetLumaI4x4Pred[I4_PRED_DDR as usize] = Some(enc_i4x4_luma_pred_ddr);
+        fl.pfGetLumaI4x4Pred[I4_PRED_VL as usize] = Some(enc_i4x4_luma_pred_vl);
+        fl.pfGetLumaI4x4Pred[I4_PRED_VR as usize] = Some(enc_i4x4_luma_pred_vr);
+        fl.pfGetLumaI4x4Pred[I4_PRED_HU as usize] = Some(enc_i4x4_luma_pred_hu);
+        fl.pfGetLumaI4x4Pred[I4_PRED_HD as usize] = Some(enc_i4x4_luma_pred_hd);
     }
 }
 

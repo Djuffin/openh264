@@ -46,7 +46,7 @@ fn sad_16x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, d
 /// `wide` selects its instruction set at compile time, so on a build without
 /// `+avx2` in the target features `u8x32` is two `u8x16`s and this is the 16-wide
 /// loop unrolled by two. It is a distinct kernel so the AVX2 table slot still points
-/// at something other than the SSE2 slot, which `sample.rs`'s install test pins.
+/// at something other than the baseline slot, which `sample.rs`'s install test pins.
 #[inline(always)]
 fn sad_16x_two_rows<S: RefSamples, const H: usize>(
     sample1: &S,
@@ -166,7 +166,7 @@ fn sad_four_4x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, sad: &mu
 // ============================================================================
 
 #[inline(always)]
-pub fn sample_sad_16x16_sse2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
+pub fn sample_sad_16x16<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     sad_16x::<S, 16>(sample1, sample2, 0, 0)
 }
 
@@ -178,7 +178,7 @@ pub(crate) fn sample_sad_16x16_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> 
 }
 
 #[inline(always)]
-pub fn sample_sad_16x8_sse2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
+pub fn sample_sad_16x8<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     sad_16x::<S, 8>(sample1, sample2, 0, 0)
 }
 
@@ -189,62 +189,62 @@ pub(crate) fn sample_sad_16x8_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i
 }
 
 #[inline(always)]
-pub fn sample_sad_8x16_sse2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
+pub fn sample_sad_8x16<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     sad_8x::<S, 16>(sample1, sample2, 0, 0)
 }
 
 #[inline(always)]
-pub fn sample_sad_8x8_sse2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
+pub fn sample_sad_8x8<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     sad_8x::<S, 8>(sample1, sample2, 0, 0)
 }
 
 #[inline(always)]
-pub fn sample_sad_4x4_sse2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
+pub fn sample_sad_4x4<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     sad_4x::<S, 4>(sample1, sample2, 0, 0)
 }
 
 #[inline(always)]
-pub fn sample_sad_8x4_sse2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
+pub fn sample_sad_8x4<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     sad_8x::<S, 4>(sample1, sample2, 0, 0)
 }
 
 #[inline(always)]
-pub fn sample_sad_4x8_sse2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
+pub fn sample_sad_4x8<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     sad_4x::<S, 8>(sample1, sample2, 0, 0)
 }
 
 #[inline(always)]
-pub fn sample_sad_four_16x16_sse2<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
+pub fn sample_sad_four_16x16<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
     sad_four_16x::<S, 16>(sample1, sample2, sad)
 }
 
 #[inline(always)]
-pub fn sample_sad_four_16x8_sse2<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
+pub fn sample_sad_four_16x8<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
     sad_four_16x::<S, 8>(sample1, sample2, sad)
 }
 
 #[inline(always)]
-pub fn sample_sad_four_8x16_sse2<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
+pub fn sample_sad_four_8x16<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
     sad_four_8x::<S, 16>(sample1, sample2, sad)
 }
 
 #[inline(always)]
-pub fn sample_sad_four_8x8_sse2<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
+pub fn sample_sad_four_8x8<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
     sad_four_8x::<S, 8>(sample1, sample2, sad)
 }
 
 #[inline(always)]
-pub fn sample_sad_four_4x4_sse2<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
+pub fn sample_sad_four_4x4<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
     sad_four_4x::<S, 4>(sample1, sample2, sad)
 }
 
 #[inline(always)]
-pub fn sample_sad_four_8x4_sse2<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
+pub fn sample_sad_four_8x4<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
     sad_four_8x::<S, 4>(sample1, sample2, sad)
 }
 
 #[inline(always)]
-pub fn sample_sad_four_4x8_sse2<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
+pub fn sample_sad_four_4x8<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
     sad_four_4x::<S, 8>(sample1, sample2, sad)
 }
 
@@ -267,25 +267,28 @@ mod tests {
     }
 
     #[test]
-    fn test_sse2_sad_parity_all_shapes() {
+    fn test_sad_parity_all_shapes() {
         let (p1, p2) = make_test_planes(64, 64);
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        assert_eq!(sample_sad_16x16_sse2(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
-        assert_eq!(sample_sad_16x8_sse2(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
-        assert_eq!(sample_sad_8x16_sse2(&c1, &c2), sample_sad::<8, 16, _>(&c1, &c2));
-        assert_eq!(sample_sad_8x8_sse2(&c1, &c2), sample_sad::<8, 8, _>(&c1, &c2));
-        assert_eq!(sample_sad_4x4_sse2(&c1, &c2), sample_sad::<4, 4, _>(&c1, &c2));
-        assert_eq!(sample_sad_8x4_sse2(&c1, &c2), sample_sad::<8, 4, _>(&c1, &c2));
-        assert_eq!(sample_sad_4x8_sse2(&c1, &c2), sample_sad::<4, 8, _>(&c1, &c2));
+        assert_eq!(sample_sad_16x16(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
+        assert_eq!(sample_sad_16x8(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
+        assert_eq!(sample_sad_8x16(&c1, &c2), sample_sad::<8, 16, _>(&c1, &c2));
+        assert_eq!(sample_sad_8x8(&c1, &c2), sample_sad::<8, 8, _>(&c1, &c2));
+        assert_eq!(sample_sad_4x4(&c1, &c2), sample_sad::<4, 4, _>(&c1, &c2));
+        assert_eq!(sample_sad_8x4(&c1, &c2), sample_sad::<8, 4, _>(&c1, &c2));
+        assert_eq!(sample_sad_4x8(&c1, &c2), sample_sad::<4, 8, _>(&c1, &c2));
     }
 
+    /// The `_avx2` pair, which is not AVX2 code and needs no probe to run.
+    ///
+    /// `wide` has no runtime dispatch, so these two are 128-bit bodies that step two
+    /// rows — the same lanes as every other kernel here, filling the slots the
+    /// intrinsic twin fills with `vpsadbw`. There is no instruction to test for, on
+    /// any target, so this simply runs.
     #[test]
     fn test_avx2_sad_parity() {
-        if !std::is_x86_feature_detected!("avx2") {
-            return;
-        }
         let (p1, p2) = make_test_planes(64, 64);
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
@@ -295,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sse2_sample_sad_four_parity() {
+    fn test_sample_sad_four_parity() {
         let (p1, p2) = make_test_planes(64, 64);
         let c1 = PlaneCursor::new(&p1, 64 * 16 + 16, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 16 + 16, 64);
@@ -304,31 +307,31 @@ mod tests {
         let mut actual = [0i32; 4];
 
         sample_sad_four::<16, 16, _>(&c1, &c2, &mut expected);
-        sample_sad_four_16x16_sse2(&c1, &c2, &mut actual);
+        sample_sad_four_16x16(&c1, &c2, &mut actual);
         assert_eq!(actual, expected, "16x16 four-point SAD mismatch");
 
         sample_sad_four::<16, 8, _>(&c1, &c2, &mut expected);
-        sample_sad_four_16x8_sse2(&c1, &c2, &mut actual);
+        sample_sad_four_16x8(&c1, &c2, &mut actual);
         assert_eq!(actual, expected, "16x8 four-point SAD mismatch");
 
         sample_sad_four::<8, 16, _>(&c1, &c2, &mut expected);
-        sample_sad_four_8x16_sse2(&c1, &c2, &mut actual);
+        sample_sad_four_8x16(&c1, &c2, &mut actual);
         assert_eq!(actual, expected, "8x16 four-point SAD mismatch");
 
         sample_sad_four::<8, 8, _>(&c1, &c2, &mut expected);
-        sample_sad_four_8x8_sse2(&c1, &c2, &mut actual);
+        sample_sad_four_8x8(&c1, &c2, &mut actual);
         assert_eq!(actual, expected, "8x8 four-point SAD mismatch");
 
         sample_sad_four::<4, 4, _>(&c1, &c2, &mut expected);
-        sample_sad_four_4x4_sse2(&c1, &c2, &mut actual);
+        sample_sad_four_4x4(&c1, &c2, &mut actual);
         assert_eq!(actual, expected, "4x4 four-point SAD mismatch");
 
         sample_sad_four::<8, 4, _>(&c1, &c2, &mut expected);
-        sample_sad_four_8x4_sse2(&c1, &c2, &mut actual);
+        sample_sad_four_8x4(&c1, &c2, &mut actual);
         assert_eq!(actual, expected, "8x4 four-point SAD mismatch");
 
         sample_sad_four::<4, 8, _>(&c1, &c2, &mut expected);
-        sample_sad_four_4x8_sse2(&c1, &c2, &mut actual);
+        sample_sad_four_4x8(&c1, &c2, &mut actual);
         assert_eq!(actual, expected, "4x8 four-point SAD mismatch");
     }
 
@@ -381,7 +384,7 @@ mod tests {
     const ANCHORS: [usize; 4] = [64 * 16 + 16, 64 * 17 + 19, 64 * 18 + 22, 64 * 19 + 21];
 
     #[test]
-    fn sse2_sad_parity_over_anchors_and_distributions() {
+    fn sad_parity_over_anchors_and_distributions() {
         for (name, p1, p2) in input_pairs(64, 64) {
             for anchor in ANCHORS {
                 let c1 = PlaneCursor::new(&p1, anchor, 64);
@@ -389,37 +392,37 @@ mod tests {
                 let at = format!("{name} @ {anchor}");
 
                 assert_eq!(
-                    sample_sad_16x16_sse2(&c1, &c2),
+                    sample_sad_16x16(&c1, &c2),
                     sample_sad::<16, 16, _>(&c1, &c2),
                     "16x16 {at}"
                 );
                 assert_eq!(
-                    sample_sad_16x8_sse2(&c1, &c2),
+                    sample_sad_16x8(&c1, &c2),
                     sample_sad::<16, 8, _>(&c1, &c2),
                     "16x8 {at}"
                 );
                 assert_eq!(
-                    sample_sad_8x16_sse2(&c1, &c2),
+                    sample_sad_8x16(&c1, &c2),
                     sample_sad::<8, 16, _>(&c1, &c2),
                     "8x16 {at}"
                 );
                 assert_eq!(
-                    sample_sad_8x8_sse2(&c1, &c2),
+                    sample_sad_8x8(&c1, &c2),
                     sample_sad::<8, 8, _>(&c1, &c2),
                     "8x8 {at}"
                 );
                 assert_eq!(
-                    sample_sad_4x4_sse2(&c1, &c2),
+                    sample_sad_4x4(&c1, &c2),
                     sample_sad::<4, 4, _>(&c1, &c2),
                     "4x4 {at}"
                 );
                 assert_eq!(
-                    sample_sad_8x4_sse2(&c1, &c2),
+                    sample_sad_8x4(&c1, &c2),
                     sample_sad::<8, 4, _>(&c1, &c2),
                     "8x4 {at}"
                 );
                 assert_eq!(
-                    sample_sad_4x8_sse2(&c1, &c2),
+                    sample_sad_4x8(&c1, &c2),
                     sample_sad::<4, 8, _>(&c1, &c2),
                     "4x8 {at}"
                 );
@@ -428,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn sse2_sample_sad_four_parity_over_anchors_and_distributions() {
+    fn sample_sad_four_parity_over_anchors_and_distributions() {
         for (name, p1, p2) in input_pairs(64, 64) {
             for anchor in ANCHORS {
                 let c1 = PlaneCursor::new(&p1, anchor, 64);
@@ -437,50 +440,40 @@ mod tests {
                 let (mut want, mut got) = ([0i32; 4], [0i32; 4]);
 
                 sample_sad_four::<16, 16, _>(&c1, &c2, &mut want);
-                sample_sad_four_16x16_sse2(&c1, &c2, &mut got);
+                sample_sad_four_16x16(&c1, &c2, &mut got);
                 assert_eq!(got, want, "16x16 four-point {at}");
 
                 sample_sad_four::<16, 8, _>(&c1, &c2, &mut want);
-                sample_sad_four_16x8_sse2(&c1, &c2, &mut got);
+                sample_sad_four_16x8(&c1, &c2, &mut got);
                 assert_eq!(got, want, "16x8 four-point {at}");
 
                 sample_sad_four::<8, 16, _>(&c1, &c2, &mut want);
-                sample_sad_four_8x16_sse2(&c1, &c2, &mut got);
+                sample_sad_four_8x16(&c1, &c2, &mut got);
                 assert_eq!(got, want, "8x16 four-point {at}");
 
                 sample_sad_four::<8, 8, _>(&c1, &c2, &mut want);
-                sample_sad_four_8x8_sse2(&c1, &c2, &mut got);
+                sample_sad_four_8x8(&c1, &c2, &mut got);
                 assert_eq!(got, want, "8x8 four-point {at}");
 
                 sample_sad_four::<4, 4, _>(&c1, &c2, &mut want);
-                sample_sad_four_4x4_sse2(&c1, &c2, &mut got);
+                sample_sad_four_4x4(&c1, &c2, &mut got);
                 assert_eq!(got, want, "4x4 four-point {at}");
 
                 sample_sad_four::<8, 4, _>(&c1, &c2, &mut want);
-                sample_sad_four_8x4_sse2(&c1, &c2, &mut got);
+                sample_sad_four_8x4(&c1, &c2, &mut got);
                 assert_eq!(got, want, "8x4 four-point {at}");
 
                 sample_sad_four::<4, 8, _>(&c1, &c2, &mut want);
-                sample_sad_four_4x8_sse2(&c1, &c2, &mut got);
+                sample_sad_four_4x8(&c1, &c2, &mut got);
                 assert_eq!(got, want, "4x8 four-point {at}");
             }
         }
     }
 
-    /// The AVX2 pair over the same sweep.
-    ///
-    /// Like `test_avx2_sad_parity` this can only run where the host has AVX2, but it
-    /// says so on the way out instead of returning green in silence: a run that
-    /// reports "ok" having executed nothing is the failure mode worth avoiding here.
+    /// The `_avx2` pair over the same sweep, and like `test_avx2_sad_parity` it runs
+    /// everywhere: nothing in this module is gated on a CPU feature.
     #[test]
     fn avx2_sad_parity_over_anchors_and_distributions() {
-        if !std::is_x86_feature_detected!("avx2") {
-            eprintln!(
-                "SKIPPED avx2_sad_parity_over_anchors_and_distributions: \
-                 this host has no AVX2, so the two AVX2 kernels were not executed"
-            );
-            return;
-        }
         for (name, p1, p2) in input_pairs(64, 64) {
             for anchor in ANCHORS {
                 let c1 = PlaneCursor::new(&p1, anchor, 64);
@@ -531,9 +524,9 @@ mod tests {
             fl.sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].map(|f| f as usize)
         };
 
-        let sse2_only = slot(WELS_CPU_SSE2);
+        let baseline = slot(WELS_CPU_SSE2);
         let asked_for_avx2 = slot(WELS_CPU_SSE2 | WELS_CPU_AVX2);
-        assert!(sse2_only.is_some() && asked_for_avx2.is_some());
+        assert!(baseline.is_some() && asked_for_avx2.is_some());
 
         // **The oracle is `has_avx2()`, not `is_x86_feature_detected!`.** They are not the
         // same question: the table arm consults the port's probe, which also honours
@@ -541,12 +534,12 @@ mod tests {
         // get the SSE2 entry. Asking the CPU directly made this test fail there.
         if crate::simd::has_avx2() {
             assert_ne!(
-                asked_for_avx2, sse2_only,
+                asked_for_avx2, baseline,
                 "has_avx2() is true, so asking for AVX2 must change the installed kernel"
             );
         } else {
             assert_eq!(
-                asked_for_avx2, sse2_only,
+                asked_for_avx2, baseline,
                 "has_avx2() is false, so the flag alone must not install an AVX2 kernel"
             );
         }
