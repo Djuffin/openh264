@@ -103,6 +103,13 @@ pub fn idct_rec_i16x16_dc(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, 
         crate::simd::x86_64::dct::idct_rec_i16x16_dc_sse2(rec, pred, dc);
         return;
     }
+    idct_rec_i16x16_dc_c(rec, pred, dc);
+}
+
+/// The scalar body of [`idct_rec_i16x16_dc`], never dispatched. Kept separate so the SSE2
+/// parity tests have a reference that is guaranteed not to route back into
+/// the kernel under test.
+pub fn idct_rec_i16x16_dc_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc: &[i16; 16]) {
     for i in 0..16usize {
         let r: &mut [u8; 16] = rec.row_mut(i as isize, 0, 16).try_into().unwrap();
         let p: &[u8; 16] = pred.row(i as isize, 0, 16).try_into().unwrap();
@@ -128,6 +135,13 @@ pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[
         crate::simd::x86_64::dct::idct_t4_rec_sse2(rec, pred, dct);
         return;
     }
+    idct_t4_rec_c(rec, pred, dct);
+}
+
+/// The scalar body of [`idct_t4_rec`], never dispatched. Kept separate so the SSE2
+/// parity tests have a reference that is guaranteed not to route back into
+/// the kernel under test.
+pub fn idct_t4_rec_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
         let p: &[u8; 4] = pred.row(dy as isize, 0, 4).try_into().unwrap();
@@ -150,6 +164,13 @@ pub fn idct_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
         crate::simd::x86_64::dct::idct_t4_rec_in_place_sse2(rec, dct);
         return;
     }
+    idct_t4_rec_in_place_c(rec, dct);
+}
+
+/// The scalar body of [`idct_t4_rec_in_place`], never dispatched. Kept separate so the SSE2
+/// parity tests have a reference that is guaranteed not to route back into
+/// the kernel under test.
+pub fn idct_t4_rec_in_place_c(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
         let out: &mut [u8; 4] = rec.row_mut(dy as isize, 0, 4).try_into().unwrap();
