@@ -551,6 +551,20 @@ unsafe fn mc_hor_ver22_inner_sse2<S: RefSamples + Copy>(
     unsafe {
         let mut iTmp = [0i16; 17 + 5];
         let n = width + 5;
+        // `iTmp` is `[i16; 17 + 5]` as in the C++ (`int16_t iTmp[17 + 5]` against
+        // `for (j = 0; j < iWidth + 5; j++)`), so `width` above 17 indexes past it.
+        // The widest caller is `encoder/md.rs:1529` — `kiW + 1` with `kiW = 16` — which
+        // fills `iTmp` to exactly 22 with zero headroom. The scalar twin
+        // (`common/mc.rs:410`) writes through `iTmp[..n].iter_mut()` and panics on a
+        // wider one; the vertical pass below stores with `_mm_storeu_si128` through a
+        // raw pointer and would not — at `width = 19` the `j + 8 <= n` guard admits
+        // `j = 16` and the store runs four bytes off the end of the stack frame. State
+        // the precondition rather than let a future caller turn the scalar's panic into
+        // a silent stack overwrite.
+        assert!(
+            width <= 17,
+            "mc_hor_ver22 width {width} exceeds the 17 iTmp is sized for"
+        );
         let zero = _mm_setzero_si128();
 
         let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
@@ -622,259 +636,36 @@ pub fn mc_hor_ver22_sse2<S: RefSamples + Copy>(
 // Luma Quarter-Pel MC (SSE2)
 // ============================================================================
 
-#[inline(always)]
-fn scratch() -> [u8; 256] {
-    [0u8; 256]
-}
 
-#[inline(never)]
-pub fn mc_hor_ver01_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut tmp = scratch();
-    mc_hor_ver02_sse2(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    pixel_avg_sse2(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
-}
+/// **The SSE2 leaf set** — `McLeaves` with the three real kernels in this file.
+///
+/// The twelve quarter-pel composites live once, in `common/mc.rs`; this is the whole
+/// of what used to be ~250 lines of second copy. See [`crate::common::mc::McLeaves`].
+pub struct Sse2Leaves;
 
-#[inline(never)]
-pub fn mc_hor_ver03_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut tmp = scratch();
-    mc_hor_ver02_sse2(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    pixel_avg_sse2(
-        dst,
-        &src.advance(0, 1),
-        &PlaneCursor::new(&tmp, 0, 16),
-        width,
-        height,
-    );
-}
-
-#[inline(never)]
-pub fn mc_hor_ver10_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut tmp = scratch();
-    mc_hor_ver20_sse2(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    pixel_avg_sse2(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
-}
-
-#[inline(never)]
-pub fn mc_hor_ver11_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ver = scratch();
-    mc_hor_ver20_sse2(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    mc_hor_ver02_sse2(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    pixel_avg_sse2(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ver, 0, 16),
-        width,
-        height,
-    );
-}
-
-#[inline(never)]
-pub fn mc_hor_ver12_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut ver = scratch();
-    let mut ctr = scratch();
-    mc_hor_ver02_sse2(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    mc_hor_ver22_sse2(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg_sse2(
-        dst,
-        &PlaneCursor::new(&ver, 0, 16),
-        &PlaneCursor::new(&ctr, 0, 16),
-        width,
-        height,
-    );
-}
-
-#[inline(never)]
-pub fn mc_hor_ver13_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ver = scratch();
-    mc_hor_ver20_sse2(
-        &src.advance(0, 1),
-        &mut PlaneCursorMut::new(&mut hor, 0, 16),
-        width,
-        height,
-    );
-    mc_hor_ver02_sse2(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    pixel_avg_sse2(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ver, 0, 16),
-        width,
-        height,
-    );
-}
-
-#[inline(never)]
-pub fn mc_hor_ver21_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ctr = scratch();
-    mc_hor_ver20_sse2(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    mc_hor_ver22_sse2(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg_sse2(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ctr, 0, 16),
-        width,
-        height,
-    );
-}
-
-#[inline(never)]
-pub fn mc_hor_ver23_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ctr = scratch();
-    mc_hor_ver20_sse2(
-        &src.advance(0, 1),
-        &mut PlaneCursorMut::new(&mut hor, 0, 16),
-        width,
-        height,
-    );
-    mc_hor_ver22_sse2(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg_sse2(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ctr, 0, 16),
-        width,
-        height,
-    );
-}
-
-#[inline(never)]
-pub fn mc_hor_ver30_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    mc_hor_ver20_sse2(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    pixel_avg_sse2(
-        dst,
-        &src.advance(1, 0),
-        &PlaneCursor::new(&hor, 0, 16),
-        width,
-        height,
-    );
-}
-
-#[inline(never)]
-pub fn mc_hor_ver31_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ver = scratch();
-    mc_hor_ver20_sse2(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    mc_hor_ver02_sse2(
-        &src.advance(1, 0),
-        &mut PlaneCursorMut::new(&mut ver, 0, 16),
-        width,
-        height,
-    );
-    pixel_avg_sse2(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ver, 0, 16),
-        width,
-        height,
-    );
-}
-
-#[inline(never)]
-pub fn mc_hor_ver32_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut ver = scratch();
-    let mut ctr = scratch();
-    mc_hor_ver02_sse2(
-        &src.advance(1, 0),
-        &mut PlaneCursorMut::new(&mut ver, 0, 16),
-        width,
-        height,
-    );
-    mc_hor_ver22_sse2(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg_sse2(
-        dst,
-        &PlaneCursor::new(&ver, 0, 16),
-        &PlaneCursor::new(&ctr, 0, 16),
-        width,
-        height,
-    );
-}
-
-#[inline(never)]
-pub fn mc_hor_ver33_sse2<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ver = scratch();
-    mc_hor_ver20_sse2(
-        &src.advance(0, 1),
-        &mut PlaneCursorMut::new(&mut hor, 0, 16),
-        width,
-        height,
-    );
-    mc_hor_ver02_sse2(
-        &src.advance(1, 0),
-        &mut PlaneCursorMut::new(&mut ver, 0, 16),
-        width,
-        height,
-    );
-    pixel_avg_sse2(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ver, 0, 16),
-        width,
-        height,
-    );
+impl crate::common::mc::McLeaves for Sse2Leaves {
+    #[inline(always)]
+    fn hor<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+        mc_hor_ver20_sse2(src, dst, width, height)
+    }
+    #[inline(always)]
+    fn ver<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+        mc_hor_ver02_sse2(src, dst, width, height)
+    }
+    #[inline(always)]
+    fn cen<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+        mc_hor_ver22_sse2(src, dst, width, height)
+    }
+    #[inline(always)]
+    fn avg<A: RefSamples, B: RefSamples>(
+        dst: &mut PlaneCursorMut<'_>,
+        a: &A,
+        b: &B,
+        width: usize,
+        height: usize,
+    ) {
+        pixel_avg_sse2(dst, a, b, width, height)
+    }
 }
 
 /// Public safe entry point for SSE2 luma quarter-pel MC.
@@ -886,24 +677,7 @@ pub fn mc_luma_sse2<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    match ((mv_x & 0x03) as u8, (mv_y & 0x03) as u8) {
-        (0, 0) => mc_copy(src, dst, width, height),
-        (0, 1) => mc_hor_ver01_sse2(src, dst, width, height),
-        (0, 2) => mc_hor_ver02_sse2(src, dst, width, height),
-        (0, 3) => mc_hor_ver03_sse2(src, dst, width, height),
-        (1, 0) => mc_hor_ver10_sse2(src, dst, width, height),
-        (1, 1) => mc_hor_ver11_sse2(src, dst, width, height),
-        (1, 2) => mc_hor_ver12_sse2(src, dst, width, height),
-        (1, 3) => mc_hor_ver13_sse2(src, dst, width, height),
-        (2, 0) => mc_hor_ver20_sse2(src, dst, width, height),
-        (2, 1) => mc_hor_ver21_sse2(src, dst, width, height),
-        (2, 2) => mc_hor_ver22_sse2(src, dst, width, height),
-        (2, 3) => mc_hor_ver23_sse2(src, dst, width, height),
-        (3, 0) => mc_hor_ver30_sse2(src, dst, width, height),
-        (3, 1) => mc_hor_ver31_sse2(src, dst, width, height),
-        (3, 2) => mc_hor_ver32_sse2(src, dst, width, height),
-        _ => mc_hor_ver33_sse2(src, dst, width, height),
-    }
+    crate::common::mc::mc_luma_with::<Sse2Leaves, S>(src, dst, mv_x, mv_y, width, height)
 }
 
 // ============================================================================

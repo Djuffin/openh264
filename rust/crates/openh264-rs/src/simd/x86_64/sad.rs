@@ -40,6 +40,11 @@ pub unsafe fn sad_16x_avx2<S: RefSamples, const H: usize>(
     dx: isize,
     dy: isize,
 ) -> i32 {
+    // The loop below steps two rows per iteration, so an odd `H` would read and
+    // accumulate row `H` — one past the block. Only 16 and 8 are instantiated today;
+    // the SSE2 twin (`sad_16x_sse2`, `:22`) iterates one row at a time and has no such
+    // constraint, and nothing in either signature said so.
+    const { assert!(H % 2 == 0, "sad_16x_avx2 filters two rows per step; H must be even") };
     unsafe {
         let mut acc = _mm256_setzero_si256();
         let mut y = 0;
@@ -248,8 +253,20 @@ pub fn sample_sad_16x16_sse2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     unsafe { sad_16x_sse2::<S, 16>(sample1, sample2, 0, 0) }
 }
 
+/// # The AVX2 precondition, and where it is established
+///
+/// `sad_16x_avx2` is `#[target_feature(enable = "avx2")]`: this runs `vpsadbw` with
+/// no test of its own and faults on any pre-Haswell Intel or pre-Excavator AMD part.
+///
+/// The one caller is `encoder::sample::WelsInitSampleSadFunc`, which installs these
+/// into `pfSampleSad` only under `uiCpuFlag & WELS_CPU_AVX2 && simd::has_avx2()`.
+/// That is the right altitude for the test — it is asked once when the table is
+/// built, not on every candidate the mode-decision loop scores — and it is why this
+/// is `pub(crate)`: the module boundary is what keeps the set of callers to the one
+/// that checks, in place of a branch each call would pay for.
 #[inline(always)]
-pub fn sample_sad_16x16_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
+pub(crate) fn sample_sad_16x16_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
+    // SAFETY: the caller established AVX2 support before installing this; see above.
     unsafe { sad_16x_avx2::<S, 16>(sample1, sample2, 0, 0) }
 }
 
@@ -258,8 +275,20 @@ pub fn sample_sad_16x8_sse2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     unsafe { sad_16x_sse2::<S, 8>(sample1, sample2, 0, 0) }
 }
 
+/// # The AVX2 precondition, and where it is established
+///
+/// `sad_16x_avx2` is `#[target_feature(enable = "avx2")]`: this runs `vpsadbw` with
+/// no test of its own and faults on any pre-Haswell Intel or pre-Excavator AMD part.
+///
+/// The one caller is `encoder::sample::WelsInitSampleSadFunc`, which installs these
+/// into `pfSampleSad` only under `uiCpuFlag & WELS_CPU_AVX2 && simd::has_avx2()`.
+/// That is the right altitude for the test — it is asked once when the table is
+/// built, not on every candidate the mode-decision loop scores — and it is why this
+/// is `pub(crate)`: the module boundary is what keeps the set of callers to the one
+/// that checks, in place of a branch each call would pay for.
 #[inline(always)]
-pub fn sample_sad_16x8_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
+pub(crate) fn sample_sad_16x8_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
+    // SAFETY: the caller established AVX2 support before installing this; see above.
     unsafe { sad_16x_avx2::<S, 8>(sample1, sample2, 0, 0) }
 }
 
@@ -369,8 +398,11 @@ mod tests {
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        assert_eq!(sample_sad_16x16_avx2(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
-        assert_eq!(sample_sad_16x8_avx2(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
+        // SAFETY: guarded by the `is_x86_feature_detected!` return above.
+        unsafe {
+            assert_eq!(sample_sad_16x16_avx2(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
+            assert_eq!(sample_sad_16x8_avx2(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
+        }
     }
 
     #[test]
@@ -409,5 +441,233 @@ mod tests {
         sample_sad_four::<4, 8, _>(&c1, &c2, &mut expected);
         sample_sad_four_4x8_sse2(&c1, &c2, &mut actual);
         assert_eq!(actual, expected, "4x8 four-point SAD mismatch");
+    }
+
+    // ========================================================================
+    // Input and anchor coverage (review §14).
+    //
+    // The three tests above do reach all sixteen public kernels, but each of them at
+    // exactly **one anchor** (`64 * 8 + 8`, so both cursors sit at the same 8-byte
+    // aligned offset) over **one input pattern** (two arithmetic ramps). A kernel that
+    // handled some other alignment wrongly, or whose lanes only disagree on inputs a
+    // ramp never produces, passes all three.
+    //
+    // The sweep below runs every kernel over four anchors chosen to land on each
+    // residue class mod 8 — so the aligned and the three unaligned cases are all
+    // exercised — and five input distributions: two ramps, uniform noise, an
+    // all-`0xFF`/all-`0x00` pair that maximises every absolute difference, and a
+    // near-identical pair where almost every difference is zero. The second and third
+    // are the ends of the accumulator's range, which is where a `psadbw` accumulation
+    // that widened or saturated wrongly would show.
+    //
+    // The four-point kernels get the same treatment; their `(dx, dy)` probes read
+    // outside the block, so the anchor sweep is doing more work for them than for the
+    // single-point ones.
+    // ========================================================================
+
+    /// A 64-bit LCG, so a failing seed is replayable.
+    fn lcg(seed: &mut u64) -> u8 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (*seed >> 32) as u8
+    }
+
+    /// The five input distributions, each a pair of planes of `stride * height` bytes.
+    fn input_pairs(stride: usize, height: usize) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
+        let n = stride * height;
+        let mut seed = 0x5DEECE66Du64;
+        let noise1: Vec<u8> = (0..n).map(|_| lcg(&mut seed)).collect();
+        let noise2: Vec<u8> = (0..n).map(|_| lcg(&mut seed)).collect();
+
+        let mut near = noise1.clone();
+        // A handful of differing bytes: the accumulator spends most of its range at 0.
+        for (i, b) in near.iter_mut().enumerate() {
+            if i % 97 == 0 {
+                *b = b.wrapping_add(1);
+            }
+        }
+
+        let (ramp1, ramp2) = make_test_planes(stride, height);
+        vec![
+            ("ramps", ramp1, ramp2),
+            ("noise", noise1.clone(), noise2),
+            ("max-diff", vec![0xFFu8; n], vec![0x00u8; n]),
+            ("near-identical", noise1, near),
+            ("identical", vec![0x5Au8; n], vec![0x5Au8; n]),
+        ]
+    }
+
+    /// Four anchors covering every residue mod 8, so the aligned case is not the only
+    /// one tested. Each leaves at least 16 rows and 16 columns of margin on all sides.
+    const ANCHORS: [usize; 4] = [64 * 16 + 16, 64 * 17 + 19, 64 * 18 + 22, 64 * 19 + 21];
+
+    #[test]
+    fn sse2_sad_parity_over_anchors_and_distributions() {
+        for (name, p1, p2) in input_pairs(64, 64) {
+            for anchor in ANCHORS {
+                let c1 = PlaneCursor::new(&p1, anchor, 64);
+                let c2 = PlaneCursor::new(&p2, anchor, 64);
+                let at = format!("{name} @ {anchor}");
+
+                assert_eq!(
+                    sample_sad_16x16_sse2(&c1, &c2),
+                    sample_sad::<16, 16, _>(&c1, &c2),
+                    "16x16 {at}"
+                );
+                assert_eq!(
+                    sample_sad_16x8_sse2(&c1, &c2),
+                    sample_sad::<16, 8, _>(&c1, &c2),
+                    "16x8 {at}"
+                );
+                assert_eq!(
+                    sample_sad_8x16_sse2(&c1, &c2),
+                    sample_sad::<8, 16, _>(&c1, &c2),
+                    "8x16 {at}"
+                );
+                assert_eq!(
+                    sample_sad_8x8_sse2(&c1, &c2),
+                    sample_sad::<8, 8, _>(&c1, &c2),
+                    "8x8 {at}"
+                );
+                assert_eq!(
+                    sample_sad_4x4_sse2(&c1, &c2),
+                    sample_sad::<4, 4, _>(&c1, &c2),
+                    "4x4 {at}"
+                );
+                assert_eq!(
+                    sample_sad_8x4_sse2(&c1, &c2),
+                    sample_sad::<8, 4, _>(&c1, &c2),
+                    "8x4 {at}"
+                );
+                assert_eq!(
+                    sample_sad_4x8_sse2(&c1, &c2),
+                    sample_sad::<4, 8, _>(&c1, &c2),
+                    "4x8 {at}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sse2_sample_sad_four_parity_over_anchors_and_distributions() {
+        for (name, p1, p2) in input_pairs(64, 64) {
+            for anchor in ANCHORS {
+                let c1 = PlaneCursor::new(&p1, anchor, 64);
+                let c2 = PlaneCursor::new(&p2, anchor, 64);
+                let at = format!("{name} @ {anchor}");
+                let (mut want, mut got) = ([0i32; 4], [0i32; 4]);
+
+                sample_sad_four::<16, 16, _>(&c1, &c2, &mut want);
+                sample_sad_four_16x16_sse2(&c1, &c2, &mut got);
+                assert_eq!(got, want, "16x16 four-point {at}");
+
+                sample_sad_four::<16, 8, _>(&c1, &c2, &mut want);
+                sample_sad_four_16x8_sse2(&c1, &c2, &mut got);
+                assert_eq!(got, want, "16x8 four-point {at}");
+
+                sample_sad_four::<8, 16, _>(&c1, &c2, &mut want);
+                sample_sad_four_8x16_sse2(&c1, &c2, &mut got);
+                assert_eq!(got, want, "8x16 four-point {at}");
+
+                sample_sad_four::<8, 8, _>(&c1, &c2, &mut want);
+                sample_sad_four_8x8_sse2(&c1, &c2, &mut got);
+                assert_eq!(got, want, "8x8 four-point {at}");
+
+                sample_sad_four::<4, 4, _>(&c1, &c2, &mut want);
+                sample_sad_four_4x4_sse2(&c1, &c2, &mut got);
+                assert_eq!(got, want, "4x4 four-point {at}");
+
+                sample_sad_four::<8, 4, _>(&c1, &c2, &mut want);
+                sample_sad_four_8x4_sse2(&c1, &c2, &mut got);
+                assert_eq!(got, want, "8x4 four-point {at}");
+
+                sample_sad_four::<4, 8, _>(&c1, &c2, &mut want);
+                sample_sad_four_4x8_sse2(&c1, &c2, &mut got);
+                assert_eq!(got, want, "4x8 four-point {at}");
+            }
+        }
+    }
+
+    /// The AVX2 pair over the same sweep.
+    ///
+    /// Like `test_avx2_sad_parity` this can only run where the host has AVX2, but it
+    /// says so on the way out instead of returning green in silence: a run that
+    /// reports "ok" having executed nothing is the failure mode worth avoiding here.
+    #[test]
+    fn avx2_sad_parity_over_anchors_and_distributions() {
+        if !std::is_x86_feature_detected!("avx2") {
+            eprintln!(
+                "SKIPPED avx2_sad_parity_over_anchors_and_distributions: \
+                 this host has no AVX2, so the two AVX2 kernels were not executed"
+            );
+            return;
+        }
+        for (name, p1, p2) in input_pairs(64, 64) {
+            for anchor in ANCHORS {
+                let c1 = PlaneCursor::new(&p1, anchor, 64);
+                let c2 = PlaneCursor::new(&p2, anchor, 64);
+                let at = format!("{name} @ {anchor}");
+                // SAFETY: guarded by the `is_x86_feature_detected!` return above.
+                unsafe {
+                    assert_eq!(
+                        sample_sad_16x16_avx2(&c1, &c2),
+                        sample_sad::<16, 16, _>(&c1, &c2),
+                        "16x16 avx2 {at}"
+                    );
+                    assert_eq!(
+                        sample_sad_16x8_avx2(&c1, &c2),
+                        sample_sad::<16, 8, _>(&c1, &c2),
+                        "16x8 avx2 {at}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The table site is the only thing standing between these kernels and a SIGILL,
+    /// so pin what it installs.
+    ///
+    /// `WelsInitSampleSadFunc` fills `pfSampleSad[BLOCK_16x16]` from the AVX2 kernel
+    /// exactly when `uiCpuFlag` asks for AVX2 *and* this CPU has it.
+    ///
+    /// **What this catches, and where.** The flag half is pinned on every host: drop
+    /// the `uiCpuFlag & WELS_CPU_AVX2` test and the `WELS_CPU_SSE2`-only case starts
+    /// returning the AVX2 pointer. The hardware half — dropping `has_avx2()` — can only
+    /// fail this test on a machine without AVX2, because on one with it both spellings
+    /// install the same kernel. That is the machine where it matters, and it is not
+    /// this one, so treat a green run here as covering the flag half only.
+    ///
+    /// Function-pointer identity is the comparison, so the caveat on
+    /// `common/mc.rs`'s `init_mc_func_cpu_flags` applies: both addresses come from the
+    /// same `WelsInitSampleSadFunc` instantiation, which makes them comparable, but
+    /// Miri mints a fresh synthetic address per reification and is excluded.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn init_sample_sad_installs_avx2_only_where_the_cpu_has_it() {
+        use crate::common::cpu_core::{WELS_CPU_AVX2, WELS_CPU_SSE2};
+        use crate::encoder::svc_mode_decision::BLOCK_16x16;
+        use crate::encoder::sample::WelsInitSampleSadFunc;
+        use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+
+        let slot = |flags: u32| {
+            let mut fl = SWelsFuncPtrList::default();
+            WelsInitSampleSadFunc(&mut fl, flags);
+            fl.sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].map(|f| f as usize)
+        };
+
+        let sse2_only = slot(WELS_CPU_SSE2);
+        let asked_for_avx2 = slot(WELS_CPU_SSE2 | WELS_CPU_AVX2);
+        assert!(sse2_only.is_some() && asked_for_avx2.is_some());
+
+        if std::is_x86_feature_detected!("avx2") {
+            assert_ne!(
+                asked_for_avx2, sse2_only,
+                "this host has AVX2, so asking for it must change the installed kernel"
+            );
+        } else {
+            assert_eq!(
+                asked_for_avx2, sse2_only,
+                "this host has no AVX2, so the flag alone must not install an AVX2 kernel"
+            );
+        }
     }
 }

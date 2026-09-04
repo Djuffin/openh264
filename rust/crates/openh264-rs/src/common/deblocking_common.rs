@@ -79,11 +79,10 @@ pub fn deblock_luma_lt4(
     tc: &[i8; 4],
 ) {
     #[cfg(target_arch = "x86_64")]
-    {
+    if crate::simd::has_sse2() {
         crate::simd::x86_64::deblock::deblock_luma_lt4_sse2(pix, step_x, step_y, alpha, beta, tc);
         return;
     }
-    #[allow(unreachable_code)]
     deblock_luma_lt4_scalar(pix, step_x, step_y, alpha, beta, tc);
 }
 
@@ -145,11 +144,10 @@ pub fn deblock_luma_eq4(
     beta: i32,
 ) {
     #[cfg(target_arch = "x86_64")]
-    {
+    if crate::simd::has_sse2() {
         crate::simd::x86_64::deblock::deblock_luma_eq4_sse2(pix, step_x, step_y, alpha, beta);
         return;
     }
-    #[allow(unreachable_code)]
     deblock_luma_eq4_scalar(pix, step_x, step_y, alpha, beta);
 }
 
@@ -253,11 +251,10 @@ pub fn deblock_chroma_lt4(
     tc: &[i8; 4],
 ) {
     #[cfg(target_arch = "x86_64")]
-    {
+    if crate::simd::has_sse2() {
         crate::simd::x86_64::deblock::deblock_chroma_lt4_sse2(cb, cr, step_x, step_y, alpha, beta, tc);
         return;
     }
-    #[allow(unreachable_code)]
     deblock_chroma_lt4_scalar(cb, cr, step_x, step_y, alpha, beta, tc);
 }
 
@@ -292,11 +289,10 @@ pub fn deblock_chroma_eq4(
     beta: i32,
 ) {
     #[cfg(target_arch = "x86_64")]
-    {
+    if crate::simd::has_sse2() {
         crate::simd::x86_64::deblock::deblock_chroma_eq4_sse2(cb, cr, step_x, step_y, alpha, beta);
         return;
     }
-    #[allow(unreachable_code)]
     deblock_chroma_eq4_scalar(cb, cr, step_x, step_y, alpha, beta);
 }
 

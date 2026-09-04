@@ -128,6 +128,13 @@ pub fn idct_rec_i16x16_dc_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>
 /// truncation is observable and load-bearing); the vertical pass and the
 /// `+32 >> 6` rounding run in `i32`, total over the full coefficient range.
 ///
+/// **That last sentence is a claim about the dispatched path, not only this one.**
+/// It was true of the `_c` body alone for a while: the SSE2 kernel this dispatches to
+/// on x86_64 ran its vertical pass in `epi16` and wrapped where this saturates, so the
+/// same stream decoded differently per architecture. `compute_idct_residuals_sse2`
+/// widened to `epi32` and the two now agree over the whole `i16` coefficient range,
+/// which `simd::x86_64::dct::tests` exercises rather than assumes.
+///
 /// C++: `WelsIDctT4Rec_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
     #[cfg(target_arch = "x86_64")]

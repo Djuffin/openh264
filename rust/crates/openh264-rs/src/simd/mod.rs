@@ -12,16 +12,39 @@ pub mod x86_64;
 
 use crate::common::cpu_core::*;
 
-/// Detects available CPU SIMD features at runtime.
+/// Detects available CPU SIMD features, once per process.
 ///
 /// Respects the `OPENH264_NO_SIMD=1` environment variable to force scalar fallbacks
 /// for testing and differential verification.
+///
+/// **The answer is latched, and that is the point.** This used to re-read the
+/// environment on every call while [`has_sse2`] latched its own copy on the first,
+/// so the two could disagree for the rest of the process: a host that decoded one
+/// stream, then set `OPENH264_NO_SIMD=1` and opened a second decoder, got
+/// `uiCpuFlag == 0` in every table slot while the per-call `has_sse2()` sites kept
+/// returning `true` from the stale cache. The four-block residual path
+/// (`decode_slice.rs:913/931/1873/2030`, reached through `pIdctFourResAddPredFunc`)
+/// ran SSE2 while its single-block sibling ran scalar, on the same picture. Both
+/// mechanisms now read this one word, so the switch is all-or-nothing.
+///
+/// The cost of latching is that the variable is a process-start switch rather than
+/// a per-decoder one, which is what it already was in practice — nothing outside
+/// this module reads it, and the tables a decoder builds at init never rebuild.
 pub fn detect_cpu_features() -> u32 {
-    if std::env::var_os("OPENH264_NO_SIMD").is_some() {
-        return 0;
+    let cached = CPU_FEATURES.load(Ordering::Relaxed);
+    if cached != 0 {
+        return cached & !CPU_FEATURES_LATCHED;
     }
 
-    arch_cpu_features()
+    let flags = if std::env::var_os("OPENH264_NO_SIMD").is_some() {
+        0
+    } else {
+        arch_cpu_features()
+    };
+    // Racing callers compute the same word from the same inputs, so the store is
+    // idempotent and needs no compare-exchange.
+    CPU_FEATURES.store(flags | CPU_FEATURES_LATCHED, Ordering::Relaxed);
+    flags
 }
 
 /// The x86_64 feature probe. MMX, SSE and SSE2 are part of the baseline x86_64
@@ -64,18 +87,28 @@ fn arch_cpu_features() -> u32 {
     0
 }
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
-static SSE2_CACHED: AtomicU8 = AtomicU8::new(0);
+/// Bit 31, which no `WELS_CPU_*` flag uses (the highest is
+/// `WELS_CPU_CACHELINE_64 = 0x4000_0000`), marks the word as computed — so that a
+/// genuine all-scalar answer of `0` is distinguishable from "not yet asked".
+const CPU_FEATURES_LATCHED: u32 = 1 << 31;
+
+/// The process-wide feature word. See [`detect_cpu_features`] for why it is latched.
+static CPU_FEATURES: AtomicU32 = AtomicU32::new(0);
 
 /// Returns true if SSE2 is supported and not disabled by `OPENH264_NO_SIMD=1`.
 #[inline(always)]
 pub fn has_sse2() -> bool {
-    let state = SSE2_CACHED.load(Ordering::Relaxed);
-    if state != 0 {
-        return state == 2;
-    }
-    let detected = (detect_cpu_features() & WELS_CPU_SSE2) != 0;
-    SSE2_CACHED.store(if detected { 2 } else { 1 }, Ordering::Relaxed);
-    detected
+    (detect_cpu_features() & WELS_CPU_SSE2) != 0
+}
+
+/// Returns true if AVX2 is supported and not disabled by `OPENH264_NO_SIMD=1`.
+///
+/// Unlike SSE2 this is not x86_64 baseline, so it is a real runtime question: the
+/// AVX2 SAD kernels execute `vpsadbw` and fault on any pre-Haswell Intel or
+/// pre-Excavator AMD part.
+#[inline(always)]
+pub fn has_avx2() -> bool {
+    (detect_cpu_features() & WELS_CPU_AVX2) != 0
 }

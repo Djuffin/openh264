@@ -555,6 +555,15 @@ pub trait PlaneSamples: RefSamples {
     /// Writes the sample at `(dx, dy)` from the anchor.
     fn set(&mut self, dx: isize, dy: isize, v: u8);
 
+    /// Bytes per row of the plane this view is anchored in.
+    ///
+    /// The scalar deblocking kernels never need this — they address in flat byte
+    /// offsets and are stride-agnostic by design (`deblocking_common.rs:52`). Their
+    /// SSE2 twins address in 2D through the cursor instead, which silently requires the
+    /// caller's cross-line step to *be* this stride; exposing it here is what lets them
+    /// check that rather than assume it.
+    fn stride(&self) -> usize;
+
     /// Writes `N` contiguous samples starting at `(dx0, dy)`.
     #[inline]
     fn set_row_n<const N: usize>(&mut self, dy: isize, dx0: isize, val: &[u8; N]) {
@@ -829,6 +838,11 @@ impl RefSamples for PlaneCursorMut<'_> {
 }
 
 impl PlaneSamples for PlaneCursorMut<'_> {
+    #[inline]
+    fn stride(&self) -> usize {
+        PlaneCursorMut::stride(self)
+    }
+
     #[inline]
     fn set(&mut self, dx: isize, dy: isize, v: u8) {
         PlaneCursorMut::set(self, dx, dy, v)

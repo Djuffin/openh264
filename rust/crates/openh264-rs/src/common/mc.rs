@@ -466,30 +466,130 @@ fn scratch() -> [u8; 256] {
     [0u8; 256]
 }
 
-/// C++: `McHorVer01_c`.
-#[inline(never)]
-pub fn mc_hor_ver01_c<S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut tmp = scratch();
-    mc_hor_ver02_c(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    pixel_avg_c(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
+
+// ============================================================================
+// The quarter-pel composites, once (review §11)
+// ============================================================================
+
+/// **The three half-pel leaves and the averaging step, as one substitutable set.**
+///
+/// Twelve of the fifteen `McHorVerXY` kernels are not filters at all: they are
+/// compositions of `McHorVer20` (horizontal), `McHorVer02` (vertical),
+/// `McHorVer22` (centre) and `McSampleAvg`, at fixed offsets the standard fixes.
+/// Only those four do arithmetic, and only they have an SSE2 form worth writing.
+///
+/// This file used to carry the twelve composites and `simd/x86_64/mc.rs` a verbatim
+/// second copy with `_sse2` appended to every call inside — ~250 lines whose only
+/// content was which leaf set to reach. Both copies now share these bodies and differ
+/// in `L`. What that trades away is real and worth naming: a structural mistake in a
+/// composite can no longer be caught by comparing the two spellings, because there is
+/// one spelling. What it buys is that the two can no longer *drift* — which is the
+/// failure the parity tests could not see either, since they would have agreed with
+/// whichever copy they were pointed at.
+///
+/// The leaves stay individually tested against each other, which is where the
+/// arithmetic lives; `mc_luma_parity` still compares the two instantiations across all
+/// sixteen quarter-pel positions, so a leaf that disagrees still fails.
+pub trait McLeaves {
+    /// `McHorVer20` — the horizontal half-pel filter.
+    fn hor<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
+    /// `McHorVer02` — the vertical half-pel filter.
+    fn ver<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
+    /// `McHorVer22` — the centre filter, vertical into 16-bit then horizontal.
+    fn cen<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
+    /// `McSampleAvg` — the rounded two-source average.
+    fn avg<A: RefSamples, B: RefSamples>(
+        dst: &mut PlaneCursorMut<'_>,
+        a: &A,
+        b: &B,
+        width: usize,
+        height: usize,
+    );
 }
 
-/// C++: `McHorVer03_c`.
+/// The scalar leaf set. Every method is a `_c` kernel, so a composite instantiated
+/// here cannot route into SIMD — which is what makes it usable as a parity reference.
+pub struct ScalarLeaves;
+
+impl McLeaves for ScalarLeaves {
+    #[inline(always)]
+    fn hor<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+        mc_hor_ver20_c(src, dst, width, height)
+    }
+    #[inline(always)]
+    fn ver<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+        mc_hor_ver02_c(src, dst, width, height)
+    }
+    #[inline(always)]
+    fn cen<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+        mc_hor_ver22_c(src, dst, width, height)
+    }
+    #[inline(always)]
+    fn avg<A: RefSamples, B: RefSamples>(
+        dst: &mut PlaneCursorMut<'_>,
+        a: &A,
+        b: &B,
+        width: usize,
+        height: usize,
+    ) {
+        pixel_avg_c(dst, a, b, width, height)
+    }
+}
+
+/// `mc_luma`'s fan-out, over whichever leaf set `L` names.
+///
+/// C++: `McLuma_c`'s `switch` on `(mv_x & 3, mv_y & 3)`.
+pub fn mc_luma_with<L: McLeaves, S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    mv_x: i16,
+    mv_y: i16,
+    width: usize,
+    height: usize,
+) {
+    match ((mv_x & 0x03) as u8, (mv_y & 0x03) as u8) {
+        (0, 0) => mc_copy(src, dst, width, height),
+        (0, 1) => mc_hor_ver01_with::<L, S>(src, dst, width, height),
+        (0, 2) => L::ver(src, dst, width, height),
+        (0, 3) => mc_hor_ver03_with::<L, S>(src, dst, width, height),
+        (1, 0) => mc_hor_ver10_with::<L, S>(src, dst, width, height),
+        (1, 1) => mc_hor_ver11_with::<L, S>(src, dst, width, height),
+        (1, 2) => mc_hor_ver12_with::<L, S>(src, dst, width, height),
+        (1, 3) => mc_hor_ver13_with::<L, S>(src, dst, width, height),
+        (2, 0) => L::hor(src, dst, width, height),
+        (2, 1) => mc_hor_ver21_with::<L, S>(src, dst, width, height),
+        (2, 2) => L::cen(src, dst, width, height),
+        (2, 3) => mc_hor_ver23_with::<L, S>(src, dst, width, height),
+        (3, 0) => mc_hor_ver30_with::<L, S>(src, dst, width, height),
+        (3, 1) => mc_hor_ver31_with::<L, S>(src, dst, width, height),
+        (3, 2) => mc_hor_ver32_with::<L, S>(src, dst, width, height),
+        _ => mc_hor_ver33_with::<L, S>(src, dst, width, height),
+    }
+}
+
+/// C++: `McHorVer01_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-pub fn mc_hor_ver03_c<S: RefSamples + Copy>(
+pub fn mc_hor_ver01_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
     let mut tmp = scratch();
-    mc_hor_ver02_c(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    pixel_avg_c(
+    L::ver(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
+    L::avg(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
+}
+/// C++: `McHorVer03_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+pub fn mc_hor_ver03_with<L: McLeaves, S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    let mut tmp = scratch();
+    L::ver(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
+    L::avg(
         dst,
         &src.advance(0, 1),
         &PlaneCursor::new(&tmp, 0, 16),
@@ -497,23 +597,21 @@ pub fn mc_hor_ver03_c<S: RefSamples + Copy>(
         height,
     );
 }
-
-/// C++: `McHorVer10_c`.
+/// C++: `McHorVer10_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-pub fn mc_hor_ver10_c<S: RefSamples + Copy>(
+pub fn mc_hor_ver10_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
     let mut tmp = scratch();
-    mc_hor_ver20_c(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    pixel_avg_c(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
+    L::hor(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
+    L::avg(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
 }
-
-/// C++: `McHorVer11_c`.
+/// C++: `McHorVer11_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-pub fn mc_hor_ver11_c<S: RefSamples + Copy>(
+pub fn mc_hor_ver11_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -521,9 +619,9 @@ pub fn mc_hor_ver11_c<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ver = scratch();
-    mc_hor_ver20_c(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    mc_hor_ver02_c(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    pixel_avg_c(
+    L::hor(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    L::ver(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
+    L::avg(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ver, 0, 16),
@@ -531,10 +629,9 @@ pub fn mc_hor_ver11_c<S: RefSamples + Copy>(
         height,
     );
 }
-
-/// C++: `McHorVer12_c`.
+/// C++: `McHorVer12_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-pub fn mc_hor_ver12_c<S: RefSamples + Copy>(
+pub fn mc_hor_ver12_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -542,9 +639,9 @@ pub fn mc_hor_ver12_c<S: RefSamples + Copy>(
 ) {
     let mut ver = scratch();
     let mut ctr = scratch();
-    mc_hor_ver02_c(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    mc_hor_ver22_c(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg_c(
+    L::ver(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
+    L::cen(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    L::avg(
         dst,
         &PlaneCursor::new(&ver, 0, 16),
         &PlaneCursor::new(&ctr, 0, 16),
@@ -552,10 +649,9 @@ pub fn mc_hor_ver12_c<S: RefSamples + Copy>(
         height,
     );
 }
-
-/// C++: `McHorVer13_c`.
+/// C++: `McHorVer13_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-pub fn mc_hor_ver13_c<S: RefSamples + Copy>(
+pub fn mc_hor_ver13_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -563,14 +659,14 @@ pub fn mc_hor_ver13_c<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ver = scratch();
-    mc_hor_ver20_c(
+    L::hor(
         &src.advance(0, 1),
         &mut PlaneCursorMut::new(&mut hor, 0, 16),
         width,
         height,
     );
-    mc_hor_ver02_c(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    pixel_avg_c(
+    L::ver(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
+    L::avg(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ver, 0, 16),
@@ -578,10 +674,9 @@ pub fn mc_hor_ver13_c<S: RefSamples + Copy>(
         height,
     );
 }
-
-/// C++: `McHorVer21_c`.
+/// C++: `McHorVer21_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-pub fn mc_hor_ver21_c<S: RefSamples + Copy>(
+pub fn mc_hor_ver21_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -589,9 +684,9 @@ pub fn mc_hor_ver21_c<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ctr = scratch();
-    mc_hor_ver20_c(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    mc_hor_ver22_c(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg_c(
+    L::hor(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    L::cen(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    L::avg(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ctr, 0, 16),
@@ -599,10 +694,9 @@ pub fn mc_hor_ver21_c<S: RefSamples + Copy>(
         height,
     );
 }
-
-/// C++: `McHorVer23_c`.
+/// C++: `McHorVer23_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-pub fn mc_hor_ver23_c<S: RefSamples + Copy>(
+pub fn mc_hor_ver23_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -610,14 +704,14 @@ pub fn mc_hor_ver23_c<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ctr = scratch();
-    mc_hor_ver20_c(
+    L::hor(
         &src.advance(0, 1),
         &mut PlaneCursorMut::new(&mut hor, 0, 16),
         width,
         height,
     );
-    mc_hor_ver22_c(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg_c(
+    L::cen(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    L::avg(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ctr, 0, 16),
@@ -625,18 +719,17 @@ pub fn mc_hor_ver23_c<S: RefSamples + Copy>(
         height,
     );
 }
-
-/// C++: `McHorVer30_c`.
+/// C++: `McHorVer30_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-pub fn mc_hor_ver30_c<S: RefSamples + Copy>(
+pub fn mc_hor_ver30_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
     let mut hor = scratch();
-    mc_hor_ver20_c(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    pixel_avg_c(
+    L::hor(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    L::avg(
         dst,
         &src.advance(1, 0),
         &PlaneCursor::new(&hor, 0, 16),
@@ -644,10 +737,9 @@ pub fn mc_hor_ver30_c<S: RefSamples + Copy>(
         height,
     );
 }
-
-/// C++: `McHorVer31_c`.
+/// C++: `McHorVer31_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-pub fn mc_hor_ver31_c<S: RefSamples + Copy>(
+pub fn mc_hor_ver31_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -655,14 +747,14 @@ pub fn mc_hor_ver31_c<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ver = scratch();
-    mc_hor_ver20_c(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    mc_hor_ver02_c(
+    L::hor(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
+    L::ver(
         &src.advance(1, 0),
         &mut PlaneCursorMut::new(&mut ver, 0, 16),
         width,
         height,
     );
-    pixel_avg_c(
+    L::avg(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ver, 0, 16),
@@ -670,10 +762,9 @@ pub fn mc_hor_ver31_c<S: RefSamples + Copy>(
         height,
     );
 }
-
-/// C++: `McHorVer32_c`.
+/// C++: `McHorVer32_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-pub fn mc_hor_ver32_c<S: RefSamples + Copy>(
+pub fn mc_hor_ver32_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -681,14 +772,14 @@ pub fn mc_hor_ver32_c<S: RefSamples + Copy>(
 ) {
     let mut ver = scratch();
     let mut ctr = scratch();
-    mc_hor_ver02_c(
+    L::ver(
         &src.advance(1, 0),
         &mut PlaneCursorMut::new(&mut ver, 0, 16),
         width,
         height,
     );
-    mc_hor_ver22_c(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    pixel_avg_c(
+    L::cen(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
+    L::avg(
         dst,
         &PlaneCursor::new(&ver, 0, 16),
         &PlaneCursor::new(&ctr, 0, 16),
@@ -696,10 +787,9 @@ pub fn mc_hor_ver32_c<S: RefSamples + Copy>(
         height,
     );
 }
-
-/// C++: `McHorVer33_c`.
+/// C++: `McHorVer33_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-pub fn mc_hor_ver33_c<S: RefSamples + Copy>(
+pub fn mc_hor_ver33_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -707,19 +797,19 @@ pub fn mc_hor_ver33_c<S: RefSamples + Copy>(
 ) {
     let mut hor = scratch();
     let mut ver = scratch();
-    mc_hor_ver20_c(
+    L::hor(
         &src.advance(0, 1),
         &mut PlaneCursorMut::new(&mut hor, 0, 16),
         width,
         height,
     );
-    mc_hor_ver02_c(
+    L::ver(
         &src.advance(1, 0),
         &mut PlaneCursorMut::new(&mut ver, 0, 16),
         width,
         height,
     );
-    pixel_avg_c(
+    L::avg(
         dst,
         &PlaneCursor::new(&hor, 0, 16),
         &PlaneCursor::new(&ver, 0, 16),
@@ -727,6 +817,7 @@ pub fn mc_hor_ver33_c<S: RefSamples + Copy>(
         height,
     );
 }
+
 
 /// C++: `McLuma_c` — quarter-pel dispatch on the low two bits of each MV component.
 ///
@@ -740,24 +831,7 @@ pub fn mc_luma_c<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    match ((mv_x & 0x03) as u8, (mv_y & 0x03) as u8) {
-        (0, 0) => mc_copy(src, dst, width, height),
-        (0, 1) => mc_hor_ver01_c(src, dst, width, height),
-        (0, 2) => mc_hor_ver02_c(src, dst, width, height),
-        (0, 3) => mc_hor_ver03_c(src, dst, width, height),
-        (1, 0) => mc_hor_ver10_c(src, dst, width, height),
-        (1, 1) => mc_hor_ver11_c(src, dst, width, height),
-        (1, 2) => mc_hor_ver12_c(src, dst, width, height),
-        (1, 3) => mc_hor_ver13_c(src, dst, width, height),
-        (2, 0) => mc_hor_ver20_c(src, dst, width, height),
-        (2, 1) => mc_hor_ver21_c(src, dst, width, height),
-        (2, 2) => mc_hor_ver22_c(src, dst, width, height),
-        (2, 3) => mc_hor_ver23_c(src, dst, width, height),
-        (3, 0) => mc_hor_ver30_c(src, dst, width, height),
-        (3, 1) => mc_hor_ver31_c(src, dst, width, height),
-        (3, 2) => mc_hor_ver32_c(src, dst, width, height),
-        _ => mc_hor_ver33_c(src, dst, width, height),
-    }
+    mc_luma_with::<ScalarLeaves, S>(src, dst, mv_x, mv_y, width, height)
 }
 
 #[inline(always)]
@@ -1193,6 +1267,29 @@ fn block_span(stride: usize, width: usize, height: usize) -> usize {
 }
 
 /// C++: `InitMcFunc`, `codec/common/src/mc.cpp` — both codecs call it at open time.
+///
+/// # The table it fills is not this port's MC dispatch path
+///
+/// Upstream calls MC *through* `sMcFunc`, so its `uiCpuFlag` gate here is what selects
+/// scalar or SSE2 for every motion-compensated block. This port does not: `md.rs:582`
+/// states it outright — "MC and the half-pel filters are called directly, not via
+/// `sMcFuncs`" — and `grep` for the six field names below finds no read anywhere
+/// outside this file. The live dispatch is the per-call `crate::simd::has_sse2()` test
+/// in `mc_luma`/`mc_chroma`/`pixel_avg` and the half-pel filters (`:312`, `:347`,
+/// `:398`, `:455`, `:773`, `:843`).
+///
+/// Two consequences, both real and neither fixed by editing this function:
+///
+/// - A host that restricts `uiCpuFlag` to force scalar MC does not get it. The slots
+///   go scalar; the code that runs consults `has_sse2()`, which answers from the
+///   process-wide probe (`simd/mod.rs`), not from this argument.
+/// - The `init_mc_func_cpu_flags` test below is a faithful test of *this function* and
+///   of nothing downstream of it. It is not evidence that MC dispatch is gated.
+///
+/// The table is still filled, and the fields still exist (`decoder_context.rs:1281`,
+/// `encoder/wels_func_ptr_def.rs:327`), because the struct is part of the ported
+/// context layout. Closing the gap means routing MC back through the table, or
+/// threading the context's flag into the direct calls — one mechanism instead of two.
 pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, uiCpuFlag: u32) {
     *pMcFuncs = SMcFunc::default();
     #[cfg(target_arch = "x86_64")]
@@ -1405,6 +1502,9 @@ mod tests {
     /// the comparison is meaningful. Not under Miri: it mints a fresh synthetic
     /// address for each reified function pointer, so even two calls of the
     /// *same* installer compare unequal there.
+    /// **Scope: `InitMcFunc` only.** The slots this checks are never read — see the
+    /// note on `InitMcFunc`. Passing does not mean a `uiCpuFlag` without
+    /// `WELS_CPU_SSE2` produces scalar motion compensation; it does not.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn init_mc_func_cpu_flags() {
