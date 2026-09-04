@@ -250,6 +250,27 @@ impl<'a> RecCursor<'a> {
             .map(|r| r[..N].try_into().unwrap())
     }
 
+    /// The `w`-wide, `h`-tall block at `(dx0, dy0)` as **one** slice, alongside
+    /// the stride to walk it by — the same span [`row_windows`](Self::row_windows)
+    /// carves up, handed over whole.
+    ///
+    /// For a kernel that does its own address arithmetic. `row_windows` re-slices
+    /// per row, which costs a bounds check each and, because `chunks` divides by
+    /// a run-time stride, a `div` to count them; a kernel that strides through
+    /// the span itself pays neither. The returned slice is exactly
+    /// `(h - 1) * stride + w` bytes, so row `y` column `x` is at `y * stride + x`
+    /// for every `y < h` and `x < w`, and that is the invariant an `unsafe`
+    /// caller may rely on.
+    ///
+    /// # Panics
+    /// If the block leaves the buffer.
+    #[inline]
+    pub fn block_span(&self, dy0: isize, dx0: isize, w: usize, h: usize) -> &'a [Cell<u8>] {
+        let start = idx(self.center, dx0, dy0, self.stride);
+        let span = if h == 0 { 0 } else { (h - 1) * self.stride + w };
+        &self.cells[start..][..span]
+    }
+
     /// Writes `N` samples into row `dy` starting at `dx0`.
     #[inline]
     pub fn write_row<const N: usize>(&self, dy: isize, dx0: isize, src: &[u8; N]) {

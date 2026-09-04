@@ -30,6 +30,39 @@
 /// than `(pic_h + 2*pad) * stride`, or `pic_w`/`pic_h` of zero. The C++
 /// equivalent would read and write out of the allocation.
 pub fn expand_picture(buf: &mut [u8], stride: usize, pic_w: usize, pic_h: usize, pad: usize) {
+    // The two pads both codecs ever ask for, specialised — see `expand_with`.
+    match pad {
+        PAD_LUMA => expand_with::<PAD_LUMA>(buf, stride, pic_w, pic_h),
+        PAD_CHROMA => expand_with::<PAD_CHROMA>(buf, stride, pic_w, pic_h),
+        _ => expand_any(buf, stride, pic_w, pic_h, pad),
+    }
+}
+
+/// `PADDING_LENGTH`, and its chroma half — the only two pads
+/// `ExpandPicture`'s call sites pass, in either codec.
+const PAD_LUMA: usize = 32;
+const PAD_CHROMA: usize = 16;
+
+/// [`expand_picture`] with the pad known at compile time.
+///
+/// This is where upstream's split into `ExpandPictureLuma_sse2` and
+/// `ExpandPictureChroma{Align,Unalign}_sse2` lands, and it buys the same thing
+/// their vector stores do without an intrinsic or an `unsafe`. The margin fills
+/// are `pad` bytes wide and `pad` is a parameter, so `expand_any` leaves a
+/// `memset` **call** at each of them — six in the emitted body, two of which sit
+/// in the per-row loop and so run `2 * pic_h` times per plane. A constant width
+/// lowers each to a couple of stores instead.
+///
+/// Kept as a wrapper over the general body rather than a second copy of it:
+/// monomorphising is the whole point, and the source stays single.
+#[inline]
+fn expand_with<const PAD: usize>(buf: &mut [u8], stride: usize, pic_w: usize, pic_h: usize) {
+    expand_any(buf, stride, pic_w, pic_h, PAD);
+}
+
+/// The pad-as-a-parameter body. See [`expand_picture`] for the contract.
+#[inline(always)]
+fn expand_any(buf: &mut [u8], stride: usize, pic_w: usize, pic_h: usize, pad: usize) {
     assert!(pic_w > 0 && pic_h > 0, "cannot expand an empty picture");
     assert!(
         stride >= pic_w + 2 * pad,
