@@ -621,3 +621,56 @@ offset (e.g. `dct.rs:342`, `:400`) where a transposed `(dx, dy)` or stride mix-u
 silent. This is the encoder's reconstruction seam.
 
 Similar: `intra_pred.rs` has 3 tests for 30 public kernels, `sad.rs` 3 for 23.
+
+---
+
+# Addendum: an audit for the same class of defect elsewhere
+
+§10 was a kernel that claimed to be SIMD and was not. Two checks were run over the
+whole tree afterwards, looking for anything else of that shape.
+
+**Mistranslated kernels: none left.** The detector is "an installed SIMD kernel with no
+parity test against a scalar that cannot route back into it" — the exact hole §10 lived
+in. It comes back empty.
+
+**Unreachable kernels: seven, now wired.** The other direction, and nothing was looking
+for it: kernels written and parity-tested but never named by a dispatch table, so the
+tables handed out the scalar on a machine that had the SIMD sitting right there.
+
+| slot | upstream x86 | was |
+|---|---|---|
+| `pfSampleSad[BLOCK_4x4]` | `WelsSampleSad4x4_mmx` | scalar — a gap against upstream |
+| `pfSampleSad[BLOCK_8x4]`, `[BLOCK_4x8]` | none | scalar |
+| `pfSample4Sad[BLOCK_8x4]`, `[BLOCK_4x8]` | none | scalar |
+| `pfSampleSatd[BLOCK_8x4]`, `[BLOCK_4x8]` | none | scalar |
+
+Only the first is a gap against upstream; the other six put this port ahead of it.
+That is safe to do because SAD and SATD are exact integer costs — the parity tests
+assert these agree with `sample_sad::<W, H>` / `satd_WxH` bit for bit over five input
+distributions and four anchors, so mode decision sees identical numbers and picks
+identical modes. The conformance suite confirms it: no golden moved.
+
+`every_sse2_sad_and_satd_slot_is_wired` (`encoder/sample.rs`) now pins the tables
+against themselves — under `WELS_CPU_SSE2` every one of these slots must hold a
+different function than at `uiCpuFlag == 0` — so a slot that stops being wired fails by
+name. Mutation-checked.
+
+## What is still missing, if anyone wants it
+
+Upstream installs, in encoder/decoder/common: 78 SSE2, 27 MMX, 18 AVX2, 16 SSSE3, 10
+SSE4.1, 2 SSE4.2. This port has 76 SSE2 kernels and two AVX2, and nothing in the other
+tiers. The slots where upstream is SIMD and this port is scalar:
+
+- **Hot, per macroblock.** `pfCopy16x16Aligned`/`NotAligned`/`16x8`/`8x16`/`8x8`
+  (`WelsCopy*_sse2`/`_mmx`, `common/copy_mb.rs`); `pfScan4x4` and `pfScan4x4Ac`
+  (`WelsScan4x4DcAc_sse2`, `WelsScan4x4Ac_sse2`); `pfSetNZCZero`
+  (`WelsNonZeroCount_sse2`); `pfUpdateMbMv` (`UpdateMbMv_sse2`);
+  `pfCalculateSingleCtr4x4` (`WelsCalculateSingleCtr4x4_sse2`); `pfCavlcParamCal`
+  (`CavlcParamCal_sse2`).
+- **Per frame.** `pfExpandLumaPicture`, `pfExpandChromaPicture`
+  (`ExpandPicture*_sse2`, `common/expand_pic.rs`).
+- **Decoder intra.** `pGetI4x4LumaPredFunc` DDL/DDR/HD/HU/VL/VR — six `_mmx` kernels
+  upstream, scalar here. V/H/DC are the word-wide rewrites (§10).
+- **Mode-dependent.** `pfQuantizationHadamard2x2`/`Skip` (`_mmx`); the VAA pair
+  (`AnalysisVaaInfoIntra_sse2`, `MdInterAnalysisVaaInfo_sse2`); the four screen-content
+  feature-search kernels.
