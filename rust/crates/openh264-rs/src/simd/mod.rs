@@ -53,3 +53,19 @@ pub fn detect_cpu_features() -> u32 {
 
     flags
 }
+
+use std::sync::atomic::{AtomicU8, Ordering};
+
+static SSE2_CACHED: AtomicU8 = AtomicU8::new(0);
+
+/// Returns true if SSE2 is supported and not disabled by `OPENH264_NO_SIMD=1`.
+#[inline(always)]
+pub fn has_sse2() -> bool {
+    let state = SSE2_CACHED.load(Ordering::Relaxed);
+    if state != 0 {
+        return state == 2;
+    }
+    let detected = (detect_cpu_features() & WELS_CPU_SSE2) != 0;
+    SSE2_CACHED.store(if detected { 2 } else { 1 }, Ordering::Relaxed);
+    detected
+}
