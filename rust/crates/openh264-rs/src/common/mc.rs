@@ -42,12 +42,12 @@ impl Default for TagMcFunc {
     /// and a non-capturing closure does.
     fn default() -> Self {
         Self {
-            pfLumaHalfpelHor: |s, d, w, h| mc_hor_ver20(s, d, w, h),
-            pfLumaHalfpelVer: |s, d, w, h| mc_hor_ver02(s, d, w, h),
-            pfLumaHalfpelCen: |s, d, w, h| mc_hor_ver22(s, d, w, h),
-            pMcChromaFunc: |s, d, mx, my, w, h| mc_chroma(s, d, mx, my, w, h),
-            pMcLumaFunc: |s, d, mx, my, w, h| mc_luma(s, d, mx, my, w, h),
-            pfSampleAveraging: |dst, a, b, w, h| pixel_avg(dst, a, b, w, h),
+            pfLumaHalfpelHor: |s, d, w, h| mc_hor_ver20_c(s, d, w, h),
+            pfLumaHalfpelVer: |s, d, w, h| mc_hor_ver02_c(s, d, w, h),
+            pfLumaHalfpelCen: |s, d, w, h| mc_hor_ver22_c(s, d, w, h),
+            pMcChromaFunc: |s, d, mx, my, w, h| mc_chroma_c(s, d, mx, my, w, h),
+            pMcLumaFunc: |s, d, mx, my, w, h| mc_luma_c(s, d, mx, my, w, h),
+            pfSampleAveraging: |dst, a, b, w, h| pixel_avg_c(dst, a, b, w, h),
         }
     }
 }
@@ -281,24 +281,14 @@ pub fn mc_copy<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, widt
 }
 
 /// C++: `PixelAvg_c` — the rounded average of two surfaces, `SMcFunc::pfSampleAveraging`.
-///
-/// The three surfaces carry their own strides because the encoder's quarter-pel
-/// refinement averages a `ME_REFINE_BUF_STRIDE` scratch buffer against the reference
-/// picture (`encoder/md.rs:1059`).
 #[inline(always)]
-pub fn pixel_avg<A: RefSamples, B: RefSamples>(
+pub fn pixel_avg_c<A: RefSamples, B: RefSamples>(
     dst: &mut PlaneCursorMut<'_>,
     a: &A,
     b: &B,
     width: usize,
     height: usize,
 ) {
-    // **Two independent operand types, and both are needed.** The quarter-pel
-    // arms below average the *reference plane* against a scratch surface —
-    // `pixel_avg(dst, src, &PlaneCursor::new(&tmp, 0, 16), ..)` — so `a` is
-    // whatever the caller's plane cursor is (a `RecCursor` under the encoder's
-    // seam, a `PlaneCursor` under the decoder) while `b` is always the local
-    // scratch. One type parameter would force a conversion at every such site.
     for dy in 0..height as isize {
         let ra = a.row_view(dy, 0, width);
         let rb = b.row_view(dy, 0, width);
@@ -309,21 +299,34 @@ pub fn pixel_avg<A: RefSamples, B: RefSamples>(
     }
 }
 
+/// Rounded average of two surfaces, dispatching to SSE2 if available.
+#[inline(always)]
+pub fn pixel_avg<A: RefSamples, B: RefSamples>(
+    dst: &mut PlaneCursorMut<'_>,
+    a: &A,
+    b: &B,
+    width: usize,
+    height: usize,
+) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::mc::pixel_avg_sse2(dst, a, b, width, height);
+        return;
+    }
+    pixel_avg_c(dst, a, b, width, height);
+}
+
 /// C++: `McHorVer20_c` — the horizontal half-pel filter, `(2, 0)` in quarter-pel.
 ///
 /// Reads `x` in `-2 .. width + 3`, `y` in `0 .. height`.
 #[inline(always)]
-pub fn mc_hor_ver20<S: RefSamples + Copy>(
+pub fn mc_hor_ver20_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
     for dy in 0..height as isize {
-        // One row window per output row, six-sample sliding windows inside it: the
-        // bounds check lands per row, the filter arithmetic per sample. The row is
-        // read into a reused stack buffer rather than borrowed, because a shared
-        // cell view cannot lend one.
         let row = src.row_view(dy, -2, width + 5);
         let out = dst.row_mut(dy, 0, width);
         for (o, w) in out.iter_mut().zip(row.windows(6)) {
@@ -332,26 +335,32 @@ pub fn mc_hor_ver20<S: RefSamples + Copy>(
     }
 }
 
-/// C++: `McHorVer02_c` — the vertical half-pel filter, `(0, 2)` in quarter-pel.
-///
-/// Reads `x` in `0 .. width`, `y` in `-2 .. height + 3`.
+/// Horizontal half-pel filter, dispatching to SSE2 if available.
 #[inline(always)]
-pub fn mc_hor_ver02<S: RefSamples + Copy>(
+pub fn mc_hor_ver20<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
     height: usize,
 ) {
-    // Two shapes carry this loop.
-    //
-    // *A zipped column walk, not indexing.* Indexing seven same-length slices by `j`
-    // leaves LLVM to prove seven bounds facts per output *sample*, and it does not.
-    // The zip moves the whole check to the row reads, one per output row.
-    //
-    // *A rolling window, not six fresh row reads per output row.* Six reads means
-    // six `center + dy * stride` multiplies per row where the C++ advanced one
-    // pointer by one add; rotating the window and fetching only the new bottom row
-    // costs one.
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::mc::mc_hor_ver20_sse2(src, dst, width, height);
+        return;
+    }
+    mc_hor_ver20_c(src, dst, width, height);
+}
+
+/// C++: `McHorVer02_c` — the vertical half-pel filter, `(0, 2)` in quarter-pel.
+///
+/// Reads `x` in `0 .. width`, `y` in `-2 .. height + 3`.
+#[inline(always)]
+pub fn mc_hor_ver02_c<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
     let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
         src.row_view(-2, 0, width),
         src.row_view(-1, 0, width),
@@ -377,16 +386,28 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
     }
 }
 
+/// Vertical half-pel filter, dispatching to SSE2 if available.
+#[inline(always)]
+pub fn mc_hor_ver02<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::mc::mc_hor_ver02_sse2(src, dst, width, height);
+        return;
+    }
+    mc_hor_ver02_c(src, dst, width, height);
+}
+
 /// C++: `McHorVer22_c` — the centre half-pel filter, `(2, 2)` in quarter-pel:
 /// vertical 6-tap into 16-bit intermediates, then horizontal 6-tap over those.
 ///
 /// Reads `x` in `-2 .. width + 3`, `y` in `-2 .. height + 3`.
-///
-/// `iTmp` is `[i16; 17 + 5]` as in the C++, and `width` above 17 indexes past it —
-/// a panic here. The encoder's half-pel refinement is what needs the 17: it filters
-/// `iWidth + 1` columns (`encoder/md.rs:1289`).
 #[inline(always)]
-pub fn mc_hor_ver22<S: RefSamples + Copy>(
+pub fn mc_hor_ver22_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     width: usize,
@@ -394,7 +415,6 @@ pub fn mc_hor_ver22<S: RefSamples + Copy>(
 ) {
     let mut iTmp = [0i16; 17 + 5];
     let n = width + 5;
-    // Zipped and rolling, for the reasons given in `mc_hor_ver02`.
     let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
         src.row_view(-2, -2, n),
         src.row_view(-1, -2, n),
@@ -421,6 +441,22 @@ pub fn mc_hor_ver22<S: RefSamples + Copy>(
             *o = WelsClip1((hor_filter_input_16bit(w.try_into().unwrap()) + 512) >> 10);
         }
     }
+}
+
+/// Center half-pel filter, dispatching to SSE2 if available.
+#[inline(always)]
+pub fn mc_hor_ver22<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::mc::mc_hor_ver22_sse2(src, dst, width, height);
+        return;
+    }
+    mc_hor_ver22_c(src, dst, width, height);
 }
 
 /// A `16`-stride scratch surface for the quarter-pel kernels — the C++
@@ -696,7 +732,7 @@ pub fn mc_hor_ver33<S: RefSamples + Copy>(
 ///
 /// The arms are in `[iMvX & 3][iMvY & 3]` order.
 #[inline(always)]
-pub fn mc_luma<S: RefSamples + Copy>(
+pub fn mc_luma_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     mv_x: i16,
@@ -722,6 +758,23 @@ pub fn mc_luma<S: RefSamples + Copy>(
         (3, 2) => mc_hor_ver32(src, dst, width, height),
         _ => mc_hor_ver33(src, dst, width, height),
     }
+}
+
+#[inline(always)]
+pub fn mc_luma<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    mv_x: i16,
+    mv_y: i16,
+    width: usize,
+    height: usize,
+) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::mc::mc_luma_sse2(src, dst, mv_x, mv_y, width, height);
+        return;
+    }
+    mc_luma_c(src, dst, mv_x, mv_y, width, height);
 }
 
 /// C++: `McChromaWithFragMv_c` — bilinear chroma interpolation at eighth-pel.
@@ -762,7 +815,7 @@ pub fn mc_chroma_with_frag_mv<S: RefSamples + Copy>(
 
 /// C++: `McChroma_c` — the copy path when the eighth-pel fraction is zero.
 #[inline(always)]
-pub fn mc_chroma<S: RefSamples + Copy>(
+pub fn mc_chroma_c<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     mv_x: i16,
@@ -775,6 +828,23 @@ pub fn mc_chroma<S: RefSamples + Copy>(
     } else {
         mc_chroma_with_frag_mv(src, dst, mv_x, mv_y, width, height);
     }
+}
+
+#[inline(always)]
+pub fn mc_chroma<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    mv_x: i16,
+    mv_y: i16,
+    width: usize,
+    height: usize,
+) {
+    #[cfg(target_arch = "x86_64")]
+    if crate::simd::has_sse2() {
+        crate::simd::x86_64::mc::mc_chroma_sse2(src, dst, mv_x, mv_y, width, height);
+        return;
+    }
+    mc_chroma_c(src, dst, mv_x, mv_y, width, height);
 }
 
 // ============================================================================
@@ -1123,8 +1193,17 @@ fn block_span(stride: usize, width: usize, height: usize) -> usize {
 }
 
 /// C++: `InitMcFunc`, `codec/common/src/mc.cpp` — both codecs call it at open time.
-pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, _uiCpuFlag: u32) {
+pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, uiCpuFlag: u32) {
     *pMcFuncs = SMcFunc::default();
+    #[cfg(target_arch = "x86_64")]
+    if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+        pMcFuncs.pfLumaHalfpelHor = |s, d, w, h| crate::simd::x86_64::mc::mc_hor_ver20_sse2(s, d, w, h);
+        pMcFuncs.pfLumaHalfpelVer = |s, d, w, h| crate::simd::x86_64::mc::mc_hor_ver02_sse2(s, d, w, h);
+        pMcFuncs.pfLumaHalfpelCen = |s, d, w, h| crate::simd::x86_64::mc::mc_hor_ver22_sse2(s, d, w, h);
+        pMcFuncs.pfSampleAveraging = |dst, a, b, w, h| crate::simd::x86_64::mc::pixel_avg_sse2(dst, a, b, w, h);
+        pMcFuncs.pMcChromaFunc = |s, d, mx, my, w, h| crate::simd::x86_64::mc::mc_chroma_sse2(s, d, mx, my, w, h);
+        pMcFuncs.pMcLumaFunc = |s, d, mx, my, w, h| crate::simd::x86_64::mc::mc_luma_sse2(s, d, mx, my, w, h);
+    }
 }
 
 #[cfg(test)]
@@ -1311,11 +1390,8 @@ mod tests {
         assert_eq!(buf, want);
     }
 
-    /// `InitMcFunc` is a **constant function of its CPU-flag argument**.
-    ///
-    /// Every `_sse2`/`_neon` variant in this port is a delegating stub or a dead
-    /// extern, so `_uiCpuFlag` selects nothing; this pins that, for every flag
-    /// value the port can produce rather than for the one this machine reports.
+    /// `InitMcFunc` installs SIMD kernels when `WELS_CPU_SSE2` is present on x86_64,
+    /// and scalar defaults otherwise.
     ///
     /// **Why this compares two tables instead of a table against named
     /// functions.** The obvious assert-map — `t.pMcLumaFunc as usize
@@ -1331,12 +1407,10 @@ mod tests {
     /// *same* installer compare unequal there.
     #[test]
     #[cfg_attr(miri, ignore)]
-    fn init_mc_func_ignores_the_cpu_flag() {
+    fn init_mc_func_cpu_flags() {
         use crate::common::cpu_core::*;
-        let flags: [u32; 10] = [
-            0, u32::MAX,
-            WELS_CPU_SSE2, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_AVX,
-            WELS_CPU_AVX2, WELS_CPU_NEON, WELS_CPU_MMI, WELS_CPU_LSX,
+        let scalar_flags: [u32; 5] = [
+            0, WELS_CPU_NEON, WELS_CPU_MMI, WELS_CPU_LSX, WELS_CPU_MMX,
         ];
         let mut base = SMcFunc::default();
         InitMcFunc(&mut base, 0);
@@ -1354,16 +1428,50 @@ mod tests {
             "pfLumaHalfpelHor", "pfLumaHalfpelVer", "pfLumaHalfpelCen",
             "pfSampleAveraging", "pMcChromaFunc", "pMcLumaFunc",
         ];
-        let want = addrs(&base);
-        for flag in flags {
+        let scalar_want = addrs(&base);
+        for flag in scalar_flags {
             let mut t = SMcFunc::default();
             InitMcFunc(&mut t, flag);
-            for (i, (got, expected)) in addrs(&t).into_iter().zip(want).enumerate() {
+            for (i, (got, expected)) in addrs(&t).into_iter().zip(scalar_want).enumerate() {
                 assert_eq!(
                     got, expected,
-                    "cpu flag {flag:#x} selected a different function for slot {}",
+                    "scalar cpu flag {flag:#x} selected a different function for slot {}",
                     NAMES[i]
                 );
+            }
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut sse2_base = SMcFunc::default();
+            InitMcFunc(&mut sse2_base, WELS_CPU_SSE2);
+            let sse2_want = addrs(&sse2_base);
+            for (i, (got, expected)) in sse2_want.into_iter().zip(scalar_want).enumerate() {
+                assert_ne!(
+                    got, expected,
+                    "SSE2 flag should install a SIMD function for slot {}",
+                    NAMES[i]
+                );
+            }
+
+            let sse2_flags: [u32; 6] = [
+                WELS_CPU_SSE2,
+                WELS_CPU_SSE2 | WELS_CPU_SSE41,
+                WELS_CPU_SSE2 | WELS_CPU_SSE42,
+                WELS_CPU_SSE2 | WELS_CPU_AVX,
+                WELS_CPU_SSE2 | WELS_CPU_AVX2,
+                u32::MAX,
+            ];
+            for flag in sse2_flags {
+                let mut t = SMcFunc::default();
+                InitMcFunc(&mut t, flag);
+                for (i, (got, expected)) in addrs(&t).into_iter().zip(sse2_want).enumerate() {
+                    assert_eq!(
+                        got, expected,
+                        "SSE2 cpu flag {flag:#x} selected a different function for slot {}",
+                        NAMES[i]
+                    );
+                }
             }
         }
     }
