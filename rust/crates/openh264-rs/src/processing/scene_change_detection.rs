@@ -19,7 +19,7 @@
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
-use crate::common::sad_common::sample_sad;
+use crate::simd::kernels::sad::sample_sad_8x8;
 use crate::encoder::wels_preprocess::{ESceneChangeIdc, EStaticBlockIdc, SPixMap, SSceneChangeResult};
 use crate::safe::plane::PlaneCursor;
 
@@ -107,7 +107,7 @@ impl CSceneChangeDetection {
                     j * 8 * planes.ref_stride + i * 8,
                     planes.ref_stride,
                 );
-                let iSad = sample_sad::<8, 8, _>(&cur, &refp);
+                let iSad = sample_sad_8x8(&cur, &refp);
                 self.m_sSceneChangeParam.iMotionBlockNum +=
                     (iSad > HIGH_MOTION_BLOCK_THRESHOLD) as i32;
             }
@@ -220,7 +220,7 @@ impl CSceneChangeDetectionScreen {
                     j * 8 * planes.ref_stride + i * 8,
                     planes.ref_stride,
                 );
-                let iSad = sample_sad::<8, 8, _>(&cur, &refp);
+                let iSad = sample_sad_8x8(&cur, &refp);
                 if iSad == 0 {
                     uiBlockIdcTmp = EStaticBlockIdc::COLLOCATED_STATIC;
                 } else if bScrollDetectFlag
@@ -249,7 +249,7 @@ impl CSceneChangeDetectionScreen {
                             .expect("the scroll bounds test admits only in-plane blocks"),
                         planes.ref_stride,
                     );
-                    let iSadScroll = sample_sad::<8, 8, _>(&cur, &refp_scroll);
+                    let iSadScroll = sample_sad_8x8(&cur, &refp_scroll);
                     if iSadScroll == 0 {
                         uiBlockIdcTmp = EStaticBlockIdc::SCROLLED_STATIC;
                     } else {

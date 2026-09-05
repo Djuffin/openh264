@@ -33,7 +33,7 @@
 #![forbid(unsafe_code)]
 
 use crate::common::intra_pred_common::{i16x16_luma_pred_h, i16x16_luma_pred_v};
-use crate::common::sad_common::sample_sad;
+use crate::simd::kernels::sad::sample_sad_16x16;
 use crate::encoder::wels_preprocess::{
     SComplexityAnalysisParam, SComplexityAnalysisScreenParam, SPixMap, SVAACalcResult,
 };
@@ -451,12 +451,12 @@ impl CComplexityAnalysisScreen {
                     let top: &[u8; 16] = pTmpCur.row(-1, 0, 16).try_into().expect("16 samples");
                     i16x16_luma_pred_v(&mut iMemPredMb, top);
                     let pred = PlaneCursor::new(&iMemPredMb, 0, 16);
-                    iSadPredV = sample_sad::<16, 16, _>(&pTmpCur, &pred);
+                    iSadPredV = sample_sad_16x16(&pTmpCur, &pred);
                 }
                 if i > 0 {
                     i16x16_luma_pred_h(&mut iMemPredMb, &pTmpCur);
                     let pred = PlaneCursor::new(&iMemPredMb, 0, 16);
-                    iSadPredH = sample_sad::<16, 16, _>(&pTmpCur, &pred);
+                    iSadPredH = sample_sad_16x16(&pTmpCur, &pred);
                 }
                 if i != 0 || j != 0 {
                     iGomSad += WELS_MIN(iSadPredV, iSadPredH);
@@ -536,7 +536,7 @@ impl CComplexityAnalysisScreen {
 
                 let pTmpCur = PlaneCursor::new(planes.cur, j * 16 * iStrideY + i * 16, iStrideY);
                 let pTmpRef = PlaneCursor::new(planes.refp, j * 16 * iStrideX + i * 16, iStrideX);
-                let mut iInterSad = sample_sad::<16, 16, _>(&pTmpCur, &pTmpRef);
+                let mut iInterSad = sample_sad_16x16(&pTmpCur, &pTmpRef);
                 if bScrollFlag
                     && (iInterSad != 0)
                     && (iBlockPointX + iScrollMvX >= 0)
@@ -555,7 +555,7 @@ impl CComplexityAnalysisScreen {
                             .expect("the scroll offset addresses the reference plane"),
                         iStrideX,
                     );
-                    let iScrollSad = sample_sad::<16, 16, _>(&pTmpCur, &pTmpRefScroll);
+                    let iScrollSad = sample_sad_16x16(&pTmpCur, &pTmpRefScroll);
 
                     if iScrollSad < iInterSad {
                         iInterSad = iScrollSad;
@@ -568,12 +568,12 @@ impl CComplexityAnalysisScreen {
                     let top: &[u8; 16] = pTmpCur.row(-1, 0, 16).try_into().expect("16 samples");
                     i16x16_luma_pred_v(&mut iMemPredMb, top);
                     let pred = PlaneCursor::new(&iMemPredMb, 0, 16);
-                    iSadPredV = sample_sad::<16, 16, _>(&pTmpCur, &pred);
+                    iSadPredV = sample_sad_16x16(&pTmpCur, &pred);
                 }
                 if i > 0 {
                     i16x16_luma_pred_h(&mut iMemPredMb, &pTmpCur);
                     let pred = PlaneCursor::new(&iMemPredMb, 0, 16);
-                    iSadPredH = sample_sad::<16, 16, _>(&pTmpCur, &pred);
+                    iSadPredH = sample_sad_16x16(&pTmpCur, &pred);
                 }
 
                 iGomSad += WELS_MIN(WELS_MIN(iSadPredV, iSadPredH), iInterSad);

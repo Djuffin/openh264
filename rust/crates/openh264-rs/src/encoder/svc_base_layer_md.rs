@@ -32,9 +32,7 @@ use crate::encoder::svc_encode_slice::{
 use crate::encoder::picture::{RecPicId, SrcPicId};
 use crate::common::mc::{mc_chroma, mc_luma};
 use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_8x16, copy_8x8};
-use crate::common::sad_common::sample_sad;
-use crate::encoder::sample::{satd_16x16, satd_4x4};
-use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
+use crate::safe::plane::PlaneCursorMut;
 use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY, SPicData};
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
 use crate::encoder::md::{
@@ -388,7 +386,7 @@ pub extern "C" fn WelsMdI4x4(
                 let cEnc = pEncPicture
                     .plane(0)
                     .cursor(kiMbOrgX + iCoordinateX as isize, kiMbOrgY + iCoordinateY as isize);
-                satd_4x4(&cPred, &cEnc)
+                (pFunc.sSampleDealingFuncs.pfSampleSatd[BLOCK_4x4].unwrap())(&cPred, &cEnc)
             } + lambda[(iPredMode == g_kiMapModeI4x4[iCurMode as usize] as i32) as usize];
 
             if iCurCost < iBestCost {
@@ -1126,9 +1124,11 @@ pub fn WelsMdPSkipEnc(
     let kiMbXChroma = (pCurMb.iMbX as isize) << 3;
     let kiMbYChroma = (pCurMb.iMbY as isize) << 3;
 
+    let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurLayer);
+    let pEncPicture = layer_enc_view_expect(&*pCurLayer);
+
     //luma
     {
-        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurLayer);
         let cRefLuma = pRefPicture.plane(0).cursor(
             kiMbXLuma + sQpelMvp.iMvX as isize,
             kiMbYLuma + sQpelMvp.iMvY as isize,
@@ -1137,17 +1137,15 @@ pub fn WelsMdPSkipEnc(
         mc_luma(&cRefLuma, &mut cDstLuma, sMvp.iMvX, sMvp.iMvY, 16, 16);
     }
     iSadCostLuma = {
-        let pEncPicture = layer_enc_view_expect(&*pCurLayer);
         let cEncLuma = pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
         let cSkipLuma = RecCursor::over_owned(&mut pMbCache.sSkipMb[..256], 0, 16);
-        sample_sad::<16, 16, _>(&cEncLuma, &cSkipLuma)
+        (pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].unwrap())(&cEncLuma, &cSkipLuma)
     };
 
     // `iStrideUV` was `(mvY >> 1) * strideUV + (mvX >> 1)` off the chroma macroblock
     // origin; in samples that is `(mvX >> 1, mvY >> 1)` from the same origin, and
     // `sQpelMvp` is already `sMvp >> 2`, so both are `sMvp >> 3`.
     {
-        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurLayer);
         let cRefCb = pRefPicture.plane(1).cursor(
             kiMbXChroma + (sQpelMvp.iMvX as isize >> 1),
             kiMbYChroma + (sQpelMvp.iMvY as isize >> 1),
@@ -1156,14 +1154,12 @@ pub fn WelsMdPSkipEnc(
         mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cb
     }
     iSadCostChroma = {
-        let pEncPicture = layer_enc_view_expect(&*pCurLayer);
         let cEncCb = pEncPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
         let cSkipCb = RecCursor::over_owned(&mut pMbCache.sSkipMb[256..320], 0, 8);
-        sample_sad::<8, 8, _>(&cEncCb, &cSkipCb)
+        (pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_8x8].unwrap())(&cEncCb, &cSkipCb)
     };
 
     {
-        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurLayer);
         let cRefCr = pRefPicture.plane(2).cursor(
             kiMbXChroma + (sQpelMvp.iMvX as isize >> 1),
             kiMbYChroma + (sQpelMvp.iMvY as isize >> 1),
@@ -1172,10 +1168,9 @@ pub fn WelsMdPSkipEnc(
         mc_chroma(&cRefCr, &mut cDstCr, sMvp.iMvX, sMvp.iMvY, 8, 8); //Cr
     }
     iSadCostChroma += {
-        let pEncPicture = layer_enc_view_expect(&*pCurLayer);
         let cEncCr = pEncPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
         let cSkipCr = RecCursor::over_owned(&mut pMbCache.sSkipMb[320..384], 0, 8);
-        sample_sad::<8, 8, _>(&cEncCr, &cSkipCr)
+        (pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_8x8].unwrap())(&cEncCr, &cSkipCr)
     };
 
     iSadCostMb = iSadCostLuma + iSadCostChroma;
@@ -1234,7 +1229,7 @@ fn AcceptPskip(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
-    pMbCache: &SMbCache,
+    pMbCache: &mut SMbCache,
     sMvp: &SMVUnitXY,
     iSadCostLuma: i32,
     iSadCostMb: i32,
@@ -1254,8 +1249,8 @@ fn AcceptPskip(
         let cEncLuma = pEncPicture
             .plane(0)
             .cursor((pCurMb.iMbX as isize) << 4, (pCurMb.iMbY as isize) << 4);
-        let cSkipLuma = PlaneCursor::new(&pMbCache.sSkipMb[..256], 0, 16);
-        pWelsMd.iCostLuma = satd_16x16(&cEncLuma, &cSkipLuma);
+        let cSkipLuma = RecCursor::over_owned(&mut pMbCache.sSkipMb[..256], 0, 16);
+        pWelsMd.iCostLuma = (pFunc.sSampleDealingFuncs.pfSampleSatd[BLOCK_16x16].unwrap())(&cEncLuma, &cSkipLuma);
     }
 
     pWelsMd.iCostSkipMb = iSadCostMb;
@@ -1276,6 +1271,8 @@ pub fn WelsMdInterMbRefinement(
 ) {
     let pCurDqLayer = current_layer_expect(pEncCtx);
     let pFunc = pEncCtx.func_list();
+    let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
+    let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
     let mut iBestSadCost = 0i32;
     let mut iBestSatdCost = 0i32;
     let mut sMeRefine = SMeRefinePointer::default();
@@ -1297,8 +1294,6 @@ pub fn WelsMdInterMbRefinement(
     /// The destination slice is exactly the block's span, `($h - 1) * 8 + $w`.
     macro_rules! mc_chroma_at {
         ($plane:expr, $off:expr, $dx:expr, $dy:expr, $mv:expr, $w:expr, $h:expr) => {{
-            let pRefPicture =
-                layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
             let cRef = pRefPicture
                 .plane($plane)
                 .cursor(kiMbXChroma + ($dx) as isize, kiMbYChroma + ($dy) as isize);
@@ -1344,20 +1339,18 @@ pub fn WelsMdInterMbRefinement(
             mc_chroma_at!(1, kiOffCb, dx, dy, sMv, 8, 8); //Cb
             mc_chroma_at!(2, kiOffCr, dx, dy, sMv, 8, 8); //Cr
 
-            let pEncPicture =
-                layer_enc_view_expect(&*pCurDqLayer);
             let cEncLuma = pEncPicture.plane(0).cursor(kiMbXChroma << 1, kiMbYChroma << 1);
             let cEncCb = pEncPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
             let cEncCr = pEncPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
-            pWelsMd.iCostSkipMb = sample_sad::<16, 16, _>(
+            pWelsMd.iCostSkipMb = (pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].unwrap())(
                 &cEncLuma,
                 &RecCursor::over_owned(&mut pMbCache.sMemPredMb[kiOffLuma..][..256], 0, 16),
             );
-            pWelsMd.iCostSkipMb += sample_sad::<8, 8, _>(
+            pWelsMd.iCostSkipMb += (pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_8x8].unwrap())(
                 &cEncCb,
                 &RecCursor::over_owned(&mut pMbCache.sMemPredMb[kiOffCb..][..64], 0, 8),
             );
-            pWelsMd.iCostSkipMb += sample_sad::<8, 8, _>(
+            pWelsMd.iCostSkipMb += (pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_8x8].unwrap())(
                 &cEncCr,
                 &RecCursor::over_owned(&mut pMbCache.sMemPredMb[kiOffCr..][..64], 0, 8),
             );
