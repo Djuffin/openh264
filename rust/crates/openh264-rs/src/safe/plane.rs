@@ -506,8 +506,8 @@ impl RefSamples for PlaneCursor<'_> {
 
     #[inline]
     fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
-        let r = PlaneCursor::row(self, dy, dx0, N);
-        std::array::from_fn(|i| r[i])
+        let r: &[u8; N] = PlaneCursor::row(self, dy, dx0, N).try_into().unwrap();
+        *r
     }
 
     #[inline]
@@ -800,8 +800,8 @@ impl RefSamples for PlaneCursorMut<'_> {
 
     #[inline]
     fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
-        let r = PlaneCursorMut::row(self, dy, dx0, N);
-        std::array::from_fn(|i| r[i])
+        let r: &[u8; N] = PlaneCursorMut::row(self, dy, dx0, N).try_into().unwrap();
+        *r
     }
 
     #[inline]
