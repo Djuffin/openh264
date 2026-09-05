@@ -43,3 +43,6 @@ path = "main.rs"
 opt-level = 3
 debug-assertions = true
 overflow-checks = true
+
+[profile.release]
+debug = true
