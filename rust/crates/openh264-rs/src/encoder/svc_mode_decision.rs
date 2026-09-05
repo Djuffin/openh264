@@ -32,8 +32,6 @@ pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::wels_preprocess::EStaticBlockIdc;
 pub use crate::encoder::md::SMcFunc;
 use crate::common::mc::{mc_chroma, mc_luma};
-use crate::common::sad_common::sample_sad;
-use crate::encoder::sample::satd_16x16;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 pub use crate::encoder::wels_preprocess::SVAACalcResult;
 pub use crate::encoder::wels_preprocess::SScrollDetectionParam;
@@ -452,6 +450,9 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     let kiMbXChroma = (pCurMb.iMbX as isize) << 3;
     let kiMbYChroma = (pCurMb.iMbY as isize) << 3;
 
+    let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
+    let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
+
     // The destination is one of two disjoint cache regions, chosen by the same flag
     // the C++ chose it by: `sSkipMb`'s three panes when the macroblock will be coded
     // as a background skip, `sMemPredMb`'s luma/chroma halves when it falls through to
@@ -460,7 +461,6 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
 
     // MC
     {
-        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
         let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
         let mut cDstLuma = if bSkipMbFlag {
             let pSkipMb = &mut pMbCache.sSkipMb;
@@ -473,7 +473,6 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
         mc_luma(&cRefLuma, &mut cDstLuma, 0, 0, 16, 16);
     }
     {
-        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
         let cRefCb = pRefPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
         let mut cDstCb = if bSkipMbFlag {
             let pSkipMb = &mut pMbCache.sSkipMb;
@@ -486,7 +485,6 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
         mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cb
     }
     {
-        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
         let cRefCr = pRefPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
         let mut cDstCr = if bSkipMbFlag {
             let pSkipMb = &mut pMbCache.sSkipMb;
@@ -503,11 +501,9 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     pMbCache.bCollocatedPredFlag = true;
     pWelsMd.iCostLuma = 0; // BGD&RC integration
     pCurMb.iSadCost = {
-        let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
-        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
         let cEncLuma = pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
         let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
-        sample_sad::<16, 16, _>(&cEncLuma, &cRefLuma)
+        (pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].unwrap())(&cEncLuma, &cRefLuma)
     };
     pCurMb.sP16x16Mv = SMVUnitXY::default();
     layer_rec_view_expect(&*pCurDqLayer)
@@ -561,11 +557,9 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     if pWelsMd.bMdUsingSad {
         pWelsMd.iCostLuma = pCurMb.iSadCost;
     } else {
-        let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
-        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
         let cEncLuma = pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
         let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
-        pWelsMd.iCostLuma = satd_16x16(&cEncLuma, &cRefLuma);
+        pWelsMd.iCostLuma = (pFunc.sSampleDealingFuncs.pfSampleSatd[BLOCK_16x16].unwrap())(&cEncLuma, &cRefLuma);
     }
 
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
