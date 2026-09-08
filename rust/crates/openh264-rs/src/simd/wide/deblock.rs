@@ -16,6 +16,7 @@ use wide::i16x8;
 
 use super::lanes::{load8, low8, narrow, widen_lo};
 use crate::safe::plane::{BlockRows, PlaneSamples, RefSamples};
+use crate::encoder::encoder_context::SMVUnitXY;
 
 // ============================================================================
 // Lane helpers
@@ -573,6 +574,23 @@ pub fn deblock_chroma_eq4(
 }
 
 
+/// The boundary strengths of one macroblock.
+///
+/// A forward to the scalar, for the reason `super::super::x86_64::deblock::bs_calc`
+/// gives: this module is that one written a second time in portable lanes, and there
+/// is nothing there to write. See
+/// [`bs_calc_scalar`](crate::encoder::deblocking::bs_calc_scalar).
+#[inline(always)]
+pub fn bs_calc(
+    cur_nzc: &[i8; 24],
+    cur_mv: &[SMVUnitXY; 16],
+    left: Option<(&[i8; 24], &[SMVUnitXY; 16])>,
+    top: Option<(&[i8; 24], &[SMVUnitXY; 16])>,
+    inside: u8,
+    bs: &mut [[[u8; 4]; 4]; 2],
+) {
+    crate::encoder::deblocking::bs_calc_scalar(cur_nzc, cur_mv, left, top, inside, bs)
+}
 
 #[cfg(test)]
 mod tests {

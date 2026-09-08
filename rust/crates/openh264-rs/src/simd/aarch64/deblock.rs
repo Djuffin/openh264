@@ -28,7 +28,7 @@
 
 use core::arch::aarch64::*;
 
-use super::lanes::{any_set, ld16, ld4, ld8, st16, to8};
+use super::lanes::{any_set, ld16, ld4, ld8, ld8_i16, st16, to8};
 use crate::safe::plane::{BlockRows, PlaneSamples, RefSamples};
 
 // ============================================================================
@@ -589,6 +589,245 @@ pub fn deblock_chroma_eq4(cb: &mut impl PlaneSamples, cr: &mut impl PlaneSamples
     } else {
         crate::common::deblocking_common::deblock_chroma_eq4_scalar(cb, cr, step_x, step_y, alpha, beta);
     }
+}
+
+// ============================================================================
+// Boundary strength
+// ============================================================================
+//
+// `DeblockingBSCalcEnc_AArch64_neon`, `codec/common/arm64/deblocking_aarch64_neon.S:827`,
+// built there from the `BS_NZC_CHECK` and `BS_MV_CHECK` macros. Both directions'
+// sixteen edge positions in one pass: `2` where either 4x4 block has a non-zero
+// coefficient count, else `1` where the two motion vectors differ by at least a whole
+// sample in either component, else `0`.
+//
+// # Three departures from the asm, each named where it is
+//
+// * The column-major rearrangement of the counts is one `tbl` rather than the asm's
+//   two `ins`/`zip1` pairs — the same permutation, a quarter of the instructions.
+// * The counts are combined with `orr` and tested against zero, where the asm adds
+//   and compares. Both answer "is either non-zero", which is what the scalar's
+//   `(a | b) != 0` asks; `orr` cannot overflow a lane, so it holds for raw counts as
+//   well as normalised ones.
+// * The motion-vector difference is a saturating subtraction each way and the larger
+//   of the two, where the asm uses `sabd`. See [`mv_ge4`].
+//
+// The asm reaches its neighbours by pointer arithmetic off the current macroblock
+// (`pCurMb - 1`, `pCurMb - iMbStride`) and so assumes one contiguous macroblock array
+// and a single reference frame — which is why upstream installs it only under
+// `SINGLE_REF_FRAME`. Here both neighbours arrive as plain arrays the caller looked
+// up through the macroblock window, so neither assumption is made; the absent-
+// neighbour case is `None` and is *defined* to give zero, rather than the asm's stale
+// register that its caller happens to overwrite.
+
+use crate::encoder::encoder_context::SMVUnitXY;
+
+const _: () = assert!(
+    size_of::<SMVUnitXY>() == 4 && align_of::<SMVUnitXY>() == 2,
+    "`ld_mv4` reads `[SMVUnitXY; 16]` as 32 contiguous `i16`"
+);
+
+/// The 4x4 transpose of a macroblock's sixteen block indices: entry `j` is block
+/// `4 * (j % 4) + j / 4`, so the four vertical-edge positions of one column land in
+/// one word. The asm builds it with two `ins`/`zip1` rounds; `tbl` is the same
+/// permutation in one instruction.
+const COLUMN_MAJOR: [u8; 16] = [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15];
+
+/// Four bytes into lanes 12..16, the rest zero — where `ext #12` picks the
+/// neighbouring macroblock's edge column up from.
+#[inline]
+#[target_feature(enable = "neon")]
+fn edge_word(w: u32) -> uint8x16_t {
+    vreinterpretq_u8_u32(vsetq_lane_u32::<3>(w, vdupq_n_u32(0)))
+}
+
+/// The four counts at `idx` of a neighbour's table, as one word.
+#[inline]
+fn nzc_word(nzc: &[i8; 24], idx: [usize; 4]) -> u32 {
+    u32::from_ne_bytes(idx.map(|i| nzc[i] as u8))
+}
+
+/// A macroblock's sixteen luma counts as bytes. Only their non-zero-ness is read, so
+/// the sign the C++ never sets in them cannot matter.
+#[inline]
+fn nzc_word_bytes(nzc: &[i8; 24]) -> [u8; 16] {
+    std::array::from_fn(|i| nzc[i] as u8)
+}
+
+/// `BS_NZC_CHECK`'s tail: `2` wherever either of the two blocks has a coefficient.
+#[inline]
+#[target_feature(enable = "neon")]
+fn nzc_term(cur: uint8x16_t, prev: uint8x16_t) -> uint8x16_t {
+    let both = vorrq_u8(cur, prev);
+    vandq_u8(vtstq_u8(both, both), vdupq_n_u8(2))
+}
+
+/// The `k`-th group of four motion vectors, as eight halfword lanes.
+#[inline]
+#[target_feature(enable = "neon")]
+fn ld_mv4<const K: usize>(mv: &[SMVUnitXY; 16]) -> int16x8_t {
+    const { assert!(K < 4, "a macroblock holds four groups of four vectors") };
+    // SAFETY: `SMVUnitXY` is `#[repr(C)]` over two `i16` — asserted above — so
+    // `[SMVUnitXY; 16]` is 32 contiguous `i16` with no padding, and `K < 4` puts the
+    // eight lanes read here at halfwords `8K .. 8K + 8` of it.
+    unsafe { vld1q_s16(mv.as_ptr().cast::<i16>().add(K * 8)) }
+}
+
+/// Four motion vectors gathered from scattered indices — the left neighbour's last
+/// column, which is the one place the asm's contiguous `ld1` cannot serve.
+#[inline]
+#[target_feature(enable = "neon")]
+fn gather_mv4(mv: &[SMVUnitXY; 16], idx: [usize; 4]) -> int16x8_t {
+    let mut w = [0i16; 8];
+    for (j, &i) in idx.iter().enumerate() {
+        w[2 * j] = mv[i].iMvX;
+        w[2 * j + 1] = mv[i].iMvY;
+    }
+    ld8_i16(&w)
+}
+
+/// `BS_COMPARE_MV`: for four vector pairs, a set mask where either component differs
+/// by four or more — the whole-sample threshold `MB_BS_MV`/`SMB_EDGE_MV` test.
+///
+/// `|a - b| >= 4` is spelled as a saturating subtraction each way and the larger of
+/// the two, not as the asm's `sabd`: `sabd` wraps for a difference past `i16::MAX`,
+/// where saturation clamps to `i16::MAX` — still at or above 4 — so this answers the
+/// scalar's `i32` question over the whole `i16` range rather than only over the
+/// motion range the encoder happens to produce.
+#[inline]
+#[target_feature(enable = "neon")]
+fn mv_ge4(a: int16x8_t, b: int16x8_t) -> uint16x8_t {
+    let d = vmaxq_s16(vqsubq_s16(a, b), vqsubq_s16(b, a));
+    vcgeq_s16(d, vdupq_n_s16(4))
+}
+
+/// The four groups' comparisons folded to sixteen `1`/`0` bytes: `pmax` pairs each
+/// vector's two components together, then the halfword masks narrow to bytes.
+#[inline]
+#[target_feature(enable = "neon")]
+fn mv_term(m: [uint16x8_t; 4]) -> uint8x16_t {
+    let lo = vpmaxq_u16(m[0], m[1]);
+    let hi = vpmaxq_u16(m[2], m[3]);
+    vandq_u8(vcombine_u8(vmovn_u16(lo), vmovn_u16(hi)), vdupq_n_u8(1))
+}
+
+/// The per-direction mask: the macroblock edge kept or cleared, the three interior
+/// edges reduced to what this macroblock kind's rule allows. See
+/// [`bs_calc`] for what the caller puts in `inside`.
+#[inline]
+#[target_feature(enable = "neon")]
+fn bs_mask(edge_present: bool, inside: u8) -> uint8x16_t {
+    let mut m = [inside; 16];
+    m[..4].fill(if edge_present { 0xFF } else { 0 });
+    ld16(&m)
+}
+
+/// `DeblockingBSCalcEnc_AArch64_neon` — the deblocking boundary strengths of one
+/// macroblock, both directions, from plain per-macroblock data.
+///
+/// `bs[0]` is the vertical (left-hand) edges and `bs[1]` the horizontal (top) ones;
+/// within each, `[0]` is the macroblock boundary and `[1..4]` the interior edges, and
+/// the four bytes of each are the positions along it. A `None` neighbour gives `0`
+/// across that macroblock edge, which is what `DeblockingBSCalc_c` writes when the
+/// boundary flag is clear.
+///
+/// `inside` is ANDed into the interior edges, and is where the three macroblock kinds
+/// differ: `0xFF` for a partitioned inter macroblock (`DeblockingBSInsideMBNormal`),
+/// `0x02` for `MB_TYPE_16x16`, whose rule is the coefficient term alone
+/// (`DeblockingBSInsideMBAvsbase`), and `0x00` for `MB_TYPE_SKIP`, which has no
+/// interior edges. On the data the encoder actually produces the last two masks
+/// change nothing — a 16x16 partition replicates one vector to all sixteen blocks, so
+/// the vector term is already zero, and a skip macroblock has neither coefficients
+/// nor differing vectors — and `deblocking::tests::the_kind_masks_are_no_ops_on_the`
+/// `_data_the_encoder_produces` is that claim. They are applied anyway, because "the
+/// encoder cannot produce it" is not a property of this kernel.
+///
+/// Nothing here reads a reference index. Neither does the scalar it must match, and
+/// neither does the asm — which is why upstream guards its installation with
+/// `SINGLE_REF_FRAME`.
+pub fn bs_calc(
+    cur_nzc: &[i8; 24],
+    cur_mv: &[SMVUnitXY; 16],
+    left: Option<(&[i8; 24], &[SMVUnitXY; 16])>,
+    top: Option<(&[i8; 24], &[SMVUnitXY; 16])>,
+    inside: u8,
+    bs: &mut [[[u8; 4]; 4]; 2],
+) {
+    // SAFETY: NEON is baseline on aarch64; see the module header.
+    unsafe { bs_calc_neon(cur_nzc, cur_mv, left, top, inside, bs) }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn bs_calc_neon(
+    cur_nzc: &[i8; 24],
+    cur_mv: &[SMVUnitXY; 16],
+    left: Option<(&[i8; 24], &[SMVUnitXY; 16])>,
+    top: Option<(&[i8; 24], &[SMVUnitXY; 16])>,
+    inside: u8,
+    bs: &mut [[[u8; 4]; 4]; 2],
+) {
+    // The counts, in both orders: raster for the horizontal edges, column-major for
+    // the vertical ones. Only the sixteen luma entries take part.
+    let rows = ld16(&nzc_word_bytes(cur_nzc));
+    let cols = vqtbl1q_u8(rows, ld16(&COLUMN_MAJOR));
+
+    // `ext #12` slides the neighbour's edge column in ahead of this macroblock's own
+    // first three columns, so lane `i` meets the block across its edge.
+    let prev_rows = vextq_u8::<12>(
+        edge_word(top.map_or(0, |(n, _)| nzc_word(n, [12, 13, 14, 15]))),
+        rows,
+    );
+    let prev_cols = vextq_u8::<12>(
+        edge_word(left.map_or(0, |(n, _)| nzc_word(n, [3, 7, 11, 15]))),
+        cols,
+    );
+
+    // The vectors, likewise: four rows of four, and their 4x4 transpose.
+    let (r0, r1, r2, r3) = (
+        ld_mv4::<0>(cur_mv),
+        ld_mv4::<1>(cur_mv),
+        ld_mv4::<2>(cur_mv),
+        ld_mv4::<3>(cur_mv),
+    );
+    let (z0, z1) = (
+        vreinterpretq_s16_u32(vzip1q_u32(vreinterpretq_u32_s16(r0), vreinterpretq_u32_s16(r2))),
+        vreinterpretq_s16_u32(vzip2q_u32(vreinterpretq_u32_s16(r0), vreinterpretq_u32_s16(r2))),
+    );
+    let (z2, z3) = (
+        vreinterpretq_s16_u32(vzip1q_u32(vreinterpretq_u32_s16(r1), vreinterpretq_u32_s16(r3))),
+        vreinterpretq_s16_u32(vzip2q_u32(vreinterpretq_u32_s16(r1), vreinterpretq_u32_s16(r3))),
+    );
+    let (c0, c1) = (
+        vreinterpretq_s16_u32(vzip1q_u32(vreinterpretq_u32_s16(z0), vreinterpretq_u32_s16(z2))),
+        vreinterpretq_s16_u32(vzip2q_u32(vreinterpretq_u32_s16(z0), vreinterpretq_u32_s16(z2))),
+    );
+    let (c2, c3) = (
+        vreinterpretq_s16_u32(vzip1q_u32(vreinterpretq_u32_s16(z1), vreinterpretq_u32_s16(z3))),
+        vreinterpretq_s16_u32(vzip2q_u32(vreinterpretq_u32_s16(z1), vreinterpretq_u32_s16(z3))),
+    );
+
+    let zero_mv = vdupq_n_s16(0);
+    let prev_r = top.map_or(zero_mv, |(_, m)| ld_mv4::<3>(m));
+    let prev_c = left.map_or(zero_mv, |(_, m)| gather_mv4(m, [3, 7, 11, 15]));
+
+    let mv_rows = mv_term([mv_ge4(prev_r, r0), mv_ge4(r0, r1), mv_ge4(r1, r2), mv_ge4(r2, r3)]);
+    let mv_cols = mv_term([mv_ge4(prev_c, c0), mv_ge4(c0, c1), mv_ge4(c1, c2), mv_ge4(c2, c3)]);
+
+    // `umax`: the coefficient term is 2 and the vector term 1, so the larger is the
+    // scalar's "2 if either block has a coefficient, else 1 if the vectors differ".
+    let vertical = vandq_u8(
+        vmaxq_u8(nzc_term(cols, prev_cols), mv_cols),
+        bs_mask(left.is_some(), inside),
+    );
+    let horizontal = vandq_u8(
+        vmaxq_u8(nzc_term(rows, prev_rows), mv_rows),
+        bs_mask(top.is_some(), inside),
+    );
+
+    let (v, h) = bs.split_at_mut(1);
+    st16(v[0].as_flattened_mut(), vertical);
+    st16(h[0].as_flattened_mut(), horizontal);
 }
 
 // ============================================================================

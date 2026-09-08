@@ -185,6 +185,8 @@ use crate::common::deblocking_common::{
     deblock_chroma_eq4, deblock_chroma_lt4, deblock_luma_eq4, deblock_luma_lt4,
 };
 use crate::safe::mb_grid::{MbSplit, MbWindow};
+/// The kernel set this module dispatches through; see [`crate::simd::kernels`].
+use crate::simd::kernels;
 
 /// Active parameters and pointers for macroblock deblocking filtering.
 /// Matches `struct TagDeblockingFilter` in `codec/encoder/core/inc/deblocking.h`.
@@ -463,61 +465,143 @@ pub fn DeblockingBSMarginalMBAvcbase(pCurMb: &SMB, pNeighMb: &SMB, iEdge: usize)
     u32::from_ne_bytes(uiBSx4)
 }
 
-/// Reference C implementation of Boundary Strength ($bS$) calculation.
+/// Boundary strength ($bS$) for one macroblock: the kernel, and the one override it
+/// cannot make.
 ///
 /// `uiBS[0][0]` is the left MB-boundary edge, `uiBS[1][0]` the top one;
 /// `uiBS[dir][1..4]` are the interior edges. The C++ writes the boundary rows
 /// through `uint32_t` punning (`*(uint32_t*)uiBS[0][0]`); a 4-byte row
 /// assignment is the same store with the type kept.
 ///
+/// This is `DeblockingBSCalc_AArch64_neon` (`deblocking.cpp:578`) rather than
+/// `DeblockingBSCalc_c`: the kernel computes all eight edge groups from the three
+/// macroblocks' counts and vectors, and the caller then stamps `0x04040404` across a
+/// macroblock edge whose neighbour is intra — the one thing that depends on a
+/// neighbour's *type* rather than its data, and the only thing upstream's own NEON
+/// wrapper does after calling the asm. The `!iLeftFlag` / `!iTopFlag` zeroing the C++
+/// also does there is the kernel's `None` case here.
+///
+/// The counts are normalised in place first, and that write-back is *observable* —
+/// `DeblockingBSCalc_c` has always performed it and later readers of
+/// `iNonZeroCount` see the normalised values — so it stays, even though the kernel
+/// tests non-zero-ness and would not need it.
+///
 /// A flag set with the neighbour absent from the split is a bug, and
 /// [`MbSplit`]'s panic names it.
-pub fn DeblockingBSCalc_c(
+pub fn DeblockingBSCalc(
     mbs: &mut MbSplit<'_, SMB>,
     uiBS: &mut [[[u8; 4]; 4]; 2],
     uiCurMbType: u32,
-    iLeftFlag: i32,
-    iTopFlag: i32,
+    iLeftFlag: bool,
+    iTopFlag: bool,
 ) {
-    if iLeftFlag != 0 {
-        let leftMb = mbs.left();
-        let val = if IS_INTRA(leftMb.uiMbType) {
-            0x04040404u32
-        } else {
-            DeblockingBSMarginalMBAvcbase(mbs.cur(), leftMb, 0)
-        };
-        uiBS[0][0] = val.to_ne_bytes();
-    } else {
-        uiBS[0][0] = [0; 4];
-    }
-
-    if iTopFlag != 0 {
-        let topMb = mbs.top();
-        let val = if IS_INTRA(topMb.uiMbType) {
-            0x04040404u32
-        } else {
-            DeblockingBSMarginalMBAvcbase(mbs.cur(), topMb, 1)
-        };
-        uiBS[1][0] = val.to_ne_bytes();
-    } else {
-        uiBS[1][0] = [0; 4];
-    }
-
     if uiCurMbType != MB_TYPE_SKIP {
         // deblocking.cpp:615
         WelsNonZeroCount_c(&mut mbs.cur_mut().iNonZeroCount);
-        if uiCurMbType == MB_TYPE_16x16 {
-            DeblockingBSInsideMBAvsbase(&mbs.cur().iNonZeroCount, uiBS, 1);
+    }
+    let cur = mbs.cur();
+    let leftMb = if iLeftFlag { Some(mbs.left()) } else { None };
+    let topMb = if iTopFlag { Some(mbs.top()) } else { None };
+
+    kernels::deblock::bs_calc(
+        &cur.iNonZeroCount,
+        &cur.sMv,
+        leftMb.map(|m| (&m.iNonZeroCount, &m.sMv)),
+        topMb.map(|m| (&m.iNonZeroCount, &m.sMv)),
+        inside_bs_mask(uiCurMbType),
+        uiBS,
+    );
+
+    if leftMb.is_some_and(|m| IS_INTRA(m.uiMbType)) {
+        uiBS[0][0] = [4; 4];
+    }
+    if topMb.is_some_and(|m| IS_INTRA(m.uiMbType)) {
+        uiBS[1][0] = [4; 4];
+    }
+}
+
+/// **The boundary-strength calculation on plain data** — what every kernel set's
+/// `bs_calc` computes, and the body the scalar set forwards to.
+///
+/// Factored out of `DeblockingBSCalc_c` so that the strength calculation takes
+/// per-macroblock *data* rather than a window into the macroblock array: the NEON
+/// kernel reaches its neighbours the same way, and the two can therefore be held
+/// against each other directly. See
+/// [`kernels::deblock::bs_calc`](crate::simd::kernels) for the contract, which is
+/// this function's.
+///
+/// # How this differs, line by line, from the three functions it replaces
+///
+/// * The macroblock edges are `DeblockingBSMarginalMBAvcbase` with its table indices
+///   spelled out, and are unchanged.
+/// * The interior edges are `DeblockingBSInsideMBNormal` with `BS_EDGE`'s
+///   `(bs | mv) << (bs != 0)` written as the test it performs — `2` when either block
+///   has a coefficient, else the vector term. The two agree exactly on counts already
+///   normalised to 0/1, which is what the caller passes, and this spelling also holds
+///   for raw counts, where `BS_EDGE`'s shift would not.
+/// * `DeblockingBSInsideMBAvsbase` (the `MB_TYPE_16x16` rule, coefficients only) and
+///   the skip macroblock's all-zero interior are `inside_mask` — `0x02` and `0x00`
+///   against this function's `0xFF` — rather than separate bodies.
+pub fn bs_calc_scalar(
+    cur_nzc: &[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM],
+    cur_mv: &[SMVUnitXY; MB_BLOCK4x4_NUM],
+    left: Option<(&[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM], &[SMVUnitXY; MB_BLOCK4x4_NUM])>,
+    top: Option<(&[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM], &[SMVUnitXY; MB_BLOCK4x4_NUM])>,
+    inside_mask: u8,
+    uiBS: &mut [[[u8; 4]; 4]; 2],
+) {
+    /// One edge: the coefficient test first, the motion-vector test second.
+    #[inline(always)]
+    fn edge(a_nzc: i8, b_nzc: i8, a_mv: SMVUnitXY, b_mv: SMVUnitXY) -> u8 {
+        if (a_nzc | b_nzc) != 0 {
+            2
+        } else if (a_mv.iMvX as i32 - b_mv.iMvX as i32).abs() >= 4
+            || (a_mv.iMvY as i32 - b_mv.iMvY as i32).abs() >= 4
+        {
+            1
         } else {
-            let cur = mbs.cur();
-            DeblockingBSInsideMBNormal(&cur.sMv, uiBS, &cur.iNonZeroCount);
+            0
         }
-    } else {
-        for dir in 0..2 {
-            for edge in 1..4 {
-                uiBS[dir][edge] = [0; 4];
-            }
+    }
+
+    for (dir, nb) in [(0usize, left), (1usize, top)] {
+        uiBS[dir][0] = match nb {
+            Some((nzc, mv)) => std::array::from_fn(|i| {
+                let (b, bn) = (
+                    g_kuiTableBIdx[dir][i] as usize,
+                    g_kuiTableBIdx[dir][4 + i] as usize,
+                );
+                edge(cur_nzc[b], nzc[bn], cur_mv[b], mv[bn])
+            }),
+            None => [0; 4],
+        };
+    }
+
+    for pos in 0..4 {
+        for e in 1..4 {
+            // Vertical edge `e` at row `pos` separates blocks `4 * pos + e - 1` and
+            // `4 * pos + e`; the horizontal one at column `pos` separates
+            // `4 * (e - 1) + pos` and `4 * e + pos`.
+            let (v, vp) = (4 * pos + e, 4 * pos + e - 1);
+            let (h, hp) = (4 * e + pos, 4 * (e - 1) + pos);
+            uiBS[0][e][pos] = edge(cur_nzc[v], cur_nzc[vp], cur_mv[v], cur_mv[vp]) & inside_mask;
+            uiBS[1][e][pos] = edge(cur_nzc[h], cur_nzc[hp], cur_mv[h], cur_mv[hp]) & inside_mask;
         }
+    }
+}
+
+/// The `inside_mask` for a macroblock kind — see [`bs_calc_scalar`].
+///
+/// `DeblockingBSCalc_c` branches on the same three cases: a skip macroblock's interior
+/// edges are set to zero outright, `MB_TYPE_16x16` takes
+/// `DeblockingBSInsideMBAvsbase`, whose rule is the coefficient term alone, and
+/// everything else takes `DeblockingBSInsideMBNormal`.
+#[inline]
+pub fn inside_bs_mask(uiCurMbType: u32) -> u8 {
+    match uiCurMbType {
+        MB_TYPE_SKIP => 0x00,
+        MB_TYPE_16x16 => 0x02,
+        _ => 0xFF,
     }
 }
 
@@ -704,40 +788,25 @@ fn FilteringEdgeChromaIntraV(
 // Macroblock Deblocking Execution
 // ============================================================================
 
+/// The inter macroblock's eight edges.
+///
+/// The validity flags and the three plane cursors are the caller's — computed once in
+/// [`DeblockingMbAvcbase`] where the boundary strengths need them too, rather than
+/// re-derived here from the slice map and `mb_cursors` as they were.
 pub fn DeblockingInterMb(
-    view: &RecPicView,
-    map: &[AtomicU16],
     mbs: &MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
     uiBS: &[[[u8; 4]; 4]; 2],
+    cursors: (RecCursor<'_>, RecCursor<'_>, RecCursor<'_>),
+    iLeftFlag: bool,
+    iTopFlag: bool,
 ) {
     let iCurLumaQp = mbs.cur().uiLumaQp as i8;
     let iCurChromaQp = mbs.cur().uiChromaQp as i8;
     let iLineSize = pFilter.iCsStride[0];
     let iLineSizeUV = pFilter.iCsStride[1];
-    let iMbStride = pFilter.iMbStride as isize;
 
-    let iMbX = mbs.cur().iMbX as i32;
-    let iMbY = mbs.cur().iMbY as i32;
-    let kiMbXY = mbs.cur().iMbXY;
-
-    let bLeftBsValid = [
-        iMbX > 0,
-        iMbX > 0
-            && (mbs.cur().uiSliceIdc
-                == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
-    ];
-    let bTopBsValid = [
-        iMbY > 0,
-        iMbY > 0
-            && (mbs.cur().uiSliceIdc
-                == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
-    ];
-
-    let iLeftFlag = bLeftBsValid[pFilter.uiFilterIdc as usize];
-    let iTopFlag = bTopBsValid[pFilter.uiFilterIdc as usize];
-
-    let (mut pDestY, mut pDestCb, mut pDestCr) = mb_cursors(view, iMbX, iMbY);
+    let (mut pDestY, mut pDestCb, mut pDestCr) = cursors;
 
     if iLeftFlag {
         let leftMb = mbs.left();
@@ -870,43 +939,24 @@ pub fn DeblockingInterMb(
     }
 }
 
+/// The intra macroblock's luma edges. Flags and cursor from the caller, as in
+/// [`DeblockingInterMb`].
 pub fn FilteringEdgeLumaHV(
-    view: &RecPicView,
-    map: &[AtomicU16],
     mbs: &MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
+    mut pDestY: RecCursor<'_>,
+    iLeftFlag: bool,
+    iTopFlag: bool,
 ) {
     let iLineSize = pFilter.iCsStride[0];
-    let iMbStride = pFilter.iMbStride as isize;
 
     let mut iIdexA = 0i32;
     let mut iAlpha = 0i32;
     let mut iBeta = 0i32;
 
-    let iMbX = mbs.cur().iMbX as i32;
-    let iMbY = mbs.cur().iMbY as i32;
-
-    let kiMbXY = mbs.cur().iMbXY;
-    let bLeftBsValid = [
-        iMbX > 0,
-        iMbX > 0
-            && (mbs.cur().uiSliceIdc
-                == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
-    ];
-    let bTopBsValid = [
-        iMbY > 0,
-        iMbY > 0
-            && (mbs.cur().uiSliceIdc
-                == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
-    ];
-
-    let iLeftFlag = bLeftBsValid[pFilter.uiFilterIdc as usize];
-    let iTopFlag = bTopBsValid[pFilter.uiFilterIdc as usize];
-
     let mut iTc: [i8; 4] = [0; 4];
     let uiBSx4: [u8; 4] = [0x03, 0x03, 0x03, 0x03];
 
-    let (mut pDestY, _, _) = mb_cursors(view, iMbX, iMbY);
     let iCurQp = mbs.cur().uiLumaQp as i8;
 
     // Luma vertical edges
@@ -947,43 +997,24 @@ pub fn FilteringEdgeLumaHV(
     }
 }
 
+/// The intra macroblock's chroma edges. Flags and cursors from the caller.
 pub fn FilteringEdgeChromaHV(
-    view: &RecPicView,
-    map: &[AtomicU16],
     mbs: &MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
+    mut pDestCb: RecCursor<'_>,
+    mut pDestCr: RecCursor<'_>,
+    iLeftFlag: bool,
+    iTopFlag: bool,
 ) {
     let iLineSize = pFilter.iCsStride[1];
-    let iMbStride = pFilter.iMbStride as isize;
 
     let mut iIdexA = 0i32;
     let mut iAlpha = 0i32;
     let mut iBeta = 0i32;
 
-    let iMbX = mbs.cur().iMbX as i32;
-    let iMbY = mbs.cur().iMbY as i32;
-
-    let kiMbXY = mbs.cur().iMbXY;
-    let bLeftBsValid = [
-        iMbX > 0,
-        iMbX > 0
-            && (mbs.cur().uiSliceIdc
-                == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
-    ];
-    let bTopBsValid = [
-        iMbY > 0,
-        iMbY > 0
-            && (mbs.cur().uiSliceIdc
-                == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
-    ];
-
-    let iLeftFlag = bLeftBsValid[pFilter.uiFilterIdc as usize];
-    let iTopFlag = bTopBsValid[pFilter.uiFilterIdc as usize];
-
     let mut iTc: [i8; 4] = [0; 4];
     let uiBSx4: [u8; 4] = [0x03, 0x03, 0x03, 0x03];
 
-    let (_, mut pDestCb, mut pDestCr) = mb_cursors(view, iMbX, iMbY);
     let iCurQp = mbs.cur().uiChromaQp as i8;
 
     // Chroma vertical edges
@@ -1038,15 +1069,30 @@ pub fn FilteringEdgeChromaHV(
 
 #[inline(always)]
 pub fn DeblockingIntraMb(
-    view: &RecPicView,
-    map: &[AtomicU16],
     mbs: &MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
+    cursors: (RecCursor<'_>, RecCursor<'_>, RecCursor<'_>),
+    iLeftFlag: bool,
+    iTopFlag: bool,
 ) {
-    FilteringEdgeLumaHV(view, map, mbs, pFilter);
-    FilteringEdgeChromaHV(view, map, mbs, pFilter);
+    let (pDestY, pDestCb, pDestCr) = cursors;
+    FilteringEdgeLumaHV(mbs, pFilter, pDestY, iLeftFlag, iTopFlag);
+    FilteringEdgeChromaHV(mbs, pFilter, pDestCb, pDestCr, iLeftFlag, iTopFlag);
 }
 
+/// One macroblock's filter, and **the one place its neighbour flags and plane cursors
+/// are computed**.
+///
+/// Both used to be re-derived by each callee — the flags three times from the slice
+/// map, the cursors twice through `mb_cursors`, which is six `SharedPlane::cursor`
+/// constructions — for values that are the macroblock's and settled here. The C++ does
+/// the same thing in `DeblockingMbAvcbase` and passes `pFilter` down with the
+/// pointers already in it.
+///
+/// The flags are also *lazier* than the array pair they replace: `bLeftBsValid[2]`
+/// built both elements, so the slice map was read even at `uiFilterIdc == 0`, which
+/// only ever selects element 0. The read is relaxed and side-effect-free, so dropping
+/// it changes nothing but the work.
 pub fn DeblockingMbAvcbase(
     view: &RecPicView,
     map: &[AtomicU16],
@@ -1056,42 +1102,33 @@ pub fn DeblockingMbAvcbase(
     // deblocking.cpp:629 — `uint8_t uiBS[2][4][4]`, two 4x4 planes (vertical and
     // horizontal edges).
     let mut uiBS: [[[u8; 4]; 4]; 2] = [[[0; 4]; 4]; 2];
-    let uiCurMbType = mbs.cur().uiMbType;
+    let cur = mbs.cur();
+    let uiCurMbType = cur.uiMbType;
     let iMbStride = pFilter.iMbStride as isize;
 
-    let iMbX = mbs.cur().iMbX as i32;
-    let iMbY = mbs.cur().iMbY as i32;
+    let iMbX = cur.iMbX as i32;
+    let iMbY = cur.iMbY as i32;
+    let kiMbXY = cur.iMbXY;
+    let uiSliceIdc = cur.uiSliceIdc;
+    let bWithinSlice = pFilter.uiFilterIdc != 0;
 
-    let kiMbXY = mbs.cur().iMbXY;
-    let bLeftBsValid = [
-        iMbX > 0,
-        iMbX > 0
-            && (mbs.cur().uiSliceIdc
-                == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed)),
-    ];
-    let bTopBsValid = [
-        iMbY > 0,
-        iMbY > 0
-            && (mbs.cur().uiSliceIdc
-                == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed)),
-    ];
+    let iLeftFlag = iMbX > 0
+        && (!bWithinSlice
+            || uiSliceIdc == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed));
+    let iTopFlag = iMbY > 0
+        && (!bWithinSlice
+            || uiSliceIdc
+                == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed));
 
-    let iLeftFlag = bLeftBsValid[pFilter.uiFilterIdc as usize] as i32;
-    let iTopFlag = bTopBsValid[pFilter.uiFilterIdc as usize] as i32;
+    let cursors = mb_cursors(view, iMbX, iMbY);
 
     match uiCurMbType {
         MB_TYPE_INTRA4x4 | MB_TYPE_INTRA16x16 | MB_TYPE_INTRA_PCM => {
-            DeblockingIntraMb(view, map, mbs, pFilter);
+            DeblockingIntraMb(mbs, pFilter, cursors, iLeftFlag, iTopFlag);
         }
         _ => {
-            DeblockingBSCalc_c(
-                mbs,
-                &mut uiBS,
-                uiCurMbType,
-                iLeftFlag,
-                iTopFlag,
-            );
-            DeblockingInterMb(view, map, mbs, pFilter, &uiBS);
+            DeblockingBSCalc(mbs, &mut uiBS, uiCurMbType, iLeftFlag, iTopFlag);
+            DeblockingInterMb(mbs, pFilter, &uiBS, cursors, iLeftFlag, iTopFlag);
         }
     }
 }
@@ -1296,6 +1333,243 @@ mod tests {
         assert_eq!(iTc[1], 1);
         assert_eq!(iTc[2], 2);
         assert_eq!(iTc[3], -1);
+    }
+
+
+    // ========================================================================
+    // Boundary strength
+    // ========================================================================
+
+    /// **The three-way scalar this replaced, kept verbatim as the test's oracle.**
+    ///
+    /// `DeblockingBSCalc_c` as it stood before the strength calculation became one
+    /// kernel over plain data: the marginal edges through
+    /// `DeblockingBSMarginalMBAvcbase`, then one of three interior bodies chosen by
+    /// the macroblock kind, with `WelsNonZeroCount_c` run over the current
+    /// macroblock's counts in between. Everything below is held against this.
+    fn bs_calc_three_way(
+        cur: &mut SMB,
+        left: Option<&SMB>,
+        top: Option<&SMB>,
+        uiBS: &mut [[[u8; 4]; 4]; 2],
+    ) {
+        uiBS[0][0] = match left {
+            Some(m) => {
+                let v = if IS_INTRA(m.uiMbType) {
+                    0x04040404u32
+                } else {
+                    DeblockingBSMarginalMBAvcbase(cur, m, 0)
+                };
+                v.to_ne_bytes()
+            }
+            None => [0; 4],
+        };
+        uiBS[1][0] = match top {
+            Some(m) => {
+                let v = if IS_INTRA(m.uiMbType) {
+                    0x04040404u32
+                } else {
+                    DeblockingBSMarginalMBAvcbase(cur, m, 1)
+                };
+                v.to_ne_bytes()
+            }
+            None => [0; 4],
+        };
+        if cur.uiMbType != MB_TYPE_SKIP {
+            WelsNonZeroCount_c(&mut cur.iNonZeroCount);
+            if cur.uiMbType == MB_TYPE_16x16 {
+                DeblockingBSInsideMBAvsbase(&cur.iNonZeroCount, uiBS, 1);
+            } else {
+                let mv = cur.sMv;
+                DeblockingBSInsideMBNormal(&mv, uiBS, &cur.iNonZeroCount);
+            }
+        } else {
+            for dir in 0..2 {
+                for edge in 1..4 {
+                    uiBS[dir][edge] = [0; 4];
+                }
+            }
+        }
+    }
+
+    /// The path `DeblockingMbAvcbase` runs: normalise, kernel, intra override.
+    fn bs_calc_via_kernel(
+        cur: &mut SMB,
+        left: Option<&SMB>,
+        top: Option<&SMB>,
+        uiBS: &mut [[[u8; 4]; 4]; 2],
+    ) {
+        if cur.uiMbType != MB_TYPE_SKIP {
+            WelsNonZeroCount_c(&mut cur.iNonZeroCount);
+        }
+        crate::simd::kernels::deblock::bs_calc(
+            &cur.iNonZeroCount,
+            &cur.sMv,
+            left.map(|m| (&m.iNonZeroCount, &m.sMv)),
+            top.map(|m| (&m.iNonZeroCount, &m.sMv)),
+            inside_bs_mask(cur.uiMbType),
+            uiBS,
+        );
+        if let Some(m) = left {
+            if IS_INTRA(m.uiMbType) {
+                uiBS[0][0] = [4; 4];
+            }
+        }
+        if let Some(m) = top {
+            if IS_INTRA(m.uiMbType) {
+                uiBS[1][0] = [4; 4];
+            }
+        }
+    }
+
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u32 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (self.0 >> 32) as u32
+        }
+
+        /// A motion vector concentrated on the +/-3 / +/-4 threshold the strength test
+        /// turns on, with the occasional extreme so the 16-bit lanes are exercised at
+        /// their ends.
+        fn mv(&mut self) -> SMVUnitXY {
+            let mut c = || match self.next() % 10 {
+                0..=6 => (self.next() % 11) as i16 - 5,
+                7 | 8 => (self.next() % 2001) as i16 - 1000,
+                _ => [i16::MIN, i16::MAX, -32000, 32000][(self.next() % 4) as usize],
+            };
+            SMVUnitXY { iMvX: c(), iMvY: c() }
+        }
+
+        /// A macroblock of the given kind, with counts either raw or already 0/1 —
+        /// both occur, because a skip macroblock's are not normalised.
+        fn mb(&mut self, uiMbType: u32, raw_counts: bool, uniform_mv: bool) -> SMB {
+            let mut mb = SMB { uiMbType, ..Default::default() };
+            for n in mb.iNonZeroCount.iter_mut() {
+                *n = match self.next() % 4 {
+                    0 | 1 => 0,
+                    _ if raw_counts => (self.next() % 17) as i8,
+                    _ => 1,
+                };
+            }
+            let one = self.mv();
+            for m in mb.sMv.iter_mut() {
+                *m = if uniform_mv { one } else { self.mv() };
+            }
+            mb
+        }
+    }
+
+    /// **The kernel and the three-way scalar agree, byte for byte, over every
+    /// combination that reaches them.**
+    ///
+    /// Both neighbour flags on and off, intra and inter neighbours, all three
+    /// macroblock kinds, raw and normalised counts, and motion vectors drawn around
+    /// the whole-sample threshold and at the ends of the 16-bit range.
+    #[test]
+    fn the_boundary_strength_kernel_matches_the_three_way_scalar() {
+        let mut r = Lcg(0x5EED_1234_ABCD_0001);
+        let kinds = [
+            MB_TYPE_16x16,
+            MB_TYPE_SKIP,
+            MB_TYPE_16x8,
+            MB_TYPE_8x16,
+            MB_TYPE_8x8,
+        ];
+        // 400 rounds natively; a tenth of that keeps the Miri filter for this module
+        // inside its three-minute budget, and the combinations below are what the
+        // coverage rests on rather than the round count.
+        for round in 0..if cfg!(miri) { 40 } else { 400 } {
+            for &kind in &kinds {
+                // A 16x16 or skip macroblock carries one vector in all sixteen
+                // blocks; every other kind may differ block to block.
+                let uniform = kind == MB_TYPE_16x16 || kind == MB_TYPE_SKIP;
+                let raw = kind == MB_TYPE_SKIP;
+                let cur = r.mb(kind, raw, uniform);
+                for lk in 0..3 {
+                    for tk in 0..3 {
+                        let nb = |k: usize, r: &mut Lcg| match k {
+                            0 => None,
+                            1 => Some(r.mb(MB_TYPE_8x8, true, false)),
+                            _ => Some(r.mb(MB_TYPE_INTRA16x16, true, false)),
+                        };
+                        let l = nb(lk, &mut r);
+                        let t = nb(tk, &mut r);
+                        let (mut a, mut b) = (cur.clone(), cur.clone());
+                        let (mut want, mut got) = ([[[0u8; 4]; 4]; 2], [[[0u8; 4]; 4]; 2]);
+                        bs_calc_three_way(&mut a, l.as_ref(), t.as_ref(), &mut want);
+                        bs_calc_via_kernel(&mut b, l.as_ref(), t.as_ref(), &mut got);
+                        assert_eq!(
+                            want, got,
+                            "round {round} kind {kind:#x} left {lk} top {tk}"
+                        );
+                        // The count normalisation is observable — later readers of
+                        // `iNonZeroCount` see it — so it has to survive too.
+                        assert_eq!(
+                            a.iNonZeroCount, b.iNonZeroCount,
+                            "the write-back of the normalised counts, round {round}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// **Why upstream's asm can leave the two kind masks out, and why this port
+    /// applies them anyway.**
+    ///
+    /// `DeblockingBSCalcEnc_AArch64_neon` computes one rule for every interior edge —
+    /// the partitioned-inter one — where `DeblockingBSCalc_c` has three. It gets away
+    /// with it on the data the encoder produces: a `MB_TYPE_16x16` macroblock has one
+    /// motion vector replicated to all sixteen blocks, so the vector term is zero and
+    /// the coefficient term is all that is left, which is `DeblockingBSInsideMBAvsbase`;
+    /// and a skip macroblock has that *and* no coefficients, so its interior is zero.
+    ///
+    /// This asserts exactly that — with `0xFF` for `inside`, the unmasked rule already
+    /// equals the kind's own — and, by the negative half, that it is a property of the
+    /// data and not of the kernel: give a 16x16 macroblock two different vectors and
+    /// the masks start to matter.
+    #[test]
+    fn the_kind_masks_are_no_ops_on_the_data_the_encoder_produces() {
+        let mut r = Lcg(0x5EED_1234_ABCD_0002);
+        for _ in 0..if cfg!(miri) { 20 } else { 200 } {
+            for &kind in &[MB_TYPE_16x16, MB_TYPE_SKIP] {
+                let cur = r.mb(kind, false, true);
+                let cur = if kind == MB_TYPE_SKIP {
+                    SMB { iNonZeroCount: [0; MB_LUMA_CHROMA_BLOCK4x4_NUM], ..cur }
+                } else {
+                    cur
+                };
+                let l = r.mb(MB_TYPE_8x8, true, false);
+                let (mut masked, mut unmasked) = ([[[0u8; 4]; 4]; 2], [[[0u8; 4]; 4]; 2]);
+                for (mask, out) in [(inside_bs_mask(kind), &mut masked), (0xFF, &mut unmasked)] {
+                    crate::simd::kernels::deblock::bs_calc(
+                        &cur.iNonZeroCount,
+                        &cur.sMv,
+                        Some((&l.iNonZeroCount, &l.sMv)),
+                        None,
+                        mask,
+                        out,
+                    );
+                }
+                assert_eq!(masked, unmasked, "kind {kind:#x}");
+            }
+        }
+
+        // The negative half: a 16x16 macroblock whose blocks disagree about the
+        // motion vector — which the encoder never builds — is where the mask earns
+        // its place, because the unmasked rule would raise those edges to 1.
+        let mut cur = SMB { uiMbType: MB_TYPE_16x16, ..Default::default() };
+        cur.sMv[5] = SMVUnitXY { iMvX: 64, iMvY: 0 };
+        let (mut masked, mut unmasked) = ([[[0u8; 4]; 4]; 2], [[[0u8; 4]; 4]; 2]);
+        for (mask, out) in [(inside_bs_mask(MB_TYPE_16x16), &mut masked), (0xFF, &mut unmasked)] {
+            crate::simd::kernels::deblock::bs_calc(
+                &cur.iNonZeroCount, &cur.sMv, None, None, mask, out,
+            );
+        }
+        assert_ne!(masked, unmasked, "the mask is what makes the 16x16 rule the 16x16 rule");
+        assert_eq!(masked, [[[0u8; 4]; 4]; 2], "coefficients are all zero, so the 16x16 rule gives zero");
     }
 
     #[test]

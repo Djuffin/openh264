@@ -9,6 +9,7 @@
 use core::arch::x86_64::*;
 
 use crate::safe::plane::{BlockRows, PlaneSamples, RefSamples};
+use crate::encoder::encoder_context::SMVUnitXY;
 
 // ============================================================================
 // Core SSE2 Vectorized Edge Filters
@@ -913,6 +914,27 @@ pub fn deblock_chroma_eq4(
 // ============================================================================
 
 
+/// The boundary strengths of one macroblock.
+///
+/// **A forward to the scalar, because upstream has no x86 kernel here.**
+/// `DeblockingBSCalcEnc` exists only as `_neon` and `_AArch64_neon`
+/// (`codec/encoder/core/inc/deblocking.h:66-75`), and
+/// `codec/encoder/core/src/deblocking.cpp` installs `DeblockingBSCalc_c` on every
+/// other target — so there is no `mb_copy.asm`-style routine to transcribe, and
+/// inventing one would be a kernel this port measures against nothing. The aarch64
+/// set carries the real thing; see
+/// [`bs_calc_scalar`](crate::encoder::deblocking::bs_calc_scalar) for the contract.
+#[inline(always)]
+pub fn bs_calc(
+    cur_nzc: &[i8; 24],
+    cur_mv: &[SMVUnitXY; 16],
+    left: Option<(&[i8; 24], &[SMVUnitXY; 16])>,
+    top: Option<(&[i8; 24], &[SMVUnitXY; 16])>,
+    inside: u8,
+    bs: &mut [[[u8; 4]; 4]; 2],
+) {
+    crate::encoder::deblocking::bs_calc_scalar(cur_nzc, cur_mv, left, top, inside, bs)
+}
 
 #[cfg(test)]
 mod tests {
