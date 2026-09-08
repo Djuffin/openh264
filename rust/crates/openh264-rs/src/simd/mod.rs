@@ -71,9 +71,10 @@ use crate::common::cpu_core::*;
 /// to clear this word, and it was removed with the per-call `has_simd()` sites it was
 /// the other half of: with the twenty-two direct sites now calling [`kernels`]
 /// unconditionally, clearing the word would take the `pfXxx` tables scalar and leave
-/// motion compensation, deblocking and the IDCTs on the vector kernels — a switch that
-/// half-applies is worse than none. `--features scalar` is the switch now, and it is
-/// the reference's own (`USE_ASM=No`); see the per-arch `arch_cpu_features`.
+/// motion compensation, deblocking, the IDCTs and the VAA statistics on the vector
+/// kernels — a switch that half-applies is worse than none. `--features scalar` is the
+/// switch now, and it is the reference's own (`USE_ASM=No`); see the per-arch
+/// `arch_cpu_features`.
 ///
 /// Latching keeps this to one probe per process. Out-of-line initialiser so the
 /// steady-state read is an acquire load and a compare.

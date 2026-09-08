@@ -7,10 +7,23 @@
 //! `pfVAACalcSadBgd`, `pfVAACalcSadSsdBgd`) are selected by
 //! `iCalcVar`/`iCalcSsd`/`iCalcBgd`, which `CWelsPreProcess::AnalyzeSpatialPic`
 //! derives from rate control, adaptive quantisation and background detection.
+//!
+//! **What runs, and what these five are for.** [`CVAACalculation::Process`]
+//! dispatches through [`crate::simd::kernels`]`::vaa`, like every other family in
+//! the port: on aarch64 that is the NEON transcription of
+//! `codec/processing/src/arm64/vaa_calc_aarch64_neon.S`, on x86_64 the SSE2
+//! transcription of `codec/processing/src/x86/vaa.asm`, and under
+//! `--features scalar` a forward straight back to the functions below. The five
+//! `vaa_calc_*` here stay where they are because they are **the reference**: the
+//! definition of what the kernels must compute, what the scalar set forwards to,
+//! and what each kernel set's unit tests compare against, geometry by geometry.
+//! [`vaa_span`] is shared with them — it is what `Process` trims the planes to, so
+//! a kernel that walks the picture wrong panics instead of reading past a plane.
 
 #![forbid(unsafe_code)]
 
 use crate::encoder::wels_preprocess::{SPixMap, SVAACalcParam, SVAACalcResult};
+use crate::simd::kernels;
 
 /// `EResult` — `codec/processing/interface/IWelsVP.h:54`.
 pub const RET_SUCCESS: i32 = 0;
@@ -433,31 +446,31 @@ impl CVAACalculation {
                     pMad8x8,
                     ..
                 } = result;
-                vaa_calc_sad_ssd_bgd(
+                kernels::vaa::vaa_calc_sad_ssd_bgd(
                     cur, refp, iPicWidth, iPicHeight, iPicStride,
                     pSad8x8, pSum16x16, pSumOfSquare16x16, pSsd16x16, pSumOfDiff8x8, pMad8x8,
                 )
             } else {
                 let SVAACalcResult { pSad8x8, pSumOfDiff8x8, pMad8x8, .. } = result;
-                vaa_calc_sad_bgd(
+                kernels::vaa::vaa_calc_sad_bgd(
                     cur, refp, iPicWidth, iPicHeight, iPicStride,
                     pSad8x8, pSumOfDiff8x8, pMad8x8,
                 )
             }
         } else if self.m_sCalcParam.iCalcSsd {
             let SVAACalcResult { pSad8x8, pSum16x16, pSumOfSquare16x16, pSsd16x16, .. } = result;
-            vaa_calc_sad_ssd(
+            kernels::vaa::vaa_calc_sad_ssd(
                 cur, refp, iPicWidth, iPicHeight, iPicStride,
                 pSad8x8, pSum16x16, pSumOfSquare16x16, pSsd16x16,
             )
         } else if self.m_sCalcParam.iCalcVar {
             let SVAACalcResult { pSad8x8, pSum16x16, pSumOfSquare16x16, .. } = result;
-            vaa_calc_sad_var(
+            kernels::vaa::vaa_calc_sad_var(
                 cur, refp, iPicWidth, iPicHeight, iPicStride,
                 pSad8x8, pSum16x16, pSumOfSquare16x16,
             )
         } else {
-            vaa_calc_sad(cur, refp, iPicWidth, iPicHeight, iPicStride, &mut result.pSad8x8)
+            kernels::vaa::vaa_calc_sad(cur, refp, iPicWidth, iPicHeight, iPicStride, &mut result.pSad8x8)
         };
         RET_SUCCESS
     }

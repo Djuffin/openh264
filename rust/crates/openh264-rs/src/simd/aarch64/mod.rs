@@ -13,6 +13,7 @@
 //! | `intra_pred.rs` | `codec/common/arm64/intra_pred_common_aarch64_neon.S`, `codec/{encoder,decoder}/core/arm64/intra_pred_aarch64_neon.S` |
 //! | `copy.rs` | `codec/common/arm64/copy_mb_aarch64_neon.S` |
 //! | `score.rs` | none — upstream keeps `WelsCalculateSingleCtr4x4_c` on arm64; see the file |
+//! | `vaa.rs` | `codec/processing/src/arm64/vaa_calc_aarch64_neon.S` |
 //!
 //! Each kernel names the asm routine it came from, and each file's header says
 //! where and why it departs from the asm. There are four such departures, and every
@@ -53,6 +54,7 @@ pub mod quant;
 pub mod sad;
 pub mod satd;
 pub mod score;
+pub mod vaa;
 
 /// Loads and stores shared by the kernels: the `ld1`/`st1` of the asm, with the
 /// bounds check the asm leaves to its caller done by the slice index in front of
