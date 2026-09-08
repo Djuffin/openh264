@@ -301,7 +301,22 @@ impl<'a> RecCursor<'a> {
         &self.cells[start..][..span]
     }
 
-    /// Writes `N` samples into row `dy` starting at `dx0`.
+    /// Writes `N` samples into row `dy` starting at `dx0` — **one store, not `N`**.
+    ///
+    /// `Cell::set` is a plain write and the row's length is a constant, so the `N`
+    /// stores merge into one `N`-byte vector store; `examples/simd_probe.rs`'s
+    /// `probe_write_row_16` is a bounds check and a single `str q0`. That is the whole
+    /// reason [`PlaneSamples::set_row_n`](crate::safe::plane::PlaneSamples::set_row_n)
+    /// is overridden onto this rather than left on the trait's per-sample default,
+    /// which is what every line the deblocking kernels write used to cost.
+    ///
+    /// The seam's bulk write wherever a destination row is reached on its own:
+    /// [`copy_rows_shared`], and `set_row_n` for the deblocking kernels.
+    /// [`copy_block_to_view`] cuts a span instead, because it has a whole block of
+    /// rows to place and can drop the per-row bounds check with them.
+    ///
+    /// # Panics
+    /// If the row leaves the buffer.
     #[inline]
     pub fn write_row<const N: usize>(&self, dy: isize, dx0: isize, src: &[u8; N]) {
         let start = idx(self.center, dx0, dy, self.stride);
@@ -380,6 +395,24 @@ impl<'a> CellSpan<'a> {
     }
 }
 
+impl<'a> CellSpan<'a> {
+    /// The `W` **cells** of row `y` — [`BlockRows::row`]'s writable twin.
+    ///
+    /// Cells are writable through a shared reference, so one span type serves a
+    /// kernel that reads and one that writes; what the seam withholds is `&mut [u8]`,
+    /// and this cannot produce it. Row `y` is at `y * stride` of the *same* narrowed
+    /// stride the cut used, which is what lets the compiler place it inside the span
+    /// and drop the check — see [`RefSamples::span`](crate::safe::plane::RefSamples::span).
+    ///
+    /// # Panics
+    /// If the row leaves the span, which a caller writing the block the span was cut
+    /// for cannot reach.
+    #[inline]
+    pub(crate) fn row_cells<const W: usize>(&self, y: usize) -> &'a [Cell<u8>; W] {
+        self.cells[y * self.stride as usize..][..W].try_into().expect("W cells")
+    }
+}
+
 impl crate::safe::plane::BlockRows for CellSpan<'_> {
     /// Cells cannot be `copy_from_slice`d, so the row is read entry by entry; over a
     /// slice the compiler knows to be `W` long that is `W` byte loads it coalesces
@@ -411,6 +444,16 @@ impl crate::safe::plane::PlaneSamples for RecCursor<'_> {
     fn set(&mut self, dx: isize, dy: isize, v: u8) {
         RecCursor::set(self, dx, dy, v)
     }
+
+    /// **The override that matters.** The trait's default is a `set` per sample, and
+    /// on this cursor that is `N` bounds-checked cell stores — which is what every
+    /// line the deblocking kernels write used to cost. [`RecCursor::write_row`] is
+    /// one store; see its doc for why the array reference is what buys that.
+    #[inline]
+    fn set_row_n<const N: usize>(&mut self, dy: isize, dx0: isize, val: &[u8; N]) {
+        RecCursor::write_row::<N>(self, dy, dx0, val)
+    }
+
 }
 
 impl crate::safe::plane::RefSamples for RecCursor<'_> {
@@ -474,7 +517,7 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
 }
 
 /// The reconstruction plane's flavour of `common::copy_mb`'s `copy_WxH` family:
-/// a `W`x`h` block copied out of a contiguous prediction buffer into the shared
+/// a `W`x`H` block copied out of a contiguous prediction buffer into the shared
 /// view.
 ///
 /// `PlaneCursorMut::row_mut` hands out `&mut [u8]`, which a shared view cannot
@@ -483,22 +526,35 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
 /// columns as well. Rows go in by value instead.
 ///
 /// Every one of the reconstruction copy sites has an *arena* source — the
-/// macroblock cache's `sSkipMb` or `sMemPredMb`, both plain owned arrays — so the
-/// source is a slice and a stride rather than a second cursor.
+/// macroblock cache's `sSkipMb`, `sMemPredMb` or `sMemPredBlk4`, all plain owned
+/// arrays, and all **packed at `W`**, which is why the source is a slice rather than
+/// a second cursor and why it carries no stride of its own.
+///
+/// # Two checks, not two per row
+///
+/// The height is a const parameter and both operands are cut **once**: `W * H` bytes
+/// of the source, and `(H - 1) * stride + W` cells of the destination through
+/// [`RecCursor::block_span`]. Inside, row `y` is at `y * W` and `y * stride`, and with
+/// the destination stride narrowed to a `u32` — a cursor invariant, asserted where a
+/// cursor is made — the compiler can place every one of those rows inside its cut and
+/// drops the per-row checks. It is the argument
+/// [`PlaneSpan::cut`](crate::safe::plane::PlaneSpan) makes, applied to a copy whose
+/// height is known: at `h` as a run-time argument nothing follows from `y < h` and the
+/// checks stay, which is what these sixteen rows used to pay.
 ///
 /// # Panics
-/// If `src` is shorter than `(h - 1) * src_stride + W`, or the block runs off the
-/// plane. Both are geometry bugs in the caller.
+/// If `src` is shorter than `W * H`, or the block runs off the plane. Both are
+/// geometry bugs in the caller.
 #[inline]
-pub fn copy_block_to_view<const W: usize>(
-    src: &[u8],
-    src_stride: usize,
-    dst: &RecCursor<'_>,
-    h: usize,
-) {
-    for y in 0..h {
-        let row: &[u8; W] = src[y * src_stride..][..W].try_into().unwrap();
-        dst.write_row::<W>(y as isize, 0, row);
+pub fn copy_block_to_view<const W: usize, const H: usize>(src: &[u8], dst: &RecCursor<'_>) {
+    use crate::safe::plane::RefSamples;
+    let block = &src[..W * H];
+    let cells = dst.span::<W, H>(0, 0);
+    for y in 0..H {
+        let row: &[u8; W] = block[y * W..][..W].try_into().expect("W bytes");
+        for (c, &v) in cells.row_cells::<W>(y).iter().zip(row.iter()) {
+            c.set(v);
+        }
     }
 }
 
@@ -874,6 +930,71 @@ mod tests {
         for i in 0..64usize {
             assert_eq!(arr.get(i), SMVUnitXY { iMvX: i as i16, iMvY: -(i as i16) });
             assert_eq!(qp.get(i), i as u8);
+        }
+    }
+
+    /// **The block copy places every row where the per-sample walk would, and
+    /// nothing anywhere else.**
+    ///
+    /// `copy_block_to_view` gained a const height and two cut spans so its per-row
+    /// bounds checks fold; that is a codegen change, and the thing a codegen change
+    /// can break is *where* the rows land. So this compares the whole plane — padding
+    /// included — against a `set`-per-sample reference, at three strides and all three
+    /// shapes the encoder uses, anchored off `(0, 0)` so a copy that ignored its
+    /// anchor or ran a row long has somewhere to land.
+    #[test]
+    fn the_block_copy_lands_exactly_where_a_per_sample_walk_would() {
+        fn check<const W: usize, const H: usize>(stride: usize) {
+            let src: Vec<u8> = (0..W * H).map(|i| (i as u8).wrapping_mul(37).wrapping_add(11)).collect();
+            let (ax, ay) = (3isize, 2isize);
+            let (mut want, mut got) = (PaddedPlane::new(stride - 8, 24, 4, stride), PaddedPlane::new(stride - 8, 24, 4, stride));
+            for p in [&mut want, &mut got] {
+                for y in -4..28isize {
+                    for x in -4..(stride as isize - 12) {
+                        p.set(x, y, ((x * 7) ^ (y * 13)) as u8 & 0x7f);
+                    }
+                }
+            }
+            // Reference: one `set` per sample, through the same shared view.
+            let vw = view_of(&mut want);
+            let cw = vw.cursor(ax, ay);
+            for y in 0..H {
+                for x in 0..W {
+                    cw.set(x as isize, y as isize, src[y * W + x]);
+                }
+            }
+            let vg = view_of(&mut got);
+            copy_block_to_view::<W, H>(&src, &vg.cursor(ax, ay));
+            assert_eq!(want.as_slice(), got.as_slice(), "{W}x{H} over stride {stride}");
+        }
+        for &stride in &[16usize, 33, 64] {
+            check::<4, 4>(stride);
+            check::<8, 8>(stride);
+            check::<16, 16>(stride);
+        }
+    }
+
+    /// `RecCursor` overrides `PlaneSamples::set_row_n` to reach
+    /// [`RecCursor::write_row`] instead of the trait's per-sample default — the
+    /// override the deblocking kernels' write side is. It must move the same bytes to
+    /// the same places, including at a negative column offset, which is how a vertical
+    /// edge writes back its inner taps.
+    #[test]
+    fn the_row_setter_writes_what_a_sample_setter_would() {
+        use crate::safe::plane::PlaneSamples;
+
+        for &(dy, dx0) in &[(0isize, 0isize), (2, -2), (-1, -4), (5, 3)] {
+            let (mut want, mut got) = (PaddedPlane::new(32, 16, 8, 48), PaddedPlane::new(32, 16, 8, 48));
+            let row: [u8; 6] = [9, 8, 7, 6, 5, 4];
+            let vw = view_of(&mut want);
+            let mut cw = vw.cursor(6, 5);
+            for (i, &v) in row.iter().enumerate() {
+                PlaneSamples::set(&mut cw, dx0 + i as isize, dy, v);
+            }
+            let vg = view_of(&mut got);
+            let mut cg = vg.cursor(6, 5);
+            PlaneSamples::set_row_n::<6>(&mut cg, dy, dx0, &row);
+            assert_eq!(want.as_slice(), got.as_slice(), "set_row_n at ({dx0}, {dy})");
         }
     }
 

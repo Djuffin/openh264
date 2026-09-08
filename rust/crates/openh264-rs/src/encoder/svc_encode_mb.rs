@@ -494,11 +494,9 @@ pub fn WelsEncRecI16x16Y(
         let view = layer_rec_view_expect(&*pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
         let kiPredOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
-        copy_block_to_view::<16>(
+        copy_block_to_view::<16, 16>(
             &pMbCache.sMemPredMb[kiPredOff..kiPredOff + 256],
-            16,
             &view.plane(0).cursor(lx, ly),
-            16,
         );
     }
 }
@@ -589,11 +587,9 @@ pub fn WelsEncRecI4x4Y(
         let (dx, dy) =
             (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
         let kiPredOff = best_pred_i4x4_blk4_off(pMbCache.uiBestPredI4x4Blk4Half);
-        copy_block_to_view::<4>(
+        copy_block_to_view::<4, 4>(
             &pMbCache.sMemPredBlk4[kiPredOff..kiPredOff + 16],
-            4,
             &view.plane(0).cursor(lx + dx, ly + dy),
-            4,
         );
     }
 }

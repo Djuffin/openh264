@@ -164,6 +164,22 @@ pub fn probe_isa_hor_ver02_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut
     isa::mc::mc_hor_ver02(src, dst, 16, 16)
 }
 
+/// One row into the shared view: the store [`RecCursor::write_row`] promises. The
+/// assembly should be a bounds check and a single `stur q0`.
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_write_row_16(dst: &RecCursor<'_>, v: &[u8; 16]) {
+    dst.write_row::<16>(3, 0, v)
+}
+
+/// The skip reconstruction's luma copy: sixteen rows out of a contiguous prediction
+/// buffer into the shared view. One vector store per row is the whole of it.
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_copy_block_to_view_16(src: &[u8], dst: &RecCursor<'_>) {
+    openh264_rs::encoder::rec_view::copy_block_to_view::<16, 16>(src, dst)
+}
+
 #[cfg(feature = "wide")]
 mod wide_probes {
     use super::*;
@@ -257,6 +273,13 @@ fn main() {
             probe_isa_mc_luma_zero_16x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
             probe_isa_mc_chroma_zero_8x8_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
         }
+    }
+    {
+        let src = vec![5u8; 256];
+        let mut ra = vec![7u8; 64 * 64];
+        let ka = RecCursor::over_owned(&mut ra, 20 * 64 + 19, 64);
+        probe_copy_block_to_view_16(&src, &ka);
+        probe_write_row_16(&ka, &[3u8; 16]);
     }
     #[cfg(feature = "wide")]
     {

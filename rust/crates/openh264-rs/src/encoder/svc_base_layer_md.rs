@@ -1681,13 +1681,11 @@ pub fn WelsMdInterEncode(
     let kiLumaOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
     let kiChromaOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
     let src = &pMbCache.sMemPredMb;
-    copy_block_to_view::<16>(&src[kiLumaOff..kiLumaOff + 256], 16, &view.plane(0).cursor(lx, ly), 16);
-    copy_block_to_view::<8>(&src[kiChromaOff..kiChromaOff + 64], 8, &view.plane(1).cursor(cx, cy), 8);
-    copy_block_to_view::<8>(
+    copy_block_to_view::<16, 16>(&src[kiLumaOff..kiLumaOff + 256], &view.plane(0).cursor(lx, ly));
+    copy_block_to_view::<8, 8>(&src[kiChromaOff..kiChromaOff + 64], &view.plane(1).cursor(cx, cy));
+    copy_block_to_view::<8, 8>(
         &src[kiChromaOff + 64..kiChromaOff + 128],
-        8,
         &view.plane(2).cursor(cx, cy),
-        8,
     );
 }
 
