@@ -70,9 +70,18 @@ allocation through two pointers, the port owns it once and hands out views.
 
 `unsafe` is confined to the C ABI in `src/api/` (the vtable thunks and the raw
 option blobs `codec_api.h` defines), the intrinsics in `src/simd/`, one
-`unsafe impl Sync` at the reconstruction seam, and test instruments.
-Multi-threaded encoding forks with `std::thread::scope`; the context the workers
-share is `Sync` by construction, which the compiler checks at the fork.
+`unsafe impl Sync` at the reconstruction seam, one lifetime erasure in the
+encoder's worker pool (`src/encoder/worker_pool.rs`), and test instruments.
+Multi-threaded encoding forks onto a pool of persistent worker threads through a
+`scope` API shaped like `std::thread::scope`, so the context the workers share is
+`Sync` by construction, which the compiler checks at the fork. The pool's one
+`unsafe` erases a job closure's `'scope` lifetime to hand it to a long-lived
+thread; it is sound for the reason `std::thread::scope` is — the scope waits for
+every job to complete, on its return and on its unwind path, before the frame the
+job borrows can end — and the argument is written at the top of that module. The
+pool is built with the encoder's slice-threading resources when
+`iMultipleThreadIdc > 1`, is never constructed for single-threaded encoding, and
+its threads are joined when the encoder is uninitialised.
 
 `src/simd/` is the one place `unsafe` is load-bearing rather than a boundary, so
 the kernels are shaped to keep it small: each takes its bounds check on the safe
@@ -86,9 +95,9 @@ can hold: a mutant `block_span` one row's width short is caught by a block sized
 to that gap.
 
 **The compiler keeps it that way.** `#![forbid(unsafe_code)]` sits at the top of
-every file that can carry it — 82 of 118 — so adding an `unsafe` block to one is a
-build error, not a report someone has to read. The 12 files that cannot are the
-C-ABI boundary, the intrinsics and the audited sites, and each `#[allow(unsafe_code)]`
-in them carries its category and its reason at the site. `tools/find_dup_types.sh`
+every file that can carry it — 82 of 133 — so adding an `unsafe` block to one is a
+build error, not a report someone has to read. The files that cannot are the
+C-ABI boundary, the intrinsics, the audited sites and the worker pool, and each
+`#[allow(unsafe_code)]` in them carries its category and its reason at the site. `tools/find_dup_types.sh`
 is a hand-run duplicate audit beside that.
 
