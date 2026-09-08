@@ -62,6 +62,7 @@ pub mod quant;
 pub mod sad;
 pub mod satd;
 pub mod score;
+pub mod vaa;
 
 /// Loads, stores, widenings and permutes shared by the kernels.
 ///

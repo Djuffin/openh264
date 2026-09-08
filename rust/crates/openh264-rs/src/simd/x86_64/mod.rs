@@ -5,6 +5,7 @@ pub mod mc;
 pub mod dct;
 pub mod quant;
 pub mod score;
+pub mod vaa;
 pub mod copy;
 pub mod intra_pred;
 pub mod deblock;

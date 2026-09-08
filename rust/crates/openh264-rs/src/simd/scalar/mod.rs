@@ -9,9 +9,10 @@
 //! one.
 //!
 //! **These run.** `--features scalar` is the port's `USE_ASM=No`, and on that build the
-//! twenty-two direct dispatch sites — motion compensation, deblocking, the IDCTs — call
-//! straight through here to the scalar body. The `pfXxx` tables do not: the feature word
-//! is `0`, so they install their scalar arm without going through a forward.
+//! twenty-two direct dispatch sites — motion compensation, deblocking, the IDCTs, the
+//! VAA statistics — call straight through here to the scalar body. The `pfXxx` tables
+//! do not: the feature word is `0`, so they install their scalar arm without going
+//! through a forward.
 //! `#[inline(always)]` on every one, so the hop costs nothing.
 //!
 //! Generated shape, one line each: same name, same signature, calls the scalar.
@@ -28,3 +29,4 @@ pub mod quant;
 pub mod sad;
 pub mod satd;
 pub mod score;
+pub mod vaa;

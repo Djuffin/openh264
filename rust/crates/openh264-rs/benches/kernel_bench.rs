@@ -47,6 +47,7 @@ use openh264_rs::encoder::encode_mb_aux as enc_aux;
 use openh264_rs::encoder::get_intra_predictor as ipred;
 use openh264_rs::encoder::rec_view::RecCursor;
 use openh264_rs::encoder::sample as satd_ref;
+use openh264_rs::processing::vaacalc as vaa_ref;
 use openh264_rs::safe::plane::{PaddedPlane, PlaneCursor, PlaneCursorMut};
 #[cfg(target_arch = "x86_64")]
 use openh264_rs::simd::x86_64 as isa;
@@ -267,6 +268,85 @@ fn sad_rows(rows: &mut Vec<Row>) {
         |_| { let mut s = [0; 4]; sample_sad_four::<8, 8, _>(&black_box(a), &black_box(b), &mut s); four(&mut s) },
         |_| { let mut s = [0; 4]; isa::sad::sample_sad_four_8x8(&black_box(a), &black_box(b), &mut s); four(&mut s) },
         |_| { let mut s = [0; 4]; wd::sad::sample_sad_four_8x8(&black_box(a), &black_box(b), &mut s); four(&mut s) });
+}
+
+/// A whole picture per call, not a block: three 16x16 macroblocks across by three
+/// down at stride 64, which is the shape `CVAACalculation::Process` walks. The
+/// planes are exactly `vaa_span` bytes, so a kernel that over-reads panics in the
+/// bench too, and the checksum folds every output array together with the returned
+/// frame SAD — a kernel that gets `mad` or `sd` wrong cannot hide behind the SAD.
+fn vaa_rows(rows: &mut Vec<Row>) {
+    const W: i32 = 48;
+    const H: i32 = 48;
+    const S: i32 = 64;
+    let mbs = ((W >> 4) * (H >> 4)) as usize;
+    let span = vaa_ref::vaa_span(W, H, S);
+    let (a, b) = (noise(span, 11), noise(span, 12));
+
+    /// Every output the five kernels can write, folded with the frame SAD.
+    struct Out {
+        sad8x8: Vec<[i32; 4]>,
+        sd8x8: Vec<[i32; 4]>,
+        mad8x8: Vec<[u8; 4]>,
+        sum: Vec<i32>,
+        sqsum: Vec<i32>,
+        sqdiff: Vec<i32>,
+    }
+    impl Out {
+        fn new(mbs: usize) -> Self {
+            Self {
+                sad8x8: vec![[0; 4]; mbs],
+                sd8x8: vec![[0; 4]; mbs],
+                mad8x8: vec![[0; 4]; mbs],
+                sum: vec![0; mbs],
+                sqsum: vec![0; mbs],
+                sqdiff: vec![0; mbs],
+            }
+        }
+        /// The frame SAD when the row is only being timed, every array when it is
+        /// being checked.
+        fn sum(&self, frame: i32, check: bool) -> u64 {
+            if !check {
+                return frame as u64;
+            }
+            let mut h = frame as u64;
+            let mut mix = |v: i64| h = (h ^ v as u64).wrapping_mul(0x100000001b3);
+            for i in 0..self.sum.len() {
+                for k in 0..4 {
+                    mix(self.sad8x8[i][k] as i64);
+                    mix(self.sd8x8[i][k] as i64);
+                    mix(self.mad8x8[i][k] as i64);
+                }
+                mix(self.sum[i] as i64);
+                mix(self.sqsum[i] as i64);
+                mix(self.sqdiff[i] as i64);
+            }
+            h
+        }
+    }
+
+    // One output set per column, allocated **once**: `Out::new` is six `Vec`s, and
+    // inside the timed closure those six allocations were most of what the row
+    // measured. The kernels overwrite every entry they touch, so reuse is exact.
+    let (mut o0, mut o1, mut o2) = (Out::new(mbs), Out::new(mbs), Out::new(mbs));
+
+    macro_rules! vaa_row {
+        ($name:expr, $call:ident, $($arg:ident),*) => {
+            row!(*rows, $name,
+                |c| { let f = vaa_ref::$call(black_box(&a), black_box(&b), W, H, S, $(&mut o0.$arg),*);
+                      o0.sum(f, c) },
+                |c| { let f = isa::vaa::$call(black_box(&a), black_box(&b), W, H, S, $(&mut o1.$arg),*);
+                      o1.sum(f, c) },
+                |c| { let f = wd::vaa::$call(black_box(&a), black_box(&b), W, H, S, $(&mut o2.$arg),*);
+                      o2.sum(f, c) });
+        };
+    }
+
+    vaa_row!("vaa sad 48x48", vaa_calc_sad, sad8x8);
+    vaa_row!("vaa sad+var 48x48", vaa_calc_sad_var, sad8x8, sum, sqsum);
+    vaa_row!("vaa sad+ssd 48x48", vaa_calc_sad_ssd, sad8x8, sum, sqsum, sqdiff);
+    vaa_row!("vaa sad+bgd 48x48", vaa_calc_sad_bgd, sad8x8, sd8x8, mad8x8);
+    vaa_row!("vaa sad+ssd+bgd 48x48", vaa_calc_sad_ssd_bgd, sad8x8, sum, sqsum, sqdiff, sd8x8, mad8x8);
 }
 
 fn satd_rows(rows: &mut Vec<Row>) {
@@ -499,6 +579,7 @@ fn main() {
     let mut rows = Vec::new();
     eprint!(" timing");
     sad_rows(&mut rows);
+    vaa_rows(&mut rows);
     satd_rows(&mut rows);
     mc_rows(&mut rows);
     dct_rows(&mut rows);
