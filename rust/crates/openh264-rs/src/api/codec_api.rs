@@ -4500,9 +4500,10 @@ mod send_verdict {
     /// below the boundary, and a raw pointer is `!Send` by construction, so
     /// `Box<SWelsDecoderContext>` is `!Send` and so are `Decoder` and `Encoder`.
     ///
-    /// The encoder's own threading does not depend on this: it forks
-    /// with `std::thread::scope` and the workers take what they reach by static
-    /// partition; `Send` on the *whole* encoder is a different property, and it is
+    /// The encoder's own threading does not depend on this: it forks onto its
+    /// worker pool through a `scope` shaped like `std::thread::scope`, and the
+    /// workers take what they reach by static partition; `Send` on the *whole*
+    /// encoder is a different property, and it is
     /// the one a Rust consumer would need to move a codec between threads.
     #[test]
     fn the_cores_are_not_send_yet_and_this_is_the_inventory() {

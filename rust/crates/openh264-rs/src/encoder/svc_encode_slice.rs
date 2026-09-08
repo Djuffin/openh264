@@ -3674,8 +3674,8 @@ mod tests {
     ///
     /// What it drives: `SM_FIXEDSLCNUM_SLICE` with two slices at two threads, which
     /// is `EncodeFixedSlicesForked` — two `SliceJobHandle`s moved across two
-    /// `thread::scope` spawns, each owning one bs scratch slot, both calling
-    /// `WelsCodeOneSlice`, joined by the scope before `AppendSliceToFrameBs` walks
+    /// spawns on the worker pool's `scope`, each owning one bs scratch slot, both
+    /// calling `WelsCodeOneSlice`, joined by the scope before `AppendSliceToFrameBs` walks
     /// the slices in index order. Miri checks what the byte gate cannot: that the
     /// two workers' derivations of the shared context do not invalidate each
     /// other, and that the assembly reads what they wrote.

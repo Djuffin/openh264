@@ -132,6 +132,13 @@ pub struct SSliceThreading {
     /// `min(iMultipleThreadIdc, MAX_THREADS_NUM)`. This is where the fork reads it
     /// (`ForkWidth`).
     pub uiThreadBsBufferNum: usize,
+    /// The persistent worker threads the three forks run on — `CWelsThreadPool`'s
+    /// place in the port. Built with the buffers, one worker per slot
+    /// (`uiThreadBsBufferNum`), and dropped with them: the threads end when the
+    /// context does, at `WelsUninitEncoderExt`, and none outlives the encoder.
+    /// `Default` is a pool of no threads, on which every job runs on the calling
+    /// thread.
+    pub pool: crate::encoder::worker_pool::WorkerPool,
 }
 
 impl Default for SSliceThreading {
@@ -140,6 +147,7 @@ impl Default for SSliceThreading {
             mutexSliceNumUpdate: std::sync::Mutex::new(()),
             pThreadBsBuffer: std::array::from_fn(|_| Vec::new()),
             uiThreadBsBufferNum: 0,
+            pool: crate::encoder::worker_pool::WorkerPool::new(0),
         }
     }
 }
@@ -533,6 +541,14 @@ pub fn RequestMtResource(
     for i in 0..iThreadBufferNum {
         pSmt.pThreadBsBuffer[i] = vec![0u8; iCountBsLen as usize];
     }
+    // The workers, one per slot — `CWelsThreadPool::AddReference`'s moment. They
+    // are created here, on the application's thread, and joined when the
+    // context drops. A thread the OS refuses is the same failure as a buffer it
+    // refuses.
+    pSmt.pool = match crate::encoder::worker_pool::WorkerPool::try_new(iThreadBufferNum) {
+        Ok(pool) => pool,
+        Err(_) => return 1,
+    };
     ctx.pSliceThreading = Some(pSmt);
 
     0
@@ -541,7 +557,8 @@ pub fn RequestMtResource(
 /// Tears down and frees all multithreading objects and bitstream buffers.
 pub fn ReleaseMtResource(ctx: &mut sWelsEncCtx) {
     // The take is the whole teardown: the box drops at the end of this function,
-    // its `Vec`s and the mutex with it.
+    // its `Vec`s, the mutex and the worker pool with it — the pool's `Drop` stops
+    // and joins its threads.
     let Some(pSmt) = ctx.pSliceThreading.take() else {
         return;
     };
@@ -834,6 +851,7 @@ mod tests {
             pSmt.pThreadBsBuffer[k] = vec![0u8; LEN];
         }
         pSmt.uiThreadBsBufferNum = WORKERS;
+        pSmt.pool = crate::encoder::worker_pool::WorkerPool::new(WORKERS);
 
         // The take — the fork entries' partition.
         let mut vTakenBsBufs: Vec<Vec<u8>> = (0..WORKERS)
@@ -841,8 +859,10 @@ mod tests {
             .collect();
 
         {
+            // The pool is reached through the same shared borrow of the owner
+            // the workers hold — production's shape exactly.
             let pSmtShared: &SSliceThreading = &pSmt;
-            std::thread::scope(|s| {
+            pSmtShared.pool.scope(|s| {
                 for (k, buf) in vTakenBsBufs.iter_mut().enumerate() {
                     s.spawn(move || {
                         // Production's shape: a shared borrow of the owner held
@@ -1341,7 +1361,11 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
             jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), slices, mbs, None, None, k, k, iWidth, kiSliceCount, bRecordsTime));
         }
 
-        std::thread::scope(|s| {
+        // The persistent workers, borrowed through the shared context like
+        // everything else the jobs see. `scope` has `std::thread::scope`'s shape
+        // and its guarantee: nothing below it returns until every job has.
+        let pool = &pCtx.pSliceThreading.as_deref().expect("guarded above").pool;
+        pool.scope(|s| {
             let mut handles = Vec::with_capacity(jobs.len());
             for job in jobs {
                 handles.push(s.spawn(move || {
@@ -1425,7 +1449,14 @@ pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
         return;
     }
     let iWidth = ForkWidth(pCtx, kiTaskCount);
-    let Some(pCurDq) = current_layer_mut(pCtx) else {
+    // The layer and the pool are disjoint fields of the context, so the layer's
+    // `&mut` and the pool's `&` coexist — `current_layer_mut`, spelled out.
+    let sWelsEncCtx { ppDqLayerList, iCurDqLayer, pSliceThreading, .. } = &mut *pCtx;
+    let pool = &pSliceThreading.as_deref().expect("guarded above").pool;
+    let Some(pCurDq) = iCurDqLayer
+        .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
+        .and_then(|l| l.as_deref_mut())
+    else {
         return;
     };
 
@@ -1471,7 +1502,7 @@ pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
     }
 
     let pSliceCtx: &crate::encoder::svc_encode_slice::SSliceCtx = sSliceEncCtx;
-    std::thread::scope(|s| {
+    pool.scope(|s| {
         for group in per_worker {
             s.spawn(move || {
                 for (idc, first, count, chunk) in group {
@@ -1814,7 +1845,8 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
             jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), Vec::new(), mbs, dynbuf, Some(bank), k, k, iWidth, kiPartitionCnt, true));
         }
 
-        std::thread::scope(|s| {
+        let pool = &pCtx.pSliceThreading.as_deref().expect("guarded above").pool;
+        pool.scope(|s| {
             let mut handles = Vec::with_capacity(jobs.len());
             for job in jobs {
                 handles.push(s.spawn(move || {

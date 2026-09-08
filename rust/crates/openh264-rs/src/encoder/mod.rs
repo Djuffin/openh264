@@ -30,6 +30,7 @@ pub mod rc;
 pub mod wels_encoder_ext;
 pub mod wels_func_ptr_def;
 pub mod wels_preprocess;
+pub mod worker_pool;
 
 /// Whether an `OH264_*DUMP` debugging dump is switched on, cached so the hot paths
 /// that call it pay one relaxed load rather than an environment scan.

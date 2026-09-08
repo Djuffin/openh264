@@ -33,8 +33,10 @@
 //! sound **iff** no two workers touch the same byte.
 //!
 //! Publication to post-join readers is the scope join, which is a
-//! happens-before edge: everything a worker wrote before `thread::scope`
-//! returns is visible to whatever reads the picture after it.
+//! happens-before edge: everything a worker wrote before the fork's `scope`
+//! returns — the worker pool's (`worker_pool.rs`), which keeps
+//! `std::thread::scope`'s guarantee — is visible to whatever reads the picture
+//! after it.
 //!
 //! # What is *not* claimed
 //!
@@ -120,7 +122,7 @@ impl<T: Copy> SharedCells<T> {
 ///
 /// A captured base address is `!Sync` by inference, and every view in this
 /// module is built on one — so this single `impl` is what lets a worker hold
-/// `&RecPicView` across `thread::scope`. What makes the sharing sound is not
+/// `&RecPicView` across the fork's `scope`. What makes the sharing sound is not
 /// the `impl`: each worker touches only its own macroblocks' bytes and entries.
 /// The `impl` is where that claim is written down, and it is placed on the type
 /// that holds the raw parts rather than on the picture view, because the parts
