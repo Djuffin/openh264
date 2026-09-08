@@ -29,7 +29,7 @@
 use core::arch::aarch64::*;
 
 use super::lanes::{any_set, ld16, ld4, ld8, st16, to8};
-use crate::safe::plane::PlaneSamples;
+use crate::safe::plane::{BlockRows, PlaneSamples, RefSamples};
 
 // ============================================================================
 // Lane helpers
@@ -224,12 +224,17 @@ fn transpose8x8(r: [uint8x8_t; 8]) -> [uint8x8_t; 8] {
 
 /// A vertical luma edge's sixteen lines, taps `-4 .. 4` of each, as eight tap
 /// vectors of sixteen lines: two 8x8 transposes, one per half.
+///
+/// The lines come out of **one** span rather than sixteen `row_n` calls — the same
+/// block, one bounds check instead of sixteen; see [`RefSamples::span`]. The cut is
+/// the exact bounding box of what the taps read, so the reach is unchanged.
 #[inline]
 #[target_feature(enable = "neon")]
-fn gather_luma_lines(pix: &impl PlaneSamples) -> [[u8; 16]; 8] {
+fn gather_luma_lines(pix: &impl RefSamples) -> [[u8; 16]; 8] {
+    let s = pix.span::<8, 16>(0, -4);
     let mut lines = [vdup_n_u8(0); 16];
     for (i, l) in lines.iter_mut().enumerate() {
-        *l = ld8(&pix.row_n::<8>(i as isize, -4));
+        *l = ld8(&s.row::<8>(i, 0));
     }
     let top = transpose8x8([lines[0], lines[1], lines[2], lines[3], lines[4], lines[5], lines[6], lines[7]]);
     let bot = transpose8x8([lines[8], lines[9], lines[10], lines[11], lines[12], lines[13], lines[14], lines[15]]);
@@ -254,23 +259,26 @@ fn scatter_luma_lines<const FIRST: usize, const N: usize>(pix: &mut impl PlaneSa
     }
     let top = transpose8x8(top);
     let bot = transpose8x8(bot);
-    for i in 0..16 {
+    // Sixteen lines as one block: `set_block` cuts a single span for them, where a
+    // `set_row_n` apiece re-derived and re-checked each line's address.
+    let out: [[u8; N]; 16] = std::array::from_fn(|i| {
         let line = to8(if i < 8 { top[i] } else { bot[i - 8] });
-        let seg: &[u8; N] = line[FIRST..FIRST + N].try_into().expect("taps");
-        pix.set_row_n::<N>(i as isize, FIRST as isize - 4, seg);
-    }
+        line[FIRST..FIRST + N].try_into().expect("taps")
+    });
+    pix.set_block::<N, 16>(0, FIRST as isize - 4, &out);
 }
 
 /// A vertical chroma edge's eight lines per plane, taps `-2 .. 2`, as four tap
 /// vectors holding the Cb lines low and the Cr lines high.
 #[inline]
 #[target_feature(enable = "neon")]
-fn gather_chroma_lines(cb: &impl PlaneSamples, cr: &impl PlaneSamples) -> [[u8; 16]; 4] {
+fn gather_chroma_lines(cb: &impl RefSamples, cr: &impl RefSamples) -> [[u8; 16]; 4] {
+    let (sb, sr) = (cb.span::<4, 8>(0, -2), cr.span::<4, 8>(0, -2));
     let mut a = [vdup_n_u8(0); 8];
     let mut b = [vdup_n_u8(0); 8];
     for i in 0..8 {
-        a[i] = ld4(&cb.row_n::<4>(i as isize, -2));
-        b[i] = ld4(&cr.row_n::<4>(i as isize, -2));
+        a[i] = ld4(&sb.row::<4>(i, 0));
+        b[i] = ld4(&sr.row::<4>(i, 0));
     }
     let a = transpose8x8(a);
     let b = transpose8x8(b);
@@ -294,12 +302,12 @@ fn scatter_chroma_lines(cb: &mut impl PlaneSamples, cr: &mut impl PlaneSamples, 
     }
     let a = transpose8x8(a);
     let b = transpose8x8(b);
-    for i in 0..8 {
-        let la = to8(a[i]);
-        let lb = to8(b[i]);
-        cb.set_row_n::<2>(i as isize, -1, la[1..3].try_into().expect("p0, q0"));
-        cr.set_row_n::<2>(i as isize, -1, lb[1..3].try_into().expect("p0, q0"));
-    }
+    let out_cb: [[u8; 2]; 8] =
+        std::array::from_fn(|i| to8(a[i])[1..3].try_into().expect("p0, q0"));
+    let out_cr: [[u8; 2]; 8] =
+        std::array::from_fn(|i| to8(b[i])[1..3].try_into().expect("p0, q0"));
+    cb.set_block::<2, 8>(0, -1, &out_cb);
+    cr.set_block::<2, 8>(0, -1, &out_cr);
 }
 
 // ============================================================================
@@ -441,21 +449,18 @@ fn chroma_eq4_16(p1: &[u8; 16], p0: &mut [u8; 16], q0: &mut [u8; 16], q1: &[u8; 
 pub fn deblock_luma_lt4(pix: &mut impl PlaneSamples, step_x: isize, step_y: isize, alpha: i32, beta: i32, tc: &[i8; 4]) {
     if step_y == 1 {
         debug_assert_eq!(step_x, pix.stride() as isize);
-        // Horizontal edge: taps step vertically in y (-3, -2, -1, 0, 1, 2).
-        let p2 = pix.row_n::<16>(-3, 0);
-        let mut p1 = pix.row_n::<16>(-2, 0);
-        let mut p0 = pix.row_n::<16>(-1, 0);
-        let mut q0 = pix.row_n::<16>(0, 0);
-        let mut q1 = pix.row_n::<16>(1, 0);
-        let q2 = pix.row_n::<16>(2, 0);
+        // Horizontal edge: taps step vertically in y (-3, -2, -1, 0, 1, 2), which is
+        // one 16-wide, 6-tall span cut at `dy0 = -3` and indexed from its own row 0.
+        let (p2, mut p1, mut p0, mut q0, mut q1, q2) = {
+            let s = pix.span::<16, 6>(-3, 0);
+            (s.row::<16>(0, 0), s.row::<16>(1, 0), s.row::<16>(2, 0),
+             s.row::<16>(3, 0), s.row::<16>(4, 0), s.row::<16>(5, 0))
+        };
 
         // SAFETY: NEON is baseline on aarch64; see the module header.
         unsafe { luma_lt4_16(&p2, &mut p1, &mut p0, &mut q0, &mut q1, &q2, alpha, beta, tc) };
 
-        pix.set_row_n::<16>(-2, 0, &p1);
-        pix.set_row_n::<16>(-1, 0, &p0);
-        pix.set_row_n::<16>(0, 0, &q0);
-        pix.set_row_n::<16>(1, 0, &q1);
+        pix.set_block::<16, 4>(-2, 0, &[p1, p0, q0, q1]);
     } else if step_x == 1 {
         debug_assert_eq!(step_y, pix.stride() as isize);
         // Vertical edge: line i has its taps at row i, columns -4..4.
@@ -474,23 +479,16 @@ pub fn deblock_luma_lt4(pix: &mut impl PlaneSamples, step_x: isize, step_y: isiz
 pub fn deblock_luma_eq4(pix: &mut impl PlaneSamples, step_x: isize, step_y: isize, alpha: i32, beta: i32) {
     if step_y == 1 {
         debug_assert_eq!(step_x, pix.stride() as isize);
-        let p3 = pix.row_n::<16>(-4, 0);
-        let mut p2 = pix.row_n::<16>(-3, 0);
-        let mut p1 = pix.row_n::<16>(-2, 0);
-        let mut p0 = pix.row_n::<16>(-1, 0);
-        let mut q0 = pix.row_n::<16>(0, 0);
-        let mut q1 = pix.row_n::<16>(1, 0);
-        let mut q2 = pix.row_n::<16>(2, 0);
-        let q3 = pix.row_n::<16>(3, 0);
+        // Taps `-4 .. 3`: one 16-wide, 8-tall span, as in `deblock_luma_lt4`.
+        let (p3, mut p2, mut p1, mut p0, mut q0, mut q1, mut q2, q3) = {
+            let s = pix.span::<16, 8>(-4, 0);
+            (s.row::<16>(0, 0), s.row::<16>(1, 0), s.row::<16>(2, 0), s.row::<16>(3, 0),
+             s.row::<16>(4, 0), s.row::<16>(5, 0), s.row::<16>(6, 0), s.row::<16>(7, 0))
+        };
 
         unsafe { luma_eq4_16(&p3, &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, &q3, alpha, beta) };
 
-        pix.set_row_n::<16>(-3, 0, &p2);
-        pix.set_row_n::<16>(-2, 0, &p1);
-        pix.set_row_n::<16>(-1, 0, &p0);
-        pix.set_row_n::<16>(0, 0, &q0);
-        pix.set_row_n::<16>(1, 0, &q1);
-        pix.set_row_n::<16>(2, 0, &q2);
+        pix.set_block::<16, 6>(-3, 0, &[p2, p1, p0, q0, q1, q2]);
     } else if step_x == 1 {
         debug_assert_eq!(step_y, pix.stride() as isize);
         let mut t = unsafe { gather_luma_lines(&*pix) };
@@ -516,25 +514,30 @@ pub fn deblock_chroma_lt4(
     if step_y == 1 {
         debug_assert_eq!(step_x, cb.stride() as isize);
         debug_assert_eq!(step_x, cr.stride() as isize);
+        // Taps `-2 .. 1` of each plane: one 8-wide, 4-tall span apiece, Cb into the
+        // low eight lanes and Cr into the high eight.
         let mut p1 = [0u8; 16];
         let mut p0 = [0u8; 16];
         let mut q0 = [0u8; 16];
         let mut q1 = [0u8; 16];
-        p1[..8].copy_from_slice(&cb.row_n::<8>(-2, 0));
-        p1[8..].copy_from_slice(&cr.row_n::<8>(-2, 0));
-        p0[..8].copy_from_slice(&cb.row_n::<8>(-1, 0));
-        p0[8..].copy_from_slice(&cr.row_n::<8>(-1, 0));
-        q0[..8].copy_from_slice(&cb.row_n::<8>(0, 0));
-        q0[8..].copy_from_slice(&cr.row_n::<8>(0, 0));
-        q1[..8].copy_from_slice(&cb.row_n::<8>(1, 0));
-        q1[8..].copy_from_slice(&cr.row_n::<8>(1, 0));
+        {
+            let (sb, sr) = (cb.span::<8, 4>(-2, 0), cr.span::<8, 4>(-2, 0));
+            for (k, row) in [&mut p1, &mut p0, &mut q0, &mut q1].into_iter().enumerate() {
+                row[..8].copy_from_slice(&sb.row::<8>(k, 0));
+                row[8..].copy_from_slice(&sr.row::<8>(k, 0));
+            }
+        }
 
         unsafe { chroma_lt4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta, tc) };
 
-        cb.set_row_n::<8>(-1, 0, p0[..8].try_into().expect("cb p0"));
-        cr.set_row_n::<8>(-1, 0, p0[8..].try_into().expect("cr p0"));
-        cb.set_row_n::<8>(0, 0, q0[..8].try_into().expect("cb q0"));
-        cr.set_row_n::<8>(0, 0, q0[8..].try_into().expect("cr q0"));
+        cb.set_block::<8, 2>(-1, 0, &[
+            p0[..8].try_into().expect("cb p0"),
+            q0[..8].try_into().expect("cb q0"),
+        ]);
+        cr.set_block::<8, 2>(-1, 0, &[
+            p0[8..].try_into().expect("cr p0"),
+            q0[8..].try_into().expect("cr q0"),
+        ]);
     } else if step_x == 1 {
         debug_assert_eq!(step_y, cb.stride() as isize);
         debug_assert_eq!(step_y, cr.stride() as isize);
@@ -552,25 +555,30 @@ pub fn deblock_chroma_eq4(cb: &mut impl PlaneSamples, cr: &mut impl PlaneSamples
     if step_y == 1 {
         debug_assert_eq!(step_x, cb.stride() as isize);
         debug_assert_eq!(step_x, cr.stride() as isize);
+        // Taps `-2 .. 1` of each plane: one 8-wide, 4-tall span apiece, Cb into the
+        // low eight lanes and Cr into the high eight.
         let mut p1 = [0u8; 16];
         let mut p0 = [0u8; 16];
         let mut q0 = [0u8; 16];
         let mut q1 = [0u8; 16];
-        p1[..8].copy_from_slice(&cb.row_n::<8>(-2, 0));
-        p1[8..].copy_from_slice(&cr.row_n::<8>(-2, 0));
-        p0[..8].copy_from_slice(&cb.row_n::<8>(-1, 0));
-        p0[8..].copy_from_slice(&cr.row_n::<8>(-1, 0));
-        q0[..8].copy_from_slice(&cb.row_n::<8>(0, 0));
-        q0[8..].copy_from_slice(&cr.row_n::<8>(0, 0));
-        q1[..8].copy_from_slice(&cb.row_n::<8>(1, 0));
-        q1[8..].copy_from_slice(&cr.row_n::<8>(1, 0));
+        {
+            let (sb, sr) = (cb.span::<8, 4>(-2, 0), cr.span::<8, 4>(-2, 0));
+            for (k, row) in [&mut p1, &mut p0, &mut q0, &mut q1].into_iter().enumerate() {
+                row[..8].copy_from_slice(&sb.row::<8>(k, 0));
+                row[8..].copy_from_slice(&sr.row::<8>(k, 0));
+            }
+        }
 
         unsafe { chroma_eq4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta) };
 
-        cb.set_row_n::<8>(-1, 0, p0[..8].try_into().expect("cb p0"));
-        cr.set_row_n::<8>(-1, 0, p0[8..].try_into().expect("cr p0"));
-        cb.set_row_n::<8>(0, 0, q0[..8].try_into().expect("cb q0"));
-        cr.set_row_n::<8>(0, 0, q0[8..].try_into().expect("cr q0"));
+        cb.set_block::<8, 2>(-1, 0, &[
+            p0[..8].try_into().expect("cb p0"),
+            q0[..8].try_into().expect("cb q0"),
+        ]);
+        cr.set_block::<8, 2>(-1, 0, &[
+            p0[8..].try_into().expect("cr p0"),
+            q0[8..].try_into().expect("cr q0"),
+        ]);
     } else if step_x == 1 {
         debug_assert_eq!(step_y, cb.stride() as isize);
         debug_assert_eq!(step_y, cr.stride() as isize);

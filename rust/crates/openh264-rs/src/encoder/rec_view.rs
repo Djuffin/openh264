@@ -454,6 +454,22 @@ impl crate::safe::plane::PlaneSamples for RecCursor<'_> {
         RecCursor::write_row::<N>(self, dy, dx0, val)
     }
 
+    /// One cut span and `H` folded row writes, where the default would re-derive and
+    /// re-check every row; see [`PlaneSamples::set_block`](crate::safe::plane::PlaneSamples::set_block).
+    #[inline]
+    fn set_block<const W: usize, const H: usize>(
+        &mut self,
+        dy0: isize,
+        dx0: isize,
+        rows: &[[u8; W]; H],
+    ) {
+        let span = crate::safe::plane::RefSamples::span::<W, H>(self, dy0, dx0);
+        for (y, r) in rows.iter().enumerate() {
+            for (c, &v) in span.row_cells::<W>(y).iter().zip(r.iter()) {
+                c.set(v);
+            }
+        }
+    }
 }
 
 impl crate::safe::plane::RefSamples for RecCursor<'_> {
