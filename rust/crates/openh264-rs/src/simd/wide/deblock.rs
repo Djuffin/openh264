@@ -15,7 +15,7 @@
 use wide::i16x8;
 
 use super::lanes::{load8, low8, narrow, widen_lo};
-use crate::safe::plane::PlaneSamples;
+use crate::safe::plane::{BlockRows, PlaneSamples, RefSamples};
 
 // ============================================================================
 // Lane helpers
@@ -301,24 +301,26 @@ pub fn deblock_luma_lt4(
 ) {
     if step_y == 1 {
         debug_assert_eq!(step_x, pix.stride() as isize);
-        let mut p2 = pix.row_n::<16>(-3, 0);
-        let mut p1 = pix.row_n::<16>(-2, 0);
-        let mut p0 = pix.row_n::<16>(-1, 0);
-        let mut q0 = pix.row_n::<16>(0, 0);
-        let mut q1 = pix.row_n::<16>(1, 0);
-        let mut q2 = pix.row_n::<16>(2, 0);
+        // Taps `-3 .. 2`: one 16-wide, 6-tall span, indexed from its own row 0,
+        // rather than six `row_n` calls with a bounds check each.
+        let (mut p2, mut p1, mut p0, mut q0, mut q1, mut q2) = {
+            let s = pix.span::<16, 6>(-3, 0);
+            (s.row::<16>(0, 0), s.row::<16>(1, 0), s.row::<16>(2, 0),
+             s.row::<16>(3, 0), s.row::<16>(4, 0), s.row::<16>(5, 0))
+        };
 
         deblock_luma_lt4_16(&mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, alpha, beta, tc);
 
-        pix.set_row_n::<16>(-2, 0, &p1);
-        pix.set_row_n::<16>(-1, 0, &p0);
-        pix.set_row_n::<16>(0, 0, &q0);
-        pix.set_row_n::<16>(1, 0, &q1);
+        pix.set_block::<16, 4>(-2, 0, &[p1, p0, q0, q1]);
     } else if step_x == 1 {
         debug_assert_eq!(step_y, pix.stride() as isize);
+        // Sixteen lines of taps `-4 .. 4`, out of one span.
         let mut rows = [[0u8; 8]; 16];
-        for i in 0..16 {
-            rows[i] = pix.row_n::<8>(i as isize, -4);
+        {
+            let s = pix.span::<8, 16>(0, -4);
+            for (i, r) in rows.iter_mut().enumerate() {
+                *r = s.row::<8>(i, 0);
+            }
         }
 
         let mut t = [[0u8; 16]; 8];
@@ -339,10 +341,10 @@ pub fn deblock_luma_lt4(
 
         // Write back only the columns the filter can modify; at `iEdge == 0` the
         // outer columns belong to the previous macroblock.
-        for i in 0..16 {
-            let seg: &[u8; 4] = rows[i][2..6].try_into().expect("p1..q1");
-            pix.set_row_n::<4>(i as isize, -2, seg);
-        }
+        // Sixteen lines as one block, one bounds check for all of them.
+        let out: [[u8; 4]; 16] =
+            std::array::from_fn(|i| rows[i][2..6].try_into().expect("p1..q1"));
+        pix.set_block::<4, 16>(0, -2, &out);
     } else {
         crate::common::deblocking_common::deblock_luma_lt4_scalar(pix, step_x, step_y, alpha, beta, tc);
     }
@@ -352,28 +354,25 @@ pub fn deblock_luma_lt4(
 pub fn deblock_luma_eq4(pix: &mut impl PlaneSamples, step_x: isize, step_y: isize, alpha: i32, beta: i32) {
     if step_y == 1 {
         debug_assert_eq!(step_x, pix.stride() as isize);
-        let p3 = pix.row_n::<16>(-4, 0);
-        let mut p2 = pix.row_n::<16>(-3, 0);
-        let mut p1 = pix.row_n::<16>(-2, 0);
-        let mut p0 = pix.row_n::<16>(-1, 0);
-        let mut q0 = pix.row_n::<16>(0, 0);
-        let mut q1 = pix.row_n::<16>(1, 0);
-        let mut q2 = pix.row_n::<16>(2, 0);
-        let q3 = pix.row_n::<16>(3, 0);
+        // Taps `-4 .. 3`: one 16-wide, 8-tall span, as in `deblock_luma_lt4`.
+        let (p3, mut p2, mut p1, mut p0, mut q0, mut q1, mut q2, q3) = {
+            let s = pix.span::<16, 8>(-4, 0);
+            (s.row::<16>(0, 0), s.row::<16>(1, 0), s.row::<16>(2, 0), s.row::<16>(3, 0),
+             s.row::<16>(4, 0), s.row::<16>(5, 0), s.row::<16>(6, 0), s.row::<16>(7, 0))
+        };
 
         deblock_luma_eq4_16(&p3, &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, &q3, alpha, beta);
 
-        pix.set_row_n::<16>(-3, 0, &p2);
-        pix.set_row_n::<16>(-2, 0, &p1);
-        pix.set_row_n::<16>(-1, 0, &p0);
-        pix.set_row_n::<16>(0, 0, &q0);
-        pix.set_row_n::<16>(1, 0, &q1);
-        pix.set_row_n::<16>(2, 0, &q2);
+        pix.set_block::<16, 6>(-3, 0, &[p2, p1, p0, q0, q1, q2]);
     } else if step_x == 1 {
         debug_assert_eq!(step_y, pix.stride() as isize);
+        // Sixteen lines of taps `-4 .. 4`, out of one span.
         let mut rows = [[0u8; 8]; 16];
-        for i in 0..16 {
-            rows[i] = pix.row_n::<8>(i as isize, -4);
+        {
+            let s = pix.span::<8, 16>(0, -4);
+            for (i, r) in rows.iter_mut().enumerate() {
+                *r = s.row::<8>(i, 0);
+            }
         }
 
         let mut t = [[0u8; 16]; 8];
@@ -392,10 +391,9 @@ pub fn deblock_luma_eq4(pix: &mut impl PlaneSamples, step_x: isize, step_y: isiz
             }
         }
 
-        for i in 0..16 {
-            let seg: &[u8; 6] = rows[i][1..7].try_into().expect("p2..q2");
-            pix.set_row_n::<6>(i as isize, -3, seg);
-        }
+        let out: [[u8; 6]; 16] =
+            std::array::from_fn(|i| rows[i][1..7].try_into().expect("p2..q2"));
+        pix.set_block::<6, 16>(0, -3, &out);
     } else {
         crate::common::deblocking_common::deblock_luma_eq4_scalar(pix, step_x, step_y, alpha, beta);
     }
@@ -415,14 +413,12 @@ pub fn deblock_chroma_lt4(
     if step_y == 1 {
         debug_assert_eq!(step_x, cb.stride() as isize);
         debug_assert_eq!(step_x, cr.stride() as isize);
-        let cb_p1 = cb.row_n::<8>(-2, 0);
-        let cr_p1 = cr.row_n::<8>(-2, 0);
-        let mut cb_p0 = cb.row_n::<8>(-1, 0);
-        let mut cr_p0 = cr.row_n::<8>(-1, 0);
-        let mut cb_q0 = cb.row_n::<8>(0, 0);
-        let mut cr_q0 = cr.row_n::<8>(0, 0);
-        let cb_q1 = cb.row_n::<8>(1, 0);
-        let cr_q1 = cr.row_n::<8>(1, 0);
+        // Taps `-2 .. 1` of each plane: one 8-wide, 4-tall span apiece.
+        let (cb_p1, mut cb_p0, mut cb_q0, cb_q1, cr_p1, mut cr_p0, mut cr_q0, cr_q1) = {
+            let (sb, sr) = (cb.span::<8, 4>(-2, 0), cr.span::<8, 4>(-2, 0));
+            (sb.row::<8>(0, 0), sb.row::<8>(1, 0), sb.row::<8>(2, 0), sb.row::<8>(3, 0),
+             sr.row::<8>(0, 0), sr.row::<8>(1, 0), sr.row::<8>(2, 0), sr.row::<8>(3, 0))
+        };
 
         let mut p1 = [0u8; 16];
         let mut p0 = [0u8; 16];
@@ -445,18 +441,20 @@ pub fn deblock_chroma_lt4(
         cb_q0.copy_from_slice(&q0[..8]);
         cr_q0.copy_from_slice(&q0[8..]);
 
-        cb.set_row_n::<8>(-1, 0, &cb_p0);
-        cr.set_row_n::<8>(-1, 0, &cr_p0);
-        cb.set_row_n::<8>(0, 0, &cb_q0);
-        cr.set_row_n::<8>(0, 0, &cr_q0);
+        cb.set_block::<8, 2>(-1, 0, &[cb_p0, cb_q0]);
+        cr.set_block::<8, 2>(-1, 0, &[cr_p0, cr_q0]);
     } else if step_x == 1 {
         debug_assert_eq!(step_y, cb.stride() as isize);
         debug_assert_eq!(step_y, cr.stride() as isize);
+        // Eight lines of taps `-2 .. 2` per plane, out of one span each.
         let mut cb_rows = [[0u8; 4]; 8];
         let mut cr_rows = [[0u8; 4]; 8];
-        for i in 0..8 {
-            cb_rows[i] = cb.row_n::<4>(i as isize, -2);
-            cr_rows[i] = cr.row_n::<4>(i as isize, -2);
+        {
+            let (sb, sr) = (cb.span::<4, 8>(0, -2), cr.span::<4, 8>(0, -2));
+            for i in 0..8 {
+                cb_rows[i] = sb.row::<4>(i, 0);
+                cr_rows[i] = sr.row::<4>(i, 0);
+            }
         }
 
         let mut t = [[0u8; 16]; 4];
@@ -477,12 +475,12 @@ pub fn deblock_chroma_lt4(
             cr_rows[y][2] = t[2][y + 8];
         }
 
-        for i in 0..8 {
-            let cb_seg: &[u8; 2] = cb_rows[i][1..3].try_into().expect("p0, q0");
-            let cr_seg: &[u8; 2] = cr_rows[i][1..3].try_into().expect("p0, q0");
-            cb.set_row_n::<2>(i as isize, -1, cb_seg);
-            cr.set_row_n::<2>(i as isize, -1, cr_seg);
-        }
+        let out_cb: [[u8; 2]; 8] =
+            std::array::from_fn(|i| cb_rows[i][1..3].try_into().expect("p0, q0"));
+        let out_cr: [[u8; 2]; 8] =
+            std::array::from_fn(|i| cr_rows[i][1..3].try_into().expect("p0, q0"));
+        cb.set_block::<2, 8>(0, -1, &out_cb);
+        cr.set_block::<2, 8>(0, -1, &out_cr);
     } else {
         crate::common::deblocking_common::deblock_chroma_lt4_scalar(cb, cr, step_x, step_y, alpha, beta, tc);
     }
@@ -501,14 +499,12 @@ pub fn deblock_chroma_eq4(
     if step_y == 1 {
         debug_assert_eq!(step_x, cb.stride() as isize);
         debug_assert_eq!(step_x, cr.stride() as isize);
-        let cb_p1 = cb.row_n::<8>(-2, 0);
-        let cr_p1 = cr.row_n::<8>(-2, 0);
-        let mut cb_p0 = cb.row_n::<8>(-1, 0);
-        let mut cr_p0 = cr.row_n::<8>(-1, 0);
-        let mut cb_q0 = cb.row_n::<8>(0, 0);
-        let mut cr_q0 = cr.row_n::<8>(0, 0);
-        let cb_q1 = cb.row_n::<8>(1, 0);
-        let cr_q1 = cr.row_n::<8>(1, 0);
+        // Taps `-2 .. 1` of each plane: one 8-wide, 4-tall span apiece.
+        let (cb_p1, mut cb_p0, mut cb_q0, cb_q1, cr_p1, mut cr_p0, mut cr_q0, cr_q1) = {
+            let (sb, sr) = (cb.span::<8, 4>(-2, 0), cr.span::<8, 4>(-2, 0));
+            (sb.row::<8>(0, 0), sb.row::<8>(1, 0), sb.row::<8>(2, 0), sb.row::<8>(3, 0),
+             sr.row::<8>(0, 0), sr.row::<8>(1, 0), sr.row::<8>(2, 0), sr.row::<8>(3, 0))
+        };
 
         let mut p1 = [0u8; 16];
         let mut p0 = [0u8; 16];
@@ -531,18 +527,20 @@ pub fn deblock_chroma_eq4(
         cb_q0.copy_from_slice(&q0[..8]);
         cr_q0.copy_from_slice(&q0[8..]);
 
-        cb.set_row_n::<8>(-1, 0, &cb_p0);
-        cr.set_row_n::<8>(-1, 0, &cr_p0);
-        cb.set_row_n::<8>(0, 0, &cb_q0);
-        cr.set_row_n::<8>(0, 0, &cr_q0);
+        cb.set_block::<8, 2>(-1, 0, &[cb_p0, cb_q0]);
+        cr.set_block::<8, 2>(-1, 0, &[cr_p0, cr_q0]);
     } else if step_x == 1 {
         debug_assert_eq!(step_y, cb.stride() as isize);
         debug_assert_eq!(step_y, cr.stride() as isize);
+        // Eight lines of taps `-2 .. 2` per plane, out of one span each.
         let mut cb_rows = [[0u8; 4]; 8];
         let mut cr_rows = [[0u8; 4]; 8];
-        for i in 0..8 {
-            cb_rows[i] = cb.row_n::<4>(i as isize, -2);
-            cr_rows[i] = cr.row_n::<4>(i as isize, -2);
+        {
+            let (sb, sr) = (cb.span::<4, 8>(0, -2), cr.span::<4, 8>(0, -2));
+            for i in 0..8 {
+                cb_rows[i] = sb.row::<4>(i, 0);
+                cr_rows[i] = sr.row::<4>(i, 0);
+            }
         }
 
         let mut t = [[0u8; 16]; 4];
@@ -563,16 +561,18 @@ pub fn deblock_chroma_eq4(
             cr_rows[y][2] = t[2][y + 8];
         }
 
-        for i in 0..8 {
-            let cb_seg: &[u8; 2] = cb_rows[i][1..3].try_into().expect("p0, q0");
-            let cr_seg: &[u8; 2] = cr_rows[i][1..3].try_into().expect("p0, q0");
-            cb.set_row_n::<2>(i as isize, -1, cb_seg);
-            cr.set_row_n::<2>(i as isize, -1, cr_seg);
-        }
+        let out_cb: [[u8; 2]; 8] =
+            std::array::from_fn(|i| cb_rows[i][1..3].try_into().expect("p0, q0"));
+        let out_cr: [[u8; 2]; 8] =
+            std::array::from_fn(|i| cr_rows[i][1..3].try_into().expect("p0, q0"));
+        cb.set_block::<2, 8>(0, -1, &out_cb);
+        cr.set_block::<2, 8>(0, -1, &out_cr);
     } else {
         crate::common::deblocking_common::deblock_chroma_eq4_scalar(cb, cr, step_x, step_y, alpha, beta);
     }
 }
+
+
 
 #[cfg(test)]
 mod tests {

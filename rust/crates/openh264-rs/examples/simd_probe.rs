@@ -164,6 +164,40 @@ pub fn probe_isa_hor_ver02_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut
     isa::mc::mc_hor_ver02(src, dst, 16, 16)
 }
 
+/// The deblocking edge filters over the **shared cell view**, which is the operand
+/// type every encoder call hands them, one probe per branch: `step_y == 1` is the
+/// horizontal edge (taps step by the stride) and `step_x == 1` the vertical one (taps
+/// step by one byte, sixteen lines gathered and transposed). What the assembly should
+/// show is the tap loads and stores with **no per-row bounds branch** — the read side
+/// is one span per call and the write side one `write_row` per line.
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_deblock_luma_lt4_h_cells(pix: &mut RecCursor<'_>, tc: &[i8; 4]) {
+    isa::deblock::deblock_luma_lt4(pix, 64, 1, 40, 20, tc)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_deblock_luma_lt4_v_cells(pix: &mut RecCursor<'_>, tc: &[i8; 4]) {
+    isa::deblock::deblock_luma_lt4(pix, 1, 64, 40, 20, tc)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_deblock_luma_eq4_h_cells(pix: &mut RecCursor<'_>) {
+    isa::deblock::deblock_luma_eq4(pix, 64, 1, 40, 20)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_deblock_luma_eq4_v_cells(pix: &mut RecCursor<'_>) {
+    isa::deblock::deblock_luma_eq4(pix, 1, 64, 40, 20)
+}
+
 /// One row into the shared view: the store [`RecCursor::write_row`] promises. The
 /// assembly should be a bounds check and a single `stur q0`.
 #[unsafe(no_mangle)]
@@ -272,6 +306,15 @@ fn main() {
             let ka = RecCursor::over_owned(&mut ra, 20 * 64 + 19, 64);
             probe_isa_mc_luma_zero_16x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
             probe_isa_mc_chroma_zero_8x8_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+        }
+        {
+            let mut ra = vec![7u8; 64 * 64];
+            let mut ka = RecCursor::over_owned(&mut ra, 20 * 64 + 19, 64);
+            let tc = [3i8, 2, 3, 1];
+            probe_isa_deblock_luma_lt4_h_cells(&mut ka, &tc);
+            probe_isa_deblock_luma_lt4_v_cells(&mut ka, &tc);
+            probe_isa_deblock_luma_eq4_h_cells(&mut ka);
+            probe_isa_deblock_luma_eq4_v_cells(&mut ka);
         }
     }
     {

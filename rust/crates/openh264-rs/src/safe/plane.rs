@@ -683,6 +683,33 @@ pub trait PlaneSamples: RefSamples {
             self.set(dx0 + i as isize, dy, v);
         }
     }
+
+    /// Writes an `W`-wide, `H`-tall block of rows at `(dx0, dy0)` — **the write side's
+    /// twin of [`RefSamples::span`]**, and for the same reason.
+    ///
+    /// The default below is `H` calls to [`set_row_n`](Self::set_row_n), which is `H`
+    /// bounds checks over `H` separately-derived addresses. Both cursor
+    /// implementations override it to cut **one** span and walk it, so a block costs
+    /// one check however tall it is; see [`RefSamples::span`] for why the rows inside
+    /// a cut span fold, and `PlaneSpan::cut` for the narrowed stride that makes them.
+    ///
+    /// The deblocking filters are what this exists for: a vertical edge writes its
+    /// sixteen lines four or six samples wide, and that was sixteen checked stores on
+    /// the shared view.
+    ///
+    /// # Panics
+    /// If the block leaves the buffer.
+    #[inline]
+    fn set_block<const W: usize, const H: usize>(
+        &mut self,
+        dy0: isize,
+        dx0: isize,
+        rows: &[[u8; W]; H],
+    ) {
+        for (y, r) in rows.iter().enumerate() {
+            self.set_row_n::<W>(dy0 + y as isize, dx0, r);
+        }
+    }
 }
 
 
@@ -1127,6 +1154,21 @@ impl PlaneSamples for PlaneCursorMut<'_> {
     fn set_row_n<const N: usize>(&mut self, dy: isize, dx0: isize, val: &[u8; N]) {
         let r = self.row_mut(dy, dx0, N);
         r.copy_from_slice(val);
+    }
+
+    /// One [`span_mut`](PlaneCursorMut::span_mut) and `H` folded row writes; see
+    /// [`PlaneSamples::set_block`].
+    #[inline]
+    fn set_block<const W: usize, const H: usize>(
+        &mut self,
+        dy0: isize,
+        dx0: isize,
+        rows: &[[u8; W]; H],
+    ) {
+        let mut span = self.span_mut::<W, H>(dy0, dx0);
+        for (y, r) in rows.iter().enumerate() {
+            *span.row_mut::<W>(y, 0) = *r;
+        }
     }
 }
 
