@@ -184,6 +184,8 @@ impl Default for SSampleDealingPicData {
 // wels_func_ptr_def.h:127 takes uint8_t*, not const uint8_t*.
 pub use crate::encoder::md::PSampleSadSatdCostFunc;
 use crate::encoder::md::{MbCursors, MdSliceCtx};
+/// The kernel set the direct dispatch sites below name; see `simd::kernels`.
+use crate::simd::kernels;
 
 // ============================================================================
 // Macro / Inline Condition Helpers
@@ -378,9 +380,9 @@ pub fn WelsRecPskip(mbc: &MbCursors<'_>, pCurMb: &mut SMB, pMbCache: &mut SMbCac
     // The three destinations are the macroblock's reconstruction cursors, which the
     // loop built once from the same `(iMbX, iMbY)` that `SPicData` carries.
     let src = &pMbCache.sSkipMb;
-    copy_block_to_view::<16>(&src[..256], 16, &mbc.rec_y, 16);
-    copy_block_to_view::<8>(&src[256..320], 8, &mbc.rec_cb, 8);
-    copy_block_to_view::<8>(&src[320..384], 8, &mbc.rec_cr, 8);
+    copy_block_to_view::<16, 16>(&src[..256], &mbc.rec_y);
+    copy_block_to_view::<8, 8>(&src[256..320], &mbc.rec_cb);
+    copy_block_to_view::<8, 8>(&src[320..384], &mbc.rec_cr);
     // `WelsSetMemZero (pCurMb->pNonZeroCount, 24)`.
     pCurMb.iNonZeroCount = [0; MB_LUMA_CHROMA_BLOCK4x4_NUM];
 }
@@ -390,22 +392,38 @@ pub fn WelsRecPskip(mbc: &MbCursors<'_>, pCurMb: &mut SMB, pMbCache: &mut SMbCac
 ///
 /// Translated from `VaaBackgroundMbDataUpdate` in
 /// `codec/encoder/core/src/svc_base_layer_md.cpp:1341`.
+///
+/// `pCur*` is the **destination**: the copy runs previous-source -> current-source
+/// in-fork, into the picture the encoder is reading, which is why both operands are
+/// cursors over cells. The two views are the VAA block's own, not the layer's, so
+/// these six cursors are not the macroblock's — but the `Option` pair was unwrapped
+/// once, into the context.
+///
+/// The three copies go **straight to the kernels** rather than through
+/// `pfCopy16x16Aligned`/`pfCopy8x8Aligned`. Those slots hold exactly these functions
+/// on every build that has them — `WelsInitEncodingFuncs` installs
+/// `kernels::copy::copy_16x16`/`copy_8x8` under the feature bit and the scalar bodies
+/// without it, and the scalar kernel set forwards to those same bodies — so the call
+/// is the same call with the indirection removed, the copies inline into this
+/// function, and the site is one the kernel scanner can see.
+///
+/// **The six cursors stay here** rather than joining the nine on [`MbCursors`], and
+/// that was measured: hoisting them cost more in the macroblocks that are not
+/// background than it saved in the ones that are. `MbCursors` is stamped for every
+/// macroblock and copied out of `SWelsMD` at each use, so six more of them took
+/// `MbCursors::at` from 1.5% of the 720p `smptebars` frame to 5.5% and put 1.4% into
+/// `memmove`, against the 4.1% the slot call cost.
 #[inline(always)]
 fn VaaBackgroundMbDataUpdate(sc: &MdSliceCtx<'_>, pCurMb: &mut SMB) {
-    // `pCur*` is the **destination**: the copy runs previous-source -> current-source
-    // in-fork, into the picture the encoder is reading. The two views are the
-    // VAA block's own, not the layer's, so these six cursors are not the
-    // macroblock's — but the `Option` pair was unwrapped once, into the context.
     let (Some(curView), Some(refView)) = (sc.vaa_cur, sc.vaa_ref) else {
         return;
     };
     let (lx, ly) = (((pCurMb.iMbX as isize) << 4), ((pCurMb.iMbY as isize) << 4));
     let (cx, cy) = (((pCurMb.iMbX as isize) << 3), ((pCurMb.iMbY as isize) << 3));
 
-    (sc.func.pfCopy16x16Aligned)(&curView.plane(0).cursor(lx, ly), &refView.plane(0).cursor(lx, ly));
-    let copy8 = sc.func.pfCopy8x8Aligned;
-    copy8(&curView.plane(1).cursor(cx, cy), &refView.plane(1).cursor(cx, cy));
-    copy8(&curView.plane(2).cursor(cx, cy), &refView.plane(2).cursor(cx, cy));
+    kernels::copy::copy_16x16(&curView.plane(0).cursor(lx, ly), &refView.plane(0).cursor(lx, ly));
+    kernels::copy::copy_8x8(&curView.plane(1).cursor(cx, cy), &refView.plane(1).cursor(cx, cy));
+    kernels::copy::copy_8x8(&curView.plane(2).cursor(cx, cy), &refView.plane(2).cursor(cx, cy));
 }
 
 /// Encodes a background macroblock: motion-compensates it from the reference frame at
@@ -538,9 +556,9 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     let kiLumaOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
     let kiChromaOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
     let src = &pMbCache.sMemPredMb;
-    copy_block_to_view::<16>(&src[kiLumaOff..kiLumaOff + 256], 16, &mbc.rec_y, 16);
-    copy_block_to_view::<8>(&src[kiChromaOff..kiChromaOff + 64], 8, &mbc.rec_cb, 8);
-    copy_block_to_view::<8>(&src[kiChromaOff + 64..kiChromaOff + 128], 8, &mbc.rec_cr, 8);
+    copy_block_to_view::<16, 16>(&src[kiLumaOff..kiLumaOff + 256], &mbc.rec_y);
+    copy_block_to_view::<8, 8>(&src[kiChromaOff..kiChromaOff + 64], &mbc.rec_cb);
+    copy_block_to_view::<8, 8>(&src[kiChromaOff + 64..kiChromaOff + 128], &mbc.rec_cr);
 }
 
 // ============================================================================
