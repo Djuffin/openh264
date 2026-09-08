@@ -10,7 +10,7 @@
 
 // CPU feature flags from cpu_core.h
 
-use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples};
+use crate::safe::plane::{BlockRows, PlaneCursor, PlaneCursorMut, PlaneSpanMut, RefSamples};
 
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
@@ -210,26 +210,58 @@ pub fn hor_filter_input_16bit(p: &[i16; 6]) -> i32 {
     iPix05 - (iPix14 * 5) + (iPix23 * 20)
 }
 
+/// A `WIDTH`x`HEIGHT` block, source to destination, **through one bounds-checked
+/// span per operand**.
+///
+/// Both dimensions are const parameters and neither is an argument. The width has to
+/// be, or `copy_from_slice` lowers to a `_platform_memmove` *call* per row where the
+/// C++ `LD64`/`ST64A8` pairs were hand-written to get one wide load and one wide
+/// store; the height has to be, or the row loop stays a loop and `y * stride` stays
+/// symbolic, which is the one thing no span length can place inside a span. With
+/// both const the loop unrolls, every row offset is a constant, and the checks the
+/// two spans paid once are the only checks in the copy — see [`RefSamples::span`]
+/// and [`PlaneSpanMut`].
+///
+/// This path carries the zero-MV block, the commonest luma case there is.
+#[inline(always)]
+fn copy_block<const WIDTH: usize, const HEIGHT: usize, S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let s = src.span::<WIDTH, HEIGHT>(0, 0);
+    let mut d = dst.span_mut::<WIDTH, HEIGHT>(0, 0);
+    for y in 0..HEIGHT {
+        *d.row_mut::<WIDTH>(y, 0) = s.row::<WIDTH>(y, 0);
+    }
+}
+
 /// `WIDTH` bytes of each of `height` rows, source to destination.
 ///
-/// The width is a const parameter and not an argument: with a runtime length,
-/// `copy_from_slice` lowers to a `_platform_memmove` *call* per row; with the width
-/// const, the whole row is one pair of wide loads and stores — which is what the C++
-/// `LD64`/`ST64A8` pairs were hand-written to get. This path carries the zero-MV
-/// block, the commonest luma case there is.
-///
-/// The bounds check lands once per row either way.
+/// The heights an H.264 block copy can have are 16, 8, 4 and 2 — the luma
+/// partitions and their chroma halves — and each is dispatched to a const
+/// instantiation of [`copy_block`], which is where the argument for why that matters
+/// is written down. Any other height falls back to the row-at-a-time walk, which is
+/// what this whole function used to be: correct for every height, one pair of slice
+/// checks per row.
 #[inline(always)]
 pub(crate) fn copy_rows<const WIDTH: usize, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     height: usize,
 ) {
-    for dy in 0..height as isize {
-        let sv = src.row_view(dy, 0, WIDTH);
-        let s: &[u8; WIDTH] = (&*sv).try_into().unwrap();
-        let d: &mut [u8; WIDTH] = dst.row_mut(dy, 0, WIDTH).try_into().unwrap();
-        *d = *s;
+    match height {
+        16 => copy_block::<WIDTH, 16, _>(src, dst),
+        8 => copy_block::<WIDTH, 8, _>(src, dst),
+        4 => copy_block::<WIDTH, 4, _>(src, dst),
+        2 => copy_block::<WIDTH, 2, _>(src, dst),
+        _ => {
+            for dy in 0..height as isize {
+                let sv = src.row_view(dy, 0, WIDTH);
+                let s: &[u8; WIDTH] = (&*sv).try_into().unwrap();
+                let d: &mut [u8; WIDTH] = dst.row_mut(dy, 0, WIDTH).try_into().unwrap();
+                *d = *s;
+            }
+        }
     }
 }
 

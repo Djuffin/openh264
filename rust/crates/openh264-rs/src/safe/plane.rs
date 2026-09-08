@@ -762,6 +762,57 @@ impl BlockRows for PlaneSpan<'_> {
     }
 }
 
+/// The **write** side of [`PlaneSpan`]: a block's bytes and the stride to walk them
+/// by, lent out one row at a time as `&mut [u8; W]`.
+///
+/// [`PlaneSpan`] exists because a per-row `row_view` pays two slice checks a row that
+/// the compiler cannot fold; [`PlaneCursorMut::row_mut`] pays the same two, and a
+/// block copy is a row loop over *both* sides. This is that argument applied to the
+/// destination, and the invariant is the same one: `buf` is exactly
+/// `(H - 1) * stride + W` bytes, so `y * stride + x + W <= len` holds for every row
+/// the block contains and LLVM drops the branch.
+///
+/// It cannot be `BlockRows`, and should not be: that trait hands rows out **by
+/// value** because a shared cell view has no `&[u8]` to lend, and a destination has
+/// to be written through. The reconstruction seam's own write path is
+/// [`RecCursor::write_row`](crate::encoder::rec_view::RecCursor::write_row), which
+/// takes a row by value for exactly that reason.
+#[derive(Debug)]
+pub struct PlaneSpanMut<'a> {
+    buf: &'a mut [u8],
+    /// A `u32` for the reason [`PlaneSpan`]'s is — it is what makes `y * stride`
+    /// provably unable to wrap, and so what lets the per-row check fold away.
+    stride: u32,
+}
+
+impl<'a> PlaneSpanMut<'a> {
+    /// Cuts the `w`x`h` block at byte `start` of `buf` out as a writable span.
+    ///
+    /// Length and row offsets come from **one** narrowed stride, as
+    /// [`PlaneSpan::cut`] explains; the narrowing is unchecked here because the bound
+    /// is a cursor invariant, asserted in [`PlaneCursorMut::new`].
+    ///
+    /// # Panics
+    /// If the block leaves `buf`.
+    #[inline]
+    fn cut(buf: &'a mut [u8], start: usize, stride: usize, w: usize, h: usize) -> Self {
+        debug_assert!(stride <= u32::MAX as usize, "cursor stride bound violated");
+        let stride = stride as u32;
+        let len = if h == 0 { 0 } else { (h - 1) * stride as usize + w };
+        Self { buf: &mut buf[start..][..len], stride }
+    }
+
+    /// `W` writable samples of row `y` starting at column `x` **of the span**.
+    ///
+    /// # Panics
+    /// If `y * stride + x + W` leaves the span — which a caller writing the block the
+    /// span was cut for cannot reach.
+    #[inline]
+    pub fn row_mut<const W: usize>(&mut self, y: usize, x: usize) -> &mut [u8; W] {
+        (&mut self.buf[y * self.stride as usize + x..][..W]).try_into().unwrap()
+    }
+}
+
 impl<'a> PlaneCursor<'a> {
     /// Anchors a cursor at byte `center` of `buf`.
     ///
@@ -912,6 +963,23 @@ impl<'a> PlaneCursorMut<'a> {
     pub fn row_mut(&mut self, dy: isize, dx0: isize, len: usize) -> &mut [u8] {
         let start = idx(self.center, dx0, dy, self.stride);
         &mut self.buf[start..][..len]
+    }
+
+    /// The `W`x`H` block at `(dx0, dy0)` as **one bounds-checked writable span** —
+    /// the destination twin of [`RefSamples::span`], and the reason a block copy
+    /// pays no per-row check on either side.
+    ///
+    /// Not a trait method: [`RefSamples`] is read-only by construction (see its
+    /// doc), and the one write path that is *not* a `&mut [u8]` — the reconstruction
+    /// seam — writes rows by value instead.
+    ///
+    /// # Panics
+    /// If the block leaves the buffer, at the slicing — same contract as
+    /// [`row_mut`](Self::row_mut).
+    #[inline]
+    pub fn span_mut<const W: usize, const H: usize>(&mut self, dy0: isize, dx0: isize) -> PlaneSpanMut<'_> {
+        let start = idx(self.center, dx0, dy0, self.stride);
+        PlaneSpanMut::cut(self.buf, start, self.stride, W, H)
     }
 
     /// `len` samples of relative row `sy` starting at relative column `sx0`, copied

@@ -401,6 +401,30 @@ fn mc_rows(rows: &mut Vec<Row>) {
         |c| { let a = cur(black_box(&s0.a)); mc::mc_chroma_with_frag_mv(&a, &mut cur_mut(&mut s0.out), black_box(3), black_box(5), 4, 4); out_sum(&s0.out, c) },
         |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_chroma(&a, &mut cur_mut(&mut s1.out), black_box(3), black_box(5), 4, 4); out_sum(&s1.out, c) },
         |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_chroma(&a, &mut cur_mut(&mut s2.out), black_box(3), black_box(5), 4, 4); out_sum(&s2.out, c) });
+    // The **zero motion vector**: every arm of `mc_luma`/`mc_chroma` falls through to
+    // `common::mc::mc_copy`, so all three columns time the same block copy and the
+    // row exists to say what that copy costs. The vector is `black_box`ed so the
+    // dispatch is not folded away — the encoder reaches it through a run-time value.
+    row!(*rows, "mc luma (0,0) 16x16",
+        |c| { let a = cur(black_box(&s0.a)); mc::mc_luma_c(&a, &mut cur_mut(&mut s0.out), black_box(0), black_box(0), 16, 16); out_sum(&s0.out, c) },
+        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_luma(&a, &mut cur_mut(&mut s1.out), black_box(0), black_box(0), 16, 16); out_sum(&s1.out, c) },
+        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_luma(&a, &mut cur_mut(&mut s2.out), black_box(0), black_box(0), 16, 16); out_sum(&s2.out, c) });
+    row!(*rows, "mc chroma (0,0) 8x8",
+        |c| { let a = cur(black_box(&s0.a)); mc::mc_chroma_c(&a, &mut cur_mut(&mut s0.out), black_box(0), black_box(0), 8, 8); out_sum(&s0.out, c) },
+        |c| { let a = cur(black_box(&s1.a)); isa::mc::mc_chroma(&a, &mut cur_mut(&mut s1.out), black_box(0), black_box(0), 8, 8); out_sum(&s1.out, c) },
+        |c| { let a = cur(black_box(&s2.a)); wd::mc::mc_chroma(&a, &mut cur_mut(&mut s2.out), black_box(0), black_box(0), 8, 8); out_sum(&s2.out, c) });
+    // The same two over the **shared cell view**, which is the operand the encoder
+    // actually hands them: the reference picture is reached through the
+    // reconstruction seam, and a cell row cannot be lent as `&[u8]`. The rows above
+    // read a plain slice plane and are the cheaper half of the pair.
+    row!(*rows, "mc luma (0,0) 16x16 cells",
+        |c| { let a = RecCursor::over_owned(black_box(&mut s0.a), ANCHOR, STRIDE); mc::mc_luma_c(&a, &mut cur_mut(&mut s0.out), black_box(0), black_box(0), 16, 16); out_sum(&s0.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s1.a), ANCHOR, STRIDE); isa::mc::mc_luma(&a, &mut cur_mut(&mut s1.out), black_box(0), black_box(0), 16, 16); out_sum(&s1.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s2.a), ANCHOR, STRIDE); wd::mc::mc_luma(&a, &mut cur_mut(&mut s2.out), black_box(0), black_box(0), 16, 16); out_sum(&s2.out, c) });
+    row!(*rows, "mc chroma (0,0) 8x8 cells",
+        |c| { let a = RecCursor::over_owned(black_box(&mut s0.a), ANCHOR, STRIDE); mc::mc_chroma_c(&a, &mut cur_mut(&mut s0.out), black_box(0), black_box(0), 8, 8); out_sum(&s0.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s1.a), ANCHOR, STRIDE); isa::mc::mc_chroma(&a, &mut cur_mut(&mut s1.out), black_box(0), black_box(0), 8, 8); out_sum(&s1.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s2.a), ANCHOR, STRIDE); wd::mc::mc_chroma(&a, &mut cur_mut(&mut s2.out), black_box(0), black_box(0), 8, 8); out_sum(&s2.out, c) });
 }
 
 fn dct_rows(rows: &mut Vec<Row>) {
