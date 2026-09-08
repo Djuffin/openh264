@@ -56,6 +56,33 @@ pub fn probe_isa_sad_four_16x16(a: &PlaneCursor<'_>, b: &PlaneCursor<'_>, s: &mu
     isa::sad::sample_sad_four_16x16(a, b, s)
 }
 
+/// The zero-motion-vector copy — `mc_luma`/`mc_chroma` with `(0, 0)`, which is
+/// `common::mc::mc_copy` and nothing else. Both operand storages are probed because
+/// both occur: a plane cursor over the reference picture where the encoder is
+/// single-threaded, and the shared cell view under the reconstruction seam. What the
+/// assembly should show is `HEIGHT` load/store pairs and **no per-row bounds
+/// branch**; the checks belong to the two spans, once each.
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_mc_luma_zero_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    isa::mc::mc_luma(src, dst, 0, 0, 16, 16)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_mc_luma_zero_16x16_cells(src: &RecCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    isa::mc::mc_luma(src, dst, 0, 0, 16, 16)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_mc_chroma_zero_8x8_cells(src: &RecCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    isa::mc::mc_chroma(src, dst, 0, 0, 8, 8)
+}
+
 /// The same kernels over the **shared cell view**, which is the operand type every
 /// motion-search and mode-decision call actually hands them (`encoder/md.rs`'s slot
 /// signature is `fn(&RecCursor, &RecCursor) -> i32`); the `PlaneCursor` probes above
@@ -223,6 +250,13 @@ fn main() {
         probe_isa_dct_4x4(&mut d, &ca, &cb);
         probe_isa_pixel_avg_16x16(&mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64), &ca, &cb);
         probe_isa_hor_ver02_16x16(&ca, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+        probe_isa_mc_luma_zero_16x16(&ca, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+        {
+            let mut ra = vec![7u8; 64 * 64];
+            let ka = RecCursor::over_owned(&mut ra, 20 * 64 + 19, 64);
+            probe_isa_mc_luma_zero_16x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+            probe_isa_mc_chroma_zero_8x8_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+        }
     }
     #[cfg(feature = "wide")]
     {
