@@ -1750,6 +1750,9 @@ pub fn WelsISliceMdEnc(
     let kiSliceIdx = pSlice.iSliceIdx;
     let kuiChromaQpIndexOffset =
         layer_pps_ref(pEncCtx, &*pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
+    // The function list, once for the slice: the table is written only before the
+    // fork, and this loop re-fetched it at each of its five call sites.
+    let func_list = pEncCtx.func_list();
 
     let mut sMd = SWelsMD::default();
     let mut sDss = SDynamicSlicingStack::default();
@@ -1765,7 +1768,6 @@ pub fn WelsISliceMdEnc(
     loop {
         if !kbCabac {
             {
-                let func_list = pEncCtx.func_list();
                 func_list
                     .eEntropyCoder
                     .StashMBStatus(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), &mut sDss, &mut pSlice.sCabacCtx, pSlice.uiLastMbQp, 0);
@@ -1774,18 +1776,10 @@ pub fn WelsISliceMdEnc(
         iCurMbIdx = iNextMbIdx;
         pMbs.set_cur(iCurMbIdx as usize);
 
-        {
-            let func_list = pEncCtx.func_list();
-            func_list
-                .pfRc
-                .WelsRcMbInit(pEncCtx, pMbs.cur_mut(), &mut *pSlice, pCtxOutBs.as_deref());
-        }
-        crate::encoder::svc_base_layer_md::WelsMdIntraInit(
-            pEncCtx,
-            &mut *pMbs,
-            &mut pSlice.sMbCacheInfo,
-            kiSliceFirstMbXY,
-        );
+        func_list
+            .pfRc
+            .WelsRcMbInit(pEncCtx, pMbs.cur_mut(), &mut *pSlice, pCtxOutBs.as_deref());
+        crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut *pMbs, &mut pSlice.sMbCacheInfo);
 
         // TRY_REENCODING
         loop {
@@ -1796,7 +1790,6 @@ pub fn WelsISliceMdEnc(
 
             let mut iEncReturn;
             {
-                let func_list = pEncCtx.func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
                     .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut *pMbs, &mut *pSliceBsBuf, &mut *pCtxOutBs);
@@ -1804,7 +1797,6 @@ pub fn WelsISliceMdEnc(
 
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && pMbs.cur().uiLumaQp < 50 {
                 {
-                    let func_list = pEncCtx.func_list();
                     func_list
                         .eEntropyCoder
                         .StashPopMBStatus(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), &mut sDss, &mut pSlice.sCabacCtx);
@@ -1824,7 +1816,6 @@ pub fn WelsISliceMdEnc(
 
         let pMbCache = &mut pSlice.sMbCacheInfo;
         {
-            let func_list = pEncCtx.func_list();
             (func_list.pfMdBackgroundInfoUpdate)(
                 pEncCtx,
                 &*pCurLayer,
@@ -1870,6 +1861,8 @@ pub fn WelsISliceMdEncDynamic(
     let kiPartitionId = (kiSliceIdx % (pEncCtx.iActiveThreadsNum as i32)) as usize;
     let kuiChromaQpIndexOffset =
         layer_pps_ref(pEncCtx, pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
+    // As `WelsISliceMdEnc`: once for the slice.
+    let func_list = pEncCtx.func_list();
 
     let mut sMd = SWelsMD::default();
     let mut sDss = SDynamicSlicingStack::default();
@@ -1887,7 +1880,6 @@ pub fn WelsISliceMdEncDynamic(
         pMbs.set_cur(iCurMbIdx as usize);
 
         {
-            let func_list = pEncCtx.func_list();
             func_list
                 .eEntropyCoder
                 .StashMBStatus(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), &mut sDss, &mut pSlice.sCabacCtx, pSlice.uiLastMbQp, 0);
@@ -1901,12 +1893,7 @@ pub fn WelsISliceMdEncDynamic(
             pMbs.cur_mut().uiLumaQp = max_qp as u8;
             pMbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
-        crate::encoder::svc_base_layer_md::WelsMdIntraInit(
-            pEncCtx,
-            &mut *pMbs,
-            &mut pSlice.sMbCacheInfo,
-            kiSliceFirstMbXY,
-        );
+        crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut *pMbs, &mut pSlice.sMbCacheInfo);
 
         // TRY_REENCODING
         loop {
@@ -1917,7 +1904,6 @@ pub fn WelsISliceMdEncDynamic(
 
             let mut iEncReturn;
             {
-                let func_list = pEncCtx.func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
                     .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut *pMbs, &mut *pSliceBsBuf, &mut *pCtxOutBs);
@@ -1925,7 +1911,6 @@ pub fn WelsISliceMdEncDynamic(
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && pMbs.cur().uiLumaQp < 50 {
                 {
-                    let func_list = pEncCtx.func_list();
                     func_list
                         .eEntropyCoder
                         .StashPopMBStatus(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), &mut sDss, &mut pSlice.sCabacCtx);
@@ -1942,7 +1927,6 @@ pub fn WelsISliceMdEncDynamic(
         }
 
         {
-            let func_list = pEncCtx.func_list();
             sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs.as_deref()), &pSlice.sCabacCtx);
         }
 
@@ -1959,7 +1943,6 @@ pub fn WelsISliceMdEncDynamic(
             pNextSlice.as_deref_mut(),
         ) {
             {
-                let func_list = pEncCtx.func_list();
                 func_list
                     .eEntropyCoder
                     .StashPopMBStatus(&mut *pSliceBsBuf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs), &mut sDss, &mut pSlice.sCabacCtx);
@@ -1973,7 +1956,6 @@ pub fn WelsISliceMdEncDynamic(
         pMbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
 
         {
-            let func_list = pEncCtx.func_list();
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx,
                 pMbs.cur_mut(),
@@ -2061,6 +2043,16 @@ pub fn WelsMdInterMbLoop<'a>(
     let kiSliceIdx = pSlice.iSliceIdx;
     let kuiChromaQpIndexOffset =
         layer_pps_ref(pEncCtx, &*pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
+    // The context's reference picture type, resolved once: nothing may write the
+    // context while a slice is being coded, every worker holding it shared.
+    let kiCtxRefPicType = ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType);
+    // The function list, once for the slice rather than at each of the six places
+    // below — `func_list()` is a `&self` accessor, but the loop ran it per
+    // macroblock and the table is written only before the fork.
+    let func_list = pEncCtx.func_list();
+    // The reconstruction view, once: `WelsMdInterSaveSadAndRefMbType` took it per
+    // macroblock.
+    let kpRecView = layer_rec_view_expect(&*pCurLayer);
 
     let mut sDss = SDynamicSlicingStack::default();
 
@@ -2076,7 +2068,6 @@ pub fn WelsMdInterMbLoop<'a>(
     loop {
         if !kbCabac {
             {
-                let func_list = pEncCtx.func_list();
                 func_list.eEntropyCoder.StashMBStatus(
                     &mut *pSliceBsBuf,
                     slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs),
@@ -2089,64 +2080,53 @@ pub fn WelsMdInterMbLoop<'a>(
         }
         iCurMbIdx = iNextMbIdx;
         pMbs.set_cur(iCurMbIdx as usize);
+        // **The macroblock's nine plane cursors, once.** Everything below reads them
+        // off `pMd` instead of re-deriving `plane(i).cursor(kiMbX << 4, ..)` at each
+        // of the fifteen or so sites the path used to; the C++ computes the same nine
+        // pointers here, off `kiMbX`/`kiMbY`.
+        if let Some(sc) = pMd.sctx {
+            let cur = pMbs.cur();
+            pMd.mbc = Some(crate::encoder::md::MbCursors::at(&sc, cur.iMbX as i32, cur.iMbY as i32));
+        }
 
         //step(1): set QP for the current MB
-        {
-            let func_list = pEncCtx.func_list();
-            func_list
-                .pfRc
-                .WelsRcMbInit(pEncCtx, pMbs.cur_mut(), &mut *pSlice, pCtxOutBs.as_deref());
-        }
+        func_list
+            .pfRc
+            .WelsRcMbInit(pEncCtx, pMbs.cur_mut(), &mut *pSlice, pCtxOutBs.as_deref());
 
         //step (2). save some value for future use, initial pWelsMd
         let pMbCache = &mut pSlice.sMbCacheInfo;
-        crate::encoder::svc_base_layer_md::WelsMdIntraInit(
-            pEncCtx,
-            &mut *pMbs,
-            &mut *pMbCache,
-            kiSliceFirstMbXY,
-        );
-        crate::encoder::svc_base_layer_md::WelsMdInterInit(
-            pEncCtx,
-            pSlice,
-            &mut *pMbs,
-            kiSliceFirstMbXY,
-        );
+        crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut *pMbs, &mut *pMbCache);
+        crate::encoder::svc_base_layer_md::WelsMdInterInit(&pMd.sc(), pEncCtx.iMvRange, pSlice, &mut *pMbs);
 
         loop {
             WelsInitInterMDStruc(pMbs.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
             {
-                let func_list = pEncCtx.func_list();
                 if let Some(func) = func_list.pfInterMd {
                     func(pEncCtx, pMd, &mut *pSlice, &mut *pMbs);
                 }
-                let pMbCache = &mut pSlice.sMbCacheInfo;
+                let bCollocatedPredFlag = pSlice.sMbCacheInfo.bCollocatedPredFlag;
 
                 //step (4): save from the MD process for future use
-                {
-                    crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                        layer_rec_view_expect(&*pCurLayer),
-                        pMbs.cur(),
-                        pMd,
-                    );
-                }
-
+                // Nothing between here and the cache update takes the window, so the
+                // current macroblock is taken once: `cur` is an index computation and
+                // a bounds check, and this loop ran it a dozen times a macroblock.
+                let pCurMb = pMbs.cur_mut();
+                crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(kpRecView, pCurMb, pMd);
                 (func_list.pfMdBackgroundInfoUpdate)(
                     pEncCtx,
                     &*pCurLayer,
-                    pMbs.cur_mut(),
-                    pMbCache.bCollocatedPredFlag,
-                    ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
+                    pCurMb,
+                    bCollocatedPredFlag,
+                    kiCtxRefPicType,
                 );
-                mb_dump(pMbs.cur(), pMd, pSlice);
+                mb_dump(&*pCurMb, pMd, pSlice);
+                //step (5): update cache
+                UpdateNonZeroCountCache(&*pCurMb, &mut pSlice.sMbCacheInfo);
             }
-            //step (5): update cache
-            let pMbCache = &mut pSlice.sMbCacheInfo;
-            UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn;
             {
-                let func_list = pEncCtx.func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
                     .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut *pMbs, &mut *pSliceBsBuf, &mut *pCtxOutBs);
@@ -2154,7 +2134,6 @@ pub fn WelsMdInterMbLoop<'a>(
 
             if !kbCabac && iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && pMbs.cur().uiLumaQp < 50 {
                 {
-                    let func_list = pEncCtx.func_list();
                     pSlice.iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                         &mut *pSliceBsBuf,
                         slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs),
@@ -2173,14 +2152,14 @@ pub fn WelsMdInterMbLoop<'a>(
             break;
         }
 
-        pMbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
-        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, Some(pCurLayer), pSlice, pMbs.cur());
-
+        // As above: three uses, one `cur_mut`.
         {
-            let func_list = pEncCtx.func_list();
+            let pCurMb = pMbs.cur_mut();
+            pCurMb.uiSliceIdc = kiSliceIdx as u16;
+            OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, Some(pCurLayer), pSlice, &*pCurMb);
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx,
-                pMbs.cur_mut(),
+                pCurMb,
                 pMd.iCostLuma,
                 &mut *pSlice,
                 pCtxOutBs.as_deref(),
@@ -2231,6 +2210,10 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
     let kiPartitionId = (kiSliceIdx % (pEncCtx.iActiveThreadsNum as i32)) as usize;
     let kuiChromaQpIndexOffset =
         layer_pps_ref(pEncCtx, pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
+    // As `WelsMdInterMbLoop`: resolved once for the slice.
+    let kiCtxRefPicType = ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType);
+    let func_list = pEncCtx.func_list();
+    let kpRecView = layer_rec_view_expect(pCurLayer);
 
     let mut sDss = SDynamicSlicingStack::default();
     if pEncCtx.param().iEntropyCodingModeFlag != 0 {
@@ -2245,7 +2228,6 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
 
     loop {
         {
-            let func_list = pEncCtx.func_list();
             func_list.eEntropyCoder.StashMBStatus(
                 &mut *pSliceBsBuf,
                 slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs),
@@ -2257,13 +2239,18 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         }
         iCurMbIdx = iNextMbIdx;
         pMbs.set_cur(iCurMbIdx as usize);
-
-        {
-            let func_list = pEncCtx.func_list();
-            func_list
-                .pfRc
-                .WelsRcMbInit(pEncCtx, pMbs.cur_mut(), &mut *pSlice, pCtxOutBs.as_deref());
+        // **The macroblock's nine plane cursors, once.** Everything below reads them
+        // off `pMd` instead of re-deriving `plane(i).cursor(kiMbX << 4, ..)` at each
+        // of the fifteen or so sites the path used to; the C++ computes the same nine
+        // pointers here, off `kiMbX`/`kiMbY`.
+        if let Some(sc) = pMd.sctx {
+            let cur = pMbs.cur();
+            pMd.mbc = Some(crate::encoder::md::MbCursors::at(&sc, cur.iMbX as i32, cur.iMbY as i32));
         }
+
+        func_list
+            .pfRc
+            .WelsRcMbInit(pEncCtx, pMbs.cur_mut(), &mut *pSlice, pCtxOutBs.as_deref());
 
         if pSlice.bDynamicSlicingSliceSizeCtrlFlag {
             let max_qp = pEncCtx.rc_at(pEncCtx.uiDependencyId as usize).iMaxQp;
@@ -2273,52 +2260,35 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
 
         // step (2): save some values for future use, initialise pWelsMd.
         let pMbCache = &mut pSlice.sMbCacheInfo;
-        crate::encoder::svc_base_layer_md::WelsMdIntraInit(
-            pEncCtx,
-            &mut *pMbs,
-            &mut *pMbCache,
-            kiSliceFirstMbXY,
-        );
-        crate::encoder::svc_base_layer_md::WelsMdInterInit(
-            pEncCtx,
-            pSlice,
-            &mut *pMbs,
-            kiSliceFirstMbXY,
-        );
+        crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut *pMbs, &mut *pMbCache);
+        crate::encoder::svc_base_layer_md::WelsMdInterInit(&pMd.sc(), pEncCtx.iMvRange, pSlice, &mut *pMbs);
 
         // TRY_REENCODING
         loop {
             WelsInitInterMDStruc(pMbs.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
             {
-                let func_list = pEncCtx.func_list();
                 if let Some(func) = func_list.pfInterMd {
                     func(pEncCtx, pMd, &mut *pSlice, &mut *pMbs);
                 }
             }
-            let pMbCache = &mut pSlice.sMbCacheInfo;
+            let bCollocatedPredFlag = pSlice.sMbCacheInfo.bCollocatedPredFlag;
             // step (4): save from the MD process for future use
+            // As `WelsMdInterMbLoop`: one `cur_mut` for the three uses that follow.
             {
-                crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(
-                    layer_rec_view_expect(pCurLayer),
-                    pMbs.cur(),
-                    pMd,
-                );
-            }
-            {
-                let func_list = pEncCtx.func_list();
+                let pCurMb = pMbs.cur_mut();
+                crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(kpRecView, pCurMb, pMd);
                 (func_list.pfMdBackgroundInfoUpdate)(
                     pEncCtx,
                     pCurLayer,
-                    pMbs.cur_mut(),
-                    pMbCache.bCollocatedPredFlag,
-                    ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType),
+                    pCurMb,
+                    bCollocatedPredFlag,
+                    kiCtxRefPicType,
                 );
+                UpdateNonZeroCountCache(&*pCurMb, &mut pSlice.sMbCacheInfo);
             }
-            UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
             let mut iEncReturn;
             {
-                let func_list = pEncCtx.func_list();
                 iEncReturn = func_list
                     .eEntropyCoder
                     .WelsSpatialWriteMbSyn(pEncCtx, pSlice, &mut *pMbs, &mut *pSliceBsBuf, &mut *pCtxOutBs);
@@ -2326,7 +2296,6 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
 
             if iEncReturn == ENC_RETURN_VLCOVERFLOWFOUND && pMbs.cur().uiLumaQp < 50 {
                 {
-                    let func_list = pEncCtx.func_list();
                     pSlice.iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                         &mut *pSliceBsBuf,
                         slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs),
@@ -2346,7 +2315,6 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         }
 
         {
-            let func_list = pEncCtx.func_list();
             sDss.iCurrentPos = func_list.eEntropyCoder.GetBsPosition(slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs.as_deref()), &pSlice.sCabacCtx);
         }
 
@@ -2363,7 +2331,6 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             pNextSlice.as_deref_mut(),
         ) {
             {
-                let func_list = pEncCtx.func_list();
                 pSlice.iMbSkipRun = func_list.eEntropyCoder.StashPopMBStatus(
                     &mut *pSliceBsBuf,
                     slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs),
@@ -2377,14 +2344,14 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             break;
         }
 
-        pMbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
-        OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, Some(pCurLayer), pSlice, pMbs.cur());
-
+        // As above: three uses, one `cur_mut`.
         {
-            let func_list = pEncCtx.func_list();
+            let pCurMb = pMbs.cur_mut();
+            pCurMb.uiSliceIdc = kiSliceIdx as u16;
+            OutputPMbWithoutConstructCsRsNoCopy(pEncCtx, Some(pCurLayer), pSlice, &*pCurMb);
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx,
-                pMbs.cur_mut(),
+                pCurMb,
                 pMd.iCostLuma,
                 &mut *pSlice,
                 pCtxOutBs.as_deref(),
@@ -2420,11 +2387,19 @@ pub fn WelsPSliceMdEnc(
 ) -> i32 {
     let kpShExt = &pSlice.sSliceHeaderExt;
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
+    // **The slice's reference view, built once.** It is a value — three plane
+    // headers captured out of the picture pool — so it has to be owned by a frame
+    // that outlives the macroblock loop, and this is that frame. Every read of it
+    // below goes through `SWelsMD::sc`, which borrows it; the C++ has the same
+    // binding as `pRefPic` at the top of `WelsMdInterMbLoop`.
+    let kpRefView = current_layer_ref(pEncCtx).and_then(|l| layer_ref_view(pEncCtx, l));
     // C++ leaves `SWelsMD sMd;` uninitialized and only `memset`s `sMd.sMe` when the
     // base layer is unavailable or this is not the highest spatial layer.
     // `Default::default()` zeroes the whole struct, which is that memset plus zeroes
     // for fields every path assigns before reading.
     let mut sMd = SWelsMD::default();
+    sMd.sctx = current_layer_ref(pEncCtx)
+        .map(|l| crate::encoder::md::MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref()));
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
     // `svc_encode_slice.cpp:698`.
     sMd.bMdUsingSad = pEncCtx.param().iComplexityMode
@@ -2445,7 +2420,11 @@ pub fn WelsPSliceMdEncDynamic(
 ) -> i32 {
     let kpShExt = &pSlice.sSliceHeaderExt;
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
+    // As `WelsPSliceMdEnc`: the reference view is owned here for the slice's scope.
+    let kpRefView = current_layer_ref(pEncCtx).and_then(|l| layer_ref_view(pEncCtx, l));
     let mut sMd = SWelsMD::default();
+    sMd.sctx = current_layer_ref(pEncCtx)
+        .map(|l| crate::encoder::md::MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref()));
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
     // `svc_encode_slice.cpp:715`.
     sMd.bMdUsingSad = pEncCtx.param().iComplexityMode

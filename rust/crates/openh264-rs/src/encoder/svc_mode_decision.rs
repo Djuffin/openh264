@@ -183,6 +183,7 @@ impl Default for SSampleDealingPicData {
 
 // wels_func_ptr_def.h:127 takes uint8_t*, not const uint8_t*.
 pub use crate::encoder::md::PSampleSadSatdCostFunc;
+use crate::encoder::md::{MbCursors, MdSliceCtx};
 
 // ============================================================================
 // Macro / Inline Condition Helpers
@@ -224,19 +225,14 @@ pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
 // ============================================================================
 
 /// `svc_base_layer_md.cpp:1924`.
-pub extern "C" fn WelsMdInterUpdatePskip(
-    pEncCtx: &sWelsEncCtx,
-    pCurDqLayer: &SDqLayer,
-    pSlice: &mut SSlice,
-    pCurMb: &mut SMB,
-) {
+pub fn WelsMdInterUpdatePskip(kiChromaQpIndexOffset: i32, pSlice: &mut SSlice, pCurMb: &mut SMB) {
     let pMbCache = &mut pSlice.sMbCacheInfo;
     //add pEnc&rec to MD--2010.3.15
     pCurMb.uiCbp = 0;
     pCurMb.uiLumaQp = pSlice.uiLastMbQp;
-    let kiChromaQpIndexOffset = layer_pps_ref(pEncCtx, &*pCurDqLayer)
-        .expect("the layer's PPS is stamped")
-        .uiChromaQpIndexOffset as i32;
+    // The offset is the slice context's, which `WelsMdInterMbLoop` already held in
+    // `kuiChromaQpIndexOffset`; this used to resolve the layer's PPS per macroblock
+    // for a value that cannot change inside a slice.
     pCurMb.uiChromaQp = crate::encoder::svc_encode_slice::g_kuiChromaQpTable
         [WELS_CLIP3(pCurMb.uiLumaQp as i32 + kiChromaQpIndexOffset, 0, 51) as usize];
     pMbCache.bCollocatedPredFlag = LD32_MV(&pCurMb.sMv[0]) == 0;
@@ -260,9 +256,7 @@ pub extern "C" fn WelsMdInterJudgePskip(
 ) -> bool {
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let bRet;
-    if ((crate::encoder::svc_encode_slice::ctx_ref_pic(pEncCtx)
-        .map_or(0, |p| p.iPictureType)
-        == EWelsSliceType::P_SLICE as i32)
+    if ((pWelsMd.sc().ctx_ref_pic_type == EWelsSliceType::P_SLICE as i32)
         && (pMbCache.uiRefMbType == MB_TYPE_SKIP || pMbCache.uiRefMbType == MB_TYPE_BACKGROUND))
         || bTrySkip
     {
@@ -281,15 +275,11 @@ pub extern "C" fn WelsMdInterJudgePskip(
 }
 
 /// `svc_base_layer_md.cpp:1954`. P_SKIP macroblock encode.
-pub extern "C" fn WelsMdInterDecidedPskip(
-    pEncCtx: &sWelsEncCtx,
-    pSlice: &mut SSlice,
-    pCurMb: &mut SMB,
-) {
-    let pCurDqLayer = current_layer_expect(pEncCtx);
+pub fn WelsMdInterDecidedPskip(pWelsMd: &SWelsMD<'_>, pSlice: &mut SSlice, pCurMb: &mut SMB) {
+    let sc = pWelsMd.sc();
     pCurMb.uiMbType = MB_TYPE_SKIP;
-    WelsRecPskip(&*pCurDqLayer, pEncCtx.func_list(), pCurMb, &mut pSlice.sMbCacheInfo);
-    WelsMdInterUpdatePskip(pEncCtx, &*pCurDqLayer, &mut *pSlice, pCurMb);
+    WelsRecPskip(pWelsMd.mbc(), pCurMb, &mut pSlice.sMbCacheInfo);
+    WelsMdInterUpdatePskip(sc.chroma_qp_offset, &mut *pSlice, pCurMb);
 }
 
 /// `svc_base_layer_md.cpp:1997`.
@@ -316,7 +306,7 @@ pub extern "C" fn WelsMdInterSecondaryModesEnc<'a>(
     }
 
     if bSkip {
-        WelsMdInterDecidedPskip(pEncCtx, pSlice, pCurMb);
+        WelsMdInterDecidedPskip(pWelsMd, pSlice, pCurMb);
     } else {
         //Step 3: SubP16 MD
         pFuncList.pfSetScrollingMv.expect("pfSetScrollingMv is unset")(
@@ -384,20 +374,13 @@ pub extern "C" fn WelsMdIntraSecondaryModesEnc(
 /// to the reconstructed frame buffer and clearing non-zero coefficient counts.
 ///
 /// Translated from `WelsRecPskip` in `codec/encoder/core/src/svc_encode_mb.cpp:315`.
-pub extern "C" fn WelsRecPskip(
-    pCurLayer: &SDqLayer,
-    _pFuncList: &SWelsFuncPtrList,
-    pCurMb: &mut SMB,
-    pMbCache: &mut SMbCache,
-) {
-    let view = crate::encoder::svc_encode_slice::layer_rec_view_expect(pCurLayer);
-    let (lx, ly) = pMbCache.SPicData.luma_origin();
-    let (cx, cy) = pMbCache.SPicData.chroma_origin();
+pub fn WelsRecPskip(mbc: &MbCursors<'_>, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
+    // The three destinations are the macroblock's reconstruction cursors, which the
+    // loop built once from the same `(iMbX, iMbY)` that `SPicData` carries.
     let src = &pMbCache.sSkipMb;
-
-    copy_block_to_view::<16>(&src[..256], 16, &view.plane(0).cursor(lx, ly), 16);
-    copy_block_to_view::<8>(&src[256..320], 8, &view.plane(1).cursor(cx, cy), 8);
-    copy_block_to_view::<8>(&src[320..384], 8, &view.plane(2).cursor(cx, cy), 8);
+    copy_block_to_view::<16>(&src[..256], 16, &mbc.rec_y, 16);
+    copy_block_to_view::<8>(&src[256..320], 8, &mbc.rec_cb, 8);
+    copy_block_to_view::<8>(&src[320..384], 8, &mbc.rec_cr, 8);
     // `WelsSetMemZero (pCurMb->pNonZeroCount, 24)`.
     pCurMb.iNonZeroCount = [0; MB_LUMA_CHROMA_BLOCK4x4_NUM];
 }
@@ -408,21 +391,19 @@ pub extern "C" fn WelsRecPskip(
 /// Translated from `VaaBackgroundMbDataUpdate` in
 /// `codec/encoder/core/src/svc_base_layer_md.cpp:1341`.
 #[inline(always)]
-fn VaaBackgroundMbDataUpdate(
-    pFunc: &SWelsFuncPtrList,
-    pVaaInfo: &crate::encoder::wels_preprocess::SVAAFrameInfo,
-    pCurMb: &mut SMB,
-) {
+fn VaaBackgroundMbDataUpdate(sc: &MdSliceCtx<'_>, pCurMb: &mut SMB) {
     // `pCur*` is the **destination**: the copy runs previous-source -> current-source
-    // in-fork, into the picture the encoder is reading.
-    let (Some(curView), Some(refView)) = (&pVaaInfo.pCurView, &pVaaInfo.pRefView) else {
+    // in-fork, into the picture the encoder is reading. The two views are the
+    // VAA block's own, not the layer's, so these six cursors are not the
+    // macroblock's — but the `Option` pair was unwrapped once, into the context.
+    let (Some(curView), Some(refView)) = (sc.vaa_cur, sc.vaa_ref) else {
         return;
     };
     let (lx, ly) = (((pCurMb.iMbX as isize) << 4), ((pCurMb.iMbY as isize) << 4));
     let (cx, cy) = (((pCurMb.iMbX as isize) << 3), ((pCurMb.iMbY as isize) << 3));
 
-    (pFunc.pfCopy16x16Aligned)(&curView.plane(0).cursor(lx, ly), &refView.plane(0).cursor(lx, ly));
-    let copy8 = pFunc.pfCopy8x8Aligned;
+    (sc.func.pfCopy16x16Aligned)(&curView.plane(0).cursor(lx, ly), &refView.plane(0).cursor(lx, ly));
+    let copy8 = sc.func.pfCopy8x8Aligned;
     copy8(&curView.plane(1).cursor(cx, cy), &refView.plane(1).cursor(cx, cy));
     copy8(&curView.plane(2).cursor(cx, cy), &refView.plane(2).cursor(cx, cy));
 }
@@ -440,18 +421,15 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     pSlice: &mut SSlice,
     bSkipMbFlag: bool,
 ) {
+    // The slice's context and the macroblock's cursors, both resolved before the
+    // macroblock loop reached this: what used to be one `current_layer_expect`, one
+    // `func_list`, **three** `layer_ref_view_expect` builds, an
+    // `layer_enc_view_expect`, a `layer_rec_view_expect`, a `vaa_expect`, a
+    // `layer_pps_ref` and seven `plane(i).cursor(..)` calls, per macroblock.
+    let sc = pWelsMd.sc();
+    let mbc = *pWelsMd.mbc();
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let pCurDqLayer = current_layer_expect(pEncCtx);
-    let pFunc = pEncCtx.func_list();
     let sMvp = SMVUnitXY::default();
-
-    let kiMbXLuma = (pCurMb.iMbX as isize) << 4;
-    let kiMbYLuma = (pCurMb.iMbY as isize) << 4;
-    let kiMbXChroma = (pCurMb.iMbX as isize) << 3;
-    let kiMbYChroma = (pCurMb.iMbY as isize) << 3;
-
-    let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
-    let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
 
     // The destination is one of two disjoint cache regions, chosen by the same flag
     // the C++ chose it by: `sSkipMb`'s three panes when the macroblock will be coded
@@ -461,7 +439,7 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
 
     // MC
     {
-        let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
+        let cRefLuma = mbc.ref_y;
         let mut cDstLuma = if bSkipMbFlag {
             let pSkipMb = &mut pMbCache.sSkipMb;
             PlaneCursorMut::new(&mut pSkipMb[..256], 0, 16)
@@ -473,7 +451,7 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
         mc_luma(&cRefLuma, &mut cDstLuma, 0, 0, 16, 16);
     }
     {
-        let cRefCb = pRefPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
+        let cRefCb = mbc.ref_cb;
         let mut cDstCb = if bSkipMbFlag {
             let pSkipMb = &mut pMbCache.sSkipMb;
             PlaneCursorMut::new(&mut pSkipMb[256..320], 0, 8)
@@ -485,7 +463,7 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
         mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cb
     }
     {
-        let cRefCr = pRefPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
+        let cRefCr = mbc.ref_cr;
         let mut cDstCr = if bSkipMbFlag {
             let pSkipMb = &mut pMbCache.sSkipMb;
             PlaneCursorMut::new(&mut pSkipMb[320..384], 0, 8)
@@ -500,13 +478,9 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     pCurMb.uiCbp = 0;
     pMbCache.bCollocatedPredFlag = true;
     pWelsMd.iCostLuma = 0; // BGD&RC integration
-    pCurMb.iSadCost = {
-        let cEncLuma = pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
-        let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
-        (pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].unwrap())(&cEncLuma, &cRefLuma)
-    };
+    pCurMb.iSadCost = (sc.sad16)(&mbc.enc_y, &mbc.ref_y);
     pCurMb.sP16x16Mv = SMVUnitXY::default();
-    layer_rec_view_expect(&*pCurDqLayer)
+    sc.rec
         .mv_list()
         .set(pCurMb.iMbXY as usize, SMVUnitXY::default());
 
@@ -515,23 +489,16 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
 
         // update motion info to current MB
         pCurMb.iRefIndex = [0; MB_BLOCK8x8_NUM];
-        (pFunc.pfUpdateMbMv)(&mut pCurMb.sMv, sMvp);
+        (sc.func.pfUpdateMbMv)(&mut pCurMb.sMv, sMvp);
 
         pCurMb.uiLumaQp = pSlice.uiLastMbQp;
         pCurMb.uiChromaQp = crate::encoder::svc_encode_slice::g_kuiChromaQpTable
             [crate::encoder::svc_encode_slice::CLIP3_QP_0_51(
-                pCurMb.uiLumaQp as i32
-                    + layer_pps_ref(pEncCtx, &*pCurDqLayer)
-                        .expect("the layer's PPS is stamped")
-                        .uiChromaQpIndexOffset as i32,
+                pCurMb.uiLumaQp as i32 + sc.chroma_qp_offset,
             )];
 
-        WelsRecPskip(&*pCurDqLayer, &*pFunc, pCurMb, &mut *pMbCache);
-        VaaBackgroundMbDataUpdate(
-            &*pFunc,
-            pEncCtx.vaa_expect(),
-            pCurMb,
-        );
+        WelsRecPskip(&mbc, pCurMb, &mut *pMbCache);
+        VaaBackgroundMbDataUpdate(&sc, pCurMb);
         return;
     }
 
@@ -557,9 +524,7 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     if pWelsMd.bMdUsingSad {
         pWelsMd.iCostLuma = pCurMb.iSadCost;
     } else {
-        let cEncLuma = pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
-        let cRefLuma = pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma);
-        pWelsMd.iCostLuma = (pFunc.sSampleDealingFuncs.pfSampleSatd[BLOCK_16x16].unwrap())(&cEncLuma, &cRefLuma);
+        pWelsMd.iCostLuma = (sc.satd16)(&mbc.enc_y, &mbc.ref_y);
     }
 
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
@@ -569,21 +534,13 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
         pCurMb,
     );
 
-    let view = layer_rec_view_expect(&*pCurDqLayer);
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let (lx, ly) = pMbCache.SPicData.luma_origin();
-    let (cx, cy) = pMbCache.SPicData.chroma_origin();
     let kiLumaOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
     let kiChromaOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
     let src = &pMbCache.sMemPredMb;
-    copy_block_to_view::<16>(&src[kiLumaOff..kiLumaOff + 256], 16, &view.plane(0).cursor(lx, ly), 16);
-    copy_block_to_view::<8>(&src[kiChromaOff..kiChromaOff + 64], 8, &view.plane(1).cursor(cx, cy), 8);
-    copy_block_to_view::<8>(
-        &src[kiChromaOff + 64..kiChromaOff + 128],
-        8,
-        &view.plane(2).cursor(cx, cy),
-        8,
-    );
+    copy_block_to_view::<16>(&src[kiLumaOff..kiLumaOff + 256], 16, &mbc.rec_y, 16);
+    copy_block_to_view::<8>(&src[kiChromaOff..kiChromaOff + 64], 8, &mbc.rec_cb, 8);
+    copy_block_to_view::<8>(&src[kiChromaOff + 64..kiChromaOff + 128], 8, &mbc.rec_cr, 8);
 }
 
 // ============================================================================
@@ -909,7 +866,13 @@ pub extern "C" fn UpdateP8x8Motion2Cache(
     }
 }
 
-pub extern "C" fn WelsMdI16x16(
+/// [`WelsMdI16x16`] addressed from a layer rather than from two cursors — the
+/// callers that are not inside the P-slice macroblock loop and so have no
+/// [`MbCursors`] stamped: the I-slice path and the unit tests.
+///
+/// Answers `i32::MAX` — "no intra candidate" — where no layer is stamped, which is
+/// the guard the layer-taking form has always had.
+pub fn WelsMdI16x16FromLayer(
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: Option<&SDqLayer>,
     pMbCache: &mut SMbCache,
@@ -918,13 +881,26 @@ pub extern "C" fn WelsMdI16x16(
     let Some(pCurDqLayer) = pCurDqLayer else {
         return i32::MAX;
     };
+    let (kiMbOrgX, kiMbOrgY) = pMbCache.SPicData.luma_origin();
+    let cRecLuma = layer_rec_view_expect(pCurDqLayer).plane(0).cursor(kiMbOrgX, kiMbOrgY);
+    let cEncLuma = crate::encoder::svc_encode_slice::layer_enc_view_expect(pCurDqLayer)
+        .plane(0)
+        .cursor(kiMbOrgX, kiMbOrgY);
+    WelsMdI16x16(pFunc, &cRecLuma, &cEncLuma, pMbCache, iLambda)
+}
+
+pub fn WelsMdI16x16(
+    pFunc: &SWelsFuncPtrList,
+    cRecLuma: &RecCursor<'_>,
+    cEncLuma: &RecCursor<'_>,
+    pMbCache: &mut SMbCache,
+    iLambda: i32,
+) -> i32 {
     // `svc_base_layer_md.cpp:369` reads pMemPredMb, not pMemPredLuma. The two are
     // equal on entry only because WelsMdIntraInit re-points pMemPredLuma at
     // pMemPredMb; this function then *moves* pMemPredLuma to the losing ping-pong
     // half before returning, so reading pMemPredLuma here would follow the previous
     // macroblock's pointer whenever WelsMdIntraInit had not just run.
-    let view = layer_rec_view_expect(pCurDqLayer);
-    let iLineSizeEnc = pCurDqLayer.iEncStride[0];
     let mut iBestMode;
     let mut iBestCost = i32::MAX;
     let mut iIdx = 0usize;
@@ -936,8 +912,6 @@ pub extern "C" fn WelsMdI16x16(
     // `svc_base_layer_md.cpp:402` costs with pfMdCost, which SetFastCodingFunc points
     // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd.
     let pfMdCost16x16 = pFunc.sSampleDealingFuncs.md_cost(BLOCK_16x16).unwrap();
-    let pEncPicture = crate::encoder::svc_encode_slice::layer_enc_view_expect(pCurDqLayer);
-    let (kiMbOrgX, kiMbOrgY) = pMbCache.SPicData.luma_origin();
 
     iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount {
@@ -949,11 +923,11 @@ pub extern "C" fn WelsMdI16x16(
             (&mut pMbCache.sMemPredMb[kiDstOff..kiDstOff + 256])
                 .try_into()
                 .expect("a packed 16x16 prediction block is 256 bytes"),
-            &view.plane(0).cursor(kiMbOrgX, kiMbOrgY),
+            cRecLuma,
         );
         let mut iCurCost = pfMdCost16x16(
             &RecCursor::over_owned(&mut pMbCache.sMemPredMb[kiDstOff..][..256], 0, 16),
-            &pEncPicture.plane(0).cursor(kiMbOrgX, kiMbOrgY),
+            cEncLuma,
         );
         let mode_val = g_kiMapModeI16x16[iCurMode as usize] as u32;
         iCurCost += iLambda * (BsSizeUE(mode_val) as i32);
@@ -1292,7 +1266,7 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
     bSkip = WelsMdInterJudgePskip(pEncCtx, pWelsMd, pSlice, mbs.cur_mut(), bTrySkip);
 
     if bSkip && bKeepSkip {
-        WelsMdInterDecidedPskip(pEncCtx, pSlice, mbs.cur_mut());
+        WelsMdInterDecidedPskip(pWelsMd, pSlice, mbs.cur_mut());
         return;
     }
 
@@ -1316,14 +1290,16 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
     } else {
         // Base layer is Intra (BLMODE == SVC_INTRA)
         let pMbCache = &mut pSlice.sMbCacheInfo;
+        let mbc = *pWelsMd.mbc();
         let kiCostI16x16 = WelsMdI16x16(
-            pEncCtx.func_list(),
-            current_layer_ref(pEncCtx),
+            pWelsMd.sc().func,
+            &mbc.rec_y,
+            &mbc.enc_y,
             &mut *pMbCache,
             pWelsMd.iLambda,
         );
         if bSkip && (pWelsMd.iCostLuma <= kiCostI16x16) {
-            WelsMdInterDecidedPskip(pEncCtx, pSlice, mbs.cur_mut());
+            WelsMdInterDecidedPskip(pWelsMd, pSlice, mbs.cur_mut());
         } else {
             pWelsMd.iCostLuma = kiCostI16x16;
             mbs.cur_mut().uiMbType = MB_TYPE_INTRA16x16;
@@ -1353,16 +1329,15 @@ pub fn WelsMdInterMbEnhancelayer<'a>(
 
 #[inline(always)]
 /// `svc_mode_decision.cpp:161`.
+/// The slot arrives already unwrapped: the slice context resolves
+/// `pfSampleSad[BLOCK_8x8]` once, and `WelsMdPSkipEnc` was `.unwrap()`ing the same
+/// slot on the same path, so an absent one was never survivable here either.
 pub fn GetChromaCost(
-    pSad: Option<crate::encoder::md::PSampleSadSatdCostFunc>,
+    pSad: crate::encoder::md::PSampleSadSatdCostFunc,
     cSrcChroma: &crate::encoder::rec_view::RecCursor<'_>,
     cRefChroma: &crate::encoder::rec_view::RecCursor<'_>,
 ) -> i32 {
-    if let Some(f) = pSad {
-        f(cSrcChroma, cRefChroma)
-    } else {
-        0
-    }
+    pSad(cSrcChroma, cRefChroma)
 }
 
 #[inline(always)]
@@ -1383,30 +1358,16 @@ pub fn IsCostLessEqualSkipCost(
         })
 }
 
-pub fn CheckChromaCost(
-    pEncCtx: &sWelsEncCtx,
-    pWelsMd: &mut SWelsMD<'_>,
-    pMbCache: &mut SMbCache,
-    iCurMbXy: i32,
-) -> bool {
-    let pSad = pEncCtx.func_list().sSampleDealingFuncs.pfSampleSad[BLOCK_8x8];
-    let pCurDqLayer = current_layer_expect(pEncCtx);
+pub fn CheckChromaCost(pWelsMd: &mut SWelsMD<'_>, pMbCache: &mut SMbCache, iCurMbXy: i32) -> bool {
+    // The 8x8 SAD slot, the two picture views and the four chroma cursors all come
+    // off the slice context now: this used to be a `func_list`, a
+    // `current_layer_expect`, a `layer_enc_view_expect`, a `layer_ref_view_expect`
+    // *build*, four `cursor` calls and an `Option<fn>` unwrap per operand, twice.
+    let sc = pWelsMd.sc();
+    let mbc = *pWelsMd.mbc();
 
-    let kiMbXChroma = (pMbCache.SPicData.iMbX as isize) << 3;
-    let kiMbYChroma = (pMbCache.SPicData.iMbY as isize) << 3;
-    let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
-    let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
-
-    let iCbSad = GetChromaCost(
-        pSad,
-        &pEncPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma),
-        &pRefPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma),
-    );
-    let iCrSad = GetChromaCost(
-        pSad,
-        &pEncPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma),
-        &pRefPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma),
-    );
+    let iCbSad = GetChromaCost(sc.sad8, &mbc.enc_cb, &mbc.ref_cb);
+    let iCrSad = GetChromaCost(sc.sad8, &mbc.enc_cr, &mbc.ref_cr);
 
     let bChromaTooLarge = iCbSad > KNOWN_CHROMA_TOO_LARGE || iCrSad > KNOWN_CHROMA_TOO_LARGE;
     let iChromaSad = iCbSad + iCrSad;
@@ -1423,7 +1384,7 @@ pub fn CheckChromaCost(
         iChromaSad,
         pWelsMd.iSadPredSkip,
         pMbCache.uiRefMbType,
-        layer_ref_pic(pEncCtx, &*pCurDqLayer),
+        sc.ref_pic,
         iCurMbXy,
         SMALLEST_INVISIBLE,
     );
@@ -1438,15 +1399,14 @@ pub fn WelsMdInterJudgeBGDPskip(
     pCurMb: &mut SMB,
     bKeepSkip: &mut bool,
 ) -> bool {
+    let sc = pWelsMd.sc();
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let pCurDqLayer = current_layer_expect(pEncCtx);
 
-    let kiRefMbQp = (&layer_ref_pic_expect(pEncCtx, &*pCurDqLayer).pRefMbQp)[pCurMb.iMbXY as usize] as i32;
+    let kiRefMbQp = (&sc.ref_pic().pRefMbQp)[pCurMb.iMbXY as usize] as i32;
     let kiCurMbQp = pCurMb.uiLumaQp as i32;
-    let kpVaaBgFlags: &[i8] =
-        &pEncCtx.vaa_expect().pVaaBackgroundMbFlag;
+    let kpVaaBgFlags: &[i8] = &sc.vaa.pVaaBackgroundMbFlag;
     let kiXY = pCurMb.iMbXY as usize;
-    let kiMbWidth = pCurDqLayer.iMbWidth as usize;
+    let kiMbWidth = sc.mb_width as usize;
 
     *bKeepSkip = *bKeepSkip
         && (kpVaaBgFlags[kiXY - 1] == 0)
@@ -1457,7 +1417,7 @@ pub fn WelsMdInterJudgeBGDPskip(
         && !IS_INTRA(pMbCache.uiRefMbType)
         && ((kiRefMbQp - kiCurMbQp <= DELTA_QP_BGD_THD) || (kiRefMbQp <= 26))
     {
-        if CheckChromaCost(pEncCtx, pWelsMd, &mut *pMbCache, pCurMb.iMbXY) {
+        if CheckChromaCost(pWelsMd, &mut *pMbCache, pCurMb.iMbXY) {
             let mut sVaaPredSkipMv = SMVUnitXY::default();
             PredSkipMv(&pMbCache.sMvComponents, &mut sVaaPredSkipMv);
             let bZeroMv = sVaaPredSkipMv.iMvX == 0 && sVaaPredSkipMv.iMvY == 0;
@@ -1760,8 +1720,8 @@ pub extern "C" fn SvcMdSCDMbEnc(
         pCurMb.iRefIndex = [0; MB_BLOCK8x8_NUM];
         (pFunc.pfUpdateMbMv)(&mut pCurMb.sMv, sMvp);
         pCurMb.uiMbType = MB_TYPE_SKIP;
-        WelsRecPskip(&*pCurDqLayer, &*pFunc, pCurMb, &mut *pMbCache);
-        WelsMdInterUpdatePskip(pEncCtx, &*pCurDqLayer, &mut *pSlice, pCurMb);
+        WelsRecPskip(pWelsMd.mbc(), pCurMb, &mut *pMbCache);
+        WelsMdInterUpdatePskip(pWelsMd.sc().chroma_qp_offset, &mut *pSlice, pCurMb);
         return;
     }
 
@@ -2423,7 +2383,7 @@ mod tests {
             };
 
             let iLambda = 10;
-            let cost = WelsMdI16x16(
+            let cost = WelsMdI16x16FromLayer(
                 &func_list,
                 (&mut dq_layer as *mut SDqLayer).as_ref(),
                 &mut mb_cache,
