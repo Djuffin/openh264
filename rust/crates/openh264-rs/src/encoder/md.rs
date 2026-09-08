@@ -177,8 +177,178 @@ pub struct SWelsMD_sMe<'a> {
     pub sMe8x16: [SWelsME<'a>; 2],
 }
 
+/// **Everything the P-slice mode decision used to re-resolve per macroblock**,
+/// resolved once for the slice.
+///
+/// The C++ binds `pCurLayer`, `pMbCache`, `pMbList`, the PPS chroma QP offset and the
+/// MVD cost table once in `WelsMdInterMbLoop` and addresses the pictures by pointer
+/// arithmetic from `kiMbX`/`kiMbY` (`svc_encode_slice.cpp`,
+/// `svc_base_layer_md.cpp:1352`). The port reached each of those through an accessor
+/// instead, and the accessors are not free: `layer_ref_view_expect` *builds* a fresh
+/// `RoPicView` every call — layer -> reference list -> pool -> three plane captures —
+/// and `WelsMdBackgroundMbEnc` alone called it three times per macroblock.
+///
+/// Built where the slice's layer is known, and **never carried across layers or
+/// frames**: `layer_ref_pic` resolves through the layer's own dependency id, and the
+/// views are the ones stamped for the frame in progress. It is per-worker by
+/// construction — `RecCursor` is not `Send`, so a worker makes its own.
+///
+/// `Copy`, and small enough for that to mean nothing: 120 bytes of references,
+/// scalars and function pointers, every one of them loop-invariant, so a consumer
+/// takes a copy and the compiler forwards the fields it actually reads.
+#[derive(Clone, Copy)]
+pub struct MdSliceCtx<'a> {
+    /// `current_layer_expect`.
+    pub layer: &'a crate::encoder::svc_encode_slice::SDqLayer,
+    /// `sWelsEncCtx::func_list`.
+    pub func: &'a crate::encoder::wels_func_ptr_def::SWelsFuncPtrList,
+    /// `layer_enc_view_expect` — the frame's source planes.
+    pub enc: &'a crate::encoder::rec_view::RoPicView,
+    /// `layer_rec_view_expect` — the reconstruction seam.
+    pub rec: &'a crate::encoder::rec_view::RecPicView,
+    /// `layer_ref_view_expect`, **built once for the slice** and borrowed from the
+    /// caller that owns it. `None` where no reference picture is bound, which on a P
+    /// slice does not happen and on the shared helpers may.
+    pub refv: Option<&'a crate::encoder::rec_view::RoPicView>,
+    /// The reference picture itself — `pRefMbQp`, `uiRefMbType`, `pMbSkipSad`,
+    /// `iPictureType`. `None` exactly where [`refv`](Self::refv) is.
+    pub ref_pic: Option<&'a SPicture>,
+    /// `sWelsEncCtx::vaa_expect` — the background flags and the two source views.
+    pub vaa: &'a crate::encoder::wels_preprocess::SVAAFrameInfo,
+    /// `SVAAFrameInfo::pCurView` / `pRefView`, unwrapped here rather than at every
+    /// call: they are `None` together, when background detection is off, and
+    /// `VaaBackgroundMbDataUpdate` is the only reader.
+    pub vaa_cur: Option<&'a crate::encoder::rec_view::RoPicView>,
+    pub vaa_ref: Option<&'a crate::encoder::rec_view::RoPicView>,
+    /// The active PPS's `uiChromaQpIndexOffset`.
+    pub chroma_qp_offset: i32,
+    /// `ctx_ref_pic(..).map_or(0, |p| p.iPictureType)` — the **context's** reference
+    /// picture, which is `sWelsEncCtx::pRefPic` through the context's own dependency
+    /// id and so is not [`ref_pic`](Self::ref_pic), which is the *layer's*. Hoisted
+    /// as a value: nothing may write the context during a slice, every worker holding
+    /// it shared.
+    pub ctx_ref_pic_type: i32,
+    pub mb_width: i32,
+    pub mb_height: i32,
+    /// The cost slots this path calls, unwrapped once. `pfMdCost` is stamped
+    /// per frame by `PreprocessSliceCoding`, so the selection is slice-invariant.
+    pub sad16: PSampleSadSatdCostFunc,
+    pub sad8: PSampleSadSatdCostFunc,
+    pub satd16: PSampleSadSatdCostFunc,
+    pub md_cost16: PSampleSadSatdCostFunc,
+}
+
+/// The nine plane cursors a macroblock's mode decision reads, **built once per
+/// macroblock** where the C++ computes nine pointers from `kiMbX`/`kiMbY`.
+///
+/// `SharedPlane::cursor` is a raw-parts slice and a multiply-add; at seven to fifteen
+/// calls a macroblock it was 4.5% of the flat 720p frame and 4.9% of the QVGA one.
+/// Each field here is one such call, hoisted to the top of the loop.
+///
+/// `Copy` — a `RecCursor` is a slice, an offset and a stride.
+#[derive(Clone, Copy)]
+pub struct MbCursors<'a> {
+    pub enc_y: crate::encoder::rec_view::RecCursor<'a>,
+    pub enc_cb: crate::encoder::rec_view::RecCursor<'a>,
+    pub enc_cr: crate::encoder::rec_view::RecCursor<'a>,
+    pub ref_y: crate::encoder::rec_view::RecCursor<'a>,
+    pub ref_cb: crate::encoder::rec_view::RecCursor<'a>,
+    pub ref_cr: crate::encoder::rec_view::RecCursor<'a>,
+    pub rec_y: crate::encoder::rec_view::RecCursor<'a>,
+    pub rec_cb: crate::encoder::rec_view::RecCursor<'a>,
+    pub rec_cr: crate::encoder::rec_view::RecCursor<'a>,
+}
+
+impl<'a> MdSliceCtx<'a> {
+    /// Resolves the slice's context, once, from the layer the slice belongs to.
+    ///
+    /// `ref_view` is passed in rather than built here because it is a **value**: the
+    /// caller owns the `RoPicView` for the slice's whole scope and the context
+    /// borrows it, which is what makes the one build serve every macroblock.
+    ///
+    /// The chroma QP offset is `layer_pps_ref(..).map_or(0, ..)` — the reading
+    /// `WelsMdInterMbLoop` already had. Two other sites spelled the same lookup with
+    /// `.expect`, and the two disagree only about a layer with no PPS stamped, which
+    /// no coding path reaches.
+    #[inline]
+    pub fn build(
+        pCtx: &'a crate::encoder::encoder_context::sWelsEncCtx,
+        pLayer: &'a crate::encoder::svc_encode_slice::SDqLayer,
+        ref_view: Option<&'a crate::encoder::rec_view::RoPicView>,
+    ) -> Self {
+        use crate::encoder::svc_mode_decision::{BLOCK_16x16, BLOCK_8x8};
+        use crate::encoder::svc_encode_slice as ses;
+        let func = pCtx.func_list();
+        let sdf = &func.sSampleDealingFuncs;
+        let vaa = pCtx.vaa_expect();
+        Self {
+            layer: pLayer,
+            func,
+            enc: ses::layer_enc_view_expect(pLayer),
+            rec: ses::layer_rec_view_expect(pLayer),
+            refv: ref_view,
+            ref_pic: ses::layer_ref_pic(pCtx, pLayer),
+            vaa,
+            vaa_cur: vaa.pCurView.as_ref(),
+            vaa_ref: vaa.pRefView.as_ref(),
+            chroma_qp_offset: ses::layer_pps_ref(pCtx, pLayer)
+                .map_or(0, |p| p.uiChromaQpIndexOffset) as i32,
+            ctx_ref_pic_type: ses::ctx_ref_pic(pCtx).map_or(0, |p| p.iPictureType),
+            mb_width: pLayer.iMbWidth as i32,
+            mb_height: pLayer.iMbHeight as i32,
+            sad16: sdf.pfSampleSad[BLOCK_16x16].expect("pfSampleSad[16x16] is installed"),
+            sad8: sdf.pfSampleSad[BLOCK_8x8].expect("pfSampleSad[8x8] is installed"),
+            satd16: sdf.pfSampleSatd[BLOCK_16x16].expect("pfSampleSatd[16x16] is installed"),
+            md_cost16: sdf.md_cost(BLOCK_16x16).expect("pfMdCost selects an installed 16x16 slot"),
+        }
+    }
+
+    /// The reference picture, for the P-slice bodies that cannot run without one.
+    ///
+    /// # Panics
+    /// If no reference picture is bound — before the first inter frame, which the P
+    /// path is past by construction.
+    #[inline]
+    pub fn ref_pic(&self) -> &'a SPicture {
+        self.ref_pic.expect("the layer's reference picture is bound")
+    }
+}
+
+impl<'a> MbCursors<'a> {
+    /// The nine cursors of the macroblock at `(mb_x, mb_y)`.
+    ///
+    /// # Panics
+    /// If no reference view is bound. The P-slice loop is past that by
+    /// construction, and `WelsMdInterInit` — which runs on this same macroblock, a
+    /// few lines later — has always asserted the same thing of the reference
+    /// picture.
+    #[inline]
+    pub fn at(sc: &MdSliceCtx<'a>, mb_x: i32, mb_y: i32) -> Self {
+        let (lx, ly) = ((mb_x as isize) << 4, (mb_y as isize) << 4);
+        let (cx, cy) = ((mb_x as isize) << 3, (mb_y as isize) << 3);
+        let refv = sc.refv.expect("the layer's reference view is built for this frame");
+        Self {
+            enc_y: sc.enc.plane(0).cursor(lx, ly),
+            enc_cb: sc.enc.plane(1).cursor(cx, cy),
+            enc_cr: sc.enc.plane(2).cursor(cx, cy),
+            ref_y: refv.plane(0).cursor(lx, ly),
+            ref_cb: refv.plane(1).cursor(cx, cy),
+            ref_cr: refv.plane(2).cursor(cx, cy),
+            rec_y: sc.rec.plane(0).cursor(lx, ly),
+            rec_cb: sc.rec.plane(1).cursor(cx, cy),
+            rec_cr: sc.rec.plane(2).cursor(cx, cy),
+        }
+    }
+}
+
 #[repr(C)]
 pub struct SWelsMD<'a> {
+    /// The slice's resolved context, and the macroblock's cursors — `None` on the
+    /// paths that never built one (an I slice, and the unit tests), which is why
+    /// every reader goes through [`SWelsMD::sc`] / [`SWelsMD::mbc`] rather than
+    /// touching the fields.
+    pub sctx: Option<MdSliceCtx<'a>>,
+    pub mbc: Option<MbCursors<'a>>,
     pub iLambda: i32,
     /// `WelsInitInterMDStruc` re-parks it per macroblock on the current luma QP's
     /// row, and `InitMe` copies it into each search block.
@@ -197,9 +367,35 @@ pub struct SWelsMD<'a> {
     pub sMe: SWelsMD_sMe<'a>,
 }
 
+impl<'a> SWelsMD<'a> {
+    /// The slice context, for the P-slice bodies that cannot run without one.
+    ///
+    /// Returns a **copy**: the record is also written through `&mut SWelsMD` in the
+    /// same statement at many sites, and a borrow of the field would forbid that.
+    ///
+    /// # Panics
+    /// If no context was built — every P-slice entry point builds one before the
+    /// macroblock loop.
+    #[inline]
+    pub fn sc(&self) -> MdSliceCtx<'a> {
+        self.sctx.expect("the P-slice mode-decision context is built for this slice")
+    }
+
+    /// The current macroblock's plane cursors.
+    ///
+    /// # Panics
+    /// If none are stamped — the macroblock loop stamps them before any body runs.
+    #[inline]
+    pub fn mbc(&self) -> &MbCursors<'a> {
+        self.mbc.as_ref().expect("the macroblock's cursors are stamped")
+    }
+}
+
 impl Default for SWelsMD<'_> {
     fn default() -> Self {
         Self {
+            sctx: None,
+            mbc: None,
             iLambda: 0,
             pMvdCost: MvdCostCursor::none(),
             iCostLuma: 0,

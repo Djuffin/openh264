@@ -150,6 +150,27 @@ fn idx(center: usize, dx: isize, dy: isize, stride: usize) -> usize {
 }
 
 impl SharedPlane {
+    /// The one constructor, and **the one place the stride bound is checked**.
+    ///
+    /// `stride` must fit in a `u32`, for the reason
+    /// [`PlaneCursor::new`](crate::safe::plane::PlaneCursor::new) gives: it is what
+    /// makes `y * stride` provably unable to wrap, and so what lets
+    /// [`RefSamples::span`](crate::safe::plane::RefSamples::span) narrow the stride
+    /// and the compiler drop a block's per-row bounds checks. Every picture line size
+    /// in the codec is an `int32_t` in the C++, so nothing real is ruled out.
+    ///
+    /// Checked **here, per plane**, rather than in [`cursor`](Self::cursor): a plane
+    /// is built three times per picture view and a cursor is built several times per
+    /// macroblock, and the invariant is the plane's either way.
+    ///
+    /// # Panics
+    /// If `stride > u32::MAX`.
+    #[inline]
+    fn new(cells: SharedCells<u8>, stride: usize, origin: usize) -> Self {
+        assert!(stride <= u32::MAX as usize, "stride {stride} exceeds u32");
+        Self { cells, stride, origin }
+    }
+
     /// Bytes per row — the C++ `iLineSize[i]`.
     #[inline]
     pub fn stride(&self) -> usize {
@@ -177,13 +198,14 @@ impl SharedPlane {
     /// A cursor anchored at logical `(x, y)` — the shared analogue of
     /// `PaddedPlane::cursor_mut`, and the type the reconstruction kernels take.
     ///
-    /// # Panics
-    /// If the plane's stride exceeds `u32::MAX`; see
-    /// [`PlaneCursor::new`](crate::safe::plane::PlaneCursor::new) for what that bound
-    /// buys and why it is asserted here rather than per span.
+    /// The stride bound the spans rely on is the plane's, and [`new`](Self::new)
+    /// checks it — a cursor is built several times per macroblock and could not
+    /// afford to re-check it. See
+    /// [`PlaneCursor::new`](crate::safe::plane::PlaneCursor::new) for what the bound
+    /// buys.
     #[inline]
     pub fn cursor(&self, x: isize, y: isize) -> RecCursor<'_> {
-        assert!(self.stride <= u32::MAX as usize, "stride {} exceeds u32", self.stride);
+        debug_assert!(self.stride <= u32::MAX as usize, "plane stride bound violated");
         RecCursor {
             cells: self.cells.cells(),
             center: idx(self.origin, x, y, self.stride),
@@ -539,10 +561,10 @@ impl RecPicView {
         let [y, u, v] = pic.planes_mut3();
         let planes = [y, u, v].map(|p| {
             if p.is_empty() {
-                SharedPlane { cells: SharedCells::empty(), stride: p.stride(), origin: 0 }
+                SharedPlane::new(SharedCells::empty(), p.stride(), 0)
             } else {
                 let (origin, stride, len) = (p.origin(), p.stride(), p.buf_len());
-                SharedPlane { cells: SharedCells::from_parts(p.root_ptr(), len), stride, origin }
+                SharedPlane::new(SharedCells::from_parts(p.root_ptr(), len), stride, origin)
             }
         });
         Self {
@@ -648,16 +670,16 @@ impl RoPicView {
         let planes = [0usize, 1, 2].map(|i| {
             let p = pic.plane(i);
             if p.is_empty() {
-                SharedPlane { cells: SharedCells::empty(), stride: p.stride(), origin: 0 }
+                SharedPlane::new(SharedCells::empty(), p.stride(), 0)
             } else {
                 // `root_ptr_shared`, not `root_ptr`: `&mut self` would be a `Unique`
                 // retag over the plane header and every worker resolves the same
                 // picture.
-                SharedPlane {
-                    cells: SharedCells::from_parts(p.root_ptr_shared(), p.buf_len()),
-                    stride: p.stride(),
-                    origin: p.origin(),
-                }
+                SharedPlane::new(
+                    SharedCells::from_parts(p.root_ptr_shared(), p.buf_len()),
+                    p.stride(),
+                    p.origin(),
+                )
             }
         });
         Self { planes }
@@ -683,7 +705,7 @@ impl RoPicView {
 #[cfg(test)]
 pub(crate) fn shared_plane_for_test(p: &mut crate::safe::plane::PaddedPlane) -> SharedPlane {
     let (origin, stride, len) = (p.origin(), p.stride(), p.buf_len());
-    SharedPlane { cells: SharedCells::from_parts(p.root_ptr(), len), stride, origin }
+    SharedPlane::new(SharedCells::from_parts(p.root_ptr(), len), stride, origin)
 }
 
 #[cfg(test)]
