@@ -14,13 +14,17 @@
 //! The horizontal pass produces each of its four outputs twice (once per half of a
 //! lane pair, with a sign that the absolute value erases), so the lane sum is twice
 //! the transform's `Σ|coeff|` and the kernel halves it before the final rounding.
+//!
+//! The 4x4 block every shape is built from cuts each operand once into a
+//! `RefSamples::span` and indexes its four rows inside it, so it pays one cut per
+//! operand where a `row_n` walk paid two checks per row. See `RefSamples::span`.
 
 #![forbid(unsafe_code)]
 
 use wide::{i16x8, u8x16};
 
 use super::lanes::{hsum_i16, rotate_quads, swap_adjacent, swap_halves, widen_hi, widen_lo, HIGH_HALF, QUAD_HIGH_PAIR};
-use crate::safe::plane::RefSamples;
+use crate::safe::plane::{BlockRows, RefSamples};
 
 /// The horizontal Hadamard of two rows held as `[row_a | row_b]`, returned as a
 /// vector whose lanes sum to `2 * (Σ|H(row_a)| + Σ|H(row_b)|)`.
@@ -41,11 +45,12 @@ fn hpass_abs(p: i16x8) -> i16x8 {
 
 #[inline(always)]
 fn satd_4x4_impl<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
+    let (s1, s2) = (c1.span::<4, 4>(0, 0), c2.span::<4, 4>(0, 0));
     let mut a = [0u8; 16];
     let mut b = [0u8; 16];
     for i in 0..4 {
-        a[i * 4..][..4].copy_from_slice(&c1.row_n::<4>(i as isize, 0));
-        b[i * 4..][..4].copy_from_slice(&c2.row_n::<4>(i as isize, 0));
+        a[i * 4..][..4].copy_from_slice(&s1.row::<4>(i, 0));
+        b[i * 4..][..4].copy_from_slice(&s2.row::<4>(i, 0));
     }
     let (va, vb) = (u8x16::new(a), u8x16::new(b));
     let lo = widen_lo(va) - widen_lo(vb); // [row0 | row1]

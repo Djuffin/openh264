@@ -54,7 +54,7 @@ use crate::safe::plane::PlaneCursor;
 /// The displacement is what the four-point kernels need and is a parameter rather than
 /// four rebased cursors because `PlaneCursor::advance` re-runs the anchor assertion:
 /// folding the offset into the row lookup keeps the four probes at one bounds check
-/// per row each.
+/// per block each.
 #[inline(always)]
 fn sad_at<const W: usize, const H: usize, S: RefSamples>(
     sample1: &S,
@@ -67,6 +67,15 @@ fn sad_at<const W: usize, const H: usize, S: RefSamples>(
     // neither the stride nor the buffer length is a compile-time value, so a per-row
     // `row()` walk cannot fold its checks and a 16x8 emits 32 branches before reading
     // a sample — see `PlaneCursor::row_windows`.
+    //
+    // **Why this is `row_blocks` and not `RefSamples::span`,** which is what every
+    // SIMD kernel switched to. `span` hands rows over *by value*, and this loop wants
+    // them borrowed: reading 8-wide rows out of `[u8; 8]` temporaries instead of out
+    // of the plane cost this kernel 10.1 -> 17.6 ns on an 8x8 and 34.2 -> 69.0 ns on a
+    // four-point 8x8, because the copy is what LLVM vectorises rather than the
+    // difference. The vector kernels have no such problem — their row *is* a register
+    // — so they take the span and its checkless rows, and the reference keeps the
+    // block walk, whose one-check-per-block it already had.
     let rows1 = sample1.row_blocks::<W>(0, 0, H);
     let rows2 = sample2.row_blocks::<W>(dy, dx, H);
     for (a, b) in rows1.zip(rows2) {

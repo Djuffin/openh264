@@ -361,6 +361,48 @@ impl SampleCursor for PlaneCursor<'_> {
     }
 }
 
+/// The rows of a block whose bounds have already been checked, **once, as a whole**.
+///
+/// Handed out by [`RefSamples::span`], which is where the checking happens and where
+/// the argument for why the rows inside are free is written down.
+pub trait BlockRows {
+    /// `W` samples of row `y` starting at column `x` **of the span**, by value.
+    ///
+    /// Coordinates are span-relative and unsigned: whatever `(dx0, dy0)` the span was
+    /// cut at is its `(0, 0)`. By value for the reason [`RefSamples::row_n`] gives —
+    /// a shared view cannot lend a slice into its cells — and as an array rather than
+    /// a `RowBuf` or an iterator item because the vector load has to forward straight
+    /// out of it.
+    ///
+    /// # Panics
+    /// If `y * stride + x + W` leaves the span. A caller reading the block the span
+    /// was cut for cannot reach that, which is the point.
+    fn row<const W: usize>(&self, y: usize, x: usize) -> [u8; W];
+
+    /// The `h`-row, `W`-wide window starting at row `y` of this span, as a span of
+    /// its own: `(h - 1) * stride + W` samples, row 0 of which is row `y` of this one.
+    ///
+    /// # Why a kernel wants this, and why it cuts from the span and not the cursor
+    ///
+    /// [`row`](Self::row) is free only where the row index is a *constant* — a
+    /// symbolic `y * stride` is something the compiler cannot place inside the span,
+    /// so a row loop it does not unroll keeps its per-row checks. Cutting a window per
+    /// group of rows fixes that: the cut costs one check and the constant offsets
+    /// inside it fold. The four-point SAD kernels are the loops too large to unroll
+    /// and are why this exists.
+    ///
+    /// It cuts from the span rather than from the cursor because
+    /// [`RefSamples::span`] has to *validate* the stride, and that check would then
+    /// sit in the row loop; a window inherits the validated stride and pays only for
+    /// its own slicing.
+    ///
+    /// # Panics
+    /// If the window leaves the span.
+    fn window<const W: usize>(&self, y: usize, h: usize) -> Self
+    where
+        Self: Sized;
+}
+
 pub trait RefSamples {
     /// Sample at `(dx, dy)` from the anchor.
     fn at(&self, dx: isize, dy: isize) -> u8;
@@ -404,6 +446,66 @@ pub trait RefSamples {
         dx0: isize,
         h: usize,
     ) -> impl Iterator<Item = Self::Row<'_>>;
+
+    /// Rows of a block that has been bounds-checked once — [`Span`](Self::Span)'s
+    /// type, one per implementor.
+    ///
+    /// `&[u8]` plus a stride for the plane cursors, `&[Cell<u8>]` plus a stride for
+    /// the shared view. Both hand out rows by value through [`BlockRows::row`]; only
+    /// the load differs.
+    type Span<'a>: BlockRows
+    where
+        Self: 'a;
+
+    /// The `W`x`H` block at `(dx0, dy0)` as **one bounds-checked span**:
+    /// `(H - 1) * stride + W` samples in which row `y`, column `x` is at
+    /// `y * stride + x`.
+    ///
+    /// # Where the checks land, which is the whole of why this exists
+    ///
+    /// [`row_n`](Self::row_n) pays two slice checks per row — one for `buf[start..]`,
+    /// one for `[..N]` — and inside a kernel reached through a shim LLVM can fold
+    /// neither: the stride arrives as a run-time value and the buffer was just
+    /// materialised from a pointer. A 16x16 SAD reading both operands that way emits
+    /// **64** compare-and-branch pairs before the 32 `uabal`s that are its actual
+    /// work.
+    ///
+    /// This pays those two checks **once per operand**, and the rows inside are then
+    /// free: the span's length is `(H - 1) * stride + W` by construction, so
+    /// `y * stride + x + W <= len` holds for every row the block contains, and LLVM
+    /// proves it and drops the branches. `processing/vaacalc.rs::half_mb_stats` turns
+    /// on the same argument.
+    ///
+    /// **It proves it for a constant `y`.** A row loop it unrolls — which is the
+    /// single-block SAD and SATD shapes — therefore comes out with no per-row branch
+    /// at all. A loop too large to unroll leaves `y * stride` symbolic, which no
+    /// amount of span length will place inside the span; those loops take the block a
+    /// group of rows at a time through [`BlockRows::window`], which restores the
+    /// constant offsets. The four-point SADs are that case.
+    ///
+    /// [`row_blocks`](Self::row_blocks) also checks once per block, but buys it with
+    /// two integer divisions: `chunks(stride)` divides to count the chunks and again
+    /// to bound the last, and it hands rows over borrowed rather than by value. On a
+    /// vector kernel, whose row is a register either way, this is the cheaper of the
+    /// two; on the scalar reference in `common/sad_common.rs`, whose row is what LLVM
+    /// vectorises, the borrow is worth more than the divisions and it keeps
+    /// `row_blocks`.
+    ///
+    /// # Reading outside the nominal block
+    ///
+    /// The span is a window, not a block: `W` and `H` size the *reach*, and a caller
+    /// whose probes leave the block asks for the reach it needs. The four-point SAD
+    /// reads `x` in `-1 .. W + 1` and `y` in `-1 .. H + 1`, so it cuts
+    /// `span::<W + 2, H + 2>(-1, -1)` — spelled with `H + 2` passed as its own const
+    /// parameter, stable Rust having no arithmetic in a const-argument position — and
+    /// indexes its probes at span columns 0, 1 and 2.
+    ///
+    /// # Panics
+    /// If the block leaves the buffer, at the slicing — same contract as
+    /// [`row_n`](Self::row_n). Negative `dx0`/`dy0` are ordinary (they address the
+    /// padding); one that is genuinely out of range casts to a huge `usize` and
+    /// panics at the slice rather than reading anything.
+    fn span<const W: usize, const H: usize>(&self, dy0: isize, dx0: isize) -> Self::Span<'_>;
 
     /// The same anchor moved by `(dx, dy)` — `pSrc.add(dy * stride + dx)`.
     ///
@@ -520,6 +622,16 @@ impl RefSamples for PlaneCursor<'_> {
         PlaneCursor::row_windows::<N>(self, dy0, dx0, h).map(|r| &r[..])
     }
 
+    type Span<'a>
+        = PlaneSpan<'a>
+    where
+        Self: 'a;
+
+    #[inline]
+    fn span<const W: usize, const H: usize>(&self, dy0: isize, dx0: isize) -> PlaneSpan<'_> {
+        PlaneSpan::cut(self.buf, idx(self.center, dx0, dy0, self.stride), self.stride, W, H)
+    }
+
     type Row<'a>
         = &'a [u8]
     where
@@ -588,16 +700,89 @@ pub struct PlaneCursorMut<'a> {
     stride: usize,
 }
 
+/// [`RefSamples::Span`] for the two plane cursors: a block's bytes and the stride to
+/// walk them by.
+///
+/// `buf` is exactly `(h - 1) * stride + w` bytes, and that exactness is what lets the
+/// per-row slicing below fold away. See [`RefSamples::span`], and `PlaneSpan::cut`
+/// for why the stride is narrowed where it is.
+#[derive(Clone, Copy, Debug)]
+pub struct PlaneSpan<'a> {
+    buf: &'a [u8],
+    /// **A `u32`, and that is the load-bearing detail.**
+    ///
+    /// `row` needs LLVM to see that `y * stride + x + W` cannot exceed the span's
+    /// `(H - 1) * stride + SW` bytes. With a `usize` stride it cannot: `y * stride`
+    /// may *wrap* for an absurd stride, so nothing follows from `y <= H - 1` and the
+    /// per-row check stays. Narrowed to 32 bits and widened back at each use, the
+    /// product of a row index under 16 and a stride under `2^32` provably fits, the
+    /// comparison folds, and the branch goes away. Every picture line size in the
+    /// codec is an `int32_t` in the C++, and the cursors assert as much when they are
+    /// made, so nothing real is ruled out and no check is paid here.
+    stride: u32,
+}
+
+impl<'a> PlaneSpan<'a> {
+    /// Cuts the `w`x`h` block at byte `start` of `buf` out as a span.
+    ///
+    /// The length is computed from the **narrowed** stride, the same value
+    /// [`BlockRows::row`] multiplies by, so the two are one SSA value and the row
+    /// bound follows from the span bound. Building the slice and the row offsets out
+    /// of different spellings of the stride is enough to lose that, and with it every
+    /// per-row check this exists to remove.
+    ///
+    /// The narrowing is **unchecked here on purpose**: every cursor asserts the bound
+    /// when it is made (see [`PlaneCursor::new`]), and a check per cut instead — one
+    /// panicking branch inside a row loop — measured 1.6x slower on the four-point
+    /// 16x16 SAD and 1.7x on the `wide` 16x16.
+    ///
+    /// # Panics
+    /// If the block leaves `buf`.
+    #[inline]
+    fn cut(buf: &'a [u8], start: usize, stride: usize, w: usize, h: usize) -> Self {
+        debug_assert!(stride <= u32::MAX as usize, "cursor stride bound violated");
+        let stride = stride as u32;
+        let len = if h == 0 { 0 } else { (h - 1) * stride as usize + w };
+        Self { buf: &buf[start..][..len], stride }
+    }
+}
+
+impl BlockRows for PlaneSpan<'_> {
+    #[inline]
+    fn row<const W: usize>(&self, y: usize, x: usize) -> [u8; W] {
+        let r: &[u8; W] = self.buf[y * self.stride as usize + x..][..W].try_into().unwrap();
+        *r
+    }
+
+    #[inline]
+    fn window<const W: usize>(&self, y: usize, h: usize) -> Self {
+        let stride = self.stride as usize;
+        let len = if h == 0 { 0 } else { (h - 1) * stride + W };
+        Self { buf: &self.buf[y * stride..][..len], stride: self.stride }
+    }
+}
+
 impl<'a> PlaneCursor<'a> {
     /// Anchors a cursor at byte `center` of `buf`.
     ///
+    /// # The stride bound, and what it buys
+    ///
+    /// `stride` must fit in a `u32`. Every picture line size in the codec is an
+    /// `int32_t` in the C++, so this rules out nothing real — and it is what lets
+    /// [`RefSamples::span`] narrow the stride without a check of its own. That
+    /// narrowing is not cosmetic: it is the fact that makes `y * stride` provably
+    /// unable to wrap, and so the fact that lets the compiler drop a block's per-row
+    /// bounds checks. Checked once here, where a cursor is made, rather than at every
+    /// span a row loop cuts.
+    ///
     /// # Panics
-    /// If `stride == 0` or `center >= buf.len()`. Deeper bounds enforcement is the
-    /// slice indexing in the accessors — this only rejects an anchor that could not
-    /// address its own sample.
+    /// If `stride == 0`, `stride > u32::MAX`, or `center >= buf.len()`. Deeper bounds
+    /// enforcement is the slice indexing in the accessors — this only rejects an
+    /// anchor that could not address its own sample.
     #[inline]
     pub fn new(buf: &'a [u8], center: usize, stride: usize) -> Self {
         assert!(stride > 0, "stride must be non-zero");
+        assert!(stride <= u32::MAX as usize, "stride {stride} exceeds u32");
         assert!(
             center < buf.len(),
             "cursor anchor {center} outside a buffer of {} bytes",
@@ -653,11 +838,22 @@ impl<'a> PlaneCursor<'a> {
 
     /// The same view rebased by `(dx, dy)` — `pSrc.add(dy * stride + dx)`.
     ///
+    /// Only the anchor is re-checked: this cursor's stride already satisfied
+    /// [`new`](Self::new)'s two stride assertions when it was made, and rebasing does
+    /// not change it. The SATD kernels rebase fifteen times per 16x16 block, so the
+    /// two redundant branches were worth not emitting.
+    ///
     /// # Panics
     /// If the new anchor is outside the buffer, per [`new`](Self::new).
     #[inline]
     pub fn advance(self, dx: isize, dy: isize) -> Self {
-        Self::new(self.buf, idx(self.center, dx, dy, self.stride), self.stride)
+        let center = idx(self.center, dx, dy, self.stride);
+        assert!(
+            center < self.buf.len(),
+            "cursor anchor {center} outside a buffer of {} bytes",
+            self.buf.len()
+        );
+        Self { buf: self.buf, center, stride: self.stride }
     }
 
     /// Byte offset of the anchor within the underlying buffer.
@@ -677,10 +873,11 @@ impl<'a> PlaneCursorMut<'a> {
     /// Anchors a write cursor at byte `center` of `buf`.
     ///
     /// # Panics
-    /// As [`PlaneCursor::new`].
+    /// As [`PlaneCursor::new`], including the `u32` stride bound.
     #[inline]
     pub fn new(buf: &'a mut [u8], center: usize, stride: usize) -> Self {
         assert!(stride > 0, "stride must be non-zero");
+        assert!(stride <= u32::MAX as usize, "stride {stride} exceeds u32");
         assert!(
             center < buf.len(),
             "cursor anchor {center} outside a buffer of {} bytes",
@@ -814,6 +1011,16 @@ impl RefSamples for PlaneCursorMut<'_> {
         let start = idx(self.center, dx0, dy0, self.stride);
         let span = if h == 0 { 0 } else { (h - 1) * self.stride + N };
         self.buf[start..][..span].chunks(self.stride).map(|r| &r[..N])
+    }
+
+    type Span<'a>
+        = PlaneSpan<'a>
+    where
+        Self: 'a;
+
+    #[inline]
+    fn span<const W: usize, const H: usize>(&self, dy0: isize, dx0: isize) -> PlaneSpan<'_> {
+        PlaneSpan::cut(self.buf, idx(self.center, dx0, dy0, self.stride), self.stride, W, H)
     }
 
     type Row<'a>
