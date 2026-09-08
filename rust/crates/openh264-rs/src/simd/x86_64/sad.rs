@@ -1,9 +1,22 @@
 //! x86_64 SSE2 & AVX2 implementations of SAD and 4-point SAD kernels.
+//!
+//! # How the rows are addressed
+//!
+//! Each operand is cut into a `RefSamples::span` — a slice the compiler knows to be
+//! `(H - 1) * stride + W` long — and the rows are indexed inside it, which leaves one
+//! cut per operand where a `row_n` walk left two checks per row. See
+//! `RefSamples::span`, and `simd::aarch64::sad` for the same treatment measured.
+//!
+//! The four-point kernels cut a `W + 2` by `G + 2` window of `sample2` per group of
+//! `G` rows — the reach of all four probes of those rows — and read the up and down
+//! probes at span rows `j` and `j + 2` of column 1, the left and right at row `j + 1`
+//! of columns 0 and 2. Per group rather than once per block because only a constant
+//! row offset inside a span folds; `G` is sized so the group's walk unrolls.
 #![allow(unsafe_code)]
 
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
-use crate::safe::plane::RefSamples;
+use crate::safe::plane::{BlockRows, RefSamples};
 
 // ============================================================================
 // Internal SSE2 Kernels
@@ -18,10 +31,11 @@ pub unsafe fn sad_16x<S: RefSamples, const H: usize>(
     dy: isize,
 ) -> i32 {
     unsafe {
+        let (s1, s2) = (sample1.span::<16, H>(0, 0), sample2.span::<16, H>(dy, dx));
         let mut acc = _mm_setzero_si128();
         for y in 0..H {
-            let r1 = sample1.row_n::<16>(y as isize, 0);
-            let r2 = sample2.row_n::<16>(y as isize + dy, dx);
+            let r1 = s1.row::<16>(y, 0);
+            let r2 = s2.row::<16>(y, 0);
             let v1 = _mm_loadu_si128(r1.as_ptr() as *const __m128i);
             let v2 = _mm_loadu_si128(r2.as_ptr() as *const __m128i);
             acc = _mm_add_epi64(acc, _mm_sad_epu8(v1, v2));
@@ -46,13 +60,14 @@ pub unsafe fn sad_16x_avx2<S: RefSamples, const H: usize>(
     // constraint, and nothing in either signature said so.
     const { assert!(H % 2 == 0, "sad_16x_avx2 filters two rows per step; H must be even") };
     unsafe {
+        let (s1, s2) = (sample1.span::<16, H>(0, 0), sample2.span::<16, H>(dy, dx));
         let mut acc = _mm256_setzero_si256();
         let mut y = 0;
         while y < H {
-            let r1_0 = sample1.row_n::<16>(y as isize, 0);
-            let r2_0 = sample2.row_n::<16>(y as isize + dy, dx);
-            let r1_1 = sample1.row_n::<16>((y + 1) as isize, 0);
-            let r2_1 = sample2.row_n::<16>((y + 1) as isize + dy, dx);
+            let r1_0 = s1.row::<16>(y, 0);
+            let r2_0 = s2.row::<16>(y, 0);
+            let r1_1 = s1.row::<16>(y + 1, 0);
+            let r2_1 = s2.row::<16>(y + 1, 0);
 
             let v1_0 = _mm_loadu_si128(r1_0.as_ptr() as *const __m128i);
             let v2_0 = _mm_loadu_si128(r2_0.as_ptr() as *const __m128i);
@@ -83,10 +98,11 @@ pub unsafe fn sad_8x<S: RefSamples, const H: usize>(
     dy: isize,
 ) -> i32 {
     unsafe {
+        let (s1, s2) = (sample1.span::<8, H>(0, 0), sample2.span::<8, H>(dy, dx));
         let mut acc = _mm_setzero_si128();
         for y in 0..H {
-            let r1 = sample1.row_n::<8>(y as isize, 0);
-            let r2 = sample2.row_n::<8>(y as isize + dy, dx);
+            let r1 = s1.row::<8>(y, 0);
+            let r2 = s2.row::<8>(y, 0);
             let v1 = _mm_loadl_epi64(r1.as_ptr() as *const __m128i);
             let v2 = _mm_loadl_epi64(r2.as_ptr() as *const __m128i);
             acc = _mm_add_epi64(acc, _mm_sad_epu8(v1, v2));
@@ -103,10 +119,11 @@ pub unsafe fn sad_4x<S: RefSamples, const H: usize>(
     dx: isize,
     dy: isize,
 ) -> i32 {
+    let (s1, s2) = (sample1.span::<4, H>(0, 0), sample2.span::<4, H>(dy, dx));
     let mut acc = _mm_setzero_si128();
     for y in 0..H {
-        let r1 = sample1.row_n::<4>(y as isize, 0);
-        let r2 = sample2.row_n::<4>(y as isize + dy, dx);
+        let r1 = s1.row::<4>(y, 0);
+        let r2 = s2.row::<4>(y, 0);
         let v1 = _mm_cvtsi32_si128(i32::from_ne_bytes(r1));
         let v2 = _mm_cvtsi32_si128(i32::from_ne_bytes(r2));
         acc = _mm_add_epi64(acc, _mm_sad_epu8(v1, v2));
@@ -116,26 +133,32 @@ pub unsafe fn sad_4x<S: RefSamples, const H: usize>(
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn sample_sad_four_16x<S: RefSamples, const H: usize>(
+pub unsafe fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sample1: &S,
     sample2: &S,
     sad: &mut [i32; 4],
 ) {
-    unsafe {
-        let mut acc0 = _mm_setzero_si128();
-        let mut acc1 = _mm_setzero_si128();
-        let mut acc2 = _mm_setzero_si128();
-        let mut acc3 = _mm_setzero_si128();
+    const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
+    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+    let mut acc0 = _mm_setzero_si128();
+    let mut acc1 = _mm_setzero_si128();
+    let mut acc2 = _mm_setzero_si128();
+    let mut acc3 = _mm_setzero_si128();
 
-        for y in 0..H {
-            let y_isize = y as isize;
-            let r1 = sample1.row_n::<16>(y_isize, 0);
+    let s1 = sample1.span::<16, H>(0, 0);
+    let s2 = sample2.span::<18, HW>(-1, -1);
+    let mut y = 0usize;
+    while y < H {
+        let s1 = s1.window::<16>(y, G);
+        let s2 = s2.window::<18>(y, G + 2);
+        for j in 0..G {
+            let r1 = s1.row::<16>(j, 0);
             let v1 = _mm_loadu_si128(r1.as_ptr() as *const __m128i);
 
-            let r2_up = sample2.row_n::<16>(y_isize - 1, 0);
-            let r2_dn = sample2.row_n::<16>(y_isize + 1, 0);
-            let r2_lt = sample2.row_n::<16>(y_isize, -1);
-            let r2_rt = sample2.row_n::<16>(y_isize, 1);
+            let r2_up = s2.row::<16>(j, 1);
+            let r2_dn = s2.row::<16>(j + 2, 1);
+            let r2_lt = s2.row::<16>(j + 1, 0);
+            let r2_rt = s2.row::<16>(j + 1, 2);
 
             let v2_up = _mm_loadu_si128(r2_up.as_ptr() as *const __m128i);
             let v2_dn = _mm_loadu_si128(r2_dn.as_ptr() as *const __m128i);
@@ -147,45 +170,51 @@ pub unsafe fn sample_sad_four_16x<S: RefSamples, const H: usize>(
             acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
             acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
         }
-
-        #[inline(always)]
-        unsafe fn reduce16(acc: __m128i) -> i32 {
-            unsafe {
-                let hi = _mm_srli_si128(acc, 8);
-                let sum = _mm_add_epi32(acc, hi);
-                _mm_cvtsi128_si32(sum)
-            }
-        }
-
-        sad[0] = reduce16(acc0);
-        sad[1] = reduce16(acc1);
-        sad[2] = reduce16(acc2);
-        sad[3] = reduce16(acc3);
+        y += G;
     }
+    #[inline(always)]
+    unsafe fn reduce16(acc: __m128i) -> i32 {
+        unsafe {
+            let hi = _mm_srli_si128(acc, 8);
+            let sum = _mm_add_epi32(acc, hi);
+            _mm_cvtsi128_si32(sum)
+        }
+    }
+
+    sad[0] = reduce16(acc0);
+    sad[1] = reduce16(acc1);
+    sad[2] = reduce16(acc2);
+    sad[3] = reduce16(acc3);
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn sample_sad_four_8x<S: RefSamples, const H: usize>(
+pub unsafe fn sample_sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sample1: &S,
     sample2: &S,
     sad: &mut [i32; 4],
 ) {
-    unsafe {
-        let mut acc0 = _mm_setzero_si128();
-        let mut acc1 = _mm_setzero_si128();
-        let mut acc2 = _mm_setzero_si128();
-        let mut acc3 = _mm_setzero_si128();
+    const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
+    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+    let mut acc0 = _mm_setzero_si128();
+    let mut acc1 = _mm_setzero_si128();
+    let mut acc2 = _mm_setzero_si128();
+    let mut acc3 = _mm_setzero_si128();
 
-        for y in 0..H {
-            let y_isize = y as isize;
-            let r1 = sample1.row_n::<8>(y_isize, 0);
+    let s1 = sample1.span::<8, H>(0, 0);
+    let s2 = sample2.span::<10, HW>(-1, -1);
+    let mut y = 0usize;
+    while y < H {
+        let s1 = s1.window::<8>(y, G);
+        let s2 = s2.window::<10>(y, G + 2);
+        for j in 0..G {
+            let r1 = s1.row::<8>(j, 0);
             let v1 = _mm_loadl_epi64(r1.as_ptr() as *const __m128i);
 
-            let r2_up = sample2.row_n::<8>(y_isize - 1, 0);
-            let r2_dn = sample2.row_n::<8>(y_isize + 1, 0);
-            let r2_lt = sample2.row_n::<8>(y_isize, -1);
-            let r2_rt = sample2.row_n::<8>(y_isize, 1);
+            let r2_up = s2.row::<8>(j, 1);
+            let r2_dn = s2.row::<8>(j + 2, 1);
+            let r2_lt = s2.row::<8>(j + 1, 0);
+            let r2_rt = s2.row::<8>(j + 1, 2);
 
             let v2_up = _mm_loadl_epi64(r2_up.as_ptr() as *const __m128i);
             let v2_dn = _mm_loadl_epi64(r2_dn.as_ptr() as *const __m128i);
@@ -197,47 +226,55 @@ pub unsafe fn sample_sad_four_8x<S: RefSamples, const H: usize>(
             acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
             acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
         }
-
-        sad[0] = _mm_cvtsi128_si32(acc0);
-        sad[1] = _mm_cvtsi128_si32(acc1);
-        sad[2] = _mm_cvtsi128_si32(acc2);
-        sad[3] = _mm_cvtsi128_si32(acc3);
+        y += G;
     }
+    sad[0] = _mm_cvtsi128_si32(acc0);
+    sad[1] = _mm_cvtsi128_si32(acc1);
+    sad[2] = _mm_cvtsi128_si32(acc2);
+    sad[3] = _mm_cvtsi128_si32(acc3);
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn sample_sad_four_4x<S: RefSamples, const H: usize>(
+pub unsafe fn sample_sad_four_4x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sample1: &S,
     sample2: &S,
     sad: &mut [i32; 4],
 ) {
+    const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
+    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
     let mut acc0 = _mm_setzero_si128();
     let mut acc1 = _mm_setzero_si128();
     let mut acc2 = _mm_setzero_si128();
     let mut acc3 = _mm_setzero_si128();
 
-    for y in 0..H {
-        let y_isize = y as isize;
-        let r1 = sample1.row_n::<4>(y_isize, 0);
-        let v1 = _mm_cvtsi32_si128(i32::from_ne_bytes(r1));
+    let s1 = sample1.span::<4, H>(0, 0);
+    let s2 = sample2.span::<6, HW>(-1, -1);
+    let mut y = 0usize;
+    while y < H {
+        let s1 = s1.window::<4>(y, G);
+        let s2 = s2.window::<6>(y, G + 2);
+        for j in 0..G {
+            let r1 = s1.row::<4>(j, 0);
+            let v1 = _mm_cvtsi32_si128(i32::from_ne_bytes(r1));
 
-        let r2_up = sample2.row_n::<4>(y_isize - 1, 0);
-        let r2_dn = sample2.row_n::<4>(y_isize + 1, 0);
-        let r2_lt = sample2.row_n::<4>(y_isize, -1);
-        let r2_rt = sample2.row_n::<4>(y_isize, 1);
+            let r2_up = s2.row::<4>(j, 1);
+            let r2_dn = s2.row::<4>(j + 2, 1);
+            let r2_lt = s2.row::<4>(j + 1, 0);
+            let r2_rt = s2.row::<4>(j + 1, 2);
 
-        let v2_up = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_up));
-        let v2_dn = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_dn));
-        let v2_lt = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_lt));
-        let v2_rt = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_rt));
+            let v2_up = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_up));
+            let v2_dn = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_dn));
+            let v2_lt = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_lt));
+            let v2_rt = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_rt));
 
-        acc0 = _mm_add_epi64(acc0, _mm_sad_epu8(v1, v2_up));
-        acc1 = _mm_add_epi64(acc1, _mm_sad_epu8(v1, v2_dn));
-        acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
-        acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
+            acc0 = _mm_add_epi64(acc0, _mm_sad_epu8(v1, v2_up));
+            acc1 = _mm_add_epi64(acc1, _mm_sad_epu8(v1, v2_dn));
+            acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
+            acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
+        }
+        y += G;
     }
-
     sad[0] = _mm_cvtsi128_si32(acc0);
     sad[1] = _mm_cvtsi128_si32(acc1);
     sad[2] = _mm_cvtsi128_si32(acc2);
@@ -319,37 +356,37 @@ pub fn sample_sad_4x8<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 
 #[inline(always)]
 pub fn sample_sad_four_16x16<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    unsafe { sample_sad_four_16x::<S, 16>(sample1, sample2, sad) }
+    unsafe { sample_sad_four_16x::<S, 16, 18, 4>(sample1, sample2, sad) }
 }
 
 #[inline(always)]
 pub fn sample_sad_four_16x8<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    unsafe { sample_sad_four_16x::<S, 8>(sample1, sample2, sad) }
+    unsafe { sample_sad_four_16x::<S, 8, 10, 4>(sample1, sample2, sad) }
 }
 
 #[inline(always)]
 pub fn sample_sad_four_8x16<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    unsafe { sample_sad_four_8x::<S, 16>(sample1, sample2, sad) }
+    unsafe { sample_sad_four_8x::<S, 16, 18, 8>(sample1, sample2, sad) }
 }
 
 #[inline(always)]
 pub fn sample_sad_four_8x8<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    unsafe { sample_sad_four_8x::<S, 8>(sample1, sample2, sad) }
+    unsafe { sample_sad_four_8x::<S, 8, 10, 8>(sample1, sample2, sad) }
 }
 
 #[inline(always)]
 pub fn sample_sad_four_4x4<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    unsafe { sample_sad_four_4x::<S, 4>(sample1, sample2, sad) }
+    unsafe { sample_sad_four_4x::<S, 4, 6, 4>(sample1, sample2, sad) }
 }
 
 #[inline(always)]
 pub fn sample_sad_four_8x4<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    unsafe { sample_sad_four_8x::<S, 4>(sample1, sample2, sad) }
+    unsafe { sample_sad_four_8x::<S, 4, 6, 4>(sample1, sample2, sad) }
 }
 
 #[inline(always)]
 pub fn sample_sad_four_4x8<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    unsafe { sample_sad_four_4x::<S, 8>(sample1, sample2, sad) }
+    unsafe { sample_sad_four_4x::<S, 8, 10, 8>(sample1, sample2, sad) }
 }
 
 // ============================================================================

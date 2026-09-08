@@ -176,8 +176,14 @@ impl SharedPlane {
 
     /// A cursor anchored at logical `(x, y)` — the shared analogue of
     /// `PaddedPlane::cursor_mut`, and the type the reconstruction kernels take.
+    ///
+    /// # Panics
+    /// If the plane's stride exceeds `u32::MAX`; see
+    /// [`PlaneCursor::new`](crate::safe::plane::PlaneCursor::new) for what that bound
+    /// buys and why it is asserted here rather than per span.
     #[inline]
     pub fn cursor(&self, x: isize, y: isize) -> RecCursor<'_> {
+        assert!(self.stride <= u32::MAX as usize, "stride {} exceeds u32", self.stride);
         RecCursor {
             cells: self.cells.cells(),
             center: idx(self.origin, x, y, self.stride),
@@ -283,6 +289,10 @@ impl<'a> RecCursor<'a> {
 
     /// A cursor over **caller-owned** bytes — safe, with no raw pointer anywhere.
     ///
+    /// # Panics
+    /// If `stride` exceeds `u32::MAX`; see
+    /// [`PlaneCursor::new`](crate::safe::plane::PlaneCursor::new).
+    ///
     /// `Cell::from_mut(..).as_slice_of_cells()` is the standard library's own door
     /// from an exclusive borrow to shared-mutable cells. It is what lets a per-worker
     /// scratch array on `SMbCache` feed the very kernel a shared picture plane feeds,
@@ -291,6 +301,7 @@ impl<'a> RecCursor<'a> {
     /// generic.
     #[inline]
     pub fn over_owned(buf: &'a mut [u8], center: usize, stride: usize) -> Self {
+        assert!(stride <= u32::MAX as usize, "stride {stride} exceeds u32");
         Self { cells: Cell::from_mut(buf).as_slice_of_cells(), center, stride }
     }
 
@@ -305,6 +316,61 @@ impl<'a> RecCursor<'a> {
     #[inline]
     pub fn stride(&self) -> usize {
         self.stride
+    }
+}
+
+/// [`RefSamples::Span`](crate::safe::plane::RefSamples::Span) for the shared view: a
+/// block's cells and the stride to walk them by.
+///
+/// `cells` is exactly what [`RecCursor::block_span`] cut — `(h - 1) * stride + w`
+/// entries — and that exactness is what lets the per-row slicing below fold away. See
+/// [`RefSamples::span`](crate::safe::plane::RefSamples::span).
+#[derive(Clone, Copy, Debug)]
+pub struct CellSpan<'a> {
+    cells: &'a [Cell<u8>],
+    /// A `u32` for the reason
+    /// [`PlaneSpan`](crate::safe::plane::PlaneSpan)'s is: it is what lets LLVM see
+    /// that `y * stride + x + W` stays inside the span and drop the per-row checks.
+    stride: u32,
+}
+
+impl<'a> CellSpan<'a> {
+    /// Cuts the `w`x`h` block at `start` out of `cells`.
+    ///
+    /// The length and the row offsets are computed from **one** narrowed stride, which
+    /// is what ties them together for the compiler; see
+    /// [`PlaneSpan::cut`](crate::safe::plane::PlaneSpan).
+    ///
+    /// The narrowing is unchecked here for the reason
+    /// [`PlaneSpan::cut`](crate::safe::plane::PlaneSpan) gives: the bound is a cursor
+    /// invariant, asserted where a cursor is made.
+    ///
+    /// # Panics
+    /// If the block leaves `cells`.
+    #[inline]
+    fn cut(cells: &'a [Cell<u8>], start: usize, stride: usize, w: usize, h: usize) -> Self {
+        debug_assert!(stride <= u32::MAX as usize, "cursor stride bound violated");
+        let stride = stride as u32;
+        let len = if h == 0 { 0 } else { (h - 1) * stride as usize + w };
+        Self { cells: &cells[start..][..len], stride }
+    }
+}
+
+impl crate::safe::plane::BlockRows for CellSpan<'_> {
+    /// Cells cannot be `copy_from_slice`d, so the row is read entry by entry; over a
+    /// slice the compiler knows to be `W` long that is `W` byte loads it coalesces
+    /// into one vector load, not `W` bounds checks.
+    #[inline]
+    fn row<const W: usize>(&self, y: usize, x: usize) -> [u8; W] {
+        let row = &self.cells[y * self.stride as usize + x..][..W];
+        std::array::from_fn(|i| row[i].get())
+    }
+
+    #[inline]
+    fn window<const W: usize>(&self, y: usize, h: usize) -> Self {
+        let stride = self.stride as usize;
+        let len = if h == 0 { 0 } else { (h - 1) * stride + W };
+        Self { cells: &self.cells[y * stride..][..len], stride: self.stride }
     }
 }
 
@@ -348,6 +414,16 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
             }
             out
         })
+    }
+
+    type Span<'a>
+        = CellSpan<'a>
+    where
+        Self: 'a;
+
+    #[inline]
+    fn span<const W: usize, const H: usize>(&self, dy0: isize, dx0: isize) -> CellSpan<'_> {
+        CellSpan::cut(self.cells, idx(self.center, dx0, dy0, self.stride), self.stride, W, H)
     }
 
     /// The one implementor whose row is **owned** — cells cannot lend `&[u8]`.
@@ -646,7 +722,7 @@ mod tests {
     /// `row_view`, on both cursor types.
     #[test]
     fn the_row_accessors_agree_across_both_cursor_types() {
-        use crate::safe::plane::{PlaneCursor, RefSamples};
+        use crate::safe::plane::{BlockRows, PlaneCursor, RefSamples};
 
         let mut rng_state = 0x51ED_270Fu32;
         let mut next = move || {
@@ -685,6 +761,26 @@ mod tests {
                     cells.row_blocks::<4>(dy, dx, 3).map(|r| r.to_vec()).collect();
                 assert_eq!(got_plain, want, "plane row_blocks, stride {stride}, ({dx},{dy})");
                 assert_eq!(got_cells, want, "cell row_blocks, stride {stride}, ({dx},{dy})");
+
+                // `span`: the once-checked block, both types, read back row by row
+                // against the same straight `row` walk — including at column offsets
+                // *inside* the span, which is how the four-point SAD reads its probes.
+                let sp_plain = RefSamples::span::<4, 3>(&plain, dy, dx);
+                let sp_cells = RefSamples::span::<4, 3>(&cells, dy, dx);
+                for k in 0..3usize {
+                    let want4 = plain.row(dy + k as isize, dx, 4);
+                    assert_eq!(&sp_plain.row::<4>(k, 0), want4,
+                        "plane span row, stride {stride}, ({dx},{dy}), row {k}");
+                    assert_eq!(&sp_cells.row::<4>(k, 0), want4,
+                        "cell span row, stride {stride}, ({dx},{dy}), row {k}");
+                    for x0 in 0..3usize {
+                        let want2 = plain.row(dy + k as isize, dx + x0 as isize, 2);
+                        assert_eq!(&sp_plain.row::<2>(k, x0), want2,
+                            "plane span subrow, stride {stride}, ({dx},{dy}), ({x0},{k})");
+                        assert_eq!(&sp_cells.row::<2>(k, x0), want2,
+                            "cell span subrow, stride {stride}, ({dx},{dy}), ({x0},{k})");
+                    }
+                }
             }
         }
     }

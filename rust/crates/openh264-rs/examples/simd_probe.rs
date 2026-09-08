@@ -19,6 +19,7 @@
 // for a codegen instrument on a target with no kernels to read the codegen of.
 #![allow(non_snake_case, unused_imports, unused_variables, unused_mut)]
 
+use openh264_rs::encoder::rec_view::RecCursor;
 use openh264_rs::safe::plane::{PlaneCursor, PlaneCursorMut};
 #[cfg(target_arch = "x86_64")]
 use openh264_rs::simd::x86_64 as isa;
@@ -39,6 +40,59 @@ pub fn probe_isa_sad_16x16(a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) -> i32 {
 #[inline(never)]
 pub fn probe_isa_satd_4x4(a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) -> i32 {
     isa::satd::satd_4x4(a, b)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_sad_8x8(a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) -> i32 {
+    isa::sad::sample_sad_8x8(a, b)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_sad_four_16x16(a: &PlaneCursor<'_>, b: &PlaneCursor<'_>, s: &mut [i32; 4]) {
+    isa::sad::sample_sad_four_16x16(a, b, s)
+}
+
+/// The same kernels over the **shared cell view**, which is the operand type every
+/// motion-search and mode-decision call actually hands them (`encoder/md.rs`'s slot
+/// signature is `fn(&RecCursor, &RecCursor) -> i32`); the `PlaneCursor` probes above
+/// are the processing library's and the bench's path. Both have to be checkless.
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_sad_16x16_cells(a: &RecCursor<'_>, b: &RecCursor<'_>) -> i32 {
+    isa::sad::sample_sad_16x16(a, b)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_sad_8x8_cells(a: &RecCursor<'_>, b: &RecCursor<'_>) -> i32 {
+    isa::sad::sample_sad_8x8(a, b)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_sad_four_16x16_cells(a: &RecCursor<'_>, b: &RecCursor<'_>, s: &mut [i32; 4]) {
+    isa::sad::sample_sad_four_16x16(a, b, s)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_satd_16x16(a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) -> i32 {
+    isa::satd::satd_16x16(a, b)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_satd_16x16_cells(a: &RecCursor<'_>, b: &RecCursor<'_>) -> i32 {
+    isa::satd::satd_16x16(a, b)
 }
 
 #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
@@ -150,6 +204,19 @@ fn main() {
     #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
     {
         total += probe_isa_sad_16x16(&ca, &cb) + probe_isa_satd_4x4(&ca, &cb);
+        total += probe_isa_sad_8x8(&ca, &cb) + probe_isa_satd_16x16(&ca, &cb);
+        let mut four = [0i32; 4];
+        probe_isa_sad_four_16x16(&ca, &cb, &mut four);
+        total += four[0];
+        {
+            let (mut ra, mut rb) = (vec![7u8; 64 * 64], vec![9u8; 64 * 64]);
+            let ka = RecCursor::over_owned(&mut ra, 20 * 64 + 19, 64);
+            let kb = RecCursor::over_owned(&mut rb, 20 * 64 + 19, 64);
+            total += probe_isa_sad_16x16_cells(&ka, &kb) + probe_isa_sad_8x8_cells(&ka, &kb);
+            total += probe_isa_satd_16x16_cells(&ka, &kb);
+            probe_isa_sad_four_16x16_cells(&ka, &kb, &mut four);
+            total += four[1];
+        }
         probe_isa_dequant_ihadamard(&mut d, 3);
         probe_isa_hadamard_t4_dc(&mut m, &big);
         probe_isa_quant_4x4(&mut d, &ff, &mf);

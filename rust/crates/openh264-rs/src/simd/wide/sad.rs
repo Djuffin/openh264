@@ -8,6 +8,19 @@
 //! `u8x16` (three ops), zero-extended to two `i16x8` (two ops) and accumulated (two
 //! adds) — seven ops per row where the intrinsic uses two — with a `pmaddwd` reduce at
 //! the end. This is the family where the portable API pays most.
+//!
+//! # How the rows are addressed
+//!
+//! Each operand is cut into a `RefSamples::span` — a slice the compiler knows to be
+//! `(H - 1) * stride + W` long — and the rows are indexed inside it, which leaves one
+//! cut per operand where a `row_n` walk left two checks per row. See
+//! `RefSamples::span`, and `simd::aarch64::sad` for the same treatment measured.
+//!
+//! The four-point kernels cut a `W + 2` by `G + 2` window of `sample2` per group of
+//! `G` rows — the reach of all four probes of those rows — reading the up and down
+//! probes at span rows `j` and `j + 2` of column 1 and the left and right at row
+//! `j + 1` of columns 0 and 2. Per group rather than once per block because only a
+//! constant row offset inside a span folds; `G` is sized so the group's walk unrolls.
 
 #![forbid(unsafe_code)]
 
@@ -15,7 +28,7 @@ use wide::bytemuck::cast;
 use wide::{i16x8, u8x16, u8x32};
 
 use super::lanes::{hsum_i16, load4, load8, widen_hi, widen_lo};
-use crate::safe::plane::RefSamples;
+use crate::safe::plane::{BlockRows, RefSamples};
 
 /// `|a - b|` per byte.
 #[inline(always)]
@@ -31,10 +44,11 @@ fn abs_diff(a: u8x16, b: u8x16) -> u8x16 {
 /// gains at most `2 * 255` per row over at most 16 rows, so it peaks at 8160.
 #[inline(always)]
 fn sad_16x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, dy: isize) -> i32 {
+    let (s1, s2) = (sample1.span::<16, H>(0, 0), sample2.span::<16, H>(dy, dx));
     let mut acc = i16x8::ZERO;
     for y in 0..H {
-        let a = u8x16::new(sample1.row_n::<16>(y as isize, 0));
-        let b = u8x16::new(sample2.row_n::<16>(y as isize + dy, dx));
+        let a = u8x16::new(s1.row::<16>(y, 0));
+        let b = u8x16::new(s2.row::<16>(y, 0));
         let d = abs_diff(a, b);
         acc = acc + widen_lo(d) + widen_hi(d);
     }
@@ -55,15 +69,16 @@ fn sad_16x_two_rows<S: RefSamples, const H: usize>(
     dy: isize,
 ) -> i32 {
     const { assert!(H % 2 == 0, "sad_16x_two_rows steps two rows; H must be even") };
+    let (s1, s2) = (sample1.span::<16, H>(0, 0), sample2.span::<16, H>(dy, dx));
     let mut acc = i16x8::ZERO;
-    let mut y = 0isize;
-    while (y as usize) < H {
+    let mut y = 0usize;
+    while y < H {
         let mut a = [0u8; 32];
         let mut b = [0u8; 32];
-        a[..16].copy_from_slice(&sample1.row_n::<16>(y, 0));
-        a[16..].copy_from_slice(&sample1.row_n::<16>(y + 1, 0));
-        b[..16].copy_from_slice(&sample2.row_n::<16>(y + dy, dx));
-        b[16..].copy_from_slice(&sample2.row_n::<16>(y + 1 + dy, dx));
+        a[..16].copy_from_slice(&s1.row::<16>(y, 0));
+        a[16..].copy_from_slice(&s1.row::<16>(y + 1, 0));
+        b[..16].copy_from_slice(&s2.row::<16>(y, 0));
+        b[16..].copy_from_slice(&s2.row::<16>(y + 1, 0));
         let (va, vb) = (u8x32::new(a), u8x32::new(b));
         let d = va.max(vb) - va.min(vb);
         let [d0, d1]: [u8x16; 2] = cast(d);
@@ -75,10 +90,11 @@ fn sad_16x_two_rows<S: RefSamples, const H: usize>(
 
 #[inline(always)]
 fn sad_8x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, dy: isize) -> i32 {
+    let (s1, s2) = (sample1.span::<8, H>(0, 0), sample2.span::<8, H>(dy, dx));
     let mut acc = i16x8::ZERO;
     for y in 0..H {
-        let a = load8(&sample1.row_n::<8>(y as isize, 0));
-        let b = load8(&sample2.row_n::<8>(y as isize + dy, dx));
+        let a = load8(&s1.row::<8>(y, 0));
+        let b = load8(&s2.row::<8>(y, 0));
         acc = acc + widen_lo(abs_diff(a, b));
     }
     hsum_i16(acc)
@@ -86,33 +102,47 @@ fn sad_8x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, dy
 
 #[inline(always)]
 fn sad_4x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, dy: isize) -> i32 {
+    let (s1, s2) = (sample1.span::<4, H>(0, 0), sample2.span::<4, H>(dy, dx));
     let mut acc = i16x8::ZERO;
     for y in 0..H {
-        let a = load4(&sample1.row_n::<4>(y as isize, 0));
-        let b = load4(&sample2.row_n::<4>(y as isize + dy, dx));
+        let a = load4(&s1.row::<4>(y, 0));
+        let b = load4(&s2.row::<4>(y, 0));
         acc = acc + widen_lo(abs_diff(a, b));
     }
     hsum_i16(acc)
 }
 
 /// The four whole-sample neighbours — up, down, left, right — in one pass over
-/// `sample1`, one accumulator each.
+/// `sample1`, one accumulator each. See the module header for the probe span.
 #[inline(always)]
-fn sad_four_16x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
+fn sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
+    sample1: &S,
+    sample2: &S,
+    sad: &mut [i32; 4],
+) {
+    const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
+    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
     let mut acc = [i16x8::ZERO; 4];
-    for y in 0..H {
-        let y = y as isize;
-        let a = u8x16::new(sample1.row_n::<16>(y, 0));
-        let probes = [
-            u8x16::new(sample2.row_n::<16>(y - 1, 0)),
-            u8x16::new(sample2.row_n::<16>(y + 1, 0)),
-            u8x16::new(sample2.row_n::<16>(y, -1)),
-            u8x16::new(sample2.row_n::<16>(y, 1)),
-        ];
-        for k in 0..4 {
-            let d = abs_diff(a, probes[k]);
-            acc[k] = acc[k] + widen_lo(d) + widen_hi(d);
+    let s1 = sample1.span::<16, H>(0, 0);
+    let s2 = sample2.span::<18, HW>(-1, -1);
+    let mut y = 0usize;
+    while y < H {
+        let s1 = s1.window::<16>(y, G);
+        let s2 = s2.window::<18>(y, G + 2);
+        for j in 0..G {
+            let a = u8x16::new(s1.row::<16>(j, 0));
+            let probes = [
+                u8x16::new(s2.row::<16>(j, 1)),
+                u8x16::new(s2.row::<16>(j + 2, 1)),
+                u8x16::new(s2.row::<16>(j + 1, 0)),
+                u8x16::new(s2.row::<16>(j + 1, 2)),
+            ];
+            for k in 0..4 {
+                let d = abs_diff(a, probes[k]);
+                acc[k] = acc[k] + widen_lo(d) + widen_hi(d);
+            }
         }
+        y += G;
     }
     for k in 0..4 {
         sad[k] = hsum_i16(acc[k]);
@@ -120,20 +150,33 @@ fn sad_four_16x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, sad: &m
 }
 
 #[inline(always)]
-fn sad_four_8x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
+fn sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
+    sample1: &S,
+    sample2: &S,
+    sad: &mut [i32; 4],
+) {
+    const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
+    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
     let mut acc = [i16x8::ZERO; 4];
-    for y in 0..H {
-        let y = y as isize;
-        let a = load8(&sample1.row_n::<8>(y, 0));
-        let probes = [
-            load8(&sample2.row_n::<8>(y - 1, 0)),
-            load8(&sample2.row_n::<8>(y + 1, 0)),
-            load8(&sample2.row_n::<8>(y, -1)),
-            load8(&sample2.row_n::<8>(y, 1)),
-        ];
-        for k in 0..4 {
-            acc[k] = acc[k] + widen_lo(abs_diff(a, probes[k]));
+    let s1 = sample1.span::<8, H>(0, 0);
+    let s2 = sample2.span::<10, HW>(-1, -1);
+    let mut y = 0usize;
+    while y < H {
+        let s1 = s1.window::<8>(y, G);
+        let s2 = s2.window::<10>(y, G + 2);
+        for j in 0..G {
+            let a = load8(&s1.row::<8>(j, 0));
+            let probes = [
+                load8(&s2.row::<8>(j, 1)),
+                load8(&s2.row::<8>(j + 2, 1)),
+                load8(&s2.row::<8>(j + 1, 0)),
+                load8(&s2.row::<8>(j + 1, 2)),
+            ];
+            for k in 0..4 {
+                acc[k] = acc[k] + widen_lo(abs_diff(a, probes[k]));
+            }
         }
+        y += G;
     }
     for k in 0..4 {
         sad[k] = hsum_i16(acc[k]);
@@ -141,20 +184,33 @@ fn sad_four_8x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, sad: &mu
 }
 
 #[inline(always)]
-fn sad_four_4x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
+fn sad_four_4x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
+    sample1: &S,
+    sample2: &S,
+    sad: &mut [i32; 4],
+) {
+    const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
+    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
     let mut acc = [i16x8::ZERO; 4];
-    for y in 0..H {
-        let y = y as isize;
-        let a = load4(&sample1.row_n::<4>(y, 0));
-        let probes = [
-            load4(&sample2.row_n::<4>(y - 1, 0)),
-            load4(&sample2.row_n::<4>(y + 1, 0)),
-            load4(&sample2.row_n::<4>(y, -1)),
-            load4(&sample2.row_n::<4>(y, 1)),
-        ];
-        for k in 0..4 {
-            acc[k] = acc[k] + widen_lo(abs_diff(a, probes[k]));
+    let s1 = sample1.span::<4, H>(0, 0);
+    let s2 = sample2.span::<6, HW>(-1, -1);
+    let mut y = 0usize;
+    while y < H {
+        let s1 = s1.window::<4>(y, G);
+        let s2 = s2.window::<6>(y, G + 2);
+        for j in 0..G {
+            let a = load4(&s1.row::<4>(j, 0));
+            let probes = [
+                load4(&s2.row::<4>(j, 1)),
+                load4(&s2.row::<4>(j + 2, 1)),
+                load4(&s2.row::<4>(j + 1, 0)),
+                load4(&s2.row::<4>(j + 1, 2)),
+            ];
+            for k in 0..4 {
+                acc[k] = acc[k] + widen_lo(abs_diff(a, probes[k]));
+            }
         }
+        y += G;
     }
     for k in 0..4 {
         sad[k] = hsum_i16(acc[k]);
@@ -215,37 +271,37 @@ pub fn sample_sad_4x8<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 
 #[inline(always)]
 pub fn sample_sad_four_16x16<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    sad_four_16x::<S, 16>(sample1, sample2, sad)
+    sad_four_16x::<S, 16, 18, 4>(sample1, sample2, sad)
 }
 
 #[inline(always)]
 pub fn sample_sad_four_16x8<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    sad_four_16x::<S, 8>(sample1, sample2, sad)
+    sad_four_16x::<S, 8, 10, 4>(sample1, sample2, sad)
 }
 
 #[inline(always)]
 pub fn sample_sad_four_8x16<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    sad_four_8x::<S, 16>(sample1, sample2, sad)
+    sad_four_8x::<S, 16, 18, 8>(sample1, sample2, sad)
 }
 
 #[inline(always)]
 pub fn sample_sad_four_8x8<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    sad_four_8x::<S, 8>(sample1, sample2, sad)
+    sad_four_8x::<S, 8, 10, 8>(sample1, sample2, sad)
 }
 
 #[inline(always)]
 pub fn sample_sad_four_4x4<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    sad_four_4x::<S, 4>(sample1, sample2, sad)
+    sad_four_4x::<S, 4, 6, 4>(sample1, sample2, sad)
 }
 
 #[inline(always)]
 pub fn sample_sad_four_8x4<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    sad_four_8x::<S, 4>(sample1, sample2, sad)
+    sad_four_8x::<S, 4, 6, 4>(sample1, sample2, sad)
 }
 
 #[inline(always)]
 pub fn sample_sad_four_4x8<S: RefSamples>(sample1: &S, sample2: &S, sad: &mut [i32; 4]) {
-    sad_four_4x::<S, 8>(sample1, sample2, sad)
+    sad_four_4x::<S, 8, 10, 8>(sample1, sample2, sad)
 }
 
 #[cfg(test)]

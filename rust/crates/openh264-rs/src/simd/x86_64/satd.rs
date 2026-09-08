@@ -1,9 +1,13 @@
 //! x86_64 SSE2 & SSSE3 implementations of SATD (Hadamard transformed SAD).
+//!
+//! The 4x4 block every shape is built from cuts each operand once into a
+//! `RefSamples::span` and indexes its four rows inside it, so it pays one cut per
+//! operand where a `row_n` walk paid two checks per row. See `RefSamples::span`.
 #![allow(unsafe_code)]
 
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
-use crate::safe::plane::RefSamples;
+use crate::safe::plane::{BlockRows, RefSamples};
 
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
@@ -84,14 +88,15 @@ pub unsafe fn satd_4x4_sse2_impl<A: RefSamples + Copy, B: RefSamples + Copy>(
 ) -> i32 {
     unsafe {
         // 1. Load 4 rows of 4 samples and compute difference in i16
-        let r1_0 = c1.row_n::<4>(0, 0);
-        let r2_0 = c2.row_n::<4>(0, 0);
-        let r1_1 = c1.row_n::<4>(1, 0);
-        let r2_1 = c2.row_n::<4>(1, 0);
-        let r1_2 = c1.row_n::<4>(2, 0);
-        let r2_2 = c2.row_n::<4>(2, 0);
-        let r1_3 = c1.row_n::<4>(3, 0);
-        let r2_3 = c2.row_n::<4>(3, 0);
+        let (s1, s2) = (c1.span::<4, 4>(0, 0), c2.span::<4, 4>(0, 0));
+        let r1_0 = s1.row::<4>(0, 0);
+        let r2_0 = s2.row::<4>(0, 0);
+        let r1_1 = s1.row::<4>(1, 0);
+        let r2_1 = s2.row::<4>(1, 0);
+        let r1_2 = s1.row::<4>(2, 0);
+        let r2_2 = s2.row::<4>(2, 0);
+        let r1_3 = s1.row::<4>(3, 0);
+        let r2_3 = s2.row::<4>(3, 0);
 
         let v1_0 = _mm_cvtsi32_si128(i32::from_ne_bytes(r1_0));
         let v2_0 = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_0));

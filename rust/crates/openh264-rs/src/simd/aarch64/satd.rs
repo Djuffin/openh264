@@ -19,21 +19,24 @@
 //! a pairwise sum at most 2040, and a four-row group contributes two `smax` vectors,
 //! so a 16x16 block's eight groups peak at `8 * 2 * 2040 = 32640` per lane.
 //!
-//! The rows are read with `row_n`, as the x86_64 and `wide` kernels read them.
+//! Each operand is cut once into a `RefSamples::span` and its rows are indexed inside
+//! it, so a block pays one cut per operand where a `row_n` walk paid two checks per
+//! row. See `RefSamples::span`; the SAD kernels next door carry the measurement.
 #![allow(unsafe_code)]
 
 use core::arch::aarch64::*;
 
 use super::lanes::{ld16, ld8};
-use crate::safe::plane::RefSamples;
+use crate::safe::plane::{BlockRows, RefSamples};
 
 /// Rows `0..4` of a 4-wide block as `([row0 | row1], [row2 | row3])`.
 #[inline]
 #[target_feature(enable = "neon")]
 fn rows4x4<S: RefSamples>(c: &S) -> (uint8x8_t, uint8x8_t) {
+    let s = c.span::<4, 4>(0, 0);
     let mut a = [0u8; 16];
     for i in 0..4 {
-        a[i * 4..][..4].copy_from_slice(&c.row_n::<4>(i as isize, 0));
+        a[i * 4..][..4].copy_from_slice(&s.row::<4>(i, 0));
     }
     (ld8(&a[..8]), ld8(&a[8..]))
 }
@@ -113,12 +116,15 @@ fn group8(d0: int16x8_t, d1: int16x8_t, d2: int16x8_t, d3: int16x8_t) -> int16x8
 #[target_feature(enable = "neon")]
 fn satd_8w<A: RefSamples + Copy, B: RefSamples + Copy, const H: usize>(c1: &A, c2: &B) -> i32 {
     const { assert!(H % 4 == 0, "SATD groups are four rows tall") };
+    let (s1, s2) = (c1.span::<8, H>(0, 0), c2.span::<8, H>(0, 0));
     let mut acc = vdupq_n_s16(0);
     for g in 0..H / 4 {
+        // One four-row window per group: only a constant row offset inside a span
+        // folds, and this loop is not always unrolled. See `simd::aarch64::sad`.
+        let (w1, w2) = (s1.window::<8>(4 * g, 4), s2.window::<8>(4 * g, 4));
         let mut d = [vdupq_n_s16(0); 4];
         for (i, row) in d.iter_mut().enumerate() {
-            let y = (4 * g + i) as isize;
-            *row = vreinterpretq_s16_u16(vsubl_u8(ld8(&c1.row_n::<8>(y, 0)), ld8(&c2.row_n::<8>(y, 0))));
+            *row = vreinterpretq_s16_u16(vsubl_u8(ld8(&w1.row::<8>(i, 0)), ld8(&w2.row::<8>(i, 0))));
         }
         acc = vaddq_s16(acc, group8(d[0], d[1], d[2], d[3]));
     }
@@ -131,14 +137,15 @@ fn satd_8w<A: RefSamples + Copy, B: RefSamples + Copy, const H: usize>(c1: &A, c
 #[target_feature(enable = "neon")]
 fn satd_16w<A: RefSamples + Copy, B: RefSamples + Copy, const H: usize>(c1: &A, c2: &B) -> i32 {
     const { assert!(H % 4 == 0, "SATD groups are four rows tall") };
+    let (s1, s2) = (c1.span::<16, H>(0, 0), c2.span::<16, H>(0, 0));
     let mut acc = vdupq_n_s16(0);
     for g in 0..H / 4 {
+        let (w1, w2) = (s1.window::<16>(4 * g, 4), s2.window::<16>(4 * g, 4));
         let mut lo = [vdupq_n_s16(0); 4];
         let mut hi = [vdupq_n_s16(0); 4];
         for i in 0..4 {
-            let y = (4 * g + i) as isize;
-            let a = ld16(&c1.row_n::<16>(y, 0));
-            let b = ld16(&c2.row_n::<16>(y, 0));
+            let a = ld16(&w1.row::<16>(i, 0));
+            let b = ld16(&w2.row::<16>(i, 0));
             lo[i] = vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(a), vget_low_u8(b)));
             hi[i] = vreinterpretq_s16_u16(vsubl_high_u8(a, b));
         }
