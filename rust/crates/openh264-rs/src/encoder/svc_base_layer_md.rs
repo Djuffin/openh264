@@ -635,6 +635,27 @@ pub extern "C" fn WelsMdI4x4Fast(
     iCosti4x4
 }
 
+/// The 8x8 chroma predictor for `mode`, reached without `pfGetChromaPred`.
+///
+/// As [`I16x16LumaPred`](crate::encoder::svc_mode_decision::I16x16LumaPred): the
+/// arms are what the table holds mode by mode, and that is not one family —
+/// `WelsInitIntraPredFuncs` overwrites only `DC`, `H`, `V` and `P` under the SIMD
+/// bit, the two one-sided DC variants and the 128 fallback having no kernel.
+#[inline(always)]
+fn ChromaPred(iMode: i32, pPred: &mut [u8; 64], cRec: &RecCursor<'_>) {
+    use crate::encoder::get_intra_predictor as gip;
+    match iMode as i8 {
+        C_PRED_DC => kernels::intra_pred::enc_chroma_pred_dc(pPred, cRec),
+        C_PRED_H => kernels::intra_pred::enc_chroma_pred_h(pPred, cRec),
+        C_PRED_V => kernels::intra_pred::enc_chroma_pred_v(pPred, cRec),
+        C_PRED_P => kernels::intra_pred::enc_chroma_pred_plane(pPred, cRec),
+        C_PRED_DC_L => gip::WelsIChromaPredDcLeft_c(pPred, cRec),
+        C_PRED_DC_T => gip::WelsIChromaPredDcTop_c(pPred, cRec),
+        C_PRED_DC_128 => gip::WelsIChromaPredDcNA_c(pPred, cRec),
+        _ => panic!("chroma prediction mode {iMode} is not one of the seven"),
+    }
+}
+
 /// `svc_base_layer_md.cpp:867`. Picks the 8x8 chroma prediction mode over Cb and Cr
 /// jointly and leaves the winning prediction in `pBestPredIntraChroma`.
 pub extern "C" fn WelsMdIntraChroma(
@@ -652,7 +673,10 @@ pub extern "C" fn WelsMdIntraChroma(
     let iAvailCount = g_kiIntraChromaAvailMode[iOffset][4] as i32;
     let kpAvailMode = &g_kiIntraChromaAvailMode[iOffset];
 
-    let pfMdCost8x8 = pFunc.sSampleDealingFuncs.md_cost(BLOCK_8x8).unwrap();
+    let pfMdCost8x8 = pFunc
+        .sSampleDealingFuncs
+        .md_cost(BLOCK_8x8)
+        .expect("pfMdCost selects an installed 8x8 slot");
     let pEncPicture = layer_enc_view_expect(pCurDqLayer);
     let (kiChrOrgX, kiChrOrgY) = pMbCache.SPicData.chroma_origin();
     let kiPredOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
@@ -662,11 +686,11 @@ pub extern "C" fn WelsMdIntraChroma(
         let iCurMode = kpAvailMode[i] as i32;
         debug_assert!((0..7).contains(&iCurMode));
 
-        let pfChromaPred = pFunc.pfGetChromaPred[iCurMode as usize].unwrap();
         // `pDstChma` is `sMemPredMb` at the chroma half's `iChmaIdx` 128-byte side;
         // as an offset it is that side's start, and the Cr block sits 64 beyond it.
         let kiDstOff = kiPredOff + 128 * iChmaIdx;
-        pfChromaPred(
+        ChromaPred(
+            iCurMode,
             (&mut pMbCache.sMemPredMb[kiDstOff..kiDstOff + 64])
                 .try_into()
                 .expect("a packed 8x8 chroma prediction block is 64 bytes"),
@@ -677,7 +701,8 @@ pub extern "C" fn WelsMdIntraChroma(
             &pEncPicture.plane(1).cursor(kiChrOrgX, kiChrOrgY),
         );
 
-        pfChromaPred(
+        ChromaPred(
+            iCurMode,
             (&mut pMbCache.sMemPredMb[kiDstOff + 64..kiDstOff + 128])
                 .try_into()
                 .expect("a packed 8x8 chroma prediction block is 64 bytes"),
@@ -1541,7 +1566,7 @@ pub fn WelsMdFirstIntraMode(
         (mbc.rec_y, mbc.enc_y)
     };
     let iCostI16x16 = crate::encoder::svc_mode_decision::WelsMdI16x16(
-        pFunc,
+        sc.md_cost16,
         &cRecLuma,
         &cEncLuma,
         pMbCache,
