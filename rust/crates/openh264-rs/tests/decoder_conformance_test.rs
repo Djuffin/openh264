@@ -569,3 +569,37 @@ asset_test!(
     "fmo_2groups_64x64.264",
     "6420bae4a88f86a0f3f54c94aee59b2c1e7b7319"
 );
+
+// ---------------------------------------------------------------------------
+// Custom 8x8 scaling lists
+//
+// `WelsCalcDeqCoeffScalingList` (`decode_slice.cpp:1486`) is the decoder's only
+// reader of `g_kuiMatrixV` (`common_tables.cpp:64`): it builds
+// `pDequant_coeff8x8[i][q][y]` as `iScalingList8x8[i][y] * g_kuiMatrixV[q % 6][y /
+// 8][y % 8]`. The table is therefore reachable only from a stream that both
+// signals a scaling matrix and codes 8x8 transform blocks, and no asset here did
+// both — `test_scalinglist_jm.264` above signals one with
+// `transform_8x8_mode_flag = 0`, so it dequantizes 4x4 only.
+//
+// Both assets are built by ffmpeg/libx264 (`-x264-params 8x8dct=1:cqm=jvt`), for
+// the reason `rust/tools/make_narrow_assets.py` gives for `grid_48x32.264`:
+// OpenH264's encoder has no `transform_8x8_mode_flag` to write. x264 carries
+// `cqm=jvt` in the **PPS** (`pic_scaling_matrix_present_flag = 1`) and leaves
+// lists 6 and 7 to the fall-back rule, which is what makes them non-flat.
+//
+//  * `_intra` — all-intra, CABAC: list 6 through `ParseResidualBlockCabac8x8`
+//    (`parse_mb_syn_cabac.cpp:1399`).
+//  * `_inter` — I+P, CAVLC: lists 6 and 7 through `WelsResidualBlockCavlc8x8`
+//    (`parse_mb_syn_cavlc.cpp:979`).
+//
+// The goldens are the C++ decoder's, and `ffmpeg -f rawvideo` agrees with both.
+asset_test!(
+    test_asset_cqm8x8_intra_176x144,
+    "cqm8x8_intra_176x144.264",
+    "42ee8dab05d3eff2e31219b2cf29ee9a8d1e1454"
+);
+asset_test!(
+    test_asset_cqm8x8_inter_176x144,
+    "cqm8x8_inter_176x144.264",
+    "af78d465b33871858868f29eb61b79e7a4c5e5e1"
+);
