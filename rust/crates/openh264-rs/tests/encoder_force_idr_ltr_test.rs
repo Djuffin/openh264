@@ -37,7 +37,13 @@ fn valid_size(x: i32) -> i32 {
 ///
 /// # Safety
 /// Uses the C ABI as a consumer does; every pointer is valid for its call.
-unsafe fn force_idr_frame_types(width: i32, height: i32, slices: i32, frames: usize, idr_interval: i32) -> Vec<i32> {
+unsafe fn force_idr_frame_types(
+    width: i32,
+    height: i32,
+    slices: i32,
+    frames: usize,
+    idr_interval: i32,
+) -> Vec<i32> {
     unsafe {
         let mut enc: *mut ISVCEncoder = std::ptr::null_mut();
         assert_eq!(WelsCreateSVCEncoder(&mut enc), CM_RESULT_SUCCESS);
@@ -69,7 +75,11 @@ unsafe fn force_idr_frame_types(width: i32, height: i32, slices: i32, frames: us
         );
 
         let set = |id: ENCODER_OPTION, p: *mut std::ffi::c_void| {
-            assert_eq!(ISVCEncoder::SetOption(enc, id, p), CM_RESULT_SUCCESS, "SetOption {id:?}");
+            assert_eq!(
+                ISVCEncoder::SetOption(enc, id, p),
+                CM_RESULT_SUCCESS,
+                "SetOption {id:?}"
+            );
         };
         let mut trace = 0i32; // WELS_LOG_QUIET
         set(

@@ -1,9 +1,5 @@
 #![deny(unsafe_code)]
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
 //! Exponential-Golomb entropy decoding and bitstream parsing routines.
@@ -61,9 +57,8 @@ pub const g_kuiIntra4x4CbpTable: [u8; 48] = [
 ];
 
 /// CAVLC Coded Block Pattern (CBP) lookup table for Intra 4x4 monochrome macroblocks (YUV 4:0:0).
-pub const g_kuiIntra4x4CbpTable400: [u8; 16] = [
-    15, 0, 7, 11, 13, 14, 3, 5, 10, 12, 1, 2, 4, 8, 6, 9,
-];
+pub const g_kuiIntra4x4CbpTable400: [u8; 16] =
+    [15, 0, 7, 11, 13, 14, 3, 5, 10, 12, 1, 2, 4, 8, 6, 9];
 
 /// CAVLC Coded Block Pattern (CBP) lookup table for Inter macroblocks (YUV 4:2:0).
 pub const g_kuiInterCbpTable: [u8; 48] = [
@@ -73,9 +68,7 @@ pub const g_kuiInterCbpTable: [u8; 48] = [
 ];
 
 /// CAVLC Coded Block Pattern (CBP) lookup table for Inter monochrome macroblocks (YUV 4:0:0).
-pub const g_kuiInterCbpTable400: [u8; 16] = [
-    0, 1, 2, 4, 8, 3, 5, 10, 12, 15, 7, 11, 13, 14, 6, 9,
-];
+pub const g_kuiInterCbpTable400: [u8; 16] = [0, 1, 2, 4, 8, 3, 5, 10, 12, 15, 7, 11, 13, 14, 6, 9];
 
 /// Fast lookup table mapping an 8-bit unsigned byte to its number of leading zero bits.
 pub const g_kuiLeadingZeroTable: [u8; 256] = [
@@ -98,9 +91,7 @@ pub const g_kuiLeadingZeroTable: [u8; 256] = [
 ];
 
 /// 16-entry lookup table mapping 4-bit nibbles to bit counts.
-pub const g_kuiPrefix8BitsTable: [u32; 16] = [
-    0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
-];
+pub const g_kuiPrefix8BitsTable: [u32; 16] = [0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3];
 
 // Helper Functions & Macros
 
@@ -304,7 +295,7 @@ macro_rules! WELS_CHECK_SE_UPPER_ERROR_NOLOG {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::bit_stream::{BsReader, DecInitBits, RawDataBuffer, READER_SLOP};
+    use crate::decoder::bit_stream::{BsReader, DecInitBits, READER_SLOP, RawDataBuffer};
 
     /// The reader family reads `READER_SLOP` bytes past the RBSP, so the tests
     /// supply it.

@@ -40,9 +40,7 @@ pub use crate::processing::complexity_analysis::{FRAME_SAD, GOM_SAD, GOM_VAR};
 // background macroblock detection, adaptive quantization delta-QP estimation),
 // scene change detection, scroll motion vector detection, and multi-reference picture ranking.
 use crate::encoder::picture::{PicPlanes, RecPicId, SrcPicId, SrcPicPool};
-use crate::{
-    EUsageType, SSourcePicture, VideoFormat,
-};
+use crate::{EUsageType, SSourcePicture, VideoFormat};
 
 // ============================================================================
 // Constants
@@ -50,14 +48,14 @@ use crate::{
 
 pub const MAX_REF_PIC_COUNT: usize = 16;
 // From `wels_const.h`.
-pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
-use crate::encoder::encoder_context::ctx_ltr_at;
-pub use crate::encoder::encoder_context::SRefList;
-pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::encoder_context::SLTRState;
 pub use crate::encoder::encoder_context::SLogContext;
+pub use crate::encoder::encoder_context::SRefList;
+use crate::encoder::encoder_context::ctx_ltr_at;
+pub use crate::encoder::encoder_context::{MAX_GOP_SIZE, MAX_SHORT_REF_COUNT, MAX_TEMPORAL_LEVEL};
 pub use crate::encoder::param_svc::SSpatialLayerInternal;
 pub use crate::encoder::param_svc::SWelsSvcCodingParam;
+pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::rc::SWelsSvcRc;
 pub const INVALID_TEMPORAL_ID: u8 = 0xff;
 pub const STATIC_SCENE_MOTION_RATIO: f32 = 0.01;
@@ -698,8 +696,6 @@ impl VaaBlock {
 // Core Structures: SPicture, Parameters, Context, and Plugins
 // ============================================================================
 
-
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SPosOffset {
@@ -709,16 +705,11 @@ pub struct SPosOffset {
     pub iHeight: i32,
 }
 
-
-
-
-
-
 // The canonical encoder context. `SSpatialPicIndex` is the name C++ uses
 // (`encoder_context.h:198`).
-pub use crate::encoder::encoder_context::{sWelsEncCtx, SSpatialPicIndex};
 pub use crate::common::wels_common_defs::EWelsSliceType;
 use crate::common::wels_trace::{WELS_LOG_DEBUG, WELS_LOG_ERROR, WelsLog};
+pub use crate::encoder::encoder_context::{SSpatialPicIndex, sWelsEncCtx};
 use crate::encoder::picture::SScreenBlockFeatureStorage;
 use crate::encoder::rec_view::RoPicView;
 use crate::processing::SWelsVpContext;
@@ -769,26 +760,28 @@ pub unsafe fn WelsMoveMemory_c(
     iSrcStrideV: i32,
     iWidth: i32,
     iHeight: i32,
-) { unsafe {
-    let iWidth2 = (iWidth >> 1) as usize;
-    let iHeight2 = iHeight >> 1;
-    let iWidthY = iWidth as usize;
+) {
+    unsafe {
+        let iWidth2 = (iWidth >> 1) as usize;
+        let iHeight2 = iHeight >> 1;
+        let iWidthY = iWidth as usize;
 
-    for _ in 0..iHeight {
-        std::ptr::copy_nonoverlapping(pSrcY, pDstY, iWidthY);
-        pDstY = pDstY.offset(iDstStrideY as isize);
-        pSrcY = pSrcY.offset(iSrcStrideY as isize);
-    }
+        for _ in 0..iHeight {
+            std::ptr::copy_nonoverlapping(pSrcY, pDstY, iWidthY);
+            pDstY = pDstY.offset(iDstStrideY as isize);
+            pSrcY = pSrcY.offset(iSrcStrideY as isize);
+        }
 
-    for _ in 0..iHeight2 {
-        std::ptr::copy_nonoverlapping(pSrcU, pDstU, iWidth2);
-        std::ptr::copy_nonoverlapping(pSrcV, pDstV, iWidth2);
-        pDstU = pDstU.offset(iDstStrideU as isize);
-        pDstV = pDstV.offset(iDstStrideV as isize);
-        pSrcU = pSrcU.offset(iSrcStrideU as isize);
-        pSrcV = pSrcV.offset(iSrcStrideV as isize);
+        for _ in 0..iHeight2 {
+            std::ptr::copy_nonoverlapping(pSrcU, pDstU, iWidth2);
+            std::ptr::copy_nonoverlapping(pSrcV, pDstV, iWidth2);
+            pDstU = pDstU.offset(iDstStrideU as isize);
+            pDstV = pDstV.offset(iDstStrideV as isize);
+            pSrcU = pSrcU.offset(iSrcStrideU as isize);
+            pSrcV = pSrcV.offset(iSrcStrideV as isize);
+        }
     }
-}}
+}
 
 /// Updates the spatial index map pointer for a dependency layer.
 #[inline]
@@ -875,9 +868,8 @@ pub fn AllocPicture(
     if iNeedFeatureStorage != 0 {
         // picture_handle.cpp:115 -> RequestScreenBlockFeatureStorage.
         let kiFeatureStrategyIndex = (iNeedFeatureStorage >> 16) as u8;
-        let kiMe8x8FME = iNeedFeatureStorage
-            & 0x0000FF
-            & crate::encoder::svc_motion_estimate::ME_FME as i32;
+        let kiMe8x8FME =
+            iNeedFeatureStorage & 0x0000FF & crate::encoder::svc_motion_estimate::ME_FME as i32;
         let kiMe16x16FME = ((iNeedFeatureStorage & 0x00FF00) >> 8)
             & crate::encoder::svc_motion_estimate::ME_FME as i32;
         if kiMe8x8FME == crate::encoder::svc_motion_estimate::ME_FME as i32
@@ -893,23 +885,18 @@ pub fn AllocPicture(
         // constants (`kiNeedFeatureStorage = 0x0307`) it is true: margin 8,
         // `LIST_SIZE_SUM_8x8` entries.
         let bIsBlock8x8 = kiMe8x8FME == crate::encoder::svc_motion_estimate::ME_FME as i32;
-        pic.pScreenBlockFeatureStorage = Some(Box::new(
-            SScreenBlockFeatureStorage::for_frame(
-                kiWidth,
-                kiHeight,
-                bIsBlock8x8,
-                kiFeatureStrategyIndex,
-            ),
-        ));
+        pic.pScreenBlockFeatureStorage = Some(Box::new(SScreenBlockFeatureStorage::for_frame(
+            kiWidth,
+            kiHeight,
+            bIsBlock8x8,
+            kiFeatureStrategyIndex,
+        )));
     }
     Some(pic)
 }
 
 /// Initializes scaled intermediate picture buffers if aspect-ratio scaling is required.
-pub fn WelsInitScaledPic(
-    pParam: &SWelsSvcCodingParam,
-    pScaledPicture: &mut Scaled_Picture,
-) -> i32 {
+pub fn WelsInitScaledPic(pParam: &SWelsSvcCodingParam, pScaledPicture: &mut Scaled_Picture) -> i32 {
     let bInputPicNeedScaling = JudgeNeedOfScaling(pParam, pScaledPicture);
     if bInputPicNeedScaling {
         pScaledPicture.pScaledInputPicture = AllocPicture(
@@ -928,9 +915,11 @@ pub fn WelsInitScaledPic(
             .expect("just allocated");
         let (kiW, kiH) = (pPic.iWidthInPixel, pPic.iHeightInPixel);
         let [py, pu, pv] = pPic.planes_mut3();
-        for (plane, kiPlaneW, kiPlaneH) in
-            [(py, kiW, kiH), (pu, kiW >> 1, kiH >> 1), (pv, kiW >> 1, kiH >> 1)]
-        {
+        for (plane, kiPlaneW, kiPlaneH) in [
+            (py, kiW, kiH),
+            (pu, kiW >> 1, kiH >> 1),
+            (pv, kiW >> 1, kiH >> 1),
+        ] {
             let (o, kiStride) = (plane.origin(), plane.stride() as i32);
             ClearEndOfLinePadding(&mut plane.as_mut_slice()[o..], kiStride, kiPlaneW, kiPlaneH);
         }
@@ -1037,11 +1026,7 @@ impl CWelsPreProcess {
     ///
     /// # Panics
     /// If both name the same picture.
-    pub fn src_pair_mut(
-        &mut self,
-        a: SrcPicRef,
-        b: SrcPicRef,
-    ) -> (&mut SPicture, &mut SPicture) {
+    pub fn src_pair_mut(&mut self, a: SrcPicRef, b: SrcPicRef) -> (&mut SPicture, &mut SPicture) {
         match (a, b) {
             (SrcPicRef::Pooled(x), SrcPicRef::Pooled(y)) => self.m_pSpatialPicPool.pair_mut(x, y),
             (SrcPicRef::Pooled(x), SrcPicRef::Scaled) => {
@@ -1118,8 +1103,7 @@ impl CWelsPreProcess {
             let kuiLayerInTemporal = (2 + highestTid.max(1)) as u8;
             // wels_preprocess.cpp:180 — the sum is computed in int and narrowed to
             // uint8_t, so kuiRefNumInTemporal really is a uint8_t.
-            let kuiRefNumInTemporal: u8 =
-                (kuiLayerInTemporal as i32 + pParam.iLTRRefNum) as u8;
+            let kuiRefNumInTemporal: u8 = (kuiLayerInTemporal as i32 + pParam.iLTRRefNum) as u8;
 
             self.m_uiSpatialPicNum[idx] = kuiRefNumInTemporal;
             let mut i: u8 = 0;
@@ -1278,7 +1262,10 @@ impl CWelsPreProcess {
             false,
         );
 
-        if pCtx.param().bEnableSceneChangeDetect && pCtx.vaa().is_some() && !pCtx.vaa_expect().bIdrPeriodFlag {
+        if pCtx.param().bEnableSceneChangeDetect
+            && pCtx.vaa().is_some()
+            && !pCtx.vaa_expect().bIdrPeriodFlag
+        {
             if pCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
                 let idc = if pCtx.param().sDependencyLayers[depIdx].bEncCurFrmAsIdrFlag {
                     ESceneChangeIdc::LARGE_CHANGED_SCENE
@@ -1286,7 +1273,8 @@ impl CWelsPreProcess {
                     self.DetectSceneChange(pCtx, pDstPic, None)
                 };
                 pCtx.vaa_expect_mut().eSceneChangeIdc = idc;
-                pCtx.vaa_expect_mut().bSceneChangeFlag = idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
+                pCtx.vaa_expect_mut().bSceneChangeFlag =
+                    idc == ESceneChangeIdc::LARGE_CHANGED_SCENE;
             } else if !pCtx.param().sDependencyLayers[depIdx].bEncCurFrmAsIdrFlag
                 && (pCtx.param().sDependencyLayers[depIdx].iCodingIndex
                     & (pCtx.param().uiGopSize as i32 - 1))
@@ -1359,15 +1347,7 @@ impl CWelsPreProcess {
                 let iShrinkH = self.m_sScaledPicture.iScaledHeight[curDepIdx];
 
                 self.DownsamplePadding(
-                    pSrcPic,
-                    pDst,
-                    iSrcW,
-                    iSrcH,
-                    iShrinkW,
-                    iShrinkH,
-                    iTargetW,
-                    iTargetH,
-                    true,
+                    pSrcPic, pDst, iSrcW, iSrcH, iShrinkW, iShrinkH, iTargetW, iTargetH, true,
                 );
 
                 if tId != INVALID_TEMPORAL_ID {
@@ -1389,8 +1369,8 @@ impl CWelsPreProcess {
         let dIdx = kiDidx as usize;
         let bNeededMbAq =
             pCtx.param().bEnableAdaptiveQuant && (pCtx.eSliceType == EWelsSliceType::P_SLICE);
-        let bCalculateBGD = (pCtx.eSliceType == EWelsSliceType::P_SLICE)
-            && pCtx.param().bEnableBackgroundDetection;
+        let bCalculateBGD =
+            (pCtx.eSliceType == EWelsSliceType::P_SLICE) && pCtx.param().bEnableBackgroundDetection;
         let kbEnableBackgroundDetection = pCtx.param().bEnableBackgroundDetection;
         let kiUsageType = pCtx.param().iUsageType;
         let iCurTemporalIdx = self.m_uiSpatialLayersInTemporal[dIdx] as i32 - 1;
@@ -1400,15 +1380,14 @@ impl CWelsPreProcess {
             let p = &pCtx.param().sDependencyLayers[dIdx];
             (p.iDecompositionStages, p.iCodingIndex)
         };
-        let stageIdx =
-            kiDecompositionStages.max(0).min(MAX_TEMPORAL_LEVEL as i32 - 1) as usize;
+        let stageIdx = kiDecompositionStages
+            .max(0)
+            .min(MAX_TEMPORAL_LEVEL as i32 - 1) as usize;
         let gopIdx = (kiCodingIndex & gopMask) as usize;
         let mut iRefTemporalIdx = g_kuiRefTemporalIdx[stageIdx][gopIdx] as i32;
 
         let uiDidForLtr = pCtx.uiDependencyId as usize;
-        if pCtx.uiTemporalId == 0
-            && ctx_ltr_at(pCtx, uiDidForLtr).bReceivedT0LostFlag
-        {
+        if pCtx.uiTemporalId == 0 && ctx_ltr_at(pCtx, uiDidForLtr).bReceivedT0LostFlag {
             iRefTemporalIdx = self.m_uiSpatialLayersInTemporal[dIdx] as i32
                 + pCtx.vaa_expect().uiValidLongTermPicIdx as i32;
         }
@@ -1452,11 +1431,17 @@ impl CWelsPreProcess {
             // plane roots. Two slots hold two distinct buffers, so equal roots is
             // equal slots, and the handle comparison is the same question asked
             // directly.
-            let bCalculateSQDiff =
-                pLastPic.is_some() && pLastPic == pRefPic && bNeededMbAq;
+            let bCalculateSQDiff = pLastPic.is_some() && pLastPic == pRefPic && bNeededMbAq;
 
             if let Some(pVaa) = pCtx.vaa_mut() {
-                self.VaaCalculation(pVaa, pCurPic, pRefPic, bCalculateSQDiff, bCalculateVar, bCalculateBGD);
+                self.VaaCalculation(
+                    pVaa,
+                    pCurPic,
+                    pRefPic,
+                    bCalculateSQDiff,
+                    bCalculateVar,
+                    bCalculateBGD,
+                );
             }
 
             if kbEnableBackgroundDetection {
@@ -1491,8 +1476,8 @@ impl CWelsPreProcess {
                 .m_pSpatialPicPool
                 .get_mut(pCurPic.expect("the spatial pool is allocated"))
                 .planes();
-            let iMbNum = ((sCurGeom.iWidthInPixel + 15) >> 4)
-                * ((sCurGeom.iHeightInPixel + 15) >> 4);
+            let iMbNum =
+                ((sCurGeom.iWidthInPixel + 15) >> 4) * ((sCurGeom.iHeightInPixel + 15) >> 4);
             let (aq, mut bg, mut sad, mut ssd, mut sd, mut mad, mut sum, mut sqsum) =
                 (0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64);
             for i in 0..iMbNum as isize {
@@ -1518,7 +1503,14 @@ impl CWelsPreProcess {
                 bCalculateBGD as i32,
                 v.sVaaCalcInfo.iFrameSad,
                 v.sAdaptiveQuantParam.iAverMotionTextureIndexToDeltaQp,
-                aq, bg, sad, sd, mad, ssd, sum, sqsum,
+                aq,
+                bg,
+                sad,
+                sd,
+                mad,
+                ssd,
+                sum,
+                sqsum,
                 v.bSceneChangeFlag as i32
             );
         }
@@ -1588,7 +1580,9 @@ impl CWelsPreProcess {
         iCurTid: i8,
         kiDidx: i32,
     ) -> i32 {
-        if pCtx.param_opt().is_none() || pCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+        if pCtx.param_opt().is_none()
+            || pCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME
+        {
             return 0;
         }
 
@@ -1597,7 +1591,8 @@ impl CWelsPreProcess {
 
         let kiCurPos = self.GetCurPicPosition(kiDidx);
         if (iCurTid as i32) < kiCurPos || pCtx.param().iDecompStages == 0 {
-            if (iCurTid as usize) >= MAX_TEMPORAL_LEVEL || (kiCurPos as usize) > MAX_TEMPORAL_LEVEL {
+            if (iCurTid as usize) >= MAX_TEMPORAL_LEVEL || (kiCurPos as usize) > MAX_TEMPORAL_LEVEL
+            {
                 self.InitLastSpatialPictures(pCtx);
                 return 1;
             }
@@ -1702,8 +1697,7 @@ impl CWelsPreProcess {
                 // same shape `BilateralDenoising` has). `src_pair_mut` is safe to
                 // use here because this arm runs only when the two differ in size,
                 // so they cannot be the same picture.
-                let mut scratch =
-                    std::mem::take(&mut self.m_vp.sDownsample.m_pSampleBuffer);
+                let mut scratch = std::mem::take(&mut self.m_vp.sDownsample.m_pSampleBuffer);
                 let (srcPic, dstPic) = self.src_pair_mut(srcRef, dstRef);
                 {
                     let [sy, su, sv] = srcPic.planes_mut3();
@@ -1732,11 +1726,7 @@ impl CWelsPreProcess {
                         width: iShrinkWidth,
                         height: iShrinkHeight,
                     };
-                    iRet = Downsample(
-                        &mut scratch,
-                        &src,
-                        &mut dst,
-                    );
+                    iRet = Downsample(&mut scratch, &src, &mut dst);
                 }
                 self.m_vp.sDownsample.m_pSampleBuffer = scratch;
             } else {
@@ -1783,7 +1773,11 @@ impl CWelsPreProcess {
         };
         // The plugin and the pool are sibling fields, split by destructure so the
         // pass can run while both pictures stay borrowed.
-        let CWelsPreProcess { m_vp, m_pSpatialPicPool, .. } = &mut *self;
+        let CWelsPreProcess {
+            m_vp,
+            m_pSpatialPicPool,
+            ..
+        } = &mut *self;
         let (kpCur, kpRef) = (m_pSpatialPicPool.get(idCur), m_pSpatialPicPool.get(idRef));
         let (kpCurY, kpRefY) = (kpCur.plane_tail(0), kpRef.plane_tail(0));
         pVaaInfo.sVaaCalcInfo.pCurY = kpCurY.as_ptr() as usize;
@@ -1815,7 +1809,10 @@ impl CWelsPreProcess {
         m_vp.sVaaCalc.Process(
             &sCurPixMap,
             &sRefPixMap,
-            VaaCalcPlanes { cur: kpCurY, refp: kpRefY },
+            VaaCalcPlanes {
+                cur: kpCurY,
+                refp: kpRefY,
+            },
             &mut pVaaInfo.sVaaCalcInfo,
         );
     }
@@ -1831,7 +1828,11 @@ impl CWelsPreProcess {
             return;
         };
         // As at `VaaCalculation` — the plugin and the pool split by destructure.
-        let CWelsPreProcess { m_vp, m_pSpatialPicPool, .. } = &mut *self;
+        let CWelsPreProcess {
+            m_vp,
+            m_pSpatialPicPool,
+            ..
+        } = &mut *self;
         let kpCur = m_pSpatialPicPool.get(idCur);
         let kpRef = pRefPicture.map(|id| m_pSpatialPicPool.get(id));
         if let (true, Some(kpRef)) = (bDetectFlag, kpRef) {
@@ -1841,10 +1842,8 @@ impl CWelsPreProcess {
             pVaaInfo.iPicStrideUV = kpCur.stride(1);
             // Rebuilt every frame, as the layer's views are: the pool may hand the
             // next frame a different slot.
-            pVaaInfo.pCurView =
-                Some(RoPicView::build(kpCur));
-            pVaaInfo.pRefView =
-                Some(RoPicView::build(kpRef));
+            pVaaInfo.pCurView = Some(RoPicView::build(kpCur));
+            pVaaInfo.pRefView = Some(RoPicView::build(kpRef));
 
             let mut sSrcPixMap = SPixMap::default();
             let mut sRefPixMap = SPixMap::default();
@@ -1870,13 +1869,25 @@ impl CWelsPreProcess {
             // stashes it — see `CBackgroundDetection::Set` — but the call stays,
             // because the C++ makes it and the port mirrors the sequence.
             m_vp.sBackgroundDetection.Set(&BGDParam);
-            let SVAAFrameInfo { sVaaCalcInfo, pVaaBackgroundMbFlag, .. } = pVaaInfo;
+            let SVAAFrameInfo {
+                sVaaCalcInfo,
+                pVaaBackgroundMbFlag,
+                ..
+            } = pVaaInfo;
             m_vp.sBackgroundDetection.Process(
                 &sSrcPixMap,
                 &sRefPixMap,
                 &BgdPlanes {
-                    cur: [kpCur.plane_tail(0), kpCur.plane_tail(1), kpCur.plane_tail(2)],
-                    refp: [kpRef.plane_tail(0), kpRef.plane_tail(1), kpRef.plane_tail(2)],
+                    cur: [
+                        kpCur.plane_tail(0),
+                        kpCur.plane_tail(1),
+                        kpCur.plane_tail(2),
+                    ],
+                    refp: [
+                        kpRef.plane_tail(0),
+                        kpRef.plane_tail(1),
+                        kpRef.plane_tail(2),
+                    ],
                 },
                 sVaaCalcInfo,
                 pVaaBackgroundMbFlag,
@@ -1900,12 +1911,18 @@ impl CWelsPreProcess {
             return;
         };
         // As at `VaaCalculation` — the plugin and the pool split by destructure.
-        let CWelsPreProcess { m_vp, m_pSpatialPicPool, .. } = &mut *self;
+        let CWelsPreProcess {
+            m_vp,
+            m_pSpatialPicPool,
+            ..
+        } = &mut *self;
         let (kpCur, kpRef) = (m_pSpatialPicPool.get(idCur), m_pSpatialPicPool.get(idRef));
         // The C++ stored `&pVaaInfo->sVaaCalcInfo` *inside* `pVaaInfo` here
         // (`sAdaptiveQuantParam.pCalcResult`) — a self-pointer; the result is
         // handed over at the `Process` call instead.
-        pVaaInfo.sAdaptiveQuantParam.iAverMotionTextureIndexToDeltaQp = 0;
+        pVaaInfo
+            .sAdaptiveQuantParam
+            .iAverMotionTextureIndexToDeltaQp = 0;
 
         let mut pSrc = SPixMap::default();
         let mut pRef = SPixMap::default();
@@ -2095,7 +2112,10 @@ impl CWelsPreProcess {
         let kiDstStrideV = pDstPic.iLineSize[2];
 
         if !pSrcY.is_null() {
-            if iSrcWidth <= 0 || iSrcHeight <= 0 || (iSrcWidth * iSrcHeight > (MAX_MBS_PER_FRAME << 8)) {
+            if iSrcWidth <= 0
+                || iSrcHeight <= 0
+                || (iSrcWidth * iSrcHeight > (MAX_MBS_PER_FRAME << 8))
+            {
                 return ENC_RETURN_INVALIDINPUT;
             }
             if kiSrcTopOffsetY >= iSrcHeight
@@ -2139,22 +2159,22 @@ impl CWelsPreProcess {
         // its strides promise — is the API's contract, named on the callee.
         #[allow(unsafe_code)]
         unsafe {
-        WelsMoveMemory_c(
-            pDstY,
-            pDstU,
-            pDstV,
-            kiDstStrideY,
-            kiDstStrideU,
-            kiDstStrideV,
-            pSrcY,
-            pSrcU,
-            pSrcV,
-            kiSrcStrideY,
-            kiSrcStrideU,
-            kiSrcStrideV,
-            iSrcWidth,
-            iSrcHeight,
-        );
+            WelsMoveMemory_c(
+                pDstY,
+                pDstU,
+                pDstV,
+                kiDstStrideY,
+                kiDstStrideU,
+                kiDstStrideV,
+                pSrcY,
+                pSrcU,
+                pSrcV,
+                kiSrcStrideY,
+                kiSrcStrideU,
+                kiSrcStrideV,
+                iSrcWidth,
+                iSrcHeight,
+            );
         }
 
         if kiTargetWidth > iSrcWidth || kiTargetHeight > iSrcHeight {
@@ -2246,7 +2266,8 @@ impl CWelsPreProcess {
 
         let iRet = m_vp.sSceneChangeDetection.Process(&sSrcPixMap, &planes);
         if iRet == 0 {
-            m_vp.sSceneChangeDetection.Get(&mut sSceneChangeDetectResult);
+            m_vp.sSceneChangeDetection
+                .Get(&mut sSceneChangeDetectResult);
         }
         sSceneChangeDetectResult.eSceneChangeIdc
     }
@@ -2274,9 +2295,8 @@ impl CWelsPreProcess {
         }
 
         // The layer's spatial list from index 1 — the C++ passes `&m_pSpatialPic[d][1]`.
-        let pRefPicList: [Option<SrcPicId>; MAX_REF_PIC_COUNT] = std::array::from_fn(|i| {
-            self.m_pSpatialPic[iTargetDid as usize][i + 1]
-        });
+        let pRefPicList: [Option<SrcPicId>; MAX_REF_PIC_COUNT] =
+            std::array::from_fn(|i| self.m_pSpatialPic[iTargetDid as usize][i + 1]);
         let mut sAvailableRefParam = [SRefInfoParam::default(); MAX_REF_PIC_COUNT];
         let mut iAvailableRefNum = 0;
         let mut iAvailableSceneRefNum = 0;
@@ -2332,8 +2352,8 @@ impl CWelsPreProcess {
         self.InitRefJudgement(&mut sLtrJudgement);
         self.InitRefJudgement(&mut sSceneLtrJudgement);
 
-        let iNegligibleMotionBlocks = ((sCur.iWidthInPixel >> 3)
-            * (sCur.iHeightInPixel >> 3)) as f32
+        let iNegligibleMotionBlocks = ((sCur.iWidthInPixel >> 3) * (sCur.iHeightInPixel >> 3))
+            as f32
             * STATIC_SCENE_MOTION_RATIO;
         let iNegligibleBlocks = iNegligibleMotionBlocks as i32;
 
@@ -2346,7 +2366,11 @@ impl CWelsPreProcess {
             ((sSrcMap.sRect.iRectWidth >> 3) * (sSrcMap.sRect.iRectHeight >> 3)).max(0) as usize;
 
         for iScdIdx in 0..iAvailableRefNum {
-            let pCurBlockStaticPointer = pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").pVaaBlockStaticIdc.select(iScdIdx as usize);
+            let pCurBlockStaticPointer = pCtx
+                .vaa_ext_ref_mut()
+                .expect("guarded at this body's head")
+                .pVaaBlockStaticIdc
+                .select(iScdIdx as usize);
             let mut sSceneChangeResult = SSceneChangeResult::default();
             sSceneChangeResult.eSceneChangeIdc = ESceneChangeIdc::SIMILAR_SCENE;
             sSceneChangeResult.pStaticBlockIdc = pCurBlockStaticPointer;
@@ -2358,8 +2382,7 @@ impl CWelsPreProcess {
             let sRefGeom = self.m_pSpatialPicPool.get_mut(idRefPic).planes();
             Self::InitPixMap(&sRefGeom, &mut sRefMap);
 
-            let bIsClosestLtrFrame =
-                self.src_id(idRefPic).iLongTermPicNum == iClosestLtrFrameNum;
+            let bIsClosestLtrFrame = self.src_id(idRefPic).iLongTermPicNum == iClosestLtrFrameNum;
 
             // **The two plugin calls, inside one tightly scoped borrow of three
             // fields of `self`.** `self.src(..)` and `self.src_id(..)`
@@ -2371,7 +2394,12 @@ impl CWelsPreProcess {
             // The scope ends before the judgement code, which wants `self` whole
             // again (`JudgeBestRef`, `SaveBestRefToLocal`, `src_id`).
             let ret = {
-                let Self { m_pSpatialPicPool, m_sScaledPicture, m_vp, .. } = self;
+                let Self {
+                    m_pSpatialPicPool,
+                    m_sScaledPicture,
+                    m_vp,
+                    ..
+                } = self;
                 let cur_pic: &SPicture = match pCurPicture {
                     SrcPicRef::Pooled(id) => m_pSpatialPicPool.get(id),
                     SrcPicRef::Scaled => m_sScaledPicture
@@ -2408,12 +2436,10 @@ impl CWelsPreProcess {
                         // Ensure detected scroll motion vectors stay within the
                         // configured motion vector range.
                         if pScrollDetectInfo.bScrollDetectFlag {
-                            pScrollDetectInfo.iScrollMvX = pScrollDetectInfo
-                                .iScrollMvX
-                                .clamp(-kiMvRange, kiMvRange);
-                            pScrollDetectInfo.iScrollMvY = pScrollDetectInfo
-                                .iScrollMvY
-                                .clamp(-kiMvRange, kiMvRange);
+                            pScrollDetectInfo.iScrollMvX =
+                                pScrollDetectInfo.iScrollMvX.clamp(-kiMvRange, kiMvRange);
+                            pScrollDetectInfo.iScrollMvY =
+                                pScrollDetectInfo.iScrollMvY.clamp(-kiMvRange, kiMvRange);
                         }
                     }
                     sSceneChangeResult.sScrollResult = pCtx
@@ -2444,7 +2470,8 @@ impl CWelsPreProcess {
                             .sSceneChangeDetectionScreen
                             .Process(&sSrcMap, &planes, row);
                         if ret == 0 {
-                            m_vp.sSceneChangeDetectionScreen.Get(&mut sSceneChangeResult);
+                            m_vp.sSceneChangeDetectionScreen
+                                .Get(&mut sSceneChangeResult);
                         }
                         ret
                     }
@@ -2453,7 +2480,6 @@ impl CWelsPreProcess {
 
             {
                 if ret == 0 {
-
                     let iFrameComplexity = sSceneChangeResult.iFrameComplexity;
                     let iSceneDetectIdc = sSceneChangeResult.eSceneChangeIdc;
                     let iMotionBlockNum = sSceneChangeResult.iMotionBlockNum;
@@ -2468,15 +2494,37 @@ impl CWelsPreProcess {
                         iNumOfMediumChangeToLtr += 1;
                     }
 
-                    if self.JudgeBestRef(idRefPic, &sLtrJudgement, iFrameComplexity, bIsClosestLtrFrame) {
-                        self.SaveBestRefToJudgement(iRefPicAvQP, iFrameComplexity, &mut sLtrJudgement);
+                    if self.JudgeBestRef(
+                        idRefPic,
+                        &sLtrJudgement,
+                        iFrameComplexity,
+                        bIsClosestLtrFrame,
+                    ) {
+                        self.SaveBestRefToJudgement(
+                            iRefPicAvQP,
+                            iFrameComplexity,
+                            &mut sLtrJudgement,
+                        );
                         self.SaveBestRefToLocal(pRefPicInfo, &sSceneChangeResult, &mut sLtrSaved);
                     }
                     if bCurRefIsSceneLtr
-                        && self.JudgeBestRef(idRefPic, &sSceneLtrJudgement, iFrameComplexity, bIsClosestLtrFrame)
+                        && self.JudgeBestRef(
+                            idRefPic,
+                            &sSceneLtrJudgement,
+                            iFrameComplexity,
+                            bIsClosestLtrFrame,
+                        )
                     {
-                        self.SaveBestRefToJudgement(iRefPicAvQP, iFrameComplexity, &mut sSceneLtrJudgement);
-                        self.SaveBestRefToLocal(pRefPicInfo, &sSceneChangeResult, &mut sSceneLtrSaved);
+                        self.SaveBestRefToJudgement(
+                            iRefPicAvQP,
+                            iFrameComplexity,
+                            &mut sSceneLtrJudgement,
+                        );
+                        self.SaveBestRefToLocal(
+                            pRefPicInfo,
+                            &sSceneChangeResult,
+                            &mut sSceneLtrSaved,
+                        );
                     }
 
                     if iMotionBlockNum <= iNegligibleBlocks {
@@ -2506,17 +2554,35 @@ impl CWelsPreProcess {
             ),
         );
 
-        self.SaveBestRefToVaa(&sLtrSaved, &mut pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").sVaaStrBestRefCandidate[0]);
+        self.SaveBestRefToVaa(
+            &sLtrSaved,
+            &mut pCtx
+                .vaa_ext_ref_mut()
+                .expect("guarded at this body's head")
+                .sVaaStrBestRefCandidate[0],
+        );
         if let Some(id) = sLtrSaved.pRefPicture {
-            pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").iVaaBestRefFrameNum = self.src_id(id).iFrameNum;
+            pCtx.vaa_ext_ref_mut()
+                .expect("guarded at this body's head")
+                .iVaaBestRefFrameNum = self.src_id(id).iFrameNum;
         }
-        pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").pVaaBestBlockStaticIdc = sLtrSaved.pBestBlockStaticIdc;
+        pCtx.vaa_ext_ref_mut()
+            .expect("guarded at this body's head")
+            .pVaaBestBlockStaticIdc = sLtrSaved.pBestBlockStaticIdc;
 
         if iAvailableSceneRefNum > 0 {
-            self.SaveBestRefToVaa(&sSceneLtrSaved, &mut pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").sVaaLtrBestRefCandidate[0]);
+            self.SaveBestRefToVaa(
+                &sSceneLtrSaved,
+                &mut pCtx
+                    .vaa_ext_ref_mut()
+                    .expect("guarded at this body's head")
+                    .sVaaLtrBestRefCandidate[0],
+            );
         }
 
-        pCtx.vaa_ext_ref_mut().expect("guarded at this body's head").iNumOfAvailableRef = 1;
+        pCtx.vaa_ext_ref_mut()
+            .expect("guarded at this body's head")
+            .iNumOfAvailableRef = 1;
         iVaaFrameSceneChangeIdc
     }
 
@@ -2714,11 +2780,7 @@ impl CWelsPreProcess {
     /// array feeds the complexity analyser: the first confirmed long-term reference
     /// when LTR is on and a T0 frame was lost, otherwise the first usable short-term
     /// reference at or below the current temporal id.
-    pub fn SetRefMbType(
-        &self,
-        pCtx: &mut sWelsEncCtx,
-        _iRefPicType: i32,
-    ) -> Option<RecPicId> {
+    pub fn SetRefMbType(&self, pCtx: &mut sWelsEncCtx, _iRefPicType: i32) -> Option<RecPicId> {
         let uiTid = pCtx.uiTemporalId;
         let uiDid = pCtx.uiDependencyId;
         let bLtrRecovery = pCtx.param().bEnableLongTermReference
@@ -2798,7 +2860,11 @@ impl CWelsPreProcess {
                 pWelsSvcRc.pCurrentFrameGomSad.fill(0);
                 pWelsSvcRc.iGomSize
             };
-            let kiIdrFlag = if eSliceType == EWelsSliceType::I_SLICE { 1 } else { 0 };
+            let kiIdrFlag = if eSliceType == EWelsSliceType::I_SLICE {
+                1
+            } else {
+                0
+            };
 
             let Some(pVaaExt) = pCtx.vaa_ext_ref_mut() else {
                 return;
@@ -2912,19 +2978,20 @@ impl CWelsPreProcess {
             let eSliceType = pCtx.eSliceType;
 
             let kiRCMode = pCtx.param().iRCMode as i32;
-            let iComplexityAnalysisMode = if kiRCMode == RC_QUALITY_MODE && eSliceType == EWelsSliceType::P_SLICE {
-                FRAME_SAD
-            } else if ((kiRCMode == RC_BITRATE_MODE) || (kiRCMode == RC_TIMESTAMP_MODE))
-                && eSliceType == EWelsSliceType::P_SLICE
-            {
-                GOM_SAD
-            } else if ((kiRCMode == RC_BITRATE_MODE) || (kiRCMode == RC_TIMESTAMP_MODE))
-                && eSliceType == EWelsSliceType::I_SLICE
-            {
-                GOM_VAR
-            } else {
-                return;
-            };
+            let iComplexityAnalysisMode =
+                if kiRCMode == RC_QUALITY_MODE && eSliceType == EWelsSliceType::P_SLICE {
+                    FRAME_SAD
+                } else if ((kiRCMode == RC_BITRATE_MODE) || (kiRCMode == RC_TIMESTAMP_MODE))
+                    && eSliceType == EWelsSliceType::P_SLICE
+                {
+                    GOM_SAD
+                } else if ((kiRCMode == RC_BITRATE_MODE) || (kiRCMode == RC_TIMESTAMP_MODE))
+                    && eSliceType == EWelsSliceType::I_SLICE
+                {
+                    GOM_VAR
+                } else {
+                    return;
+                };
 
             let mut idRefMbType: Option<RecPicId> = None;
             if let Some(idRef) = sRefPic {
@@ -3057,7 +3124,11 @@ impl CWelsPreProcess {
         // Same borrow plan as `DetectSceneChangeScreen`: the pool and the plugin
         // table are named as fields, so a shared borrow of the source picture can sit
         // beside the `&mut` on `m_vp`.
-        let Self { m_pSpatialPicPool, m_vp, .. } = self;
+        let Self {
+            m_pSpatialPicPool,
+            m_vp,
+            ..
+        } = self;
 
         let src_pic = m_pSpatialPicPool.get(idSrc);
         let src_y = src_pic.plane(0);
@@ -3100,7 +3171,8 @@ impl CWelsPreProcess {
             .sSceneChangeDetectionScreen
             .Process(&sSrcMap, &planes, pCurBlockStaticIdc);
         if iRet == 0 {
-            m_vp.sSceneChangeDetectionScreen.Get(&mut sSceneChangeResult);
+            m_vp.sSceneChangeDetectionScreen
+                .Get(&mut sSceneChangeResult);
             return 0;
         }
         iRet
@@ -3113,7 +3185,6 @@ impl CWelsPreProcess {
         kiCurDid: i32,
         kuiShortRefCount: u32,
     ) {
-
         let bCur = match pCurPicture {
             Some(id) => {
                 let p = self.src_id(id);
@@ -3187,7 +3258,6 @@ impl CWelsPreProcess {
         }
     }
 }
-
 
 /// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
 static VP_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

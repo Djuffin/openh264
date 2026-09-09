@@ -36,11 +36,7 @@
 //! reconstructed picture object ([`SPicture`]) memory management for the H.264 / AVC
 //! video decoder.
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
 use crate::decoder::decoder_core::{ERR_INFO_INVALID_PARAM, ERR_INFO_OUT_OF_MEMORY, ERR_NONE};
@@ -71,9 +67,9 @@ pub const MV_A: usize = 2;
 // Data Structures & Enums
 // ============================================================================
 
-pub use crate::decoder::picture::{SPicture, PPicture};
-pub use crate::safe::plane::PaddedPlane;
+pub use crate::decoder::picture::{PPicture, SPicture};
 use crate::safe::mb_grid::MbDims;
+pub use crate::safe::plane::PaddedPlane;
 pub use crate::safe::pool::{Pool, PoolRest};
 
 /// A handle to one slot of the decoder's [`PicPool`].
@@ -123,7 +119,10 @@ enum PicView<'a> {
     /// [`PicPool::cur_and_rest_mut`]'s half: one slot held mutably by the caller,
     /// every other readable — [`Pool::mut_and_rest`]'s halves. The current picture
     /// is the caller's `&mut`, so this side keeps its *identity* and no address.
-    Split { rest: PoolRest<'a, PicSlot>, cur: PicId },
+    Split {
+        rest: PoolRest<'a, PicSlot>,
+        cur: PicId,
+    },
 }
 
 impl<'a> PicRefs<'a> {
@@ -142,7 +141,9 @@ impl<'a> PicRefs<'a> {
     /// sibling `&mut` came from.
     #[inline]
     fn split(rest: PoolRest<'a, PicSlot>, cur: PicId) -> Self {
-        Self { view: PicView::Split { rest, cur } }
+        Self {
+            view: PicView::Split { rest, cur },
+        }
     }
 
     /// **The reader's form of [`classify`](Self::classify)**: the picture a stored
@@ -366,7 +367,10 @@ impl PicPool {
     /// [`CreatePicBuff`]'s tail, named — it is also the only way a fixture can put its
     /// own pictures into a pool.
     pub fn over(slots: Vec<PicSlot>) -> Box<Self> {
-        let mut pool = Box::new(PicPool { slots: Pool::new(slots), cursor: 0 });
+        let mut pool = Box::new(PicPool {
+            slots: Pool::new(slots),
+            cursor: 0,
+        });
         pool.stamp_slots();
         pool
     }
@@ -461,13 +465,15 @@ fn try_filled(len: usize, fill: u8) -> Option<Vec<u8>> {
 /// planes and its macroblock tracking metadata arrays.
 ///
 /// `None` is the C's null return.
-pub fn alloc_picture(
-    bParseOnly: bool,
-    kiPicWidth: i32,
-    kiPicHeight: i32,
-) -> Option<Box<SPicture>> {
-    let iPicWidth = WELS_ALIGN(kiPicWidth + (PADDING_LENGTH << 1), PICTURE_RESOLUTION_ALIGNMENT);
-    let iPicHeight = WELS_ALIGN(kiPicHeight + (PADDING_LENGTH << 1), PICTURE_RESOLUTION_ALIGNMENT);
+pub fn alloc_picture(bParseOnly: bool, kiPicWidth: i32, kiPicHeight: i32) -> Option<Box<SPicture>> {
+    let iPicWidth = WELS_ALIGN(
+        kiPicWidth + (PADDING_LENGTH << 1),
+        PICTURE_RESOLUTION_ALIGNMENT,
+    );
+    let iPicHeight = WELS_ALIGN(
+        kiPicHeight + (PADDING_LENGTH << 1),
+        PICTURE_RESOLUTION_ALIGNMENT,
+    );
     let iPicChromaWidth = iPicWidth >> 1;
     let iPicChromaHeight = iPicHeight >> 1;
 
@@ -682,7 +688,11 @@ pub fn DecreasePicBuff(
     }
 
     {
-        let SWelsDecoderContext { pPictReoderingStatus, pPictInfoList, .. } = &mut *pCtx;
+        let SWelsDecoderContext {
+            pPictReoderingStatus,
+            pPictInfoList,
+            ..
+        } = &mut *pCtx;
         crate::decoder::decoder_core::ResetReorderingPictureBuffers(
             pPictReoderingStatus,
             pPictInfoList,
@@ -707,7 +717,11 @@ pub fn DecreasePicBuff(
             (order, 0, true)
         } else {
             // either not found, or already inside the new size and staying put
-            let cursor = if iPrevPicIdx < new_size { iPrevPicIdx as i32 } else { 0 };
+            let cursor = if iPrevPicIdx < new_size {
+                iPrevPicIdx as i32
+            } else {
+                0
+            };
             ((0..new_size).collect(), cursor, false)
         };
 
@@ -768,7 +782,11 @@ fn ResetPoolPictureFlags(pool: &mut PicPool) {
 pub fn DestroyPicBuff(pCtx: &mut SWelsDecoderContext, pool: Option<Box<PicPool>>) {
     // The reset, at the head of the function and before the early returns, where
     // `decoder.cpp:260` has it. The pair is destructured for disjointness alone.
-    let SWelsDecoderContext { pPictReoderingStatus, pPictInfoList, .. } = &mut *pCtx;
+    let SWelsDecoderContext {
+        pPictReoderingStatus,
+        pPictInfoList,
+        ..
+    } = &mut *pCtx;
     crate::decoder::decoder_core::ResetReorderingPictureBuffers(
         pPictReoderingStatus,
         pPictInfoList,
@@ -784,9 +802,9 @@ pub fn DestroyPicBuff(pCtx: &mut SWelsDecoderContext, pool: Option<Box<PicPool>>
 
 #[cfg(test)]
 mod tests {
-    use crate::decoder::decoder_context::{SDecodingParam, parse_only};
     use super::*;
-    
+    use crate::decoder::decoder_context::{SDecodingParam, parse_only};
+
     #[test]
     fn test_picture_alignment_geometry() {
         let width = 320;
@@ -807,8 +825,7 @@ mod tests {
         ctx.pParam = param;
 
         {
-            let mut pic = alloc_picture(false, 160, 120)
-                .expect("the picture allocates");
+            let mut pic = alloc_picture(false, 160, 120).expect("the picture allocates");
             let p_pic: &mut SPicture = &mut pic;
             assert_eq!(p_pic.iWidthInPixel, 160);
             assert_eq!(p_pic.iHeightInPixel, 120);
@@ -839,7 +856,10 @@ mod tests {
     /// `iLinesize[i]` encoded, which every caller still tests with `.is_null()`.
     #[test]
     fn test_alloc_picture_parse_only_carries_strides_and_no_bytes() {
-        let param = SDecodingParam { bParseOnly: true, ..Default::default() };
+        let param = SDecodingParam {
+            bParseOnly: true,
+            ..Default::default()
+        };
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.pParam = param;
 
@@ -849,8 +869,8 @@ mod tests {
                 parse_only(&pCtx.pParam),
                 "the accessor reads the field the callee used to reach for itself"
             );
-            let mut pic = alloc_picture(parse_only(&pCtx.pParam), 160, 120)
-                .expect("the picture allocates");
+            let mut pic =
+                alloc_picture(parse_only(&pCtx.pParam), 160, 120).expect("the picture allocates");
             let p_pic: &mut SPicture = &mut pic;
             assert_eq!(p_pic.linesize(0), 224);
             assert_eq!(p_pic.linesize(1), 112);
@@ -922,7 +942,10 @@ mod tests {
             // what motion compensation off a self-referencing list does. Each read
             // resolves afresh, as the decode path's do.
             pCur.iFramePoc = 77;
-            assert_eq!(refs.resolve(Some(cur), Some(pCur)).map(|p| p.iFramePoc), Some(77));
+            assert_eq!(
+                refs.resolve(Some(cur), Some(pCur)).map(|p| p.iFramePoc),
+                Some(77)
+            );
             pCur.iFramePoc = 78;
             assert_eq!(
                 refs.resolve(Some(cur), Some(pCur)).map(|p| p.iFramePoc),
@@ -932,7 +955,9 @@ mod tests {
 
             // The ordinary case still goes through the rest, and is a different
             // picture: the rule widens nothing.
-            let pOther = refs.resolve(Some(other), Some(pCur)).expect("slot 2 holds a picture");
+            let pOther = refs
+                .resolve(Some(other), Some(pCur))
+                .expect("slot 2 holds a picture");
             assert_eq!(pOther.pic_id(), Some(other));
             assert_ne!(pOther.pic_id(), pCur.pic_id());
         }
@@ -979,7 +1004,10 @@ mod tests {
         assert!(!ctx.pPictReoderingStatus.bHasBSlice);
         assert_eq!(ctx.pPictReoderingStatus.iMinPOC, IMinInt32);
         for i in 0..2 {
-            assert_eq!(ctx.pPictInfoList[i].iPicBuffIdx, -1, "slot {i} still names the freed pool");
+            assert_eq!(
+                ctx.pPictInfoList[i].iPicBuffIdx, -1,
+                "slot {i} still names the freed pool"
+            );
             assert_eq!(ctx.pPictInfoList[i].iPOC, IMinInt32, "slot {i}");
         }
     }
@@ -995,11 +1023,14 @@ mod tests {
         ctx.pParam = param;
 
         {
-            let mut pool = CreatePicBuff(false, 2, 64, 64)
-                .expect("pool");
+            let mut pool = CreatePicBuff(false, 2, 64, 64).expect("pool");
             let (id_a, id_b) = (pool.id(0), pool.id(1));
 
-            assert_eq!(pool.slot(id_a).unwrap().pic_id(), Some(id_a), "a picture knows its slot");
+            assert_eq!(
+                pool.slot(id_a).unwrap().pic_id(),
+                Some(id_a),
+                "a picture knows its slot"
+            );
             assert_eq!(pool.slot(id_b).unwrap().pic_id(), Some(id_b));
 
             pool.slot_mut(id_a).unwrap().iFramePoc = 4;
@@ -1041,8 +1072,7 @@ mod tests {
         ctx.pParam = param;
 
         {
-            let mut pool = CreatePicBuff(false, 3, 64, 64)
-                .expect("pool");
+            let mut pool = CreatePicBuff(false, 3, 64, 64).expect("pool");
             assert_eq!(pool.capacity(), 3);
 
             // Every slot in use: the two passes both come up empty, and the cursor
@@ -1066,7 +1096,11 @@ mod tests {
             let got = pool.prefetch_free().expect("the wrap reaches slot 0");
             assert_eq!(got, pool.id(0));
             assert_eq!(pool.cursor(), 0);
-            assert_eq!(pool.slot(got).unwrap().iPicBuffIdx, 0, "the winner learns its slot");
+            assert_eq!(
+                pool.slot(got).unwrap().iPicBuffIdx,
+                0,
+                "the winner learns its slot"
+            );
 
             DestroyPicBuff(&mut ctx, Some(pool));
         }
@@ -1079,8 +1113,7 @@ mod tests {
         ctx.pParam = param;
 
         {
-            let mut pool = CreatePicBuff(false, 3, 64, 64)
-                .expect("pool");
+            let mut pool = CreatePicBuff(false, 3, 64, 64).expect("pool");
             let pic0 = PrefetchPicForThread(Some(&mut pool)).map(|p| p.iPicBuffIdx);
             assert_eq!(pic0, Some(0));
             assert_eq!(pool.cursor(), 1);

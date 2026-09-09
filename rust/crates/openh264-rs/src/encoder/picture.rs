@@ -1,8 +1,4 @@
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 //! Encoder picture buffers and reference-picture state.
 //!
@@ -12,7 +8,9 @@
 #![deny(unsafe_code)]
 
 use crate::encoder::encoder_context::{BLOCK_SIZE_ALL, SMVUnitXY};
-use crate::encoder::svc_motion_estimate::{LIST_SIZE_MSE_16x16, LIST_SIZE_SUM_16x16, LIST_SIZE_SUM_8x8};
+use crate::encoder::svc_motion_estimate::{
+    LIST_SIZE_MSE_16x16, LIST_SIZE_SUM_8x8, LIST_SIZE_SUM_16x16,
+};
 pub use crate::safe::plane::PaddedPlane;
 use crate::safe::pool::{Id, Pool};
 
@@ -98,12 +96,21 @@ impl SScreenBlockFeatureStorage {
     /// reference pictures under `SCREEN_CONTENT_REAL_TIME`, as
     /// `picture_handle.cpp:115` calls the C++; `bIsBlock8x8` is that function's
     /// `(kiMe8x8FME == ME_FME)`.
-    pub fn for_frame(kiFrameWidth: i32, kiFrameHeight: i32, bIsBlock8x8: bool, kiFeatureStrategyIndex: u8) -> Self {
+    pub fn for_frame(
+        kiFrameWidth: i32,
+        kiFrameHeight: i32,
+        bIsBlock8x8: bool,
+        kiFeatureStrategyIndex: u8,
+    ) -> Self {
         let kiMarginSize = if bIsBlock8x8 { 8 } else { 16 };
         let kiFrameSize =
             ((kiFrameWidth - kiMarginSize).max(0) * (kiFrameHeight - kiMarginSize).max(0)) as usize;
         let kiListSize = if kiFeatureStrategyIndex == 0 {
-            if bIsBlock8x8 { LIST_SIZE_SUM_8x8 } else { LIST_SIZE_SUM_16x16 }
+            if bIsBlock8x8 {
+                LIST_SIZE_SUM_8x8
+            } else {
+                LIST_SIZE_SUM_16x16
+            }
         } else {
             256
         };
@@ -357,8 +364,11 @@ impl SPicture {
     pub fn copy_planes_from(&mut self, kpSrc: &SPicture, kiWidth: i32, kiHeight: i32) {
         let (kuiW, kuiH) = (kiWidth.max(0) as usize, kiHeight.max(0) as usize);
         for i in 0..3 {
-            let (kuiRow, kuiRows) =
-                if i == 0 { (kuiW, kuiH) } else { (kuiW >> 1, kuiH >> 1) };
+            let (kuiRow, kuiRows) = if i == 0 {
+                (kuiW, kuiH)
+            } else {
+                (kuiW >> 1, kuiH >> 1)
+            };
             if kuiRow == 0 || kuiRows == 0 {
                 continue;
             }
@@ -607,7 +617,6 @@ macro_rules! pic_pool {
                 let (x, y) = self.0.pair_mut(a.0, b.0);
                 (&mut **x, &mut **y)
             }
-
         }
     };
 }
@@ -716,7 +725,11 @@ mod tests {
         // exclusive write through the stamp, which the shared read observes.
         unsafe { *p_stamp = 0x11 };
         let _p3 = pic.data_ptr_shared(0);
-        assert_eq!(unsafe { *p1 }, 0x11, "a later mint or write popped the first");
+        assert_eq!(
+            unsafe { *p1 },
+            0x11,
+            "a later mint or write popped the first"
+        );
     }
 
     /// The four per-macroblock side arrays exist exactly when `bNeedMbInfo` says so,
@@ -770,7 +783,7 @@ mod tests {
             (176, 144, 176, 144, 176, 144), // same geometry, the arm's own case
             (176, 144, 160, 128, 160, 128), // destination narrower: strides differ
             (320, 240, 176, 144, 176, 144),
-            (176, 144, 176, 144, 32, 16),   // a sub-rectangle of both
+            (176, 144, 176, 144, 32, 16), // a sub-rectangle of both
         ] {
             let mut src = SPicture::new(sw, sh, false);
             // A pattern that is different in every plane and every row, so a
@@ -781,7 +794,7 @@ mod tests {
                 let buf = src.planes[i].as_mut_slice();
                 for (k, b) in buf.iter_mut().enumerate() {
                     *b = (k.wrapping_mul(31).wrapping_add(i * 7).wrapping_add(origin)
-                        ^ (k / stride.max(1)))  as u8;
+                        ^ (k / stride.max(1))) as u8;
                 }
             }
 
@@ -797,11 +810,20 @@ mod tests {
             let kdst = dst_raw.planes();
             unsafe {
                 WelsMoveMemory_c(
-                    kdst.pData[0], kdst.pData[1], kdst.pData[2],
-                    kdst.iLineSize[0], kdst.iLineSize[1], kdst.iLineSize[2],
-                    ksrc.pData[0], ksrc.pData[1], ksrc.pData[2],
-                    ksrc.iLineSize[0], ksrc.iLineSize[1], ksrc.iLineSize[2],
-                    w, h,
+                    kdst.pData[0],
+                    kdst.pData[1],
+                    kdst.pData[2],
+                    kdst.iLineSize[0],
+                    kdst.iLineSize[1],
+                    kdst.iLineSize[2],
+                    ksrc.pData[0],
+                    ksrc.pData[1],
+                    ksrc.pData[2],
+                    ksrc.iLineSize[0],
+                    ksrc.iLineSize[1],
+                    ksrc.iLineSize[2],
+                    w,
+                    h,
                 );
             }
 
@@ -822,5 +844,4 @@ mod tests {
             );
         }
     }
-
 }

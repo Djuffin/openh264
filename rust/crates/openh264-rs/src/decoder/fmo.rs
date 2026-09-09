@@ -39,11 +39,7 @@
 //! - Fast O(1) macroblock-to-slice-group queries (`FmoMbToSliceGroup`) and sequential iterators (`FmoNextMb`).
 
 #![deny(unsafe_code)]
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
 use crate::decoder::parameter_sets::{SPps, SSps};
@@ -310,7 +306,12 @@ pub fn FmoParamUpdate(
         pPps.uiSliceGroupMapType as i32,
         pPps.uiNumSliceGroups as i32,
     ) {
-        iRet = InitFmo(Some(pFmo), Some(pPps), kuiMbWidth as i32, kuiMbHeight as i32);
+        iRet = InitFmo(
+            Some(pFmo),
+            Some(pPps),
+            kuiMbWidth as i32,
+            kuiMbHeight as i32,
+        );
         if iRet != ERR_NONE {
             return iRet;
         }
@@ -380,7 +381,7 @@ pub fn FmoNextMb(pFmo: Option<&TagFmo>, kiMbXy: MB_XY_T) -> MB_XY_T {
 #[cfg(test)]
 mod tests {
     use super::*;
-        use crate::decoder::parameter_sets::{SPps, SSps};
+    use crate::decoder::parameter_sets::{SPps, SSps};
 
     #[test]
     fn test_fmo_default_and_types() {

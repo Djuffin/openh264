@@ -2,12 +2,7 @@
 #![deny(unsafe_code)]
 // The naming allows are a requirement, not debt: this crate is a line-by-line port
 // and every identifier is diffable against the C++ it came from (`CODING_STYLE`).
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(
     dead_code,
     unused_variables,
@@ -22,12 +17,11 @@
     unused_unsafe
 )]
 
-
+pub mod api;
 pub mod common;
 pub mod decoder;
 pub mod encoder;
 pub mod processing;
-pub mod api;
 pub mod safe;
 pub mod simd;
 
@@ -68,4 +62,3 @@ pub fn split_annexb_units(bitstream: &[u8]) -> Vec<&[u8]> {
     }
     units
 }
-

@@ -178,10 +178,7 @@ fn test_decoder_trace_callback_and_the_error_throttle() {
     unsafe {
         let mut sink = Collected::default();
         let mut dec: *mut ISVCDecoder = std::ptr::null_mut();
-        assert_eq!(
-            WelsCreateDecoder(&mut dec),
-            CM_RESULT_SUCCESS as i64
-        );
+        assert_eq!(WelsCreateDecoder(&mut dec), CM_RESULT_SUCCESS as i64);
 
         let mut cb: WelsTraceCallback = Some(collect);
         assert_eq!(

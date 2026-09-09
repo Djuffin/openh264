@@ -51,7 +51,11 @@ fn test_decoder_error_concealment_modes() {
 ///
 /// The switch is the whole point: it is the one write the public API makes into
 /// the parameter block *after* the decoder is configured.
-unsafe fn decode_states(data: &[u8], init_ec: ERROR_CON_IDC, switch_to: Option<ERROR_CON_IDC>) -> i32 {
+unsafe fn decode_states(
+    data: &[u8],
+    init_ec: ERROR_CON_IDC,
+    switch_to: Option<ERROR_CON_IDC>,
+) -> i32 {
     unsafe {
         let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
         assert_eq!(WelsCreateDecoder(&mut p_decoder), CM_RESULT_SUCCESS as i64);

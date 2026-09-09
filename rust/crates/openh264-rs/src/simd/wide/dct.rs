@@ -18,7 +18,7 @@
 use wide::bytemuck::cast;
 use wide::{i16x8, i32x4, i32x8};
 
-use super::lanes::{load16, load4, low4, merge_lo64, narrow, widen_hi, widen_lo};
+use super::lanes::{load4, load16, low4, merge_lo64, narrow, widen_hi, widen_lo};
 use crate::encoder::rec_view::RecCursor;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples, SampleCursor};
 
@@ -142,7 +142,12 @@ fn compute_idct_residuals(dct: &[i16; 16]) -> [i16x8; 4] {
     let res1 = (t1_b + t2_b + c32) >> 6i32;
     let res2 = (t1_b - t2_b + c32) >> 6i32;
 
-    [narrow_i32(res0), narrow_i32(res1), narrow_i32(res2), narrow_i32(res3)]
+    [
+        narrow_i32(res0),
+        narrow_i32(res1),
+        narrow_i32(res2),
+        narrow_i32(res3),
+    ]
 }
 
 /// `clip(pred + res)` for one row of four.
@@ -209,7 +214,12 @@ pub fn idct_t4_rec_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize,
 
 /// [`idct_four_t4_rec_to_view`](crate::encoder::decode_mb_aux::idct_four_t4_rec_to_view) on `wide`.
 #[inline]
-pub fn idct_four_t4_rec_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dct: &[i16; 64]) {
+pub fn idct_four_t4_rec_to_view(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dct: &[i16; 64],
+) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4i32..][..16]).try_into().unwrap();
@@ -283,7 +293,12 @@ pub fn idct_rec_i16x16_dc(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, 
 
 /// 16x16 macroblock DC luma reconstruction to a shared view.
 #[inline]
-pub fn idct_rec_i16x16_dc_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dc: &[i16; 16]) {
+pub fn idct_rec_i16x16_dc_to_view(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dc: &[i16; 16],
+) {
     for i in 0..16usize {
         let (dc_lo, dc_hi) = dc_row_offsets(dc, i);
         let out = dc_add_row(&pred[i * pred_stride..][..16], dc_lo, dc_hi);
@@ -298,16 +313,18 @@ mod tests {
     // These MUST be the `_c` scalar kernels, not the same-named dispatchers:
     // the dispatchers route to the very kernels under test, which would
     // make every assertion below a tautology.
+    use crate::decoder::decode_mb_aux::idct_res_add_pred_c as idct_res_add_pred;
     use crate::encoder::decode_mb_aux::{
         idct_rec_i16x16_dc_c as idct_rec_i16x16_dc, idct_t4_rec_c as idct_t4_rec,
         idct_t4_rec_in_place_c as idct_t4_rec_in_place,
     };
-    use crate::decoder::decode_mb_aux::idct_res_add_pred_c as idct_res_add_pred;
-    use crate::safe::plane::PaddedPlane;
     use crate::encoder::rec_view::shared_plane_for_test;
+    use crate::safe::plane::PaddedPlane;
 
     fn lcg(seed: &mut u64) -> u8 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*seed >> 32i32) & 0xFF) as u8
     }
 
@@ -317,7 +334,9 @@ mod tests {
     /// where 16- and 32-bit lanes agree, and passes on a kernel that is wrong — see
     /// `compute_idct_residuals`.
     fn lcg_i16(seed: &mut u64) -> i16 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32i32) as u16 as i16
     }
 
@@ -487,7 +506,11 @@ mod tests {
 
             for y in 0..16isize {
                 for x in 0..16isize {
-                    assert_eq!(rec_simd.at(x, y), rec_c.at(x, y), "dc mismatch at ({x}, {y})");
+                    assert_eq!(
+                        rec_simd.at(x, y),
+                        rec_c.at(x, y),
+                        "dc mismatch at ({x}, {y})"
+                    );
                 }
             }
         }

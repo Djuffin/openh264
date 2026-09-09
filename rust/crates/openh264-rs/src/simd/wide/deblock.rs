@@ -15,9 +15,12 @@
 use wide::i16x8;
 
 use super::lanes::{load8, low8, narrow, widen_lo};
-use crate::safe::plane::{BlockRows, PlaneSamples};
+use crate::common::deblocking_common::{
+    deblock_chroma_eq4_scalar, deblock_chroma_lt4_scalar, deblock_luma_eq4_scalar,
+    deblock_luma_lt4_scalar,
+};
 use crate::encoder::encoder_context::SMVUnitXY;
-use crate::common::deblocking_common::{deblock_chroma_eq4_scalar, deblock_chroma_lt4_scalar, deblock_luma_eq4_scalar, deblock_luma_lt4_scalar};
+use crate::safe::plane::{BlockRows, PlaneSamples};
 
 // ============================================================================
 // Lane helpers
@@ -173,11 +176,13 @@ pub fn deblock_luma_eq4_16(
 
         let p0_p2p0 = (p2_16 + ((p1_16 + p0_16 + q0_16) << 1i32) + q1_16 + four) >> 3i32;
         let p1_p2p0 = (p2_16 + p1_16 + p0_16 + q0_16 + two) >> 2i32;
-        let p2_p2p0 = ((p3_16 << 1i32) + (p2_16 << 1i32) + p2_16 + p1_16 + p0_16 + q0_16 + four) >> 3i32;
+        let p2_p2p0 =
+            ((p3_16 << 1i32) + (p2_16 << 1i32) + p2_16 + p1_16 + p0_16 + q0_16 + four) >> 3i32;
 
         let q0_q2q0 = (p1_16 + ((p0_16 + q0_16 + q1_16) << 1i32) + q2_16 + four) >> 3i32;
         let q1_q2q0 = (p0_16 + q0_16 + q1_16 + q2_16 + two) >> 2i32;
-        let q2_q2q0 = ((q3_16 << 1i32) + (q2_16 << 1i32) + q2_16 + q1_16 + q0_16 + p0_16 + four) >> 3i32;
+        let q2_q2q0 =
+            ((q3_16 << 1i32) + (q2_16 << 1i32) + q2_16 + q1_16 + q0_16 + p0_16 + four) >> 3i32;
 
         let p0_out = mask_filter.select(cond_p2p0.select(p0_p2p0, p0_default), p0_16);
         let p1_out = cond_p2p0.select(p1_p2p0, p1_16);
@@ -307,11 +312,19 @@ pub fn deblock_luma_lt4(
         // rather than six `row_n` calls with a bounds check each.
         let (mut p2, mut p1, mut p0, mut q0, mut q1, mut q2) = {
             let s = pix.span::<16, 6>(-3, 0);
-            (s.row::<16>(0, 0), s.row::<16>(1, 0), s.row::<16>(2, 0),
-             s.row::<16>(3, 0), s.row::<16>(4, 0), s.row::<16>(5, 0))
+            (
+                s.row::<16>(0, 0),
+                s.row::<16>(1, 0),
+                s.row::<16>(2, 0),
+                s.row::<16>(3, 0),
+                s.row::<16>(4, 0),
+                s.row::<16>(5, 0),
+            )
         };
 
-        deblock_luma_lt4_16(&mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, alpha, beta, tc);
+        deblock_luma_lt4_16(
+            &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, alpha, beta, tc,
+        );
 
         pix.set_block::<16, 4>(-2, 0, &[p1, p0, q0, q1]);
     } else if step_x == 1 {
@@ -332,7 +345,16 @@ pub fn deblock_luma_lt4(
             }
         }
 
-        let [_, ref mut t1, ref mut t2, ref mut t3, ref mut t4, ref mut t5, ref mut t6, _] = t;
+        let [
+            _,
+            ref mut t1,
+            ref mut t2,
+            ref mut t3,
+            ref mut t4,
+            ref mut t5,
+            ref mut t6,
+            _,
+        ] = t;
         deblock_luma_lt4_16(t1, t2, t3, t4, t5, t6, alpha, beta, tc);
 
         for x in 2..=5 {
@@ -344,8 +366,7 @@ pub fn deblock_luma_lt4(
         // Write back only the columns the filter can modify; at `iEdge == 0` the
         // outer columns belong to the previous macroblock.
         // Sixteen lines as one block, one bounds check for all of them.
-        let out: [[u8; 4]; 16] =
-            std::array::from_fn(|i| rows[i][2..6].try_into().expect("p1..q1"));
+        let out: [[u8; 4]; 16] = std::array::from_fn(|i| rows[i][2..6].try_into().expect("p1..q1"));
         pix.set_block::<4, 16>(0, -2, &out);
     } else {
         deblock_luma_lt4_scalar(pix, step_x, step_y, alpha, beta, tc);
@@ -353,17 +374,33 @@ pub fn deblock_luma_lt4(
 }
 
 /// The luma bS==4 filter over an edge. Preconditions as [`deblock_luma_lt4`].
-pub fn deblock_luma_eq4(pix: &mut impl PlaneSamples, step_x: isize, step_y: isize, alpha: i32, beta: i32) {
+pub fn deblock_luma_eq4(
+    pix: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+) {
     if step_y == 1 {
         debug_assert_eq!(step_x, pix.stride() as isize);
         // Taps `-4 .. 3`: one 16-wide, 8-tall span, as in `deblock_luma_lt4`.
         let (p3, mut p2, mut p1, mut p0, mut q0, mut q1, mut q2, q3) = {
             let s = pix.span::<16, 8>(-4, 0);
-            (s.row::<16>(0, 0), s.row::<16>(1, 0), s.row::<16>(2, 0), s.row::<16>(3, 0),
-             s.row::<16>(4, 0), s.row::<16>(5, 0), s.row::<16>(6, 0), s.row::<16>(7, 0))
+            (
+                s.row::<16>(0, 0),
+                s.row::<16>(1, 0),
+                s.row::<16>(2, 0),
+                s.row::<16>(3, 0),
+                s.row::<16>(4, 0),
+                s.row::<16>(5, 0),
+                s.row::<16>(6, 0),
+                s.row::<16>(7, 0),
+            )
         };
 
-        deblock_luma_eq4_16(&p3, &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, &q3, alpha, beta);
+        deblock_luma_eq4_16(
+            &p3, &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, &q3, alpha, beta,
+        );
 
         pix.set_block::<16, 6>(-3, 0, &[p2, p1, p0, q0, q1, q2]);
     } else if step_x == 1 {
@@ -384,7 +421,16 @@ pub fn deblock_luma_eq4(pix: &mut impl PlaneSamples, step_x: isize, step_y: isiz
             }
         }
 
-        let [ref t0, ref mut t1, ref mut t2, ref mut t3, ref mut t4, ref mut t5, ref mut t6, ref t7] = t;
+        let [
+            ref t0,
+            ref mut t1,
+            ref mut t2,
+            ref mut t3,
+            ref mut t4,
+            ref mut t5,
+            ref mut t6,
+            ref t7,
+        ] = t;
         deblock_luma_eq4_16(t0, t1, t2, t3, t4, t5, t6, t7, alpha, beta);
 
         for x in 1..=6 {
@@ -393,8 +439,7 @@ pub fn deblock_luma_eq4(pix: &mut impl PlaneSamples, step_x: isize, step_y: isiz
             }
         }
 
-        let out: [[u8; 6]; 16] =
-            std::array::from_fn(|i| rows[i][1..7].try_into().expect("p2..q2"));
+        let out: [[u8; 6]; 16] = std::array::from_fn(|i| rows[i][1..7].try_into().expect("p2..q2"));
         pix.set_block::<6, 16>(0, -3, &out);
     } else {
         deblock_luma_eq4_scalar(pix, step_x, step_y, alpha, beta);
@@ -418,8 +463,16 @@ pub fn deblock_chroma_lt4(
         // Taps `-2 .. 1` of each plane: one 8-wide, 4-tall span apiece.
         let (cb_p1, mut cb_p0, mut cb_q0, cb_q1, cr_p1, mut cr_p0, mut cr_q0, cr_q1) = {
             let (sb, sr) = (cb.span::<8, 4>(-2, 0), cr.span::<8, 4>(-2, 0));
-            (sb.row::<8>(0, 0), sb.row::<8>(1, 0), sb.row::<8>(2, 0), sb.row::<8>(3, 0),
-             sr.row::<8>(0, 0), sr.row::<8>(1, 0), sr.row::<8>(2, 0), sr.row::<8>(3, 0))
+            (
+                sb.row::<8>(0, 0),
+                sb.row::<8>(1, 0),
+                sb.row::<8>(2, 0),
+                sb.row::<8>(3, 0),
+                sr.row::<8>(0, 0),
+                sr.row::<8>(1, 0),
+                sr.row::<8>(2, 0),
+                sr.row::<8>(3, 0),
+            )
         };
 
         let mut p1 = [0u8; 16];
@@ -504,8 +557,16 @@ pub fn deblock_chroma_eq4(
         // Taps `-2 .. 1` of each plane: one 8-wide, 4-tall span apiece.
         let (cb_p1, mut cb_p0, mut cb_q0, cb_q1, cr_p1, mut cr_p0, mut cr_q0, cr_q1) = {
             let (sb, sr) = (cb.span::<8, 4>(-2, 0), cr.span::<8, 4>(-2, 0));
-            (sb.row::<8>(0, 0), sb.row::<8>(1, 0), sb.row::<8>(2, 0), sb.row::<8>(3, 0),
-             sr.row::<8>(0, 0), sr.row::<8>(1, 0), sr.row::<8>(2, 0), sr.row::<8>(3, 0))
+            (
+                sb.row::<8>(0, 0),
+                sb.row::<8>(1, 0),
+                sb.row::<8>(2, 0),
+                sb.row::<8>(3, 0),
+                sr.row::<8>(0, 0),
+                sr.row::<8>(1, 0),
+                sr.row::<8>(2, 0),
+                sr.row::<8>(3, 0),
+            )
         };
 
         let mut p1 = [0u8; 16];
@@ -574,7 +635,6 @@ pub fn deblock_chroma_eq4(
     }
 }
 
-
 /// The boundary strengths of one macroblock.
 ///
 /// A forward to the scalar, for the reason `super::super::x86_64::deblock::bs_calc`
@@ -612,7 +672,11 @@ mod tests {
     fn test_deblock_luma_lt4_parity() {
         let stride = 64;
         for is_horiz in [true, false] {
-            let (step_x, step_y) = if is_horiz { (stride as isize, 1) } else { (1, stride as isize) };
+            let (step_x, step_y) = if is_horiz {
+                (stride as isize, 1)
+            } else {
+                (1, stride as isize)
+            };
             let mut plane_scalar = make_test_plane(32, 32, 16, stride);
             let mut plane_simd = plane_scalar.clone();
 
@@ -654,7 +718,11 @@ mod tests {
     fn test_deblock_luma_eq4_parity() {
         let stride = 64;
         for is_horiz in [true, false] {
-            let (step_x, step_y) = if is_horiz { (stride as isize, 1) } else { (1, stride as isize) };
+            let (step_x, step_y) = if is_horiz {
+                (stride as isize, 1)
+            } else {
+                (1, stride as isize)
+            };
             let mut plane_scalar = make_test_plane(32, 32, 16, stride);
             let mut plane_simd = plane_scalar.clone();
 
@@ -693,7 +761,11 @@ mod tests {
     fn test_deblock_chroma_lt4_parity() {
         let stride = 32;
         for is_horiz in [true, false] {
-            let (step_x, step_y) = if is_horiz { (stride as isize, 1) } else { (1, stride as isize) };
+            let (step_x, step_y) = if is_horiz {
+                (stride as isize, 1)
+            } else {
+                (1, stride as isize)
+            };
             let mut cb_scalar = make_test_plane(16, 16, 8, stride);
             let mut cr_scalar = make_test_plane(16, 16, 8, stride);
             let mut cb_simd = cb_scalar.clone();
@@ -744,7 +816,11 @@ mod tests {
     fn test_deblock_chroma_eq4_parity() {
         let stride = 32;
         for is_horiz in [true, false] {
-            let (step_x, step_y) = if is_horiz { (stride as isize, 1) } else { (1, stride as isize) };
+            let (step_x, step_y) = if is_horiz {
+                (stride as isize, 1)
+            } else {
+                (1, stride as isize)
+            };
             let mut cb_scalar = make_test_plane(16, 16, 8, stride);
             let mut cr_scalar = make_test_plane(16, 16, 8, stride);
             let mut cb_simd = cb_scalar.clone();

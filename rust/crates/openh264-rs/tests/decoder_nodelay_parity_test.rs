@@ -55,7 +55,12 @@ const ROWS: &[Row] = &[
         dims: (176, 144),
         sha1: "afd7a9765961ca241bb4bdf344b31397bec7465a",
         codes: &[0; 103],
-        bufs: &[0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        bufs: &[
+            0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        ],
     },
     Row {
         asset: "Cisco_Men_whisper_640x320_CABAC_Bframe_9.264",
@@ -71,7 +76,10 @@ const ROWS: &[Row] = &[
         dims: (16, 16),
         sha1: "6299ce8a7dc8a86d367dca65ca123eb499fc5ca8",
         codes: &[0; 32],
-        bufs: &[0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1],
+        bufs: &[
+            0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1,
+            1, 0, 1,
+        ],
     },
     Row {
         asset: "QCIF_2P_I_allIPCM.264",
@@ -86,7 +94,10 @@ const ROWS: &[Row] = &[
         frames: 1,
         dims: (640, 480),
         sha1: "5c1f742798b2c1061cb83ab2f2cddd7929b2fb4e",
-        codes: &[0x0, 0x0, 0x0, 0x20, 0x0, 0x0, 0x20, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x20, 0x20, 0x20, 0x0],
+        codes: &[
+            0x0, 0x0, 0x0, 0x20, 0x0, 0x0, 0x20, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x20, 0x20, 0x20,
+            0x0,
+        ],
         bufs: &[0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
     },
 ];
@@ -114,7 +125,11 @@ unsafe fn nodelay_row(data: &[u8]) -> (usize, (i32, i32), String, Vec<i32>, Vec<
         let mut codes = Vec::new();
         let mut bufs = Vec::new();
 
-        let take = |info: &SBufferInfo, dst: [*mut u8; 3], hasher: &mut Sha1Hasher, frames: &mut usize, first: &mut (i32, i32)| {
+        let take = |info: &SBufferInfo,
+                    dst: [*mut u8; 3],
+                    hasher: &mut Sha1Hasher,
+                    frames: &mut usize,
+                    first: &mut (i32, i32)| {
             if info.iBufferStatus != 1 {
                 return;
             }
@@ -141,7 +156,13 @@ unsafe fn nodelay_row(data: &[u8]) -> (usize, (i32, i32), String, Vec<i32>, Vec<
         for unit in split_annexb_units(data) {
             let mut dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut info = SBufferInfo::default();
-            let st = ISVCDecoder::DecodeFrameNoDelay(dec, unit.as_ptr(), unit.len() as i32, dst.as_mut_ptr(), &mut info);
+            let st = ISVCDecoder::DecodeFrameNoDelay(
+                dec,
+                unit.as_ptr(),
+                unit.len() as i32,
+                dst.as_mut_ptr(),
+                &mut info,
+            );
             codes.push(st.0);
             bufs.push(info.iBufferStatus);
             take(&info, dst, &mut hasher, &mut frames, &mut first);
@@ -156,7 +177,13 @@ unsafe fn nodelay_row(data: &[u8]) -> (usize, (i32, i32), String, Vec<i32>, Vec<
         {
             let mut dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut info = SBufferInfo::default();
-            let st = ISVCDecoder::DecodeFrameNoDelay(dec, std::ptr::null(), 0, dst.as_mut_ptr(), &mut info);
+            let st = ISVCDecoder::DecodeFrameNoDelay(
+                dec,
+                std::ptr::null(),
+                0,
+                dst.as_mut_ptr(),
+                &mut info,
+            );
             codes.push(st.0);
             bufs.push(info.iBufferStatus);
             take(&info, dst, &mut hasher, &mut frames, &mut first);
@@ -185,7 +212,9 @@ unsafe fn nodelay_row(data: &[u8]) -> (usize, (i32, i32), String, Vec<i32>, Vec<
 
 #[test]
 fn decode_frame_no_delay_matches_the_reference_on_every_axis() {
-    let res = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..").join("res");
+    let res = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join("res");
     for row in ROWS {
         let data = std::fs::read(res.join(row.asset))
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", row.asset));
@@ -193,9 +222,25 @@ fn decode_frame_no_delay_matches_the_reference_on_every_axis() {
         // Counts before hashes: a hash mismatch whose frame count also moved is
         // a different defect from one whose count held.
         assert_eq!(frames, row.frames, "{}: emitted frame count", row.asset);
-        assert_eq!(dims, row.dims, "{}: first emitted frame's dimensions", row.asset);
-        assert_eq!(codes, row.codes, "{}: DecodeFrameNoDelay return codes, in call order", row.asset);
-        assert_eq!(bufs, row.bufs, "{}: iBufferStatus, in call order", row.asset);
-        assert_eq!(sha1, row.sha1, "{}: SHA-1 over every emitted plane", row.asset);
+        assert_eq!(
+            dims, row.dims,
+            "{}: first emitted frame's dimensions",
+            row.asset
+        );
+        assert_eq!(
+            codes, row.codes,
+            "{}: DecodeFrameNoDelay return codes, in call order",
+            row.asset
+        );
+        assert_eq!(
+            bufs, row.bufs,
+            "{}: iBufferStatus, in call order",
+            row.asset
+        );
+        assert_eq!(
+            sha1, row.sha1,
+            "{}: SHA-1 over every emitted plane",
+            row.asset
+        );
     }
 }

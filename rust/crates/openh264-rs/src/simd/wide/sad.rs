@@ -68,7 +68,12 @@ fn sad_16x_two_rows<S: RefSamples, const H: usize>(
     dx: isize,
     dy: isize,
 ) -> i32 {
-    const { assert!(H % 2 == 0, "sad_16x_two_rows steps two rows; H must be even") };
+    const {
+        assert!(
+            H % 2 == 0,
+            "sad_16x_two_rows steps two rows; H must be even"
+        )
+    };
     let (s1, s2) = (sample1.span::<16, H>(0, 0), sample2.span::<16, H>(dy, dx));
     let mut acc = i16x8::ZERO;
     let mut y = 0usize;
@@ -121,7 +126,12 @@ fn sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sad: &mut [i32; 4],
 ) {
     const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
-    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+    const {
+        assert!(
+            HW == H + 2,
+            "the probe span is two rows taller than the block"
+        )
+    };
     let mut acc = [i16x8::ZERO; 4];
     let s1 = sample1.span::<16, H>(0, 0);
     let s2 = sample2.span::<18, HW>(-1, -1);
@@ -156,7 +166,12 @@ fn sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sad: &mut [i32; 4],
 ) {
     const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
-    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+    const {
+        assert!(
+            HW == H + 2,
+            "the probe span is two rows taller than the block"
+        )
+    };
     let mut acc = [i16x8::ZERO; 4];
     let s1 = sample1.span::<8, H>(0, 0);
     let s2 = sample2.span::<10, HW>(-1, -1);
@@ -190,7 +205,12 @@ fn sad_four_4x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sad: &mut [i32; 4],
 ) {
     const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
-    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+    const {
+        assert!(
+            HW == H + 2,
+            "the probe span is two rows taller than the block"
+        )
+    };
     let mut acc = [i16x8::ZERO; 4];
     let s1 = sample1.span::<4, H>(0, 0);
     let s2 = sample2.span::<6, HW>(-1, -1);
@@ -338,7 +358,10 @@ mod tests {
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        assert_eq!(sample_sad_16x16(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
+        assert_eq!(
+            sample_sad_16x16(&c1, &c2),
+            sample_sad::<16, 16, _>(&c1, &c2)
+        );
         assert_eq!(sample_sad_16x8(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
         assert_eq!(sample_sad_8x16(&c1, &c2), sample_sad::<8, 16, _>(&c1, &c2));
         assert_eq!(sample_sad_8x8(&c1, &c2), sample_sad::<8, 8, _>(&c1, &c2));
@@ -359,8 +382,14 @@ mod tests {
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        assert_eq!(sample_sad_16x16_avx2(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
-        assert_eq!(sample_sad_16x8_avx2(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
+        assert_eq!(
+            sample_sad_16x16_avx2(&c1, &c2),
+            sample_sad::<16, 16, _>(&c1, &c2)
+        );
+        assert_eq!(
+            sample_sad_16x8_avx2(&c1, &c2),
+            sample_sad::<16, 8, _>(&c1, &c2)
+        );
     }
 
     #[test]
@@ -416,7 +445,9 @@ mod tests {
 
     /// A 64-bit LCG, so a failing seed is replayable.
     fn lcg(seed: &mut u64) -> u8 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32i32) as u8
     }
 
@@ -580,8 +611,8 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn init_sample_sad_installs_avx2_only_where_the_cpu_has_it() {
         use crate::common::cpu_core::{WELS_CPU_AVX2, WELS_CPU_SSE2};
-        use crate::encoder::svc_mode_decision::BLOCK_16x16;
         use crate::encoder::sample::WelsInitSampleSadFunc;
+        use crate::encoder::svc_mode_decision::BLOCK_16x16;
         use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
         let slot = |flags: u32| {

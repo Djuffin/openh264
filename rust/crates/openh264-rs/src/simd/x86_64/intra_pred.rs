@@ -113,7 +113,10 @@ unsafe fn i16x16_plane_fill<O: PredOut>(
         let row_lo = _mm_srai_epi16(_mm_add_epi16(term_lo, s_vec), 5);
         let row_hi = _mm_srai_epi16(_mm_add_epi16(term_hi, s_vec), 5);
         let mut row = [0u8; 16];
-        _mm_storeu_si128(row.as_mut_ptr() as *mut __m128i, _mm_packus_epi16(row_lo, row_hi));
+        _mm_storeu_si128(
+            row.as_mut_ptr() as *mut __m128i,
+            _mm_packus_epi16(row_lo, row_hi),
+        );
         out.put(dy, &row);
         s_vec = _mm_add_epi16(s_vec, c_vec);
     }
@@ -185,17 +188,16 @@ fn chroma_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
         left_sum += (i as i32 + 1) * (src.at(-1, 4 + i) as i32 - src.at(-1, 2 - i) as i32);
     }
     let lt_shift = (src.at(-1, 7) as i32 + src.at(7, -1) as i32) << 4;
-    ((17 * top_sum + 16) >> 5, (17 * left_sum + 16) >> 5, lt_shift)
+    (
+        (17 * top_sum + 16) >> 5,
+        (17 * left_sum + 16) >> 5,
+        lt_shift,
+    )
 }
 
 /// The 8x8 chroma plane fill, from the three coefficients.
 #[target_feature(enable = "sse2")]
-fn chroma_plane_fill<O: PredOut>(
-    out: &mut O,
-    top_shift: i32,
-    left_shift: i32,
-    lt_shift: i32,
-) {
+fn chroma_plane_fill<O: PredOut>(out: &mut O, top_shift: i32, left_shift: i32, lt_shift: i32) {
     let mul_b = _mm_setr_epi16(-3, -2, -1, 0, 1, 2, 3, 4);
     let b_vec = _mm_set1_epi16(top_shift as i16);
     let c_vec = _mm_set1_epi16(left_shift as i16);
@@ -230,7 +232,6 @@ fn pred_h<const N: usize, S: RefSamples, O: PredOut>(src: &S, out: &mut O, rows:
 pub fn enc_i16x16_luma_pred_v(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     pred_v::<16, _, _>(rec, &mut Packed::<16>(pred), 16)
 }
-
 
 /// Vertical 16x16 predictor in place (decoder).
 #[inline]
@@ -291,7 +292,6 @@ pub fn enc_i16x16_luma_pred_plane(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     // unsafe-cat: simd-kernel(x86_64)
     unsafe { i16x16_plane_fill(&mut Packed::<16>(pred), top_shift, left_shift, lt_shift) }
 }
-
 
 /// Plane 16x16 predictor in place (decoder).
 #[inline]
@@ -366,7 +366,6 @@ pub fn enc_chroma_pred_plane(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
     unsafe { chroma_plane_fill(&mut Packed::<8>(pred), top_shift, left_shift, lt_shift) }
 }
 
-
 /// Plane Chroma 8x8 predictor in place (decoder).
 #[inline]
 pub fn dec_chroma_pred_plane(pred: &mut PlaneCursorMut<'_>) {
@@ -411,7 +410,9 @@ pub fn enc_i4x4_luma_pred_h(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let l3 = rec.at(-1, 3) as i8;
     // unsafe-cat: simd-kernel(x86_64)
     unsafe {
-        let v = _mm_setr_epi8(l0, l0, l0, l0, l1, l1, l1, l1, l2, l2, l2, l2, l3, l3, l3, l3);
+        let v = _mm_setr_epi8(
+            l0, l0, l0, l0, l1, l1, l1, l1, l2, l2, l2, l2, l3, l3, l3, l3,
+        );
         _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
     }
 }
@@ -475,10 +476,9 @@ pub fn enc_i4x4_luma_pred_ddl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
-            ddl0 as i8, ddl1 as i8, ddl2 as i8, ddl3 as i8,
-            ddl1 as i8, ddl2 as i8, ddl3 as i8, ddl4 as i8,
-            ddl2 as i8, ddl3 as i8, ddl4 as i8, ddl5 as i8,
-            ddl3 as i8, ddl4 as i8, ddl5 as i8, ddl6 as i8,
+            ddl0 as i8, ddl1 as i8, ddl2 as i8, ddl3 as i8, ddl1 as i8, ddl2 as i8, ddl3 as i8,
+            ddl4 as i8, ddl2 as i8, ddl3 as i8, ddl4 as i8, ddl5 as i8, ddl3 as i8, ddl4 as i8,
+            ddl5 as i8, ddl6 as i8,
         );
         _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
     }
@@ -513,10 +513,9 @@ pub fn enc_i4x4_luma_pred_ddr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
-            ddr0 as i8, ddr1 as i8, ddr2 as i8, ddr3 as i8,
-            ddr4 as i8, ddr0 as i8, ddr1 as i8, ddr2 as i8,
-            ddr5 as i8, ddr4 as i8, ddr0 as i8, ddr1 as i8,
-            ddr6 as i8, ddr5 as i8, ddr4 as i8, ddr0 as i8,
+            ddr0 as i8, ddr1 as i8, ddr2 as i8, ddr3 as i8, ddr4 as i8, ddr0 as i8, ddr1 as i8,
+            ddr2 as i8, ddr5 as i8, ddr4 as i8, ddr0 as i8, ddr1 as i8, ddr6 as i8, ddr5 as i8,
+            ddr4 as i8, ddr0 as i8,
         );
         _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
     }
@@ -545,10 +544,8 @@ pub fn enc_i4x4_luma_pred_vr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
-            vr0 as i8, vr1 as i8, vr2 as i8, vr3 as i8,
-            vr4 as i8, vr5 as i8, vr6 as i8, vr7 as i8,
-            vr8 as i8, vr0 as i8, vr1 as i8, vr2 as i8,
-            vr9 as i8, vr4 as i8, vr5 as i8, vr6 as i8,
+            vr0 as i8, vr1 as i8, vr2 as i8, vr3 as i8, vr4 as i8, vr5 as i8, vr6 as i8, vr7 as i8,
+            vr8 as i8, vr0 as i8, vr1 as i8, vr2 as i8, vr9 as i8, vr4 as i8, vr5 as i8, vr6 as i8,
         );
         _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
     }
@@ -578,10 +575,8 @@ pub fn enc_i4x4_luma_pred_hd(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
-            hd0 as i8, hd7 as i8, hd8 as i8, hd9 as i8,
-            hd2 as i8, hd1 as i8, hd0 as i8, hd7 as i8,
-            hd4 as i8, hd3 as i8, hd2 as i8, hd1 as i8,
-            hd6 as i8, hd5 as i8, hd4 as i8, hd3 as i8,
+            hd0 as i8, hd7 as i8, hd8 as i8, hd9 as i8, hd2 as i8, hd1 as i8, hd0 as i8, hd7 as i8,
+            hd4 as i8, hd3 as i8, hd2 as i8, hd1 as i8, hd6 as i8, hd5 as i8, hd4 as i8, hd3 as i8,
         );
         _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
     }
@@ -606,10 +601,8 @@ pub fn enc_i4x4_luma_pred_vl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
-            vl0 as i8, vl1 as i8, vl2 as i8, vl3 as i8,
-            vl5 as i8, vl6 as i8, vl7 as i8, vl8 as i8,
-            vl1 as i8, vl2 as i8, vl3 as i8, vl4 as i8,
-            vl6 as i8, vl7 as i8, vl8 as i8, vl9 as i8,
+            vl0 as i8, vl1 as i8, vl2 as i8, vl3 as i8, vl5 as i8, vl6 as i8, vl7 as i8, vl8 as i8,
+            vl1 as i8, vl2 as i8, vl3 as i8, vl4 as i8, vl6 as i8, vl7 as i8, vl8 as i8, vl9 as i8,
         );
         _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
     }
@@ -635,10 +628,8 @@ pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
-            hu0 as i8, hu1 as i8, hu2 as i8, hu3 as i8,
-            hu2 as i8, hu3 as i8, hu4 as i8, hu5 as i8,
-            hu4 as i8, hu5 as i8, l3 as i8, l3 as i8,
-            l3 as i8, l3 as i8, l3 as i8, l3 as i8,
+            hu0 as i8, hu1 as i8, hu2 as i8, hu3 as i8, hu2 as i8, hu3 as i8, hu4 as i8, hu5 as i8,
+            hu4 as i8, hu5 as i8, l3 as i8, l3 as i8, l3 as i8, l3 as i8, l3 as i8, l3 as i8,
         );
         _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
     }
@@ -836,7 +827,11 @@ mod tests {
         simd: fn(&mut PlaneCursorMut<'_>),
     ) {
         let (mut pa, mut pb) = twin_pred_planes();
-        assert_eq!(pa.as_slice(), pb.as_slice(), "{name}: twins started out different");
+        assert_eq!(
+            pa.as_slice(),
+            pb.as_slice(),
+            "{name}: twins started out different"
+        );
         scalar(&mut pa.cursor_mut(8, 8));
         simd(&mut pb.cursor_mut(8, 8));
         assert_eq!(
@@ -851,7 +846,11 @@ mod tests {
         use crate::decoder::get_intra_predictor as dec;
         assert_dec_parity("16x16 V", dec::i16x16_luma_pred_v, dec_i16x16_luma_pred_v);
         assert_dec_parity("16x16 H", dec::i16x16_luma_pred_h, dec_i16x16_luma_pred_h);
-        assert_dec_parity("16x16 DC", dec::i16x16_luma_pred_dc, dec_i16x16_luma_pred_dc);
+        assert_dec_parity(
+            "16x16 DC",
+            dec::i16x16_luma_pred_dc,
+            dec_i16x16_luma_pred_dc,
+        );
         assert_dec_parity(
             "16x16 DC top",
             dec::i16x16_luma_pred_dc_top,
@@ -875,7 +874,11 @@ mod tests {
         assert_dec_parity("Chroma V", dec::chroma_pred_v, dec_chroma_pred_v);
         assert_dec_parity("Chroma H", dec::chroma_pred_h, dec_chroma_pred_h);
         assert_dec_parity("Chroma DC", dec::chroma_pred_dc, dec_chroma_pred_dc);
-        assert_dec_parity("Chroma Plane", dec::chroma_pred_plane, dec_chroma_pred_plane);
+        assert_dec_parity(
+            "Chroma Plane",
+            dec::chroma_pred_plane,
+            dec_chroma_pred_plane,
+        );
     }
 
     #[test]
@@ -935,7 +938,10 @@ mod tests {
         // The test module's own `fn`s are not `pub`, but cut it off anyway so a helper
         // named like a kernel cannot be mistaken for one.
         let src = include_str!("intra_pred.rs");
-        let src = src.split("#[cfg(test)]").next().expect("source before the tests");
+        let src = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("source before the tests");
 
         // Body of the item starting at byte `i`, by brace matching.
         fn body_at(s: &str, i: usize) -> &str {
@@ -962,7 +968,11 @@ mod tests {
             &s[i..]
         }
 
-        let ident = |s: &str| -> String { s.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect() };
+        let ident = |s: &str| -> String {
+            s.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect()
+        };
 
         // Every `fn` in the file, by name, so a one-hop call can be resolved.
         let mut bodies: Vec<(String, &str)> = Vec::new();
@@ -986,7 +996,11 @@ mod tests {
                 }
             }
         }
-        assert!(public.len() >= 30, "found only {} public kernels — the scan broke", public.len());
+        assert!(
+            public.len() >= 30,
+            "found only {} public kernels — the scan broke",
+            public.len()
+        );
 
         let intrinsics = |b: &str| b.contains("_mm_");
         let mut offenders = Vec::new();
@@ -994,7 +1008,11 @@ mod tests {
             if SCALAR_BY_DESIGN.contains(&name.as_str()) {
                 continue;
             }
-            let body = bodies.iter().find(|(n, _)| n == name).map(|(_, b)| *b).unwrap_or("");
+            let body = bodies
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, b)| *b)
+                .unwrap_or("");
             if intrinsics(body) {
                 continue;
             }
@@ -1026,7 +1044,10 @@ mod tests {
         for name in SCALAR_BY_DESIGN {
             let body = bodies.iter().find(|(n, _)| n == name).map(|(_, b)| *b);
             let body = body.unwrap_or_else(|| panic!("`{name}` is exempt but no longer exists"));
-            assert!(!intrinsics(body), "`{name}` is exempt but now has intrinsics — drop it from the list");
+            assert!(
+                !intrinsics(body),
+                "`{name}` is exempt but now has intrinsics — drop it from the list"
+            );
         }
     }
 }

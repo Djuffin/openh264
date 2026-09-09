@@ -43,13 +43,12 @@ const EXPECTED_UNION: i32 = 0x36;
 
 /// The two arms this sweep exists to keep honest: reachable from **no** stream in
 /// `res/`.
-const UNREACHED: [(i32, &str); 2] = [
-    (0x4000, "dsOutOfMemory"),
-    (0x0040, "dsRefListNullPtrs"),
-];
+const UNREACHED: [(i32, &str); 2] = [(0x4000, "dsOutOfMemory"), (0x0040, "dsRefListNullPtrs")];
 
 fn assets() -> Vec<std::path::PathBuf> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..").join("res");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join("res");
     let mut v: Vec<_> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -66,13 +65,19 @@ fn assets() -> Vec<std::path::PathBuf> {
 unsafe fn sweep_one(data: &[u8], ec: ERROR_CON_IDC, bs: VIDEO_BITSTREAM_TYPE) -> i32 {
     unsafe {
         let mut decoder: *mut ISVCDecoder = std::ptr::null_mut();
-        assert_eq!(i64::from(WelsCreateDecoder(&mut decoder)), CM_RESULT_SUCCESS as i64);
+        assert_eq!(
+            i64::from(WelsCreateDecoder(&mut decoder)),
+            CM_RESULT_SUCCESS as i64
+        );
         let mut param = SDecodingParam::default();
         param.uiTargetDqLayer = u8::MAX;
         param.eEcActiveIdc = ec;
         param.sVideoProperty.eVideoBsType = bs;
         assert_eq!(
-            i64::from(ISVCDecoder::Initialize(decoder, &param as *const SDecodingParam)),
+            i64::from(ISVCDecoder::Initialize(
+                decoder,
+                &param as *const SDecodingParam
+            )),
             CM_RESULT_SUCCESS as i64
         );
 
@@ -80,8 +85,18 @@ unsafe fn sweep_one(data: &[u8], ec: ERROR_CON_IDC, bs: VIDEO_BITSTREAM_TYPE) ->
         let mut feed = |unit: &[u8]| {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut info = SBufferInfo::default();
-            let src = if unit.is_empty() { std::ptr::null() } else { unit.as_ptr() };
-            let st = ISVCDecoder::DecodeFrame2(decoder, src, unit.len() as i32, p_dst.as_mut_ptr(), &mut info);
+            let src = if unit.is_empty() {
+                std::ptr::null()
+            } else {
+                unit.as_ptr()
+            };
+            let st = ISVCDecoder::DecodeFrame2(
+                decoder,
+                src,
+                unit.len() as i32,
+                p_dst.as_mut_ptr(),
+                &mut info,
+            );
             union_bits |= st.0;
         };
         for unit in split_annexb_units(data) {
@@ -103,7 +118,11 @@ unsafe fn sweep_one(data: &[u8], ec: ERROR_CON_IDC, bs: VIDEO_BITSTREAM_TYPE) ->
 #[test]
 fn every_res_stream_under_every_concealment_mode_reaches_a_known_set_of_states() {
     let files = assets();
-    assert!(files.len() >= 60, "res/ should hold the whole asset tree, found {}", files.len());
+    assert!(
+        files.len() >= 60,
+        "res/ should hold the whole asset tree, found {}",
+        files.len()
+    );
 
     // **Forked across the asset list.** Serially this is ~90s of whole-stream
     // decodes, which is too much to add to a per-commit gate; the decodes are
@@ -111,7 +130,9 @@ fn every_res_stream_under_every_concealment_mode_reaches_a_known_set_of_states()
     // destroyed inside the thread that uses it, and no `*mut ISVCDecoder` ever crosses
     // a thread — so the work parallelises exactly. Nothing here relies on `Decoder`
     // being `Send`, which it is not.
-    let nthreads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(files.len().max(1));
+    let nthreads = std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .min(files.len().max(1));
     let (union_bits, offenders, decodes) = std::thread::scope(|scope| {
         let mut handles = Vec::new();
         for t in 0..nthreads {
@@ -133,7 +154,8 @@ fn every_res_stream_under_every_concealment_mode_reaches_a_known_set_of_states()
                             union_bits |= bits;
                             for (bit, label) in UNREACHED {
                                 if bits & bit != 0 {
-                                    offenders.push(format!("{name} ec={ec:?} bs={bs:?} -> {label}"));
+                                    offenders
+                                        .push(format!("{name} ec={ec:?} bs={bs:?} -> {label}"));
                                 }
                             }
                         }
@@ -142,13 +164,13 @@ fn every_res_stream_under_every_concealment_mode_reaches_a_known_set_of_states()
                 (union_bits, offenders, decodes)
             }));
         }
-        handles.into_iter().map(|h| h.join().expect("sweep worker")).fold(
-            (0i32, Vec::new(), 0usize),
-            |(u, mut o, d), (u2, o2, d2)| {
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("sweep worker"))
+            .fold((0i32, Vec::new(), 0usize), |(u, mut o, d), (u2, o2, d2)| {
                 o.extend(o2);
                 (u | u2, o, d + d2)
-            },
-        )
+            })
     });
 
     eprintln!(

@@ -4,6 +4,7 @@
 
 pub mod bit_stream;
 pub mod cabac_decoder;
+pub mod deblocking;
 pub mod dec_golomb;
 pub mod decode_mb_aux;
 pub mod decode_slice;
@@ -21,5 +22,4 @@ pub mod parse_mb_syn_cavlc;
 pub mod pic_queue;
 pub mod picture;
 pub mod slice;
-pub mod deblocking;
 pub mod vlc_tables;

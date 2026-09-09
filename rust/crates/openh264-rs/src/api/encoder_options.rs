@@ -9,40 +9,33 @@
 //! `codec_api.rs`'s vtable thunks call `self.SetOption(..)`.
 
 // The C++ names come across verbatim.
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 // The module denies, and every item that needs it carries its own tagged
 // `#[allow(unsafe_code)]`.
 #![deny(unsafe_code)]
 
 use std::ffi::c_void;
 
+use crate::api::codec_api::EParameterSetStrategy::*;
+use crate::api::codec_api::LAYER_NUM::*;
+use crate::api::codec_api::RC_MODES::*;
+use crate::api::codec_api::TraceUserCtx;
 use crate::api::codec_api::{
     EComplexityMode, EncoderOption, SBitrateInfo, SEncParamBase, SEncParamExt,
 };
-use crate::api::codec_api::LAYER_NUM::*;
-use crate::api::codec_api::EParameterSetStrategy::*;
-use crate::common::wels_trace::{WelsLog, WelsTraceCallback, WELS_LOG_INFO};
-use crate::encoder::param_svc::{
-    SWelsSvcCodingParam, MAX_SPATIAL_LAYER_NUM, WELS_CLIP3,
-};
+use crate::common::wels_trace::{WELS_LOG_INFO, WelsLog, WelsTraceCallback};
+use crate::encoder::param_svc::{MAX_SPATIAL_LAYER_NUM, SWelsSvcCodingParam, WELS_CLIP3};
 use crate::encoder::rc::WelsRcInitFuncPointers;
 use crate::encoder::ref_list_mgr_svc::{
     FilterLTRMarkingFeedback, FilterLTRRecoveryRequest, SLTRMarkingFeedback, SLTRRecoverRequest,
 };
-use crate::api::codec_api::RC_MODES::*;
 use crate::encoder::wels_encoder_ext::{
-    cmInitExpected, cmInitParaError, cmResultSuccess, rc_mode_from_raw, CWelsH264SVCEncoder,
-    CheckLevelSetting, CheckProfileSetting, CheckReferenceNumSetting, SDeliveryStatus, SLTRConfig,
-    SLevelInfo, SProfileInfo, WelsEncoderApplyBitRate,
+    CWelsH264SVCEncoder, CheckLevelSetting, CheckProfileSetting, CheckReferenceNumSetting,
+    MAX_BIT_RATE, MAX_DEPENDENCY_LAYER, MAX_FRAME_RATE, MIN_BIT_RATE, MIN_FRAME_RATE,
+    SDeliveryStatus, SLTRConfig, SLevelInfo, SProfileInfo, WelsEncoderApplyBitRate,
     WelsEncoderApplyBitVaryRang, WelsEncoderApplyFrameRate, WelsEncoderApplyLTR,
-    WelsEncoderParamAdjust, MAX_BIT_RATE, MAX_DEPENDENCY_LAYER, MAX_FRAME_RATE, MIN_BIT_RATE,
-    MIN_FRAME_RATE,
+    WelsEncoderParamAdjust, cmInitExpected, cmInitParaError, cmResultSuccess, rc_mode_from_raw,
 };
-use crate::api::codec_api::TraceUserCtx;
 
 impl CWelsH264SVCEncoder {
     #[allow(unsafe_code)]
@@ -113,8 +106,7 @@ impl CWelsH264SVCEncoder {
                     }
                     let iTargetWidth = sConfig.iPicWidth;
                     let iTargetHeight = sConfig.iPicHeight;
-                    if self.m_iMaxPicWidth != iTargetWidth
-                        || self.m_iMaxPicHeight != iTargetHeight
+                    if self.m_iMaxPicWidth != iTargetWidth || self.m_iMaxPicHeight != iTargetHeight
                     {
                         self.m_iMaxPicWidth = iTargetWidth;
                         self.m_iMaxPicHeight = iTargetHeight;
@@ -161,8 +153,7 @@ impl CWelsH264SVCEncoder {
                     }
                     let iTargetWidth = sConfig.iPicWidth;
                     let iTargetHeight = sConfig.iPicHeight;
-                    if self.m_iMaxPicWidth != iTargetWidth
-                        || self.m_iMaxPicHeight != iTargetHeight
+                    if self.m_iMaxPicWidth != iTargetWidth || self.m_iMaxPicHeight != iTargetHeight
                     {
                         self.m_iMaxPicWidth = iTargetWidth;
                         self.m_iMaxPicHeight = iTargetHeight;
@@ -216,16 +207,13 @@ impl CWelsH264SVCEncoder {
                         SPATIAL_LAYER_ALL => {
                             ctx.param_mut().iTargetBitrate = iBitrate;
                         }
-                        SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2
-                        | SPATIAL_LAYER_3 => {
-                            ctx.param_mut().sSpatialLayers[pInfo.iLayer as usize]
-                                .iSpatialBitrate = iBitrate;
+                        SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2 | SPATIAL_LAYER_3 => {
+                            ctx.param_mut().sSpatialLayers[pInfo.iLayer as usize].iSpatialBitrate =
+                                iBitrate;
                         }
                     }
                     let log_ctx = self.m_pWelsTrace.m_sLogCtx;
-                    if WelsEncoderApplyBitRate(log_ctx, ctx.param_mut(), pInfo.iLayer as i32)
-                        != 0
-                    {
+                    if WelsEncoderApplyBitRate(log_ctx, ctx.param_mut(), pInfo.iLayer as i32) != 0 {
                         return cmInitParaError;
                     }
                 }
@@ -243,16 +231,13 @@ impl CWelsH264SVCEncoder {
                         SPATIAL_LAYER_ALL => {
                             ctx.param_mut().iMaxBitrate = iBitrate;
                         }
-                        SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2
-                        | SPATIAL_LAYER_3 => {
+                        SPATIAL_LAYER_0 | SPATIAL_LAYER_1 | SPATIAL_LAYER_2 | SPATIAL_LAYER_3 => {
                             ctx.param_mut().sSpatialLayers[pInfo.iLayer as usize]
                                 .iMaxSpatialBitrate = iBitrate;
                         }
                     }
                     let log_ctx = self.m_pWelsTrace.m_sLogCtx;
-                    if WelsEncoderApplyBitRate(log_ctx, ctx.param_mut(), pInfo.iLayer as i32)
-                        != 0
-                    {
+                    if WelsEncoderApplyBitRate(log_ctx, ctx.param_mut(), pInfo.iLayer as i32) != 0 {
                         return cmInitParaError;
                     }
                 }
@@ -266,10 +251,7 @@ impl CWelsH264SVCEncoder {
                     // Re-point the dispatch table. Setting the field alone leaves
                     // the encoder running the previous mode's callbacks.
                     let iRCMode = ctx.param().iRCMode;
-                    WelsRcInitFuncPointers(
-                        &mut ctx.func_list_mut().pfRc,
-                        iRCMode,
-                    );
+                    WelsRcInitFuncPointers(&mut ctx.func_list_mut().pfRc, iRCMode);
                 }
                 EncoderOption::ENCODER_OPTION_RC_FRAME_SKIP => {
                     let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
@@ -361,8 +343,7 @@ impl CWelsH264SVCEncoder {
                         // eSpsPpsIdStrategy > INCREASING_ID
                         return cmInitParaError;
                     }
-                    let mut sConfig: SWelsSvcCodingParam =
-                        *ctx.param();
+                    let mut sConfig: SWelsSvcCodingParam = *ctx.param();
                     sConfig.eSpsPpsIdStrategy = eNewStrategy;
 
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
@@ -464,15 +445,10 @@ impl CWelsH264SVCEncoder {
                         return cmInitExpected;
                     };
                     let iValue = *(pOption as *const i32);
-                    ctx.param_mut().iBitsVaryPercentage =
-                        WELS_CLIP3(iValue, 0, 100);
+                    ctx.param_mut().iBitsVaryPercentage = WELS_CLIP3(iValue, 0, 100);
                     let log_ctx = self.m_pWelsTrace.m_sLogCtx;
                     let iRang = ctx.param().iBitsVaryPercentage;
-                    WelsEncoderApplyBitVaryRang(
-                        log_ctx,
-                        ctx.param_mut(),
-                        iRang,
-                    );
+                    WelsEncoderApplyBitVaryRang(log_ctx, ctx.param_mut(), iRang);
                 }
                 EncoderOption::ENCODER_OPTION_TRACE_LEVEL => {
                     let level = pOption.cast::<u32>().read();
@@ -489,15 +465,15 @@ impl CWelsH264SVCEncoder {
                     // is replaced and handed back to the callback untouched. Never
                     // dereferenced by this crate.
                     let ctx = pOption.cast::<*mut c_void>().read();
-                    self.m_pWelsTrace.SetTraceCallbackContext(TraceUserCtx::from_abi(ctx));
+                    self.m_pWelsTrace
+                        .SetTraceCallbackContext(TraceUserCtx::from_abi(ctx));
                     self.sync_log_ctx();
-                }
-                // C++ ends with `default: return cmInitParaError`. There is no
-                // wildcard arm here on purpose: `SetOption` takes a typed
-                // `ENCODER_OPTION`, so every id the reference can be handed is
-                // one of the 32 variants above, and leaving the match exhaustive
-                // turns "a new option was added and not handled" into a compile
-                // error.
+                } // C++ ends with `default: return cmInitParaError`. There is no
+                  // wildcard arm here on purpose: `SetOption` takes a typed
+                  // `ENCODER_OPTION`, so every id the reference can be handed is
+                  // one of the 32 variants above, and leaving the match exhaustive
+                  // turns "a new option was added and not handled" into a compile
+                  // error.
             }
         }
         0
@@ -530,8 +506,7 @@ impl CWelsH264SVCEncoder {
                     *(pOption as *mut i32) = self.m_iCspInternal;
                 }
                 EncoderOption::ENCODER_OPTION_IDR_INTERVAL => {
-                    *(pOption as *mut i32) =
-                        pCtx.param().uiIntraPeriod as i32;
+                    *(pOption as *mut i32) = pCtx.param().uiIntraPeriod as i32;
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
                     let param_ext = pCtx.param().to_param_ext();
@@ -548,10 +523,11 @@ impl CWelsH264SVCEncoder {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
                         pInfo.iBitrate = pCtx.param().iTargetBitrate;
-                    } else if (pInfo.iLayer as i32) >= 0 && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER {
-                        pInfo.iBitrate = pCtx.param().sSpatialLayers
-                            [pInfo.iLayer as usize]
-                            .iSpatialBitrate;
+                    } else if (pInfo.iLayer as i32) >= 0
+                        && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER
+                    {
+                        pInfo.iBitrate =
+                            pCtx.param().sSpatialLayers[pInfo.iLayer as usize].iSpatialBitrate;
                     } else {
                         return cmInitParaError;
                     }
@@ -560,18 +536,18 @@ impl CWelsH264SVCEncoder {
                     let pInfo = &mut *(pOption as *mut SBitrateInfo);
                     if pInfo.iLayer == SPATIAL_LAYER_ALL {
                         pInfo.iBitrate = pCtx.param().iMaxBitrate;
-                    } else if (pInfo.iLayer as i32) >= 0 && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER {
-                        pInfo.iBitrate = pCtx.param().sSpatialLayers
-                            [pInfo.iLayer as usize]
-                            .iMaxSpatialBitrate;
+                    } else if (pInfo.iLayer as i32) >= 0
+                        && (pInfo.iLayer as i32) < MAX_DEPENDENCY_LAYER
+                    {
+                        pInfo.iBitrate =
+                            pCtx.param().sSpatialLayers[pInfo.iLayer as usize].iMaxSpatialBitrate;
                     } else {
                         return cmInitParaError;
                     }
                 }
                 EncoderOption::ENCODER_OPTION_GET_STATISTICS => {
                     let pStatistics = &mut *(pOption as *mut crate::SEncoderStatistics);
-                    let iLayerIdx =
-                        (pCtx.param().iSpatialLayerNum - 1) as usize;
+                    let iLayerIdx = (pCtx.param().iSpatialLayerNum - 1) as usize;
                     let pEncStats = &pCtx.sEncoderStatistics[iLayerIdx];
 
                     pStatistics.uiWidth = pEncStats.uiWidth;
@@ -596,8 +572,7 @@ impl CWelsH264SVCEncoder {
                     *(pOption as *mut i32) = pCtx.iStatisticsLogInterval;
                 }
                 EncoderOption::ENCODER_OPTION_COMPLEXITY => {
-                    *(pOption as *mut i32) =
-                        pCtx.param().iComplexityMode as i32;
+                    *(pOption as *mut i32) = pCtx.param().iComplexityMode as i32;
                 }
                 // NOTE: C++'s GetOption has **no** ENCODER_OPTION_TRACE_LEVEL case —
                 // it is set-only, and a get falls to `default: return cmInitParaError`.

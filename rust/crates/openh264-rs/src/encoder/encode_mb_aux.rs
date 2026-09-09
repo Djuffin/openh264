@@ -38,12 +38,7 @@
 //! 5. Non-Zero Count & Bit-Cost Estimation: `WelsGetNoneZeroCount_c`, `WelsCalculateSingleCtr4x4_c`
 //! 6. Dynamic SIMD Dispatch Table Initialization: `WelsInitEncodingFuncs`
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -117,7 +112,8 @@ pub const g_kiQuantInterFF: [[i16; 8]; 58] = [
     /*50*/ [139, 213, 139, 213, 213, 333, 213, 333],
     /*51*/ [149, 240, 149, 240, 240, 383, 240, 383],
     /* from here below is only for intra (QP 46..51 + 6) */
-    /*46+6*/ [171, 267, 171, 267, 267, 417, 267, 417],
+    /*46+6*/
+    [171, 267, 171, 267, 267, 417, 267, 417],
     /*47+6*/ [192, 307, 192, 307, 307, 483, 307, 483],
     /*48+6*/ [213, 347, 213, 347, 347, 533, 347, 533],
     /*49+6*/ [235, 373, 235, 373, 373, 600, 373, 600],
@@ -203,8 +199,10 @@ pub const KI_TRUN_TABLE: [i32; 16] = [3, 2, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 
 /// mode-decision path copies an owned prediction scratch into a picture plane. A
 /// function-pointer table cannot be generic, so the scratch reaches the same type
 /// through `RecCursor::over_owned`.
-pub type PCopyFunc =
-    fn(pDst: &crate::encoder::rec_view::RecCursor<'_>, pSrc: &crate::encoder::rec_view::RecCursor<'_>);
+pub type PCopyFunc = fn(
+    pDst: &crate::encoder::rec_view::RecCursor<'_>,
+    pSrc: &crate::encoder::rec_view::RecCursor<'_>,
+);
 /// The forward-DCT slot.
 pub type PDctFunc = fn(
     pDct: &mut [i16],
@@ -224,61 +222,82 @@ pub type PQuantizationMaxFunc =
     fn(pDct: &mut [i16; 64], pFF: &[i16; 8], pMF: &[i16; 8], pMax: &mut [i16; 4]);
 pub type PQuantizationDcFunc = fn(pDct: &mut [i16; 16], iFF: i16, iMF: i16);
 pub type PQuantizationSkipFunc = fn(pDct: &[i16; 49], iFF: i16, iMF: i16) -> i32;
-pub type PQuantizationHadamardFunc =
-    fn(pRes: &mut [i16; 49], kiFF: i16, iMF: i16, pDct: &mut [i16; 4], pBlock: &mut [i16; 4]) -> i32;
+pub type PQuantizationHadamardFunc = fn(
+    pRes: &mut [i16; 49],
+    kiFF: i16,
+    iMF: i16,
+    pDct: &mut [i16; 4],
+    pBlock: &mut [i16; 4],
+) -> i32;
 pub type PTransformHadamard4x4Func = fn(pLumaDc: &mut [i16; 16], pDct: &[i16; 241]);
 pub type PGetNoneZeroCountFunc = fn(pLevel: &[i16; 16]) -> i32;
 
 /// The 4x4 block at coefficient offset `off`, where the callee reads one block.
 #[inline]
 pub fn blk4x4(a: &[i16], off: usize) -> &[i16; 16] {
-    a[off..off + 16].try_into().expect("a 4x4 block is 16 coefficients")
+    a[off..off + 16]
+        .try_into()
+        .expect("a 4x4 block is 16 coefficients")
 }
 
 /// [`blk4x4`], mutably.
 #[inline]
 pub fn blk4x4_mut(a: &mut [i16], off: usize) -> &mut [i16; 16] {
-    (&mut a[off..off + 16]).try_into().expect("a 4x4 block is 16 coefficients")
+    (&mut a[off..off + 16])
+        .try_into()
+        .expect("a 4x4 block is 16 coefficients")
 }
 
 /// [`blk_four4x4_mut`], shared — the reconstruction kernels only read their
 /// coefficients.
 #[inline]
 pub fn blk_four4x4(a: &[i16], off: usize) -> &[i16; 64] {
-    a[off..off + 64].try_into().expect("four 4x4 blocks are 64 coefficients")
+    a[off..off + 64]
+        .try_into()
+        .expect("four 4x4 blocks are 64 coefficients")
 }
 
 /// The whole macroblock's 256 luma coefficients at `off` — `WelsIDctT4RecOnMb`'s
 /// span, which it walks as four quadrants of 64.
 #[inline]
 pub fn blk_mb256(a: &[i16], off: usize) -> &[i16; 256] {
-    a[off..off + 256].try_into().expect("a macroblock's luma is 256 coefficients")
+    a[off..off + 256]
+        .try_into()
+        .expect("a macroblock's luma is 256 coefficients")
 }
 
 /// The four 4x4 blocks at coefficient offset `off`, where the callee reads a
 /// quadrant.
 #[inline]
 pub fn blk_four4x4_mut(a: &mut [i16], off: usize) -> &mut [i16; 64] {
-    (&mut a[off..off + 64]).try_into().expect("four 4x4 blocks are 64 coefficients")
+    (&mut a[off..off + 64])
+        .try_into()
+        .expect("four 4x4 blocks are 64 coefficients")
 }
 
 /// The 2x2-Hadamard span at `off`: `rs[0]`, `rs[16]`, `rs[32]`, `rs[48]` and nothing
 /// past index 48.
 #[inline]
 pub fn hadamard2x2_span(a: &[i16], off: usize) -> &[i16; 49] {
-    a[off..off + 49].try_into().expect("the 2x2 Hadamard reaches index 48")
+    a[off..off + 49]
+        .try_into()
+        .expect("the 2x2 Hadamard reaches index 48")
 }
 
 /// [`hadamard2x2_span`], mutably.
 #[inline]
 pub fn hadamard2x2_span_mut(a: &mut [i16], off: usize) -> &mut [i16; 49] {
-    (&mut a[off..off + 49]).try_into().expect("the 2x2 Hadamard reaches index 48")
+    (&mut a[off..off + 49])
+        .try_into()
+        .expect("the 2x2 Hadamard reaches index 48")
 }
 
 /// The luma-DC Hadamard's span from `off`: block 15's DC sits at index 240.
 #[inline]
 pub fn hadamard_dc_span(a: &[i16], off: usize) -> &[i16; 241] {
-    a[off..off + 241].try_into().expect("the luma DC Hadamard reaches index 240")
+    a[off..off + 241]
+        .try_into()
+        .expect("the luma DC Hadamard reaches index 240")
 }
 
 // ============================================================================
@@ -684,22 +703,13 @@ pub fn WelsDctFourT4_sse2(
 // Forward Quantization Functions
 // ============================================================================
 
-
-
-
-
 // ============================================================================
 // Forward Hadamard Transforms
 // ============================================================================
 
-
-
-
 // ============================================================================
 // Zigzag Scanning Functions
 // ============================================================================
-
-
 
 /// Reorders 16 DC coefficients into 1D zigzag scan order (identical to `WelsScan4x4DcAc_c`).
 ///
@@ -714,8 +724,6 @@ pub fn WelsScan4x4Dc(pLevel: &mut [i16; 16], pDct: &[i16; 16]) {
 // ============================================================================
 // Non-Zero Count and CAVLC Bit Scoring
 // ============================================================================
-
-
 
 // ============================================================================
 // Pixel Block Copy Fallbacks (matching copy_mb.h)
@@ -810,7 +818,6 @@ pub fn WelsCopy16x16_c(
 
 /// Initializes the encoder function pointer table dynamically based on CPU feature flags.
 pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
-
     let f = &mut *pFuncList;
 
     // Baseline C fallback functions
@@ -871,9 +878,12 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
 // Unit Tests
 // ============================================================================
 
-
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_LASX, WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MMXEXT, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3};
+pub use crate::common::cpu_core::{
+    WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_LASX, WELS_CPU_LSX, WELS_CPU_MMI,
+    WELS_CPU_MMXEXT, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSE41, WELS_CPU_SSE42,
+    WELS_CPU_SSSE3,
+};
 
 #[cfg(test)]
 mod tests {
@@ -894,10 +904,21 @@ mod tests {
         WelsInitEncodingFuncs(&mut simd, WELS_CPU_SSE2);
 
         for (name, a, b) in [
-            ("pfScan4x4", scalar.pfScan4x4 as usize, simd.pfScan4x4 as usize),
-            ("pfScan4x4Ac", scalar.pfScan4x4Ac as usize, simd.pfScan4x4Ac as usize),
+            (
+                "pfScan4x4",
+                scalar.pfScan4x4 as usize,
+                simd.pfScan4x4 as usize,
+            ),
+            (
+                "pfScan4x4Ac",
+                scalar.pfScan4x4Ac as usize,
+                simd.pfScan4x4Ac as usize,
+            ),
         ] {
-            assert_eq!(a, b, "{name} gained a SIMD kernel — see simd/x86_64/score.rs first");
+            assert_eq!(
+                a, b,
+                "{name} gained a SIMD kernel — see simd/x86_64/score.rs first"
+            );
         }
     }
 
@@ -947,15 +968,16 @@ mod tests {
     #[test]
     fn test_fdct_t4() {
         let p1 = [
-            10u8, 20, 30, 40,
-            15,   25, 35, 45,
-            20,   30, 40, 50,
-            25,   35, 45, 55,
+            10u8, 20, 30, 40, 15, 25, 35, 45, 20, 30, 40, 50, 25, 35, 45, 55,
         ];
         let p2 = [0u8; 16];
         let mut dct = [0i16; 16];
 
-        dct_4x4(&mut dct, &PlaneCursor::new(&p1, 0, 4), &PlaneCursor::new(&p2, 0, 4));
+        dct_4x4(
+            &mut dct,
+            &PlaneCursor::new(&p1, 0, 4),
+            &PlaneCursor::new(&p2, 0, 4),
+        );
 
         assert_ne!(dct[0], 0);
     }

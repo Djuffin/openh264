@@ -1,9 +1,4 @@
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
@@ -78,23 +73,74 @@ pub type sSar = TagSar;
 
 /// Table E-1: Meaning of sample aspect ratio indicator (aspect_ratio_idc).
 pub const g_ksVuiSampleAspectRatio: [sSar; 17] = [
-    sSar { uiWidth: 0, uiHeight: 0 },
-    sSar { uiWidth: 1, uiHeight: 1 },
-    sSar { uiWidth: 12, uiHeight: 11 },
-    sSar { uiWidth: 10, uiHeight: 11 },
-    sSar { uiWidth: 16, uiHeight: 11 },
-    sSar { uiWidth: 40, uiHeight: 33 },
-    sSar { uiWidth: 24, uiHeight: 11 },
-    sSar { uiWidth: 20, uiHeight: 11 },
-    sSar { uiWidth: 32, uiHeight: 11 },
-    sSar { uiWidth: 80, uiHeight: 33 },
-    sSar { uiWidth: 18, uiHeight: 11 },
-    sSar { uiWidth: 15, uiHeight: 11 },
-    sSar { uiWidth: 64, uiHeight: 33 },
-    sSar { uiWidth: 160, uiHeight: 99 },
-    sSar { uiWidth: 4, uiHeight: 3 },
-    sSar { uiWidth: 3, uiHeight: 2 },
-    sSar { uiWidth: 2, uiHeight: 1 },
+    sSar {
+        uiWidth: 0,
+        uiHeight: 0,
+    },
+    sSar {
+        uiWidth: 1,
+        uiHeight: 1,
+    },
+    sSar {
+        uiWidth: 12,
+        uiHeight: 11,
+    },
+    sSar {
+        uiWidth: 10,
+        uiHeight: 11,
+    },
+    sSar {
+        uiWidth: 16,
+        uiHeight: 11,
+    },
+    sSar {
+        uiWidth: 40,
+        uiHeight: 33,
+    },
+    sSar {
+        uiWidth: 24,
+        uiHeight: 11,
+    },
+    sSar {
+        uiWidth: 20,
+        uiHeight: 11,
+    },
+    sSar {
+        uiWidth: 32,
+        uiHeight: 11,
+    },
+    sSar {
+        uiWidth: 80,
+        uiHeight: 33,
+    },
+    sSar {
+        uiWidth: 18,
+        uiHeight: 11,
+    },
+    sSar {
+        uiWidth: 15,
+        uiHeight: 11,
+    },
+    sSar {
+        uiWidth: 64,
+        uiHeight: 33,
+    },
+    sSar {
+        uiWidth: 160,
+        uiHeight: 99,
+    },
+    sSar {
+        uiWidth: 4,
+        uiHeight: 3,
+    },
+    sSar {
+        uiWidth: 3,
+        uiHeight: 2,
+    },
+    sSar {
+        uiWidth: 2,
+        uiHeight: 1,
+    },
 ];
 
 /// VUI syntax in Sequence Parameter Set, refer to Annex E.1 in ITU-T H.264 Rec.
@@ -540,7 +586,7 @@ impl TagSps {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_vui_defaults() {
         let vui = SVui::default();

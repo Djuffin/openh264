@@ -80,7 +80,10 @@ fn generate_ffmpeg_pattern(
     height: i32,
     num_frames: usize,
 ) -> (Vec<u8>, InputSource) {
-    let temp_file = std::env::temp_dir().join(format!("bench_lib_{}_{}x{}.yuv", pattern_name, width, height));
+    let temp_file = std::env::temp_dir().join(format!(
+        "bench_lib_{}_{}x{}.yuv",
+        pattern_name, width, height
+    ));
     let frame_size = (width * height * 3 / 2) as usize;
 
     let ffmpeg = std::env::var("FFMPEG").unwrap_or_else(|_| "ffmpeg".to_string());
@@ -123,7 +126,9 @@ fn generate_ffmpeg_pattern(
     };
 
     if std::env::var("BENCH_REQUIRE_FFMPEG").is_ok_and(|v| v != "0") {
-        panic!("BENCH_REQUIRE_FFMPEG is set and lavfi source `{pattern_name}` is unavailable: {reason}");
+        panic!(
+            "BENCH_REQUIRE_FFMPEG is set and lavfi source `{pattern_name}` is unavailable: {reason}"
+        );
     }
     eprintln!("  !! lavfi `{pattern_name}` unavailable ({reason}); using the synthetic pattern");
 
@@ -132,7 +137,8 @@ fn generate_ffmpeg_pattern(
         let frame_offset = f * frame_size;
         for y in 0..height as usize {
             for x in 0..width as usize {
-                buffer[frame_offset + y * width as usize + x] = ((x.wrapping_mul(x) ^ y.wrapping_mul(y) ^ (f * 17)) & 0xFF) as u8;
+                buffer[frame_offset + y * width as usize + x] =
+                    ((x.wrapping_mul(x) ^ y.wrapping_mul(y) ^ (f * 17)) & 0xFF) as u8;
             }
         }
     }
@@ -171,8 +177,13 @@ impl CppLibrary {
                     if !create_sym.is_null() && !destroy_sym.is_null() {
                         return Some(Self {
                             _handle: handle,
-                            create_fn: std::mem::transmute::<*mut c_void, CppWelsCreateSVCEncoderFn>(create_sym),
-                            destroy_fn: std::mem::transmute::<*mut c_void, CppWelsDestroySVCEncoderFn>(destroy_sym),
+                            create_fn: std::mem::transmute::<*mut c_void, CppWelsCreateSVCEncoderFn>(
+                                create_sym,
+                            ),
+                            destroy_fn: std::mem::transmute::<
+                                *mut c_void,
+                                CppWelsDestroySVCEncoderFn,
+                            >(destroy_sym),
                         });
                     }
                 }
@@ -196,7 +207,10 @@ struct SliceSpec {
 }
 
 impl SliceSpec {
-    const DEFAULT: SliceSpec = SliceSpec { mode: SliceModeEnum::SM_FIXEDSLCNUM_SLICE, arg: 0 };
+    const DEFAULT: SliceSpec = SliceSpec {
+        mode: SliceModeEnum::SM_FIXEDSLCNUM_SLICE,
+        arg: 0,
+    };
 
     /// `m` or `m:n` — `1:4` is four fixed slices, `1` is one per thread, `3` is
     /// size-limited at the 1500-byte default, `3:600` at 600.
@@ -227,7 +241,11 @@ impl SliceSpec {
             _ => format!(
                 "sm={} n={}",
                 self.mode as i32,
-                if self.arg == 0 { threads.max(1) as u32 } else { self.arg }
+                if self.arg == 0 {
+                    threads.max(1) as u32
+                } else {
+                    self.arg
+                }
             ),
         }
     }
@@ -288,7 +306,11 @@ unsafe fn fill_params(
         _ => {
             // 0 = "one slice per thread", which is the shape that makes the thread
             // axis mean something; anything else is taken literally.
-            arg.uiSliceNum = if slice.arg == 0 { threads.max(1) as u32 } else { slice.arg };
+            arg.uiSliceNum = if slice.arg == 0 {
+                threads.max(1) as u32
+            } else {
+                slice.arg
+            };
             if slice.mode == SliceModeEnum::SM_RASTER_SLICE {
                 arg.uiSliceMbNum[0] = arg.uiSliceNum;
             }
@@ -372,9 +394,22 @@ fn run_c_library_encoder(
 ) -> RunResult {
     unsafe {
         let mut enc: *mut ISVCEncoder = ptr::null_mut();
-        assert_eq!((cpp_lib.create_fn)(&mut enc), 0, "C++ WelsCreateSVCEncoder failed");
+        assert_eq!(
+            (cpp_lib.create_fn)(&mut enc),
+            0,
+            "C++ WelsCreateSVCEncoder failed"
+        );
         assert!(!enc.is_null());
-        let result = run_encoder(enc, width, height, threads, slice, load_balancing, usage, pics);
+        let result = run_encoder(
+            enc,
+            width,
+            height,
+            threads,
+            slice,
+            load_balancing,
+            usage,
+            pics,
+        );
         (cpp_lib.destroy_fn)(enc);
         result
     }
@@ -393,7 +428,16 @@ fn run_rust_library_encoder(
         let mut enc: *mut ISVCEncoder = ptr::null_mut();
         assert_eq!(WelsCreateSVCEncoder(&mut enc), CM_RESULT_SUCCESS);
         assert!(!enc.is_null());
-        let result = run_encoder(enc, width, height, threads, slice, load_balancing, usage, pics);
+        let result = run_encoder(
+            enc,
+            width,
+            height,
+            threads,
+            slice,
+            load_balancing,
+            usage,
+            pics,
+        );
         WelsDestroySVCEncoder(enc);
         result
     }
@@ -402,14 +446,20 @@ fn run_rust_library_encoder(
 fn main() {
     let cpp_lib = CppLibrary::load();
 
-    println!("========================================================================================================================");
+    println!(
+        "========================================================================================================================"
+    );
     println!(" Side-by-Side In-Memory Benchmark: Native C++ OpenH264 vs. Translated openh264-rs");
     if cpp_lib.is_some() {
         println!(" C++ OpenH264 Dynamic Library (libopenh264.so): LOADED");
     } else {
-        println!(" C++ OpenH264 Dynamic Library (libopenh264.so): NOT FOUND (Benchmarking Rust Encoder Performance)");
+        println!(
+            " C++ OpenH264 Dynamic Library (libopenh264.so): NOT FOUND (Benchmarking Rust Encoder Performance)"
+        );
     }
-    println!("========================================================================================================================");
+    println!(
+        "========================================================================================================================"
+    );
 
     let test_inputs = [
         ("testsrc", "320x240 (QVGA Moving Box)", 320, 240, 200),
@@ -423,16 +473,42 @@ fn main() {
         ("mandelbrot", "640x480 (VGA Mandelbrot)", 640, 480, 100),
         ("smptebars", "640x480 (VGA SMPTE Bars)", 640, 480, 100),
         ("mandelbrot", "1280x720 (720p HD Mandelbrot)", 1280, 720, 50),
-        ("smptehdbars", "1280x720 (720p HD SMPTE Bars)", 1280, 720, 50),
-        ("mandelbrot", "1920x1080 (1080p Full HD Mandelbrot)", 1920, 1080, 30),
-        ("smptehdbars", "1920x1080 (1080p Full HD SMPTE Bars)", 1920, 1080, 30),
-        ("testsrc", "1920x1080 (1080p Full HD Testsrc)", 1920, 1080, 30),
+        (
+            "smptehdbars",
+            "1280x720 (720p HD SMPTE Bars)",
+            1280,
+            720,
+            50,
+        ),
+        (
+            "mandelbrot",
+            "1920x1080 (1080p Full HD Mandelbrot)",
+            1920,
+            1080,
+            30,
+        ),
+        (
+            "smptehdbars",
+            "1920x1080 (1080p Full HD SMPTE Bars)",
+            1920,
+            1080,
+            30,
+        ),
+        (
+            "testsrc",
+            "1920x1080 (1080p Full HD Testsrc)",
+            1920,
+            1080,
+            30,
+        ),
     ];
 
     // `BENCH_FRAMES` caps every configuration. Useful while a known bitstream
     // divergence sits partway into a sequence: capping below it gives comparable
     // work on both sides and therefore meaningful timings, at the cost of coverage.
-    let frame_cap: Option<usize> = std::env::var("BENCH_FRAMES").ok().and_then(|v| v.parse().ok());
+    let frame_cap: Option<usize> = std::env::var("BENCH_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok());
     let thread_counts: Vec<u16> = std::env::var("BENCH_THREADS")
         .ok()
         .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
@@ -459,7 +535,7 @@ fn main() {
     let load_balancing: Option<bool> = Some(
         std::env::var("BENCH_LOAD_BALANCING")
             .ok()
-            .is_some_and(|v| v.trim() != "0")
+            .is_some_and(|v| v.trim() != "0"),
     );
 
     if let Some(cap) = frame_cap {
@@ -510,7 +586,9 @@ fn main() {
             InputSource::Ffmpeg => "lavfi",
             InputSource::Synthetic => "SYNTHETIC",
         };
-        println!("------------------------------------------------------------------------------------------------------------------------");
+        println!(
+            "------------------------------------------------------------------------------------------------------------------------"
+        );
         println!(
             " {:<38} {:>4} frames, {:.2} MB/frame, source: {}",
             label,
@@ -518,7 +596,9 @@ fn main() {
             (frame_size as f64) / (1024.0 * 1024.0),
             source_tag
         );
-        println!("------------------------------------------------------------------------------------------------------------------------");
+        println!(
+            "------------------------------------------------------------------------------------------------------------------------"
+        );
 
         for spec in &slice_specs {
             let spec = *spec;
@@ -534,15 +614,29 @@ fn main() {
                 } else {
                     format!("{threads:1} thread{usage_tag}")
                 };
-                let rust = run_rust_library_encoder(w, h, threads, spec, load_balancing, usage, &src_pics);
+                let rust =
+                    run_rust_library_encoder(w, h, threads, spec, load_balancing, usage, &src_pics);
                 let Some(ref cpp) = cpp_lib else {
                     println!(
                         "  [{}] Rust: {:8.2} fps ({:6.3} ms) | {} bytes | SHA-1 {}",
-                        row, rust.fps, rust.latency_ms, rust.bytes, &rust.sha1[..16]
+                        row,
+                        rust.fps,
+                        rust.latency_ms,
+                        rust.bytes,
+                        &rust.sha1[..16]
                     );
                     continue;
                 };
-                let c = run_c_library_encoder(cpp, w, h, threads, spec, load_balancing, usage, &src_pics);
+                let c = run_c_library_encoder(
+                    cpp,
+                    w,
+                    h,
+                    threads,
+                    spec,
+                    load_balancing,
+                    usage,
+                    &src_pics,
+                );
 
                 // A speedup over work that is not the same work is not a speedup. Report
                 // it either way, but never label a mismatched row with one.
@@ -567,16 +661,27 @@ fn main() {
             }
         }
     }
-    println!("========================================================================================================================");
+    println!(
+        "========================================================================================================================"
+    );
 
     if synthetic_used {
-        println!(" NOTE: at least one configuration fell back to the synthetic pattern — high-entropy");
-        println!("       noise, roughly worst case for an encoder. Install ffmpeg, or set FFMPEG, for");
-        println!("       representative throughput. BENCH_REQUIRE_FFMPEG=1 turns the fallback into an error.");
+        println!(
+            " NOTE: at least one configuration fell back to the synthetic pattern — high-entropy"
+        );
+        println!(
+            "       noise, roughly worst case for an encoder. Install ffmpeg, or set FFMPEG, for"
+        );
+        println!(
+            "       representative throughput. BENCH_REQUIRE_FFMPEG=1 turns the fallback into an error."
+        );
     }
     if !mismatches.is_empty() {
         println!();
-        println!(" {} configuration(s) produced different bitstreams:", mismatches.len());
+        println!(
+            " {} configuration(s) produced different bitstreams:",
+            mismatches.len()
+        );
         for m in &mismatches {
             println!("   - {m}");
         }

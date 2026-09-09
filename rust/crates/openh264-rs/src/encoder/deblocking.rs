@@ -34,16 +34,10 @@
 //! Provides boundary strength ($bS$) calculation, alpha/beta clipping threshold lookups,
 //! luma and chroma 4-sample directional edge filtering, and frame/slice macroblock raster traversal.
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 // ============================================================================
 // Constants and Dimension Definitions
 // ============================================================================
-
 #![deny(unsafe_code)]
 
 pub const MB_WIDTH_LUMA: usize = 16;
@@ -92,9 +86,9 @@ pub static g_kuiAlphaTable: [u8; 52 + 12] = [
 
 /// Table 8-16 in H.264/AVC standard: Beta table indexed by clipped QP + offset (0..51 + padding)
 pub static g_kiBetaTable: [i8; 52 + 12] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 6, 6, 7, 7, 8,
-    8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 18, 18, 18,
-    18, 18, 18, 18, 18, 18, 18, 18, 18,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 6, 6, 7, 7, 8, 8,
+    9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 18, 18, 18, 18,
+    18, 18, 18, 18, 18, 18, 18, 18,
 ];
 
 /// Table 8-17 in H.264/AVC standard: Clipping parameter matrix indexed by IndexA and bS
@@ -166,39 +160,37 @@ pub static g_kiTc0Table: [[i8; 4]; 52 + 12] = [
 ];
 
 /// Sub-block index mapping table for marginal boundary edges
-pub static g_kuiTableBIdx: [[u8; 8]; 2] = [
-    [0, 4, 8, 12, 3, 7, 11, 15],
-    [0, 1, 2, 3, 12, 13, 14, 15],
-];
+pub static g_kuiTableBIdx: [[u8; 8]; 2] =
+    [[0, 4, 8, 12, 3, 7, 11, 15], [0, 1, 2, 3, 12, 13, 14, 15]];
 
 // ============================================================================
 // Core Data Structures
 // ============================================================================
 
-/// 4-byte motion vector unit $(MV_x, MV_y)$ in quarter-pel precision.
-pub use crate::encoder::svc_encode_slice::SMVUnitXY;
-use crate::encoder::rec_view::{RecCursor, RecPicView};
-use std::sync::atomic::{AtomicU16, Ordering};
 use crate::common::deblocking_common::{
     deblock_chroma_eq4, deblock_chroma_lt4, deblock_luma_eq4, deblock_luma_lt4,
 };
+use crate::encoder::rec_view::{RecCursor, RecPicView};
+/// 4-byte motion vector unit $(MV_x, MV_y)$ in quarter-pel precision.
+pub use crate::encoder::svc_encode_slice::SMVUnitXY;
 use crate::safe::mb_grid::{MbSplit, MbWindow};
 /// The kernel set this module dispatches through; see [`crate::simd::kernels`].
 use crate::simd::kernels;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 /// Active parameters and pointers for macroblock deblocking filtering.
 /// Matches `struct TagDeblockingFilter` in `codec/encoder/core/inc/deblocking.h`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct TagDeblockingFilter {
-    pub iCsStride: [i32; 3],       // Reconstruction buffer row pitch in bytes
-    pub iMbStride: i16,            // Picture width in macroblocks
-    pub iSliceAlphaC0Offset: i8,   // Slice alpha offset parameter
-    pub iSliceBetaOffset: i8,      // Slice beta offset parameter
-    pub uiLumaQP: u8,              // Luma Quantization Parameter
-    pub uiChromaQP: u8,            // Chroma Quantization Parameter
-    pub uiFilterIdc: u8,           // Boundary control: 0 = across slices, 1 = within slice
-    pub uiReserved: u8,            // Alignment padding byte
+    pub iCsStride: [i32; 3],     // Reconstruction buffer row pitch in bytes
+    pub iMbStride: i16,          // Picture width in macroblocks
+    pub iSliceAlphaC0Offset: i8, // Slice alpha offset parameter
+    pub iSliceBetaOffset: i8,    // Slice beta offset parameter
+    pub uiLumaQP: u8,            // Luma Quantization Parameter
+    pub uiChromaQP: u8,          // Chroma Quantization Parameter
+    pub uiFilterIdc: u8,         // Boundary control: 0 = across slices, 1 = within slice
+    pub uiReserved: u8,          // Alignment padding byte
 }
 
 pub type SDeblockingFilter = TagDeblockingFilter;
@@ -218,8 +210,8 @@ impl Default for TagDeblockingFilter {
     }
 }
 
-pub use crate::encoder::svc_encode_slice::SMB;
 pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
+pub use crate::encoder::svc_encode_slice::SMB;
 
 /// The per-frame slice-walk dispatch — the one deblocking slot that is
 /// genuinely two-valued at runtime (`DeblockingFilterSliceAvcbase` when the
@@ -304,11 +296,7 @@ pub fn SMB_EDGE_MV(
     let neigh = sMotionVector[uiBnIdx];
     let dx = (cur.iMvX as i32 - neigh.iMvX as i32).abs();
     let dy = (cur.iMvY as i32 - neigh.iMvY as i32).abs();
-    if ((dx & !3) | (dy & !3)) != 0 {
-        1
-    } else {
-        0
-    }
+    if ((dx & !3) | (dy & !3)) != 0 { 1 } else { 0 }
 }
 
 #[inline(always)]
@@ -409,7 +397,6 @@ pub fn DeblockingBSInsideMBNormal(
     uiBS: &mut [[[u8; 4]; 4]; 2],
     pNnzTab: &[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM],
 ) {
-
     // Vertical internal edges (dir = 0)
     for j in 0..4 {
         let base = j * 4;
@@ -537,8 +524,14 @@ pub fn DeblockingBSCalc(
 pub fn bs_calc_scalar(
     cur_nzc: &[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM],
     cur_mv: &[SMVUnitXY; MB_BLOCK4x4_NUM],
-    left: Option<(&[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM], &[SMVUnitXY; MB_BLOCK4x4_NUM])>,
-    top: Option<(&[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM], &[SMVUnitXY; MB_BLOCK4x4_NUM])>,
+    left: Option<(
+        &[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM],
+        &[SMVUnitXY; MB_BLOCK4x4_NUM],
+    )>,
+    top: Option<(
+        &[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM],
+        &[SMVUnitXY; MB_BLOCK4x4_NUM],
+    )>,
     inside_mask: u8,
     uiBS: &mut [[[u8; 4]; 4]; 2],
 ) {
@@ -602,7 +595,6 @@ pub fn WelsNonZeroCount_c(pNonZeroCount: &mut [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM])
     nonzero_count(pNonZeroCount);
 }
 
-
 // ============================================================================
 // Directional Filtering Dispatchers
 // ============================================================================
@@ -633,14 +625,21 @@ fn mb_cursors<'a>(
 /// difference between a vertical and a horizontal edge, and it is the reason the
 /// upstream slot names read backwards against these function names: `…Ver`
 /// steps its taps by the stride, which filters a *horizontal* edge.
-fn FilteringEdgeLumaH(pFilter: &SDeblockingFilter, pix: &mut RecCursor<'_>, iStride: i32, pBS: &[u8; 4]) {
+fn FilteringEdgeLumaH(
+    pFilter: &SDeblockingFilter,
+    pix: &mut RecCursor<'_>,
+    iStride: i32,
+    pBS: &[u8; 4],
+) {
     let (mut iIdexA, mut iAlpha, mut iBeta) = (0i32, 0i32, 0i32);
     let mut iTc: [i8; 4] = [0; 4];
     GET_ALPHA_BETA_FROM_QP(
         pFilter.uiLumaQP as i32,
         pFilter.iSliceAlphaC0Offset as i32,
         pFilter.iSliceBetaOffset as i32,
-        &mut iIdexA, &mut iAlpha, &mut iBeta,
+        &mut iIdexA,
+        &mut iAlpha,
+        &mut iBeta,
     );
     if (iAlpha | iBeta) != 0 {
         TC0_TBL_LOOKUP(&mut iTc, iIdexA, pBS, 0);
@@ -649,14 +648,21 @@ fn FilteringEdgeLumaH(pFilter: &SDeblockingFilter, pix: &mut RecCursor<'_>, iStr
 }
 
 /// [`FilteringEdgeLumaH`]'s vertical-edge twin: the taps step by one byte.
-fn FilteringEdgeLumaV(pFilter: &SDeblockingFilter, pix: &mut RecCursor<'_>, iStride: i32, pBS: &[u8; 4]) {
+fn FilteringEdgeLumaV(
+    pFilter: &SDeblockingFilter,
+    pix: &mut RecCursor<'_>,
+    iStride: i32,
+    pBS: &[u8; 4],
+) {
     let (mut iIdexA, mut iAlpha, mut iBeta) = (0i32, 0i32, 0i32);
     let mut iTc: [i8; 4] = [0; 4];
     GET_ALPHA_BETA_FROM_QP(
         pFilter.uiLumaQP as i32,
         pFilter.iSliceAlphaC0Offset as i32,
         pFilter.iSliceBetaOffset as i32,
-        &mut iIdexA, &mut iAlpha, &mut iBeta,
+        &mut iIdexA,
+        &mut iAlpha,
+        &mut iBeta,
     );
     if (iAlpha | iBeta) != 0 {
         TC0_TBL_LOOKUP(&mut iTc, iIdexA, pBS, 0);
@@ -672,7 +678,9 @@ fn FilteringEdgeLumaIntraH(pFilter: &SDeblockingFilter, pix: &mut RecCursor<'_>,
         pFilter.uiLumaQP as i32,
         pFilter.iSliceAlphaC0Offset as i32,
         pFilter.iSliceBetaOffset as i32,
-        &mut iIdexA, &mut iAlpha, &mut iBeta,
+        &mut iIdexA,
+        &mut iAlpha,
+        &mut iBeta,
     );
     if (iAlpha | iBeta) != 0 {
         deblock_luma_eq4(pix, iStride as isize, 1, iAlpha, iBeta);
@@ -686,7 +694,9 @@ fn FilteringEdgeLumaIntraV(pFilter: &SDeblockingFilter, pix: &mut RecCursor<'_>,
         pFilter.uiLumaQP as i32,
         pFilter.iSliceAlphaC0Offset as i32,
         pFilter.iSliceBetaOffset as i32,
-        &mut iIdexA, &mut iAlpha, &mut iBeta,
+        &mut iIdexA,
+        &mut iAlpha,
+        &mut iBeta,
     );
     if (iAlpha | iBeta) != 0 {
         deblock_luma_eq4(pix, 1, iStride as isize, iAlpha, iBeta);
@@ -708,7 +718,9 @@ fn FilteringEdgeChromaH(
         pFilter.uiChromaQP as i32,
         pFilter.iSliceAlphaC0Offset as i32,
         pFilter.iSliceBetaOffset as i32,
-        &mut iIdexA, &mut iAlpha, &mut iBeta,
+        &mut iIdexA,
+        &mut iAlpha,
+        &mut iBeta,
     );
     if (iAlpha | iBeta) != 0 {
         TC0_TBL_LOOKUP(&mut iTc, iIdexA, pBS, 1);
@@ -730,7 +742,9 @@ fn FilteringEdgeChromaV(
         pFilter.uiChromaQP as i32,
         pFilter.iSliceAlphaC0Offset as i32,
         pFilter.iSliceBetaOffset as i32,
-        &mut iIdexA, &mut iAlpha, &mut iBeta,
+        &mut iIdexA,
+        &mut iAlpha,
+        &mut iBeta,
     );
     if (iAlpha | iBeta) != 0 {
         TC0_TBL_LOOKUP(&mut iTc, iIdexA, pBS, 1);
@@ -750,7 +764,9 @@ fn FilteringEdgeChromaIntraH(
         pFilter.uiChromaQP as i32,
         pFilter.iSliceAlphaC0Offset as i32,
         pFilter.iSliceBetaOffset as i32,
-        &mut iIdexA, &mut iAlpha, &mut iBeta,
+        &mut iIdexA,
+        &mut iAlpha,
+        &mut iBeta,
     );
     if (iAlpha | iBeta) != 0 {
         deblock_chroma_eq4(cb, cr, iStride as isize, 1, iAlpha, iBeta);
@@ -769,7 +785,9 @@ fn FilteringEdgeChromaIntraV(
         pFilter.uiChromaQP as i32,
         pFilter.iSliceAlphaC0Offset as i32,
         pFilter.iSliceBetaOffset as i32,
-        &mut iIdexA, &mut iAlpha, &mut iBeta,
+        &mut iIdexA,
+        &mut iAlpha,
+        &mut iBeta,
     );
     if (iAlpha | iBeta) != 0 {
         deblock_chroma_eq4(cb, cr, 1, iStride as isize, iAlpha, iBeta);
@@ -802,10 +820,8 @@ pub fn DeblockingInterMb(
 
     if iLeftFlag {
         let leftMb = mbs.left();
-        pFilter.uiLumaQP =
-            ((iCurLumaQp as i32 + leftMb.uiLumaQp as i32 + 1) >> 1) as u8;
-        pFilter.uiChromaQP =
-            ((iCurChromaQp as i32 + leftMb.uiChromaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiLumaQP = ((iCurLumaQp as i32 + leftMb.uiLumaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiChromaQP = ((iCurChromaQp as i32 + leftMb.uiChromaQp as i32 + 1) >> 1) as u8;
 
         if uiBS[0][0][0] == 0x04 {
             FilteringEdgeLumaIntraV(&*pFilter, &mut pDestY, iLineSize);
@@ -830,22 +846,12 @@ pub fn DeblockingInterMb(
 
     let bs01_u32 = u32::from_ne_bytes(uiBS[0][1]);
     if bs01_u32 != 0 {
-        FilteringEdgeLumaV(
-            &*pFilter,
-            &mut pDestY.advance(4, 0),
-            iLineSize,
-            &uiBS[0][1],
-        );
+        FilteringEdgeLumaV(&*pFilter, &mut pDestY.advance(4, 0), iLineSize, &uiBS[0][1]);
     }
 
     let bs02_u32 = u32::from_ne_bytes(uiBS[0][2]);
     if bs02_u32 != 0 {
-        FilteringEdgeLumaV(
-            &*pFilter,
-            &mut pDestY.advance(8, 0),
-            iLineSize,
-            &uiBS[0][2],
-        );
+        FilteringEdgeLumaV(&*pFilter, &mut pDestY.advance(8, 0), iLineSize, &uiBS[0][2]);
         FilteringEdgeChromaV(
             &*pFilter,
             &mut pDestCb.advance(4, 0),
@@ -867,10 +873,8 @@ pub fn DeblockingInterMb(
 
     if iTopFlag {
         let topMb = mbs.top();
-        pFilter.uiLumaQP =
-            ((iCurLumaQp as i32 + topMb.uiLumaQp as i32 + 1) >> 1) as u8;
-        pFilter.uiChromaQP =
-            ((iCurChromaQp as i32 + topMb.uiChromaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiLumaQP = ((iCurLumaQp as i32 + topMb.uiLumaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiChromaQP = ((iCurChromaQp as i32 + topMb.uiChromaQp as i32 + 1) >> 1) as u8;
 
         if uiBS[1][0][0] == 0x04 {
             FilteringEdgeLumaIntraH(&*pFilter, &mut pDestY, iLineSize);
@@ -895,22 +899,12 @@ pub fn DeblockingInterMb(
 
     let bs11_u32 = u32::from_ne_bytes(uiBS[1][1]);
     if bs11_u32 != 0 {
-        FilteringEdgeLumaH(
-            &*pFilter,
-            &mut pDestY.advance(0, 4),
-            iLineSize,
-            &uiBS[1][1],
-        );
+        FilteringEdgeLumaH(&*pFilter, &mut pDestY.advance(0, 4), iLineSize, &uiBS[1][1]);
     }
 
     let bs12_u32 = u32::from_ne_bytes(uiBS[1][2]);
     if bs12_u32 != 0 {
-        FilteringEdgeLumaH(
-            &*pFilter,
-            &mut pDestY.advance(0, 8),
-            iLineSize,
-            &uiBS[1][2],
-        );
+        FilteringEdgeLumaH(&*pFilter, &mut pDestY.advance(0, 8), iLineSize, &uiBS[1][2]);
         FilteringEdgeChromaH(
             &*pFilter,
             &mut pDestCb.advance(0, 4),
@@ -953,8 +947,7 @@ pub fn FilteringEdgeLumaHV(
 
     // Luma vertical edges
     if iLeftFlag {
-        pFilter.uiLumaQP =
-            ((iCurQp as i32 + mbs.left().uiLumaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiLumaQP = ((iCurQp as i32 + mbs.left().uiLumaQp as i32 + 1) >> 1) as u8;
         FilteringEdgeLumaIntraV(&*pFilter, &mut pDestY, iLineSize);
     }
 
@@ -969,23 +962,64 @@ pub fn FilteringEdgeLumaHV(
     );
     if (iAlpha | iBeta) != 0 {
         TC0_TBL_LOOKUP(&mut iTc, iIdexA, &uiBSx4, 0);
-                    deblock_luma_lt4(&mut pDestY.advance(4, 0), 1, iLineSize as isize, iAlpha, iBeta, &iTc);
-            deblock_luma_lt4(&mut pDestY.advance(8, 0), 1, iLineSize as isize, iAlpha, iBeta, &iTc);
-            deblock_luma_lt4(&mut pDestY.advance(12, 0), 1, iLineSize as isize, iAlpha, iBeta, &iTc);
+        deblock_luma_lt4(
+            &mut pDestY.advance(4, 0),
+            1,
+            iLineSize as isize,
+            iAlpha,
+            iBeta,
+            &iTc,
+        );
+        deblock_luma_lt4(
+            &mut pDestY.advance(8, 0),
+            1,
+            iLineSize as isize,
+            iAlpha,
+            iBeta,
+            &iTc,
+        );
+        deblock_luma_lt4(
+            &mut pDestY.advance(12, 0),
+            1,
+            iLineSize as isize,
+            iAlpha,
+            iBeta,
+            &iTc,
+        );
     }
 
     // Luma horizontal edges
     if iTopFlag {
-        pFilter.uiLumaQP =
-            ((iCurQp as i32 + mbs.top().uiLumaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiLumaQP = ((iCurQp as i32 + mbs.top().uiLumaQp as i32 + 1) >> 1) as u8;
         FilteringEdgeLumaIntraH(&*pFilter, &mut pDestY, iLineSize);
     }
 
     pFilter.uiLumaQP = iCurQp as u8;
     if (iAlpha | iBeta) != 0 {
-                    deblock_luma_lt4(&mut pDestY.advance(0, 4), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
-            deblock_luma_lt4(&mut pDestY.advance(0, 8), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
-            deblock_luma_lt4(&mut pDestY.advance(0, 12), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
+        deblock_luma_lt4(
+            &mut pDestY.advance(0, 4),
+            iLineSize as isize,
+            1,
+            iAlpha,
+            iBeta,
+            &iTc,
+        );
+        deblock_luma_lt4(
+            &mut pDestY.advance(0, 8),
+            iLineSize as isize,
+            1,
+            iAlpha,
+            iBeta,
+            &iTc,
+        );
+        deblock_luma_lt4(
+            &mut pDestY.advance(0, 12),
+            iLineSize as isize,
+            1,
+            iAlpha,
+            iBeta,
+            &iTc,
+        );
     }
 }
 
@@ -1011,8 +1045,7 @@ pub fn FilteringEdgeChromaHV(
 
     // Chroma vertical edges
     if iLeftFlag {
-        pFilter.uiChromaQP =
-            ((iCurQp as i32 + mbs.left().uiChromaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiChromaQP = ((iCurQp as i32 + mbs.left().uiChromaQp as i32 + 1) >> 1) as u8;
         FilteringEdgeChromaIntraV(&*pFilter, &mut pDestCb, &mut pDestCr, iLineSize);
     }
 
@@ -1040,8 +1073,7 @@ pub fn FilteringEdgeChromaHV(
 
     // Chroma horizontal edges
     if iTopFlag {
-        pFilter.uiChromaQP =
-            ((iCurQp as i32 + mbs.top().uiChromaQp as i32 + 1) >> 1) as u8;
+        pFilter.uiChromaQP = ((iCurQp as i32 + mbs.top().uiChromaQp as i32 + 1) >> 1) as u8;
         FilteringEdgeChromaIntraH(&*pFilter, &mut pDestCb, &mut pDestCr, iLineSize);
     }
 
@@ -1105,12 +1137,10 @@ pub fn DeblockingMbAvcbase(
     let bWithinSlice = pFilter.uiFilterIdc != 0;
 
     let iLeftFlag = iMbX > 0
-        && (!bWithinSlice
-            || uiSliceIdc == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed));
+        && (!bWithinSlice || uiSliceIdc == map[(kiMbXY - 1) as usize].load(Ordering::Relaxed));
     let iTopFlag = iMbY > 0
         && (!bWithinSlice
-            || uiSliceIdc
-                == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed));
+            || uiSliceIdc == map[(kiMbXY - iMbStride as i32) as usize].load(Ordering::Relaxed));
 
     let cursors = mb_cursors(view, iMbX, iMbY);
 
@@ -1138,7 +1168,11 @@ pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
             return;
         };
         let sh = &pSlice.sSliceHeaderExt.sSliceHeader;
-        (sh.uiDisableDeblockingFilterIdc, sh.iSliceAlphaC0Offset, sh.iSliceBetaOffset)
+        (
+            sh.uiDisableDeblockingFilterIdc,
+            sh.iSliceAlphaC0Offset,
+            sh.iSliceBetaOffset,
+        )
     };
     let kiMbWidth = pCurDq.iMbWidth;
     let kiMbHeight = pCurDq.iMbHeight;
@@ -1148,7 +1182,11 @@ pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     }
 
     let mut pFilter = SDeblockingFilter::default();
-    pFilter.uiFilterIdc = if kuiDisableDeblockingFilterIdc != 0 { 1 } else { 0 };
+    pFilter.uiFilterIdc = if kuiDisableDeblockingFilterIdc != 0 {
+        1
+    } else {
+        0
+    };
 
     let Some(view) = pCurDq.pRecView.as_ref() else {
         return;
@@ -1295,9 +1333,10 @@ pub fn DeblockingInit(pFunc: &mut DeblockingFunc, _iCpu: i32) {
 // Unit Tests
 // ============================================================================
 
-
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSSE3};
+pub use crate::common::cpu_core::{
+    WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSSE3,
+};
 use crate::common::deblocking_common::nonzero_count;
 use crate::encoder::slice_multi_threading::SSliceCtx;
 use crate::encoder::svc_encode_slice::{current_layer_expect_mut, slice_in_layer_mut};
@@ -1305,7 +1344,7 @@ use crate::encoder::svc_encode_slice::{current_layer_expect_mut, slice_in_layer_
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_alpha_beta_table_lookups() {
         let mut idxA = 0i32;
@@ -1333,7 +1372,6 @@ mod tests {
         assert_eq!(iTc[2], 2);
         assert_eq!(iTc[3], -1);
     }
-
 
     // ========================================================================
     // Boundary strength
@@ -1425,7 +1463,10 @@ mod tests {
 
     impl Lcg {
         fn next(&mut self) -> u32 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (self.0 >> 32) as u32
         }
 
@@ -1438,13 +1479,19 @@ mod tests {
                 7 | 8 => (self.next() % 2001) as i16 - 1000,
                 _ => [i16::MIN, i16::MAX, -32000, 32000][(self.next() % 4) as usize],
             };
-            SMVUnitXY { iMvX: c(), iMvY: c() }
+            SMVUnitXY {
+                iMvX: c(),
+                iMvY: c(),
+            }
         }
 
         /// A macroblock of the given kind, with counts either raw or already 0/1 —
         /// both occur, because a skip macroblock's are not normalised.
         fn mb(&mut self, uiMbType: u32, raw_counts: bool, uniform_mv: bool) -> SMB {
-            let mut mb = SMB { uiMbType, ..Default::default() };
+            let mut mb = SMB {
+                uiMbType,
+                ..Default::default()
+            };
             for n in mb.iNonZeroCount.iter_mut() {
                 *n = match self.next() % 4 {
                     0 | 1 => 0,
@@ -1499,10 +1546,7 @@ mod tests {
                         let (mut want, mut got) = ([[[0u8; 4]; 4]; 2], [[[0u8; 4]; 4]; 2]);
                         bs_calc_three_way(&mut a, l.as_ref(), t.as_ref(), &mut want);
                         bs_calc_via_kernel(&mut b, l.as_ref(), t.as_ref(), &mut got);
-                        assert_eq!(
-                            want, got,
-                            "round {round} kind {kind:#x} left {lk} top {tk}"
-                        );
+                        assert_eq!(want, got, "round {round} kind {kind:#x} left {lk} top {tk}");
                         // The count normalisation is observable — later readers of
                         // `iNonZeroCount` see it — so it has to survive too.
                         assert_eq!(
@@ -1536,7 +1580,10 @@ mod tests {
             for &kind in &[MB_TYPE_16x16, MB_TYPE_SKIP] {
                 let cur = r.mb(kind, false, true);
                 let cur = if kind == MB_TYPE_SKIP {
-                    SMB { iNonZeroCount: [0; MB_LUMA_CHROMA_BLOCK4x4_NUM], ..cur }
+                    SMB {
+                        iNonZeroCount: [0; MB_LUMA_CHROMA_BLOCK4x4_NUM],
+                        ..cur
+                    }
                 } else {
                     cur
                 };
@@ -1559,23 +1606,32 @@ mod tests {
         // The negative half: a 16x16 macroblock whose blocks disagree about the
         // motion vector — which the encoder never builds — is where the mask earns
         // its place, because the unmasked rule would raise those edges to 1.
-        let mut cur = SMB { uiMbType: MB_TYPE_16x16, ..Default::default() };
+        let mut cur = SMB {
+            uiMbType: MB_TYPE_16x16,
+            ..Default::default()
+        };
         cur.sMv[5] = SMVUnitXY { iMvX: 64, iMvY: 0 };
         let (mut masked, mut unmasked) = ([[[0u8; 4]; 4]; 2], [[[0u8; 4]; 4]; 2]);
-        for (mask, out) in [(inside_bs_mask(MB_TYPE_16x16), &mut masked), (0xFF, &mut unmasked)] {
-            kernels::deblock::bs_calc(
-                &cur.iNonZeroCount, &cur.sMv, None, None, mask, out,
-            );
+        for (mask, out) in [
+            (inside_bs_mask(MB_TYPE_16x16), &mut masked),
+            (0xFF, &mut unmasked),
+        ] {
+            kernels::deblock::bs_calc(&cur.iNonZeroCount, &cur.sMv, None, None, mask, out);
         }
-        assert_ne!(masked, unmasked, "the mask is what makes the 16x16 rule the 16x16 rule");
-        assert_eq!(masked, [[[0u8; 4]; 4]; 2], "coefficients are all zero, so the 16x16 rule gives zero");
+        assert_ne!(
+            masked, unmasked,
+            "the mask is what makes the 16x16 rule the 16x16 rule"
+        );
+        assert_eq!(
+            masked, [[[0u8; 4]; 4]; 2],
+            "coefficients are all zero, so the 16x16 rule gives zero"
+        );
     }
 
     #[test]
     fn test_non_zero_count_c() {
         let mut nzc: [i8; 24] = [
-            0, 5, 0, 12, -3, 0, 0, 1, 0, 0, 0, 4,
-            0, 0, 0, 0, 2, 0, 0, 0, 0, 7, 0, 0,
+            0, 5, 0, 12, -3, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 0, 2, 0, 0, 0, 0, 7, 0, 0,
         ];
         WelsNonZeroCount_c(&mut nzc);
         for (i, &val) in nzc.iter().enumerate() {

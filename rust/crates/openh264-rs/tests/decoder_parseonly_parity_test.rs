@@ -129,13 +129,13 @@ unsafe fn parseonly_rows(data: &[u8]) -> Vec<String> {
         let mut emitted = 0usize;
 
         let one = |dec: *mut ISVCDecoder,
-                       buf: *const u8,
-                       len: i32,
-                       info: &mut SParserBsInfo,
-                       out: &mut Vec<String>,
-                       all: &mut Sha1Hasher,
-                       call: &mut usize,
-                       emitted: &mut usize| {
+                   buf: *const u8,
+                   len: i32,
+                   info: &mut SParserBsInfo,
+                   out: &mut Vec<String>,
+                   all: &mut Sha1Hasher,
+                   call: &mut usize,
+                   emitted: &mut usize| {
             info.uiInBsTimeStamp = *call as u64 + 1;
             let rv = ISVCDecoder::DecodeParser(dec, buf, len, info).0;
             let mut total = 0i64;
@@ -183,7 +183,11 @@ unsafe fn parseonly_rows(data: &[u8]) -> Vec<String> {
             "PARSEONLY {} {} {}",
             call,
             emitted,
-            if emitted > 0 { all.digest() } else { "-".to_string() }
+            if emitted > 0 {
+                all.digest()
+            } else {
+                "-".to_string()
+            }
         ));
 
         ISVCDecoder::Uninitialize(dec);
@@ -194,9 +198,13 @@ unsafe fn parseonly_rows(data: &[u8]) -> Vec<String> {
 
 #[test]
 fn decode_parser_matches_the_reference_on_every_asset() {
-    assert!(ASSETS.contains(&"Error_I_P"), "F93's asset left the referee; see F199");
+    assert!(
+        ASSETS.contains(&"Error_I_P"),
+        "F93's asset left the referee; see F199"
+    );
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let goldens = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/decoder_parseonly");
+    let goldens =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/decoder_parseonly");
     let mut failures = Vec::new();
     for asset in ASSETS {
         let data = std::fs::read(root.join("res").join(format!("{asset}.264")))

@@ -1,9 +1,5 @@
 #![deny(unsafe_code)]
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
 //! Decoder bitstream reading and RBSP/EBSP serialization utilities.
@@ -352,7 +348,7 @@ pub fn rbsp_to_ebsp(src: &[u8], dst: &mut [u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     /// The reader reads `READER_SLOP` bytes past the RBSP it is handed, and the
     /// decoder's raw buffer always has the slack (`WelsDecodeBs` sizes every payload
     /// with four bytes to spare). These tests supply it rather than relying on the
@@ -365,9 +361,8 @@ mod tests {
 
     #[test]
     fn test_dec_init_bits_and_init_read_bits() {
-        let raw = RawDataBuffer::from_vec(with_slop(&[
-            0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22,
-        ]));
+        let raw =
+            RawDataBuffer::from_vec(with_slop(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22]));
         let mut bs = BsReader::default();
 
         let err = DecInitBits(&mut bs, &raw, 0, 64);
@@ -424,7 +419,10 @@ mod tests {
         {
             let raw = RawDataBuffer::from_vec(payload.clone());
             let mut rd = BsReader::default();
-            assert_eq!(DecInitBits(&mut rd, &raw, 0, (payload.len() * 8) as i32), ERR_NONE);
+            assert_eq!(
+                DecInitBits(&mut rd, &raw, 0, (payload.len() * 8) as i32),
+                ERR_NONE
+            );
             for _ in 0..12 {
                 let (buf, cursor) = rd.split(&raw);
                 control_vals.push(cursor.get_ue(buf).unwrap());
@@ -438,7 +436,10 @@ mod tests {
         let (start, len) = raw.append_ebsp_stripped(&payload);
         assert_eq!(len, payload.len());
         let mut rd = BsReader::default();
-        assert_eq!(DecInitBits(&mut rd, &raw, start, (len * 8) as i32), ERR_NONE);
+        assert_eq!(
+            DecInitBits(&mut rd, &raw, start, (len * 8) as i32),
+            ERR_NONE
+        );
 
         let mut vals = Vec::new();
         for _ in 0..4 {
@@ -483,6 +484,9 @@ mod tests {
         let mut dst = [0u8; 12];
         let count = rbsp_to_ebsp(&src, &mut dst);
         assert_eq!(count, 9);
-        assert_eq!(&dst[0..9], &[0x00, 0x00, 0x03, 0x02, 0xFF, 0x00, 0x00, 0x03, 0x03]);
+        assert_eq!(
+            &dst[0..9],
+            &[0x00, 0x00, 0x03, 0x02, 0xFF, 0x00, 0x00, 0x03, 0x03]
+        );
     }
 }

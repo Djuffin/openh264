@@ -42,10 +42,7 @@ impl Dec {
     unsafe fn new(param: &SDecodingParam, ec_override: Option<i32>) -> Self {
         unsafe {
             let mut p: *mut ISVCDecoder = std::ptr::null_mut();
-            assert_eq!(
-                WelsCreateDecoder(&mut p),
-                CM_RESULT_SUCCESS as i64
-            );
+            assert_eq!(WelsCreateDecoder(&mut p), CM_RESULT_SUCCESS as i64);
             assert!(!p.is_null());
 
             let mut buf = std::mem::MaybeUninit::<SDecodingParam>::uninit();
@@ -303,7 +300,10 @@ fn test_avc_bitstream_type_notifies_key_frame_loss_when_ec_is_off() {
         .iter()
         .map(|u| u.to_vec())
         .collect();
-    assert!(units.len() > 8, "asset is too short to corrupt a settled slice");
+    assert!(
+        units.len() > 8,
+        "asset is too short to corrupt a settled slice"
+    );
     let half = units[3].len() / 2;
     assert!(half > 6, "unit 3 is too short to corrupt");
     units[3].truncate(half);
@@ -380,8 +380,14 @@ fn test_concealment_statistics_reach_get_statistics() {
     unsafe {
         let dec = Dec::new(&param, None);
         let before = statistics(&dec);
-        assert_eq!(before.uiDecodedFrameCount, 0, "a fresh decoder had a frame count");
-        assert_eq!(before.uiEcFrameNum, 0, "a fresh decoder had concealed frames");
+        assert_eq!(
+            before.uiDecodedFrameCount, 0,
+            "a fresh decoder had a frame count"
+        );
+        assert_eq!(
+            before.uiEcFrameNum, 0,
+            "a fresh decoder had concealed frames"
+        );
 
         let (states, frames) = decode_all(&dec, &data);
         assert!(frames > 0, "the asset decoded nothing");

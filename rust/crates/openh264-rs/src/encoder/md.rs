@@ -32,16 +32,11 @@
  * \brief   Macroblock Mode Decision & Sub-Pixel Refinement Engine
  */
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
-pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
+pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::svc_motion_estimate::SWelsME;
 use crate::safe::mvd_cost::MvdCostCursor;
@@ -55,17 +50,17 @@ pub const ME_REFINE_BUF_STRIDE_BLK8: i32 = 320;
 
 // Half-pixel search offsets
 pub const REFINE_ME_NO_BEST_HALF_PIXEL: i32 = 0; // ( 0,  0)
-pub const REFINE_ME_HALF_PIXEL_TOP: i32 = 1;     // ( 0, -2) in 1/4-pel units
-pub const REFINE_ME_HALF_PIXEL_BOTTOM: i32 = 2;  // ( 0,  2) in 1/4-pel units
-pub const REFINE_ME_HALF_PIXEL_LEFT: i32 = 3;    // (-2,  0) in 1/4-pel units
-pub const REFINE_ME_HALF_PIXEL_RIGHT: i32 = 4;   // ( 2,  0) in 1/4-pel units
+pub const REFINE_ME_HALF_PIXEL_TOP: i32 = 1; // ( 0, -2) in 1/4-pel units
+pub const REFINE_ME_HALF_PIXEL_BOTTOM: i32 = 2; // ( 0,  2) in 1/4-pel units
+pub const REFINE_ME_HALF_PIXEL_LEFT: i32 = 3; // (-2,  0) in 1/4-pel units
+pub const REFINE_ME_HALF_PIXEL_RIGHT: i32 = 4; // ( 2,  0) in 1/4-pel units
 
 // Quarter-pixel search offsets
 pub const ME_NO_BEST_QUAR_PIXEL: i32 = 1; // ( 0,  0) or best half pixel
-pub const ME_QUAR_PIXEL_LEFT: i32 = 2;    // (-1,  0) in 1/4-pel units
-pub const ME_QUAR_PIXEL_RIGHT: i32 = 3;   // ( 1,  0) in 1/4-pel units
-pub const ME_QUAR_PIXEL_TOP: i32 = 4;     // ( 0, -1) in 1/4-pel units
-pub const ME_QUAR_PIXEL_BOTTOM: i32 = 5;  // ( 0,  1) in 1/4-pel units
+pub const ME_QUAR_PIXEL_LEFT: i32 = 2; // (-1,  0) in 1/4-pel units
+pub const ME_QUAR_PIXEL_RIGHT: i32 = 3; // ( 1,  0) in 1/4-pel units
+pub const ME_QUAR_PIXEL_TOP: i32 = 4; // ( 0, -1) in 1/4-pel units
+pub const ME_QUAR_PIXEL_BOTTOM: i32 = 5; // ( 0,  1) in 1/4-pel units
 
 pub const NO_BEST_FRAC_PIX: i32 = 1; // REFINE_ME_NO_BEST_HALF_PIXEL + ME_NO_BEST_QUAR_PIXEL
 
@@ -130,36 +125,25 @@ pub const MB_TYPE_SKIP: u32 = 0x00000100;
 
 // Global Lookup Tables
 pub const g_kiQpCostTable: [i32; 52] = [
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1,
-    1, 1, 1, 1, 2, 2, 2, 2,
-    3, 3, 3, 4, 4, 4, 5, 6,
-    6, 7, 8, 9, 10, 11, 13, 14,
-    16, 18, 20, 23, 25, 29, 32, 36,
-    40, 45, 51, 57, 64, 72, 81, 91,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 6, 6, 7, 8, 9,
+    10, 11, 13, 14, 16, 18, 20, 23, 25, 29, 32, 36, 40, 45, 51, 57, 64, 72, 81, 91,
 ];
 
 pub const g_kiMapModeI16x16: [i8; 7] = [0, 1, 2, 3, 2, 2, 2];
 pub const g_kiMapModeIntraChroma: [i8; 7] = [0, 1, 2, 3, 0, 0, 0];
 
 pub const G_KUI_GOLOMB_UE_LENGTH: [u32; 256] = [
-    1, 3, 3, 5, 5, 5, 5, 7, 7, 7, 7, 7, 7, 7, 7,
-    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
-    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    17,
+    1, 3, 3, 5, 5, 5, 5, 7, 7, 7, 7, 7, 7, 7, 7, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
+    11, 11, 11, 11, 11, 11, 11, 11, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 17,
 ];
 
 // Data Structures
@@ -306,8 +290,7 @@ impl MbSideInfo {
         let rp = sc.ref_pic();
         Self {
             ref_qp: rp.pRefMbQp[xy],
-            ref_is_p: rp.iPictureType
-                == EWelsSliceType::P_SLICE as i32,
+            ref_is_p: rp.iPictureType == EWelsSliceType::P_SLICE as i32,
             ref_mb_type: rp.uiRefMbType[xy],
             ref_skip_sad: rp.pMbSkipSad[xy],
         }
@@ -331,8 +314,8 @@ impl<'a> MdSliceCtx<'a> {
         pLayer: &'a SDqLayer,
         ref_view: Option<&'a crate::encoder::rec_view::RoPicView>,
     ) -> Self {
-        use crate::encoder::svc_mode_decision::BLOCK_16x16;
         use crate::encoder::svc_encode_slice as ses;
+        use crate::encoder::svc_mode_decision::BLOCK_16x16;
         let func = pCtx.func_list();
         let sdf = &func.sSampleDealingFuncs;
         let vaa = pCtx.vaa_expect();
@@ -353,7 +336,9 @@ impl<'a> MdSliceCtx<'a> {
             mb_height: pLayer.iMbHeight as i32,
             sad16: sdf.pfSampleSad[BLOCK_16x16].expect("pfSampleSad[16x16] is installed"),
             satd16: sdf.pfSampleSatd[BLOCK_16x16].expect("pfSampleSatd[16x16] is installed"),
-            md_cost16: sdf.md_cost(BLOCK_16x16).expect("pfMdCost selects an installed 16x16 slot"),
+            md_cost16: sdf
+                .md_cost(BLOCK_16x16)
+                .expect("pfMdCost selects an installed 16x16 slot"),
         }
     }
 
@@ -364,7 +349,8 @@ impl<'a> MdSliceCtx<'a> {
     /// path is past by construction.
     #[inline]
     pub fn ref_pic(&self) -> &'a SPicture {
-        self.ref_pic.expect("the layer's reference picture is bound")
+        self.ref_pic
+            .expect("the layer's reference picture is bound")
     }
 }
 
@@ -378,7 +364,9 @@ impl<'a> MbCursors<'a> {
     /// picture.
     #[inline]
     pub fn at(sc: &MdSliceCtx<'a>, mb_x: i32, mb_y: i32) -> Self {
-        let refv = sc.refv.expect("the layer's reference view is built for this frame");
+        let refv = sc
+            .refv
+            .expect("the layer's reference view is built for this frame");
         Self::from_views(sc.enc, refv, sc.rec, mb_x, mb_y)
     }
 
@@ -454,7 +442,9 @@ impl<'a> SWelsMD<'a> {
     /// macroblock loop.
     #[inline]
     pub fn sc(&self) -> &MdSliceCtx<'a> {
-        self.sctx.as_ref().expect("the P-slice mode-decision context is built for this slice")
+        self.sctx
+            .as_ref()
+            .expect("the P-slice mode-decision context is built for this slice")
     }
 
     /// The current macroblock's plane cursors.
@@ -463,7 +453,9 @@ impl<'a> SWelsMD<'a> {
     /// If none are stamped — the macroblock loop stamps them before any body runs.
     #[inline]
     pub fn mbc(&self) -> &MbCursors<'a> {
-        self.mbc.as_ref().expect("the macroblock's cursors are stamped")
+        self.mbc
+            .as_ref()
+            .expect("the macroblock's cursors are stamped")
     }
 }
 
@@ -491,7 +483,8 @@ impl Default for SWelsMD<'_> {
     }
 }
 
-pub type PCopyFunc = unsafe extern "C" fn(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32);
+pub type PCopyFunc =
+    unsafe extern "C" fn(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32);
 pub type PWelsSampleAveragingFunc = unsafe extern "C" fn(
     pDst: *mut u8,
     iDstStride: i32,
@@ -561,12 +554,20 @@ impl SMeRefinePointer {
     /// The quarter-pixel plane currently holding the best candidate.
     #[inline(always)]
     pub fn quar_pix_best(&self) -> usize {
-        (if self.bQuarPixSwapped { ME_PLANE_QUAR_B } else { ME_PLANE_QUAR_A }) + self.iStride
+        (if self.bQuarPixSwapped {
+            ME_PLANE_QUAR_B
+        } else {
+            ME_PLANE_QUAR_A
+        }) + self.iStride
     }
     /// The other one — where the next candidate is built.
     #[inline(always)]
     pub fn quar_pix_tmp(&self) -> usize {
-        (if self.bQuarPixSwapped { ME_PLANE_QUAR_A } else { ME_PLANE_QUAR_B }) + self.iStride
+        (if self.bQuarPixSwapped {
+            ME_PLANE_QUAR_A
+        } else {
+            ME_PLANE_QUAR_B
+        }) + self.iStride
     }
     /// What `mem::swap(&mut pQuarPixBest, &mut pQuarPixTmp)` was.
     #[inline(always)]
@@ -630,13 +631,19 @@ fn quar_candidate(
     let MeQuarSource::Buf(a_off) = *a else {
         unreachable!("pSrcA is a scratch plane in every half-pixel arm")
     };
-    assert!(a_off + span <= dst, "quarter-pixel destination overlaps its source");
+    assert!(
+        a_off + span <= dst,
+        "quarter-pixel destination overlaps its source"
+    );
     let (lo, hi) = pMbCache.sBufferInterPredMe.split_at_mut(dst);
     let cA = PlaneCursor::new(&lo[a_off..][..span], 0, stride);
     let mut cDst = PlaneCursorMut::new(&mut hi[..span], 0, stride);
     match *b {
         MeQuarSource::Buf(b_off) => {
-            assert!(b_off + span <= dst, "quarter-pixel destination overlaps its source");
+            assert!(
+                b_off + span <= dst,
+                "quarter-pixel destination overlaps its source"
+            );
             let cB = PlaneCursor::new(&lo[b_off..][..span], 0, stride);
             pixel_avg(&mut cDst, &cA, &cB, w, h);
         }
@@ -815,7 +822,10 @@ pub const fn mem_pred_chroma_off(uiMemPredLumaHalf: u8) -> usize {
 
 /// `pMbCache->pBestPredIntraChroma` — one of the chroma half's two 128-byte halves.
 #[inline]
-pub const fn best_pred_intra_chroma_off(uiMemPredLumaHalf: u8, uiBestPredIntraChromaHalf: u8) -> usize {
+pub const fn best_pred_intra_chroma_off(
+    uiMemPredLumaHalf: u8,
+    uiBestPredIntraChromaHalf: u8,
+) -> usize {
     mem_pred_chroma_off(uiMemPredLumaHalf) + 128 * uiBestPredIntraChromaHalf as usize
 }
 
@@ -854,16 +864,18 @@ pub type PUpdateMbMvFunc = fn(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv
 pub use crate::common::mc::SMcFunc;
 // MC and the half-pel filters are called directly, not via `sMcFuncs`.
 use crate::common::mc::{mc_hor_ver02, mc_hor_ver20, mc_hor_ver22, pixel_avg};
-pub use crate::encoder::encoder_context::SPicData;
-pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
-pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
-use crate::encoder::rec_view::{RecCursor, RecPicView, SharedMbArray};
-use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
-use crate::encoder::svc_encode_slice::{current_layer_expect, layer_enc_view_expect, layer_ref_view_expect};
-pub use crate::encoder::svc_encode_slice::SDqLayer;
-pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+pub use crate::encoder::encoder_context::SDCTCoeff;
+pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
+use crate::encoder::rec_view::{RecCursor, RecPicView, SharedMbArray};
+pub use crate::encoder::svc_encode_slice::SDqLayer;
+use crate::encoder::svc_encode_slice::{
+    current_layer_expect, layer_enc_view_expect, layer_ref_view_expect,
+};
+pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
+pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 
 /// Which sibling cost array a selector in [`SSampleDealingFunc`] names.
 ///
@@ -1000,14 +1012,18 @@ pub fn WelsMedian(iA: i32, iB: i32, iC: i32) -> i32 {
 
 #[inline(always)]
 pub fn IS_SVC_INTER(uiMbType: u32) -> bool {
-    (uiMbType & (MB_TYPE_16x16 | MB_TYPE_16x8 | MB_TYPE_8x16 | MB_TYPE_8x8 | MB_TYPE_8x8_REF0 | MB_TYPE_SKIP)) != 0
+    (uiMbType
+        & (MB_TYPE_16x16
+            | MB_TYPE_16x8
+            | MB_TYPE_8x16
+            | MB_TYPE_8x8
+            | MB_TYPE_8x8_REF0
+            | MB_TYPE_SKIP))
+        != 0
 }
 
 // Function Implementations
-pub fn FillNeighborCacheIntra(
-    pMbCache: &mut SMbCache,
-    mbs: &MbSplit<'_, SMB>,
-) {
+pub fn FillNeighborCacheIntra(pMbCache: &mut SMbCache, mbs: &MbSplit<'_, SMB>) {
     let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let mut uiNeighborIntra: u32 = 0;
 
@@ -1129,7 +1145,11 @@ pub fn FillNeighborCacheInterWithoutBGD(
         pMvComp.sMotionVectorCache[12] = SMVUnitXY::default();
         pMvComp.sMotionVectorCache[18] = SMVUnitXY::default();
         pMvComp.sMotionVectorCache[24] = SMVUnitXY::default();
-        let ref_val = if (uiNeighborAvail & LEFT_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
+        let ref_val = if (uiNeighborAvail & LEFT_MB_POS) != 0 {
+            REF_NOT_IN_LIST
+        } else {
+            REF_NOT_AVAIL
+        };
         pMvComp.iRefIndexCache[6] = ref_val;
         pMvComp.iRefIndexCache[12] = ref_val;
         pMvComp.iRefIndexCache[18] = ref_val;
@@ -1162,7 +1182,11 @@ pub fn FillNeighborCacheInterWithoutBGD(
         pMvComp.sMotionVectorCache[2] = SMVUnitXY::default();
         pMvComp.sMotionVectorCache[3] = SMVUnitXY::default();
         pMvComp.sMotionVectorCache[4] = SMVUnitXY::default();
-        let ref_val = if (uiNeighborAvail & TOP_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
+        let ref_val = if (uiNeighborAvail & TOP_MB_POS) != 0 {
+            REF_NOT_IN_LIST
+        } else {
+            REF_NOT_AVAIL
+        };
         pMvComp.iRefIndexCache[1] = ref_val;
         pMvComp.iRefIndexCache[2] = ref_val;
         pMvComp.iRefIndexCache[3] = ref_val;
@@ -1187,7 +1211,11 @@ pub fn FillNeighborCacheInterWithoutBGD(
         }
     } else {
         pMvComp.sMotionVectorCache[0] = SMVUnitXY::default();
-        pMvComp.iRefIndexCache[0] = if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
+        pMvComp.iRefIndexCache[0] = if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 {
+            REF_NOT_IN_LIST
+        } else {
+            REF_NOT_AVAIL
+        };
         pMbCache.iSadCost[0] = 0;
         pMbCache.bMbTypeSkip[0] = false;
         pMbCache.iSadCostSkip[0] = 0;
@@ -1208,7 +1236,11 @@ pub fn FillNeighborCacheInterWithoutBGD(
         }
     } else {
         pMvComp.sMotionVectorCache[5] = SMVUnitXY::default();
-        pMvComp.iRefIndexCache[5] = if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
+        pMvComp.iRefIndexCache[5] = if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 {
+            REF_NOT_IN_LIST
+        } else {
+            REF_NOT_AVAIL
+        };
         pMbCache.iSadCost[2] = 0;
         pMbCache.bMbTypeSkip[2] = false;
         pMbCache.iSadCostSkip[2] = 0;
@@ -1261,7 +1293,11 @@ pub fn FillNeighborCacheInterWithBGD(
         pMvComp.sMotionVectorCache[12] = SMVUnitXY::default();
         pMvComp.sMotionVectorCache[18] = SMVUnitXY::default();
         pMvComp.sMotionVectorCache[24] = SMVUnitXY::default();
-        let ref_val = if (uiNeighborAvail & LEFT_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
+        let ref_val = if (uiNeighborAvail & LEFT_MB_POS) != 0 {
+            REF_NOT_IN_LIST
+        } else {
+            REF_NOT_AVAIL
+        };
         pMvComp.iRefIndexCache[6] = ref_val;
         pMvComp.iRefIndexCache[12] = ref_val;
         pMvComp.iRefIndexCache[18] = ref_val;
@@ -1282,7 +1318,9 @@ pub fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[4] = pTopMb.iRefIndex[3];
         pMbCache.iSadCost[1] = pTopMb.iSadCost;
 
-        if pTopMb.uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize) as usize] == 0 {
+        if pTopMb.uiMbType == MB_TYPE_SKIP
+            && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize) as usize] == 0
+        {
             pMbCache.bMbTypeSkip[1] = true;
             pMbCache.iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
         } else {
@@ -1294,7 +1332,11 @@ pub fn FillNeighborCacheInterWithBGD(
         pMvComp.sMotionVectorCache[2] = SMVUnitXY::default();
         pMvComp.sMotionVectorCache[3] = SMVUnitXY::default();
         pMvComp.sMotionVectorCache[4] = SMVUnitXY::default();
-        let ref_val = if (uiNeighborAvail & TOP_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
+        let ref_val = if (uiNeighborAvail & TOP_MB_POS) != 0 {
+            REF_NOT_IN_LIST
+        } else {
+            REF_NOT_AVAIL
+        };
         pMvComp.iRefIndexCache[1] = ref_val;
         pMvComp.iRefIndexCache[2] = ref_val;
         pMvComp.iRefIndexCache[3] = ref_val;
@@ -1310,7 +1352,9 @@ pub fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[0] = pTopLeftMb.iRefIndex[3];
         pMbCache.iSadCost[0] = pTopLeftMb.iSadCost;
 
-        if pTopLeftMb.uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize - 1) as usize] == 0 {
+        if pTopLeftMb.uiMbType == MB_TYPE_SKIP
+            && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize - 1) as usize] == 0
+        {
             pMbCache.bMbTypeSkip[0] = true;
             pMbCache.iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
         } else {
@@ -1319,7 +1363,11 @@ pub fn FillNeighborCacheInterWithBGD(
         }
     } else {
         pMvComp.sMotionVectorCache[0] = SMVUnitXY::default();
-        pMvComp.iRefIndexCache[0] = if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
+        pMvComp.iRefIndexCache[0] = if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 {
+            REF_NOT_IN_LIST
+        } else {
+            REF_NOT_AVAIL
+        };
         pMbCache.iSadCost[0] = 0;
         pMbCache.bMbTypeSkip[0] = false;
         pMbCache.iSadCostSkip[0] = 0;
@@ -1331,7 +1379,9 @@ pub fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[5] = pTopRightMb.iRefIndex[2];
         pMbCache.iSadCost[2] = pTopRightMb.iSadCost;
 
-        if pTopRightMb.uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize + 1) as usize] == 0 {
+        if pTopRightMb.uiMbType == MB_TYPE_SKIP
+            && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize + 1) as usize] == 0
+        {
             pMbCache.bMbTypeSkip[2] = true;
             pMbCache.iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
         } else {
@@ -1340,7 +1390,11 @@ pub fn FillNeighborCacheInterWithBGD(
         }
     } else {
         pMvComp.sMotionVectorCache[5] = SMVUnitXY::default();
-        pMvComp.iRefIndexCache[5] = if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 { REF_NOT_IN_LIST } else { REF_NOT_AVAIL };
+        pMvComp.iRefIndexCache[5] = if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 {
+            REF_NOT_IN_LIST
+        } else {
+            REF_NOT_AVAIL
+        };
         pMbCache.iSadCost[2] = 0;
         pMbCache.bMbTypeSkip[2] = false;
         pMbCache.iSadCostSkip[2] = 0;
@@ -1358,10 +1412,7 @@ pub fn FillNeighborCacheInterWithBGD(
     pMvComp.iRefIndexCache[23] = REF_NOT_AVAIL;
 }
 
-pub extern "C" fn InitFillNeighborCacheInterFunc(
-    pFuncList: &mut SWelsFuncPtrList,
-    kiFlag: i32,
-) {
+pub extern "C" fn InitFillNeighborCacheInterFunc(pFuncList: &mut SWelsFuncPtrList, kiFlag: i32) {
     pFuncList.pfFillInterNeighborCache = if kiFlag != 0 {
         FillNeighborCacheInterWithBGD
     } else {
@@ -1453,10 +1504,7 @@ pub extern "C" fn AnalysisVaaInfoIntra_c(cEnc: &RecCursor<'_>) -> i32 {
     iSumSqr - ((iSumAvg * iSumAvg) >> 4)
 }
 
-pub extern "C" fn InitIntraAnalysisVaaInfo(
-    pFuncList: &mut SWelsFuncPtrList,
-    _kuiCpuFlag: u32,
-) {
+pub extern "C" fn InitIntraAnalysisVaaInfo(pFuncList: &mut SWelsFuncPtrList, _kuiCpuFlag: u32) {
     pFuncList.pfGetVarianceFromIntraVaa = AnalysisVaaInfoIntra_c;
     pFuncList.pfGetMbSignFromInterVaa = MdInterAnalysisVaaInfo_c;
     pFuncList.pfUpdateMbMv = UpdateMbMv_c;
@@ -1671,14 +1719,25 @@ pub extern "C" fn MeRefineFracPixel(
     // filters, which write one extra row or column.
     let span_wh = |w: usize, h: usize| (h - 1) * kiBufStride + w;
 
-    let pfMeCost = pFunc.sSampleDealingFuncs.me_cost(pMe.uiBlockSize as usize).unwrap();
+    let pfMeCost = pFunc
+        .sSampleDealingFuncs
+        .me_cost(pMe.uiBlockSize as usize)
+        .unwrap();
 
     if pCurDqLayer.bSatdInMdFlag {
         iBestCost = pMe.uSadPredISatd.uiValue as i32
-            + COST_MVD(pMe.pMvdCost, (iMvx - pMe.sMvp.iMvX) as i32, (iMvy - pMe.sMvp.iMvY) as i32);
+            + COST_MVD(
+                pMe.pMvdCost,
+                (iMvx - pMe.sMvp.iMvX) as i32,
+                (iMvy - pMe.sMvp.iMvY) as i32,
+            );
     } else {
         iBestCost = pfMeCost(&cEnc, &cRef)
-            + COST_MVD(pMe.pMvdCost, (iMvx - pMe.sMvp.iMvX) as i32, (iMvy - pMe.sMvp.iMvY) as i32);
+            + COST_MVD(
+                pMe.pMvdCost,
+                (iMvx - pMe.sMvp.iMvX) as i32,
+                (iMvy - pMe.sMvp.iMvY) as i32,
+            );
     }
 
     iBestHalfPix = REFINE_ME_NO_BEST_HALF_PIXEL;
@@ -1713,7 +1772,11 @@ pub extern "C" fn MeRefineFracPixel(
 
     // (0, -2) [TOP]
     iCurCost = iCostTop
-        + COST_MVD(pMe.pMvdCost, (iMvx - pMe.sMvp.iMvX) as i32, (iMvy - 2 - pMe.sMvp.iMvY) as i32);
+        + COST_MVD(
+            pMe.pMvdCost,
+            (iMvx - pMe.sMvp.iMvX) as i32,
+            (iMvy - 2 - pMe.sMvp.iMvY) as i32,
+        );
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_TOP;
@@ -1722,7 +1785,11 @@ pub extern "C" fn MeRefineFracPixel(
 
     // (0, 2) [BOTTOM]
     iCurCost = iCostBottom
-        + COST_MVD(pMe.pMvdCost, (iMvx - pMe.sMvp.iMvX) as i32, (iMvy + 2 - pMe.sMvp.iMvY) as i32);
+        + COST_MVD(
+            pMe.pMvdCost,
+            (iMvx - pMe.sMvp.iMvX) as i32,
+            (iMvy + 2 - pMe.sMvp.iMvY) as i32,
+        );
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_BOTTOM;
@@ -1754,7 +1821,11 @@ pub extern "C" fn MeRefineFracPixel(
 
     // (-2, 0) [LEFT]
     iCurCost = iCostLeft
-        + COST_MVD(pMe.pMvdCost, (iMvx - 2 - pMe.sMvp.iMvX) as i32, (iMvy - pMe.sMvp.iMvY) as i32);
+        + COST_MVD(
+            pMe.pMvdCost,
+            (iMvx - 2 - pMe.sMvp.iMvX) as i32,
+            (iMvy - pMe.sMvp.iMvY) as i32,
+        );
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_LEFT;
@@ -1763,7 +1834,11 @@ pub extern "C" fn MeRefineFracPixel(
 
     // (2, 0) [RIGHT]
     iCurCost = iCostRight
-        + COST_MVD(pMe.pMvdCost, (iMvx + 2 - pMe.sMvp.iMvX) as i32, (iMvy - pMe.sMvp.iMvY) as i32);
+        + COST_MVD(
+            pMe.pMvdCost,
+            (iMvx + 2 - pMe.sMvp.iMvX) as i32,
+            (iMvy - pMe.sMvp.iMvY) as i32,
+        );
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_RIGHT;
@@ -1773,7 +1848,6 @@ pub extern "C" fn MeRefineFracPixel(
     sParams.iBestCost = iBestCost;
     sParams.iBestHalfPix = iBestHalfPix;
     sParams.iBestQuarPix = ME_NO_BEST_QUAR_PIXEL;
-
 
     if REFINE_ME_NO_BEST_HALF_PIXEL == iBestHalfPix {
         sParams.pSrcA[0] = MeQuarSource::Buf(pMeRefine.half_pix_v());
@@ -1786,10 +1860,26 @@ pub extern "C" fn MeRefineFracPixel(
         sParams.pSrcB[2] = MeQuarSource::Ref(0, 0);
         sParams.pSrcB[3] = MeQuarSource::Ref(0, 0);
 
-        sParams.iLms[0] = COST_MVD(pMe.pMvdCost, (iHalfMvx - pMe.sMvp.iMvX) as i32, (iHalfMvy - 1 - pMe.sMvp.iMvY) as i32);
-        sParams.iLms[1] = COST_MVD(pMe.pMvdCost, (iHalfMvx - pMe.sMvp.iMvX) as i32, (iHalfMvy + 1 - pMe.sMvp.iMvY) as i32);
-        sParams.iLms[2] = COST_MVD(pMe.pMvdCost, (iHalfMvx - 1 - pMe.sMvp.iMvX) as i32, (iHalfMvy - pMe.sMvp.iMvY) as i32);
-        sParams.iLms[3] = COST_MVD(pMe.pMvdCost, (iHalfMvx + 1 - pMe.sMvp.iMvX) as i32, (iHalfMvy - pMe.sMvp.iMvY) as i32);
+        sParams.iLms[0] = COST_MVD(
+            pMe.pMvdCost,
+            (iHalfMvx - pMe.sMvp.iMvX) as i32,
+            (iHalfMvy - 1 - pMe.sMvp.iMvY) as i32,
+        );
+        sParams.iLms[1] = COST_MVD(
+            pMe.pMvdCost,
+            (iHalfMvx - pMe.sMvp.iMvX) as i32,
+            (iHalfMvy + 1 - pMe.sMvp.iMvY) as i32,
+        );
+        sParams.iLms[2] = COST_MVD(
+            pMe.pMvdCost,
+            (iHalfMvx - 1 - pMe.sMvp.iMvX) as i32,
+            (iHalfMvy - pMe.sMvp.iMvY) as i32,
+        );
+        sParams.iLms[3] = COST_MVD(
+            pMe.pMvdCost,
+            (iHalfMvx + 1 - pMe.sMvp.iMvX) as i32,
+            (iHalfMvy - pMe.sMvp.iMvY) as i32,
+        );
     } else {
         match iBestHalfPix {
             REFINE_ME_HALF_PIXEL_LEFT => {
@@ -1883,14 +1973,38 @@ pub extern "C" fn MeRefineFracPixel(
             _ => {}
         }
 
-        sParams.iLms[0] = COST_MVD(pMe.pMvdCost, (iHalfMvx - pMe.sMvp.iMvX) as i32, (iHalfMvy - 1 - pMe.sMvp.iMvY) as i32);
-        sParams.iLms[1] = COST_MVD(pMe.pMvdCost, (iHalfMvx - pMe.sMvp.iMvX) as i32, (iHalfMvy + 1 - pMe.sMvp.iMvY) as i32);
-        sParams.iLms[2] = COST_MVD(pMe.pMvdCost, (iHalfMvx - 1 - pMe.sMvp.iMvX) as i32, (iHalfMvy - pMe.sMvp.iMvY) as i32);
-        sParams.iLms[3] = COST_MVD(pMe.pMvdCost, (iHalfMvx + 1 - pMe.sMvp.iMvX) as i32, (iHalfMvy - pMe.sMvp.iMvY) as i32);
+        sParams.iLms[0] = COST_MVD(
+            pMe.pMvdCost,
+            (iHalfMvx - pMe.sMvp.iMvX) as i32,
+            (iHalfMvy - 1 - pMe.sMvp.iMvY) as i32,
+        );
+        sParams.iLms[1] = COST_MVD(
+            pMe.pMvdCost,
+            (iHalfMvx - pMe.sMvp.iMvX) as i32,
+            (iHalfMvy + 1 - pMe.sMvp.iMvY) as i32,
+        );
+        sParams.iLms[2] = COST_MVD(
+            pMe.pMvdCost,
+            (iHalfMvx - 1 - pMe.sMvp.iMvX) as i32,
+            (iHalfMvy - pMe.sMvp.iMvY) as i32,
+        );
+        sParams.iLms[3] = COST_MVD(
+            pMe.pMvdCost,
+            (iHalfMvx + 1 - pMe.sMvp.iMvX) as i32,
+            (iHalfMvy - pMe.sMvp.iMvY) as i32,
+        );
     }
 
     MeRefineQuarPixel(
-        pFunc, pMe, pMeRefine, pMbCache, &cEnc, &cRef, iWidth, iHeight, &mut sParams,
+        pFunc,
+        pMe,
+        pMeRefine,
+        pMbCache,
+        &cEnc,
+        &cRef,
+        iWidth,
+        iHeight,
+        &mut sParams,
     );
 
     if iBestCost > sParams.iBestCost {
@@ -1922,9 +2036,16 @@ pub extern "C" fn MeRefineFracPixel(
         BestPred::Buf(off) => {
             // Two *different* fields of the arena, so the compiler grants both
             // borrows at once and no `split_at_mut` is needed.
-            let SMbCache { sMemPredMb, sBufferInterPredMe, .. } = &mut *pMbCache;
-            let cSrc =
-                RecCursor::over_owned(&mut sBufferInterPredMe[off..][..span_wh(kiW, kiH)], 0, kiBufStride);
+            let SMbCache {
+                sMemPredMb,
+                sBufferInterPredMe,
+                ..
+            } = &mut *pMbCache;
+            let cSrc = RecCursor::over_owned(
+                &mut sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
+                0,
+                kiBufStride,
+            );
             let mut cDst = PlaneCursorMut::new(
                 &mut sMemPredMb[kiMemPredInterOff..][..kiDstSpan],
                 0,
@@ -1988,7 +2109,10 @@ pub fn PredictSad(
         iSadC = pSadCostCache[0];
     }
 
-    if kiRefB == REF_NOT_AVAIL as i32 && iRefC == REF_NOT_AVAIL as i32 && kiRefA != REF_NOT_AVAIL as i32 {
+    if kiRefB == REF_NOT_AVAIL as i32
+        && iRefC == REF_NOT_AVAIL as i32
+        && kiRefA != REF_NOT_AVAIL as i32
+    {
         *pSadPred = kiSadA;
     } else {
         let mut iCount = ((uiRef == kiRefA) as i32) << MB_LEFT_BIT;
@@ -2035,7 +2159,10 @@ pub fn PredictSadSkip(
         iRefSkip = pMbSkipCache[0];
     }
 
-    if kiRefB == REF_NOT_AVAIL as i32 && iRefC == REF_NOT_AVAIL as i32 && kiRefA != REF_NOT_AVAIL as i32 {
+    if kiRefB == REF_NOT_AVAIL as i32
+        && iRefC == REF_NOT_AVAIL as i32
+        && kiRefA != REF_NOT_AVAIL as i32
+    {
         *iSadPredSkip = kiSadA;
     } else {
         let mut iCount = (((uiRef == kiRefA) && pMbSkipCache[3]) as i32) << MB_LEFT_BIT;

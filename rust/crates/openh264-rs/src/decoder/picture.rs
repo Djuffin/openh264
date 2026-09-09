@@ -45,12 +45,7 @@
 //! 5. **Error Concealment Metadata**: Tracks macroblock decoding integrity flags and error
 //!    propagation counters (`iMbEcedNum`, `iMbEcedPropNum`).
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
 
 // Constants matching OpenH264 common definitions (`wels_const_common.h` and `wels_common_defs.h`)
@@ -79,14 +74,13 @@ pub const PICTURE_RESOLUTION_ALIGNMENT: i32 = 32;
 /// Base H.264 slice types matching `EWelsSliceType` in `wels_common_defs.h`.
 pub use crate::decoder::slice::EWelsSliceType;
 
-pub use crate::safe::plane::PaddedPlane;
 pub use crate::safe::mb_grid::{MbArray, MbDims};
+pub use crate::safe::plane::PaddedPlane;
 
 /// A handle to one slot of the decoder's picture pool. Declared in `safe/pool.rs`
 /// and re-exported by `pic_queue.rs` as `PicId`; named here because [`SPicture`]
 /// carries one.
 pub use crate::safe::pool::Id as PicId;
-
 
 /// Reconstructed Picture definition.
 ///
@@ -99,7 +93,6 @@ pub struct SPicture {
     // =========================================================================
     // Payload Pixel Buffers & Geometries
     // =========================================================================
-
     /// The three owned sample planes: 0 Y (luma), 1 Cb, 2 Cr.
     ///
     /// Reached through [`plane`](Self::plane) / [`plane_mut`](Self::plane_mut), and
@@ -117,7 +110,6 @@ pub struct SPicture {
     // =========================================================================
     // Error Concealment & Syntax Flags
     // =========================================================================
-
     /// Flag indicating whether the picture is an IDR (Instantaneous Decoder Refresh) keyframe.
     pub bIdrFlag: bool,
 
@@ -133,7 +125,6 @@ pub struct SPicture {
     // =========================================================================
     // Reference Picture Management
     // =========================================================================
-
     /// `true` if this picture is currently marked as a reference frame in the DPB.
     pub bUsedAsRef: bool,
 
@@ -157,7 +148,6 @@ pub struct SPicture {
     // =========================================================================
     // Scalable Video Coding (SVC) & Identification Tags
     // =========================================================================
-
     /// SVC Temporal Layer Identifier (T_id in [0, 7]).
     pub uiTemporalId: u8,
 
@@ -230,7 +220,6 @@ pub struct SPicture {
     // =========================================================================
     // Macroblock Level Metadata & Direct Mode Caches
     // =========================================================================
-
     /// Clean-decode flag per macroblock — `[iMbNum]` in the C.
     pub pMbCorrectlyDecodedFlag: MbArray<bool>,
 
@@ -247,7 +236,6 @@ pub struct SPicture {
     /// picture is marked as a reference, and read back by `MapColToList0` when a
     /// later B slice uses temporal direct mode.
     pub pRefPic: [[Option<PicId>; 17]; LIST_A],
-
 }
 
 /// Pointer typedef for reconstructed pictures matching `typedef struct SPicture* PPicture;`.
@@ -423,7 +411,6 @@ pub fn same_picture(a: Option<&SPicture>, b: Option<&SPicture>) -> bool {
 }
 
 impl SPicture {
-
     // =========================================================================
     // Plane accessors — the one way in
     //
@@ -507,8 +494,18 @@ impl SPicture {
         let (kiWidthY, kiHeightY) = (self.iWidthInPixel, self.iHeightInPixel);
         let planes = [
             (0usize, kiWidthY, kiHeightY, PADDING_LENGTH as usize),
-            (1, kiWidthY >> 1, kiHeightY >> 1, (PADDING_LENGTH >> 1) as usize),
-            (2, kiWidthY >> 1, kiHeightY >> 1, (PADDING_LENGTH >> 1) as usize),
+            (
+                1,
+                kiWidthY >> 1,
+                kiHeightY >> 1,
+                (PADDING_LENGTH >> 1) as usize,
+            ),
+            (
+                2,
+                kiWidthY >> 1,
+                kiHeightY >> 1,
+                (PADDING_LENGTH >> 1) as usize,
+            ),
         ];
         for (i, pic_w, pic_h, pad) in planes {
             let stride = self.linesize(i) as usize;
@@ -530,7 +527,7 @@ impl SPicture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_picture_initialization() {
         let mut pic = SPicture::new();
@@ -549,14 +546,24 @@ mod tests {
     /// live value is `P_SLICE`.
     #[test]
     fn with_planes_reproduces_the_zeroed_allocation_not_default() {
-        let pic = SPicture::with_planes([
-            PaddedPlane::empty(0),
-            PaddedPlane::empty(0),
-            PaddedPlane::empty(0),
-        ], MbDims::none());
+        let pic = SPicture::with_planes(
+            [
+                PaddedPlane::empty(0),
+                PaddedPlane::empty(0),
+                PaddedPlane::empty(0),
+            ],
+            MbDims::none(),
+        );
         assert_eq!(pic.eSliceType, EWelsSliceType::P_SLICE);
-        assert_eq!(SPicture::default().eSliceType, EWelsSliceType::UNKNOWN_SLICE);
-        assert_eq!(EWelsSliceType::P_SLICE as i32, 0, "the zero is what makes it the live value");
+        assert_eq!(
+            SPicture::default().eSliceType,
+            EWelsSliceType::UNKNOWN_SLICE
+        );
+        assert_eq!(
+            EWelsSliceType::P_SLICE as i32,
+            0,
+            "the zero is what makes it the live value"
+        );
     }
 
     /// `data_ptr` is `pBuffer[i] + origin` computed on demand — the offset
@@ -576,11 +583,14 @@ mod tests {
     #[allow(unsafe_code)]
     fn data_ptr_reaches_the_padding_behind_the_logical_origin() {
         let (w, h, pad, stride) = (176usize, 144usize, 32usize, 240usize);
-        let mut pic = SPicture::with_planes([
-            PaddedPlane::new(w, h, pad, stride),
-            PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
-            PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
-        ], MbDims::none());
+        let mut pic = SPicture::with_planes(
+            [
+                PaddedPlane::new(w, h, pad, stride),
+                PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
+                PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
+            ],
+            MbDims::none(),
+        );
         pic.plane_mut(0).set(0, 0, 0x5A);
         pic.plane_mut(0).set(-1, -1, 0xC3);
         pic.plane_mut(0).set(-(pad as isize), -(pad as isize), 0x7E);
@@ -588,7 +598,11 @@ mod tests {
         let base = pic.plane(0).as_slice().as_ptr();
         let origin = pic.plane(0).origin();
         let len = pic.plane(0).as_slice().len();
-        assert_eq!(origin, (1 + stride) * pad, "the C's (1 + iLinesize[0]) * PADDING_LENGTH");
+        assert_eq!(
+            origin,
+            (1 + stride) * pad,
+            "the C's (1 + iLinesize[0]) * PADDING_LENGTH"
+        );
 
         let p = pic.data_ptr(0);
         assert_eq!(unsafe { p.offset_from(base) } as usize, origin);
@@ -603,7 +617,11 @@ mod tests {
             unsafe { std::slice::from_raw_parts(p.sub(pad * stride + pad), (h + 2 * pad) * stride) }
         };
         assert_eq!(whole[0], 0x7E, "the top-left corner of the padding");
-        assert_eq!(whole.len(), len, "the padded picture is the whole allocation here");
+        assert_eq!(
+            whole.len(),
+            len,
+            "the padded picture is the whole allocation here"
+        );
 
         assert_eq!(pic.linesize(0), stride as i32);
         assert_eq!(pic.linesize(1), (stride / 2) as i32);
@@ -619,11 +637,14 @@ mod tests {
     #[allow(unsafe_code)]
     fn data_ptr_twice_leaves_the_first_cursor_usable() {
         let (w, h, pad, stride) = (176usize, 144usize, 32usize, 240usize);
-        let mut pic = SPicture::with_planes([
-            PaddedPlane::new(w, h, pad, stride),
-            PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
-            PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
-        ], MbDims::none());
+        let mut pic = SPicture::with_planes(
+            [
+                PaddedPlane::new(w, h, pad, stride),
+                PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
+                PaddedPlane::new(w / 2, h / 2, pad / 2, stride / 2),
+            ],
+            MbDims::none(),
+        );
 
         let first = pic.data_ptr(0);
         let second = pic.data_ptr(0);
@@ -631,7 +652,11 @@ mod tests {
 
         // The use that matters: the FIRST cursor, after the second derivation.
         unsafe { *first = 0x5A };
-        assert_eq!(unsafe { *second }, 0x5A, "sibling cursors read each other's writes");
+        assert_eq!(
+            unsafe { *second },
+            0x5A,
+            "sibling cursors read each other's writes"
+        );
         // And the reverse order, so neither derivation is merely tolerated as dead.
         unsafe { *second = 0xC3 };
         assert_eq!(unsafe { *first }, 0xC3);
@@ -641,7 +666,11 @@ mod tests {
         let luma_again = pic.data_ptr(0);
         unsafe { *chroma = 0x7E };
         assert_eq!(unsafe { *chroma }, 0x7E);
-        assert_eq!(unsafe { *luma_again }, 0xC3, "re-deriving plane 0 did not disturb it");
+        assert_eq!(
+            unsafe { *luma_again },
+            0xC3,
+            "re-deriving plane 0 did not disturb it"
+        );
     }
 
     /// The recycling predicate `PrefetchPic` scans on.
@@ -655,7 +684,10 @@ mod tests {
 
         pic.bUsedAsRef = false;
         pic.iRefCount = 1;
-        assert!(!pic.is_free(), "a held picture is not recyclable even when unmarked");
+        assert!(
+            !pic.is_free(),
+            "a held picture is not recyclable even when unmarked"
+        );
 
         pic.iRefCount = 0;
         assert!(pic.is_free());

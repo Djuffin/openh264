@@ -26,11 +26,7 @@
 // ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 //! Context-based Adaptive Binary Arithmetic Coding (CABAC) Macroblock Syntax Writer.
 //!
@@ -40,9 +36,9 @@
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
-pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SMVComponentUnit;
+pub use crate::encoder::encoder_context::SMVUnitXY;
 
 // ============================================================================
 // Constants & Configuration Limits
@@ -96,8 +92,6 @@ pub fn CLIP3_QP_0_51(qp: i32) -> usize {
 // Block Category Enumeration
 // ============================================================================
 
-
-
 // ============================================================================
 // Context Offset Tables
 // ============================================================================
@@ -111,72 +105,48 @@ pub const g_kiMapModeI16x16: [i8; 7] = [0, 1, 2, 3, 2, 2, 2];
 pub const g_kiMapModeIntraChroma: [i8; 7] = [0, 1, 2, 3, 0, 0, 0];
 
 pub const g_kuiMbCountScan4Idx: [u8; 24] = [
-    0, 1, 4, 5,
-    2, 3, 6, 7,
-    8, 9, 12, 13,
-    10, 11, 14, 15,
-    16, 17, 20, 21,
-    18, 19, 22, 23,
+    0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15, 16, 17, 20, 21, 18, 19, 22, 23,
 ];
 
 pub const g_kuiCache48CountScan4Idx: [u8; 24] = [
-    9, 10, 17, 18,
-    11, 12, 19, 20,
-    25, 26, 33, 34,
-    27, 28, 35, 36,
-    14, 15,
-    22, 23,
-    38, 39,
-    46, 47,
+    9, 10, 17, 18, 11, 12, 19, 20, 25, 26, 33, 34, 27, 28, 35, 36, 14, 15, 22, 23, 38, 39, 46, 47,
 ];
 
 pub const g_kuiChromaQpTable: [u8; 52] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-    12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-    28, 29, 29, 30, 31, 32, 32, 33, 34, 34, 35, 35, 36, 36, 37, 37,
-    37, 38, 38, 38, 39, 39, 39, 39,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 29, 30, 31, 32, 32, 33, 34, 34, 35, 35, 36, 36, 37, 37, 37, 38, 38, 38, 39, 39,
+    39, 39,
 ];
 
-
-
-
-
-
-
-
-
-
-
-
-pub use crate::encoder::svc_encode_slice::SSliceHeader;
-use crate::encoder::svc_encode_slice::{current_layer_expect, layer_pps_ref, slice_bs_writer};
-pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
-pub use crate::encoder::vlc_encoder::ECtxBlockCat;
-pub use crate::encoder::set_mb_syn_cabac::SStateCtx;
-pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
-pub use crate::encoder::svc_encode_slice::SLayerInfo;
-pub use crate::encoder::md::SMbCache;
 pub use crate::encoder::md::SMB;
-pub use crate::encoder::svc_encode_slice::SSlice;
+pub use crate::encoder::md::SMbCache;
+pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
+pub use crate::encoder::set_mb_syn_cabac::SStateCtx;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::svc_encode_slice::SLayerInfo;
+pub use crate::encoder::svc_encode_slice::SSlice;
+pub use crate::encoder::svc_encode_slice::SSliceHeader;
+pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
+use crate::encoder::svc_encode_slice::{current_layer_expect, layer_pps_ref, slice_bs_writer};
+pub use crate::encoder::vlc_encoder::ECtxBlockCat;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
 // ============================================================================
 // Low-Level CABAC Bitstream & Arithmetic Routines
 // ============================================================================
 pub use crate::encoder::set_mb_syn_cabac::{
-    cabac_low_t, g_kiClz5Table, g_kuiCabacRangeLps, g_kuiStateTransTable, PropagateCarry,
-    WelsCabacEncodeBypassOne, WelsCabacEncodeDecision, WelsCabacEncodeDecisionLps_,
-    WelsCabacEncodeInit, WelsCabacEncodeTerminate, WelsCabacEncodeUeBypass,
-    WelsCabacEncodeUpdateLow_, WelsCabacEncodeUpdateLowNontrivial_, CABAC_LOW_WIDTH,
-    WELS_CONTEXT_COUNT, WELS_QP_MAX,
+    CABAC_LOW_WIDTH, PropagateCarry, WELS_CONTEXT_COUNT, WELS_QP_MAX, WelsCabacEncodeBypassOne,
+    WelsCabacEncodeDecision, WelsCabacEncodeDecisionLps_, WelsCabacEncodeInit,
+    WelsCabacEncodeTerminate, WelsCabacEncodeUeBypass, WelsCabacEncodeUpdateLow_,
+    WelsCabacEncodeUpdateLowNontrivial_, cabac_low_t, g_kiClz5Table, g_kuiCabacRangeLps,
+    g_kuiStateTransTable,
 };
 
 // `BsAlign` — svc_enc_golomb.h:112.
-pub use crate::encoder::vlc_encoder::BsAlign;
 use crate::encoder::encoder_context::sWelsEncCtx;
 use crate::encoder::set_mb_syn_cabac::WelsCabacContextInit;
+pub use crate::encoder::vlc_encoder::BsAlign;
 use crate::safe::mb_grid::MbWindow;
 
 // ============================================================================
@@ -237,7 +207,12 @@ pub fn WelsCabacMbType(
             } else if (uiMbType == MB_TYPE_16x8) || (uiMbType == MB_TYPE_8x16) {
                 WelsCabacEncodeDecision(buf, pCabacCtx, 14, 0);
                 WelsCabacEncodeDecision(buf, pCabacCtx, 15, 1);
-                WelsCabacEncodeDecision(buf, pCabacCtx, 17, if uiMbType == MB_TYPE_16x8 { 1 } else { 0 });
+                WelsCabacEncodeDecision(
+                    buf,
+                    pCabacCtx,
+                    17,
+                    if uiMbType == MB_TYPE_16x8 { 1 } else { 0 },
+                );
             } else if (uiMbType == MB_TYPE_8x8) || (uiMbType == MB_TYPE_8x8_REF0) {
                 WelsCabacEncodeDecision(buf, pCabacCtx, 14, 0);
                 WelsCabacEncodeDecision(buf, pCabacCtx, 15, 0);
@@ -276,7 +251,11 @@ pub fn WelsCabacMbType(
     }
 }
 
-pub fn WelsCabacMbIntra4x4PredMode(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pMbCache: &mut SMbCache) {
+pub fn WelsCabacMbIntra4x4PredMode(
+    buf: &mut [u8],
+    pCabacCtx: &mut SCabacCtx,
+    pMbCache: &mut SMbCache,
+) {
     for iMode in 0..16 {
         let bPredFlag = pMbCache.bPrevIntra4x4PredModeFlag[iMode];
         let iRemMode = pMbCache.iRemIntra4x4PredModeFlag[iMode] as i32;
@@ -376,22 +355,26 @@ pub fn WelsCabacMbCbp(buf: &mut [u8], mbs: &MbWindow<'_, SMB>, pCabacCtx: &mut S
         let not_cbp1 = if iCbpBlockLuma[1] == 0 { 1 } else { 0 };
         let not_cbp2 = if iCbpBlockLuma[2] == 0 { 1 } else { 0 };
 
-        WelsCabacEncodeDecision(buf, 
+        WelsCabacEncodeDecision(
+            buf,
             pCabacCtx,
             73 + iCbpBlockLeft[1] + iCbpBlockTop[2] * 2,
             iCbpBlockLuma[0],
         );
-        WelsCabacEncodeDecision(buf, 
+        WelsCabacEncodeDecision(
+            buf,
             pCabacCtx,
             73 + not_cbp0 + iCbpBlockTop[3] * 2,
             iCbpBlockLuma[1],
         );
-        WelsCabacEncodeDecision(buf, 
+        WelsCabacEncodeDecision(
+            buf,
             pCabacCtx,
             73 + iCbpBlockLeft[3] + not_cbp0 * 2,
             iCbpBlockLuma[2],
         );
-        WelsCabacEncodeDecision(buf, 
+        WelsCabacEncodeDecision(
+            buf,
             pCabacCtx,
             73 + not_cbp2 + not_cbp1 * 2,
             iCbpBlockLuma[3],
@@ -400,7 +383,8 @@ pub fn WelsCabacMbCbp(buf: &mut [u8], mbs: &MbWindow<'_, SMB>, pCabacCtx: &mut S
         // Chroma CBP
         if iCbpChroma != 0 {
             WelsCabacEncodeDecision(buf, pCabacCtx, 77 + iCtx, 1);
-            WelsCabacEncodeDecision(buf, 
+            WelsCabacEncodeDecision(
+                buf,
                 pCabacCtx,
                 81 + (iCbpLeftChroma >> 1) + ((iCbpTopChroma >> 1) * 2),
                 if iCbpChroma > 1 { 1 } else { 0 },
@@ -474,7 +458,11 @@ pub fn WelsMbSkipCabac(
     bSkipFlag: i16,
 ) {
     {
-        let mut iCtx = if eSliceType == EWelsSliceType::P_SLICE { 11 } else { 24 };
+        let mut iCtx = if eSliceType == EWelsSliceType::P_SLICE {
+            11
+        } else {
+            24
+        };
         let uiNeighborAvail = mbs.cur().uiNeighborAvail;
 
         if (uiNeighborAvail & LEFT_MB_POS) != 0 {
@@ -773,7 +761,11 @@ pub fn WelsWriteBlockResidualCabac(
                     WelsCabacEncodeDecision(buf, pCabacCtx, iCtx, 1);
                     iNumAbsLevelGt1 += 1;
 
-                    let max_shift = 5 - if eCtxBlockCat == ECtxBlockCat::CHROMA_DC { 1 } else { 0 };
+                    let max_shift = 5 - if eCtxBlockCat == ECtxBlockCat::CHROMA_DC {
+                        1
+                    } else {
+                        0
+                    };
                     iCtx = iCtxLevel + 4 + core::cmp::min(max_shift, iNumAbsLevelGt1);
 
                     for _ in 1..iPrefix {
@@ -850,7 +842,8 @@ pub fn WelsWriteMbResidualCabac(
                 let dc_buf = &pDct.iLumaI16x16Dc[..];
                 let iNonZeroCount = (pFuncList.pfGetNoneZeroCount)(&pDct.iLumaI16x16Dc);
 
-                WelsWriteBlockResidualCabac(buf, 
+                WelsWriteBlockResidualCabac(
+                    buf,
                     kpNonZeroCoeffCount,
                     &*mbs,
                     &mut *pCabacCtx,
@@ -871,7 +864,8 @@ pub fn WelsWriteMbResidualCabac(
                         let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
                         let block_buf = &pDct.iLumaBlock[i][..];
 
-                        WelsWriteBlockResidualCabac(buf, 
+                        WelsWriteBlockResidualCabac(
+                            buf,
                             kpNonZeroCoeffCount,
                             &*mbs,
                             &mut *pCabacCtx,
@@ -890,7 +884,8 @@ pub fn WelsWriteMbResidualCabac(
                         let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
                         let block_buf = &pDct.iLumaBlock[i][..];
 
-                        WelsWriteBlockResidualCabac(buf, 
+                        WelsWriteBlockResidualCabac(
+                            buf,
                             kpNonZeroCoeffCount,
                             &*mbs,
                             &mut *pCabacCtx,
@@ -910,7 +905,8 @@ pub fn WelsWriteMbResidualCabac(
                 if iNonZeroCount != 0 {
                     mbs.cur_mut().iCbpDc |= 0x2;
                 }
-                WelsWriteBlockResidualCabac(buf, 
+                WelsWriteBlockResidualCabac(
+                    buf,
                     kpNonZeroCoeffCount,
                     &*mbs,
                     &mut *pCabacCtx,
@@ -926,7 +922,8 @@ pub fn WelsWriteMbResidualCabac(
                 if iNonZeroCount != 0 {
                     mbs.cur_mut().iCbpDc |= 0x4;
                 }
-                WelsWriteBlockResidualCabac(buf, 
+                WelsWriteBlockResidualCabac(
+                    buf,
                     kpNonZeroCoeffCount,
                     &*mbs,
                     &mut *pCabacCtx,
@@ -946,7 +943,8 @@ pub fn WelsWriteMbResidualCabac(
                         let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
                         let block_buf = &pDct.iChromaBlock[i][..];
 
-                        WelsWriteBlockResidualCabac(buf, 
+                        WelsWriteBlockResidualCabac(
+                            buf,
                             kpNonZeroCoeffCount,
                             &*mbs,
                             &mut *pCabacCtx,
@@ -964,7 +962,8 @@ pub fn WelsWriteMbResidualCabac(
                         let nz = kpNonZeroCoeffCount[iIdx as usize] as i16;
                         let block_buf = &pDct.iChromaBlock[4 + i][..];
 
-                        WelsWriteBlockResidualCabac(buf, 
+                        WelsWriteBlockResidualCabac(
+                            buf,
                             kpNonZeroCoeffCount,
                             &*mbs,
                             &mut *pCabacCtx,
@@ -980,7 +979,8 @@ pub fn WelsWriteMbResidualCabac(
         } else {
             mbs.cur_mut().iLumaDQp = 0;
             mbs.cur_mut().uiLumaQp = pSlice.uiLastMbQp;
-            let qp_idx = CLIP3_QP_0_51((mbs.cur().uiLumaQp as i32) + (uiChromaQpIndexOffset as i32));
+            let qp_idx =
+                CLIP3_QP_0_51((mbs.cur().uiLumaQp as i32) + (uiChromaQpIndexOffset as i32));
             mbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[qp_idx];
         }
 
@@ -1004,11 +1004,7 @@ pub fn WelsInitSliceCabac(
 
     /* init cabac */
     let iCabacInitIdc = pSlice.iCabacInitIdc;
-    WelsCabacContextInit(
-        pEncCtx,
-        &mut pSlice.sCabacCtx,
-        iCabacInitIdc,
-    );
+    WelsCabacContextInit(pEncCtx, &mut pSlice.sCabacCtx, iCabacInitIdc);
     let end = buf.len();
     let kiBsPos = slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs).pos();
     WelsCabacEncodeInit(&mut pSlice.sCabacCtx, kiBsPos, end);
@@ -1053,7 +1049,13 @@ pub fn WelsSpatialWriteMbSynCabac(
             WelsMbSkipCabac(buf, &mut *pCabacCtx, mbs, pEncCtx.eSliceType, 0);
         }
 
-        WelsCabacMbType(buf, &mut *pCabacCtx, &*mbs, &mut *pMbCache, pEncCtx.eSliceType);
+        WelsCabacMbType(
+            buf,
+            &mut *pCabacCtx,
+            &*mbs,
+            &mut *pMbCache,
+            pEncCtx.eSliceType,
+        );
 
         if IS_INTRA(uiMbType) {
             if uiMbType == MB_TYPE_INTRA4x4 {
@@ -1134,13 +1136,7 @@ pub fn WelsSpatialWriteMbSynCabac(
         }
 
         let pFuncList = pEncCtx.func_list();
-        iRet = WelsWriteMbResidualCabac(
-            buf,
-            pFuncList,
-            pSlice,
-            mbs,
-            uiChromaQpIndexOffset as u32,
-        );
+        iRet = WelsWriteMbResidualCabac(buf, pFuncList, pSlice, mbs, uiChromaQpIndexOffset as u32);
     }
 
     if !IS_INTRA(mbs.cur().uiMbType) {
@@ -1157,7 +1153,7 @@ pub fn WelsSpatialWriteMbSynCabac(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_cal_nonzero_count_2x2() {
         let block_zero = [0i16, 0, 0, 0];
@@ -1199,8 +1195,10 @@ mod tests {
     fn test_cabac_mb_skip_logic() {
         let mut buffer = vec![0u8; 128];
         let mut cabac_ctx = SCabacCtx::default();
-        let mut grid =
-            crate::safe::mb_grid::MbArray::from_vec(vec![SMB::default()], crate::safe::mb_grid::MbDims::new(1, 1));
+        let mut grid = crate::safe::mb_grid::MbArray::from_vec(
+            vec![SMB::default()],
+            crate::safe::mb_grid::MbDims::new(1, 1),
+        );
         grid.get_mut(0).uiMbType = MB_TYPE_SKIP;
 
         let end = buffer.len();

@@ -1,8 +1,4 @@
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 //! Reference picture buffer management, list construction, reordering, and DPB lifecycle.
 //!
@@ -12,9 +8,12 @@
 #![forbid(unsafe_code)]
 
 use crate::decoder::decoder_core::DqLayerState;
-pub use crate::decoder::nalu::{EWelsNalUnitType, EWelsNalUnitType::*};
-pub use crate::decoder::slice::{EWelsSliceType, EWelsSliceType::*, MMCO_END, MMCO_SHORT2UNUSED, MMCO_LONG2UNUSED, MMCO_SHORT2LONG, MMCO_SET_MAX_LONG, MMCO_RESET, MMCO_LONG};
 pub use crate::decoder::error_concealment::{ERROR_CON_IDC, ERROR_CON_IDC::*};
+pub use crate::decoder::nalu::{EWelsNalUnitType, EWelsNalUnitType::*};
+pub use crate::decoder::slice::{
+    EWelsSliceType, EWelsSliceType::*, MMCO_END, MMCO_LONG, MMCO_LONG2UNUSED, MMCO_RESET,
+    MMCO_SET_MAX_LONG, MMCO_SHORT2LONG, MMCO_SHORT2UNUSED,
+};
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const MAX_DPB_COUNT: usize = MAX_REF_PIC_COUNT + 1; // 17
 pub const MAX_MMCO_COUNT: usize = 66;
@@ -49,7 +48,7 @@ pub const dsDataErrorConcealed: i32 = 0x20;
 pub const dsOutOfMemory: i32 = 0x4000;
 
 // Log levels — the bit mask at `codec_app_def.h:323-331`.
-pub use crate::common::wels_trace::{WelsLog, WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING};
+pub use crate::common::wels_trace::{WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING, WelsLog};
 
 // ============================================================================
 // Data Structures
@@ -57,27 +56,22 @@ pub use crate::common::wels_trace::{WelsLog, WELS_LOG_ERROR, WELS_LOG_INFO, WELS
 
 pub use crate::decoder::decoder_context::{Picture, SPicture};
 
-
 pub use crate::decoder::decoder_context::SRefPic;
+use crate::decoder::decoder_context::ec_active_idc;
 use crate::decoder::decoder_context::{active_pps, active_sps, pic_and_refs_mut, ref_set, sps_of};
 use crate::decoder::pic_queue::RefSlot;
-use crate::decoder::decoder_context::ec_active_idc;
 pub use crate::decoder::slice::{SRefPicListReorderSyn, SRefPicMarking};
-
 
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
-
 pub use crate::decoder::decoder_context::SLogContext;
-
 
 pub use crate::decoder::decoder_context::SWelsDecoderContext;
 use crate::decoder::decoder_context::{
-    cur_au, dec_pic, long_ref_pic, pic_pool_mut, pool_pic, pool_pic_mut,
-    prev_dpb_id, ref_pic, short_ref_pic,
+    cur_au, dec_pic, long_ref_pic, pic_pool_mut, pool_pic, pool_pic_mut, prev_dpb_id, ref_pic,
+    short_ref_pic,
 };
 pub use crate::decoder::pic_queue::PicId;
-
 
 // ============================================================================
 // Core Reference Management Implementation
@@ -435,7 +429,12 @@ pub fn WrapShortRefPicNum(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
     };
     let Some(pSps) = sps_of(
         &pCtx.sSpsPpsCtx,
-        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
+        pCurDqLayer
+            .sLayerInfo
+            .sSliceInLayer
+            .sSliceHeaderExt
+            .sSliceHeader
+            .sps_ref,
     ) else {
         return;
     };
@@ -443,8 +442,12 @@ pub fn WrapShortRefPicNum(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
     let iMaxPicNum = 1i32 << pSps.uiLog2MaxFrameNum;
     let iShortRefCount = pCtx.sRefPic.uiShortRefCount[LIST_0] as usize;
 
-    let iSliceFrameNum =
-        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFrameNum;
+    let iSliceFrameNum = pCurDqLayer
+        .sLayerInfo
+        .sSliceInLayer
+        .sSliceHeaderExt
+        .sSliceHeader
+        .iFrameNum;
     for i in 0..iShortRefCount {
         let slot = pCtx.sRefPic.pShortRefList[LIST_0][i];
         if let Some(pPic) = pool_pic_mut(&mut pCtx.pPicBuff, slot) {
@@ -461,11 +464,14 @@ pub fn WrapShortRefPicNum(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
 ///
 /// Matches `static int32_t SlidingWindow (PWelsDecoderContext pCtx, PRefPic pRefPic)`.
 pub fn SlidingWindow(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) -> i32 {
-    let num_ref_frames = active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
-        .map_or(1, |sps| sps.iNumRefFrames as u8);
+    let num_ref_frames =
+        active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).map_or(1, |sps| sps.iNumRefFrames as u8);
 
     let counts = ref_set(pCtx, bTmpRefSet);
-    let (uiShort, uiLong) = (counts.uiShortRefCount[LIST_0], counts.uiLongRefCount[LIST_0]);
+    let (uiShort, uiLong) = (
+        counts.uiShortRefCount[LIST_0],
+        counts.uiLongRefCount[LIST_0],
+    );
     if uiShort + uiLong >= num_ref_frames {
         if uiShort == 0 {
             WelsLog(
@@ -497,16 +503,15 @@ pub fn SlidingWindow(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) -> i32 {
 /// Ensures at least 1 free slot in the DPB for error concealment operations.
 ///
 /// Matches `static int32_t RemainOneBufferInDpbForEC (PWelsDecoderContext pCtx, PRefPic pRefPic)`.
-pub fn RemainOneBufferInDpbForEC(
-    pCtx: &mut SWelsDecoderContext,
-    bTmpRefSet: bool,
-) -> i32 {
+pub fn RemainOneBufferInDpbForEC(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) -> i32 {
     // The loop below *depends* on a re-entrant call changing `uiLongRefCount`, so
     // its condition has to read the live field.
-    let num_ref_frames = active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
-        .map_or(1, |sps| sps.iNumRefFrames as u8);
+    let num_ref_frames =
+        active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).map_or(1, |sps| sps.iNumRefFrames as u8);
 
-    if ref_set(pCtx, bTmpRefSet).uiShortRefCount[0] + ref_set(pCtx, bTmpRefSet).uiLongRefCount[0] < num_ref_frames {
+    if ref_set(pCtx, bTmpRefSet).uiShortRefCount[0] + ref_set(pCtx, bTmpRefSet).uiLongRefCount[0]
+        < num_ref_frames
+    {
         return ERR_NONE;
     }
 
@@ -530,7 +535,9 @@ pub fn RemainOneBufferInDpbForEC(
         }
     }
 
-    if ref_set(pCtx, bTmpRefSet).uiShortRefCount[0] + ref_set(pCtx, bTmpRefSet).uiLongRefCount[0] >= num_ref_frames {
+    if ref_set(pCtx, bTmpRefSet).uiShortRefCount[0] + ref_set(pCtx, bTmpRefSet).uiLongRefCount[0]
+        >= num_ref_frames
+    {
         WelsLog(
             pCtx.sLogCtx,
             WELS_LOG_WARNING,
@@ -552,7 +559,6 @@ pub fn RemainOneBufferInDpbForEC(
 // both counts are bounded by `MAX_DPB_COUNT`.)
 #[allow(clippy::absurd_extreme_comparisons)]
 pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i32 {
-
     if (pCtx.sRefPic.uiShortRefCount[LIST_0] + pCtx.sRefPic.uiLongRefCount[LIST_0] <= 0)
         && (pCtx.eSliceType != I_SLICE && pCtx.eSliceType != SI_SLICE)
     {
@@ -715,7 +721,13 @@ pub fn MMCOProcess(
                         pCtx.iFrameNumOfAuMarkedLtr
                     ),
                 );
-                MarkAsLongTerm(pCtx, bTmpRefSet, iShortFrameNum, iLongTermFrameIdx, uiLongTermPicNum);
+                MarkAsLongTerm(
+                    pCtx,
+                    bTmpRefSet,
+                    iShortFrameNum,
+                    iLongTermFrameIdx,
+                    uiLongTermPicNum,
+                );
             }
         }
         MMCO_SET_MAX_LONG => {
@@ -747,7 +759,8 @@ pub fn MMCOProcess(
             WelsDelLongFromListSetUnref(pCtx, bTmpRefSet, iLongTermFrameIdx as u32);
             let num_ref_frames = active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
                 .map_or(1, |sps| sps.iNumRefFrames as u8);
-            if ref_set(pCtx, bTmpRefSet).uiLongRefCount[LIST_0] + ref_set(pCtx, bTmpRefSet).uiShortRefCount[LIST_0]
+            if ref_set(pCtx, bTmpRefSet).uiLongRefCount[LIST_0]
+                + ref_set(pCtx, bTmpRefSet).uiShortRefCount[LIST_0]
                 >= num_ref_frames.max(1)
             {
                 return ERR_INFO_INVALID_MMCO_REF_NUM_OVERFLOW;
@@ -793,8 +806,8 @@ pub fn MMCO(
     let mut i = 0usize;
     while i < MAX_MMCO_COUNT && marking.sMmcoRef[i].uiMmcoType != MMCO_END {
         let uiMmcoType = marking.sMmcoRef[i].uiMmcoType;
-        let iShortFrameNum =
-            (pCtx.iFrameNum - marking.sMmcoRef[i].iDiffOfPicNum) & ((1i32 << uiLog2MaxFrameNum) - 1);
+        let iShortFrameNum = (pCtx.iFrameNum - marking.sMmcoRef[i].iDiffOfPicNum)
+            & ((1i32 << uiLog2MaxFrameNum) - 1);
         let uiLongTermPicNum = marking.sMmcoRef[i].uiLongTermPicNum;
         let iLongTermFrameIdx = marking.sMmcoRef[i].iLongTermFrameIdx;
         let iMaxLongTermFrameIdx = marking.sMmcoRef[i].iMaxLongTermFrameIdx;
@@ -825,13 +838,16 @@ pub fn MMCO(
 /// Populates `pRefList[LIST_0]` for standard P-slices.
 ///
 /// Matches `int32_t WelsInitRefList (PWelsDecoderContext pCtx, int32_t iPoc)` in `manage_dec_ref.cpp`.
-pub fn WelsInitRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>, _iPoc: i32) -> i32 {
+pub fn WelsInitRefList(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+    _iPoc: i32,
+) -> i32 {
     let err = WelsCheckAndRecoverForFutureDecoding(pCtx);
     if err != ERR_NONE {
         return err;
     }
     WrapShortRefPicNum(pCtx, pCurDqLayer);
-
 
     for i in 0..MAX_DPB_COUNT {
         pCtx.sRefPic.pRefList[LIST_0][i] = None;
@@ -860,13 +876,16 @@ pub fn WelsInitRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut 
 /// Populates dual reference picture lists (`pRefList[0]` and `pRefList[1]`) for B-slices.
 ///
 /// Matches `int32_t WelsInitBSliceRefList (PWelsDecoderContext pCtx, int32_t iPoc)` in `manage_dec_ref.cpp`.
-pub fn WelsInitBSliceRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>, iPoc: i32) -> i32 {
+pub fn WelsInitBSliceRefList(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+    iPoc: i32,
+) -> i32 {
     let err = WelsCheckAndRecoverForFutureDecoding(pCtx);
     if err != ERR_NONE {
         return err;
     }
     WrapShortRefPicNum(pCtx, pCurDqLayer);
-
 
     for i in 0..MAX_DPB_COUNT {
         pCtx.sRefPic.pRefList[LIST_0][i] = None;
@@ -991,7 +1010,10 @@ pub fn WelsInitBSliceRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option
 /// Modifies the active reference picture lists based on parsed RPLR commands.
 ///
 /// Matches `int32_t WelsReorderRefList (PWelsDecoderContext pCtx)` in `manage_dec_ref.cpp`.
-pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
+pub fn WelsReorderRefList(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+) -> i32 {
     if pCtx.eSliceType == I_SLICE || pCtx.eSliceType == SI_SLICE {
         return ERR_NONE;
     }
@@ -1005,7 +1027,12 @@ pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
 
     let Some(pSps) = sps_of(
         &pCtx.sSpsPpsCtx,
-        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
+        pCurDqLayer
+            .sLayerInfo
+            .sSliceInLayer
+            .sSliceHeaderExt
+            .sSliceHeader
+            .sps_ref,
     ) else {
         return ERR_INFO_INVALID_PTR;
     };
@@ -1014,8 +1041,18 @@ pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
 
     for listIdx in 0..list_count {
         let iMaxRefIdx = (pCtx.iPicQueueNumber as usize).min(MAX_REF_PIC_COUNT);
-        let iRefCount = pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[listIdx];
-        let mut iPredFrameNum = pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFrameNum;
+        let iRefCount = pCurDqLayer
+            .sLayerInfo
+            .sSliceInLayer
+            .sSliceHeaderExt
+            .sSliceHeader
+            .uiRefCount[listIdx];
+        let mut iPredFrameNum = pCurDqLayer
+            .sLayerInfo
+            .sSliceInLayer
+            .sSliceHeaderExt
+            .sSliceHeader
+            .iFrameNum;
         let iMaxPicNum = 1i32 << pSps.uiLog2MaxFrameNum;
         let mut iReorderingIndex = 0usize;
 
@@ -1026,10 +1063,11 @@ pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
 
         if reorder_syn.bRefPicListReorderingFlag[listIdx] {
             while iReorderingIndex <= iMaxRefIdx
-                && reorder_syn.sReorderingSyn[listIdx][iReorderingIndex].uiReorderingOfPicNumsIdc != 3
+                && reorder_syn.sReorderingSyn[listIdx][iReorderingIndex].uiReorderingOfPicNumsIdc
+                    != 3
             {
-                let uiReorderingOfPicNumsIdc = reorder_syn.sReorderingSyn[listIdx][iReorderingIndex]
-                    .uiReorderingOfPicNumsIdc;
+                let uiReorderingOfPicNumsIdc =
+                    reorder_syn.sReorderingSyn[listIdx][iReorderingIndex].uiReorderingOfPicNumsIdc;
                 let mut found_i = -1isize;
 
                 if uiReorderingOfPicNumsIdc < 2 {
@@ -1049,14 +1087,25 @@ pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
                             .map(|c| (c.uiQualityId, c.iSpsId));
                         if let Some((uiQualityId, iSpsId)) = cur {
                             if pCurDqLayer.sLayerInfo.sNalHeaderExt.uiQualityId == uiQualityId
-                                && pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId != iSpsId
+                                && pCurDqLayer
+                                    .sLayerInfo
+                                    .sSliceInLayer
+                                    .sSliceHeaderExt
+                                    .sSliceHeader
+                                    .iSpsId
+                                    != iSpsId
                             {
                                 WelsLog(
                                     pCtx.sLogCtx,
                                     WELS_LOG_WARNING,
                                     &format!(
                                         "WelsReorderRefList()::::BASE LAYER::::iSpsId:{}, ref_sps_id:{}",
-                                        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId,
+                                        pCurDqLayer
+                                            .sLayerInfo
+                                            .sSliceInLayer
+                                            .sSliceHeaderExt
+                                            .sSliceHeader
+                                            .iSpsId,
                                         iSpsId
                                     ),
                                 );
@@ -1077,14 +1126,25 @@ pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
                             .map(|c| (c.uiQualityId, c.iSpsId));
                         if let Some((uiQualityId, iSpsId)) = cur {
                             if pCurDqLayer.sLayerInfo.sNalHeaderExt.uiQualityId == uiQualityId
-                                && pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId != iSpsId
+                                && pCurDqLayer
+                                    .sLayerInfo
+                                    .sSliceInLayer
+                                    .sSliceHeaderExt
+                                    .sSliceHeader
+                                    .iSpsId
+                                    != iSpsId
                             {
                                 WelsLog(
                                     pCtx.sLogCtx,
                                     WELS_LOG_WARNING,
                                     &format!(
                                         "WelsReorderRefList()::::BASE LAYER::::iSpsId:{}, ref_sps_id:{}",
-                                        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iSpsId,
+                                        pCurDqLayer
+                                            .sLayerInfo
+                                            .sSliceInLayer
+                                            .sSliceHeaderExt
+                                            .sSliceHeader
+                                            .iSpsId,
                                         iSpsId
                                     ),
                                 );
@@ -1130,7 +1190,10 @@ pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
 /// Alternative test implementation of reference picture list reordering.
 ///
 /// Matches `int32_t WelsReorderRefList2 (PWelsDecoderContext pCtx)` in `manage_dec_ref.cpp`.
-pub fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
+pub fn WelsReorderRefList2(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+) -> i32 {
     if pCtx.eSliceType == I_SLICE || pCtx.eSliceType == SI_SLICE {
         return ERR_NONE;
     }
@@ -1144,7 +1207,12 @@ pub fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&
 
     let Some(pSps) = sps_of(
         &pCtx.sSpsPpsCtx,
-        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.sps_ref,
+        pCurDqLayer
+            .sLayerInfo
+            .sSliceInLayer
+            .sSliceHeaderExt
+            .sSliceHeader
+            .sps_ref,
     ) else {
         return ERR_INFO_INVALID_PTR;
     };
@@ -1152,13 +1220,23 @@ pub fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&
     let iShortRefCount = pCtx.sRefPic.uiShortRefCount[LIST_0] as usize;
     let iLongRefCount = pCtx.sRefPic.uiLongRefCount[LIST_0] as usize;
     let iMaxRefIdx = (pCtx.iPicQueueNumber as usize).min(MAX_REF_PIC_COUNT);
-    let iCurFrameNum = pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFrameNum;
+    let iCurFrameNum = pCurDqLayer
+        .sLayerInfo
+        .sSliceInLayer
+        .sSliceHeaderExt
+        .sSliceHeader
+        .iFrameNum;
     let iMaxPicNum = 1i32 << pSps.uiLog2MaxFrameNum;
     let iListCount = if pCtx.eSliceType == B_SLICE { 2 } else { 1 };
 
     for listIdx in 0..iListCount {
         let mut iCount = 0usize;
-        let iRefCount = pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[listIdx] as usize;
+        let iRefCount = pCurDqLayer
+            .sLayerInfo
+            .sSliceInLayer
+            .sSliceHeaderExt
+            .sSliceHeader
+            .uiRefCount[listIdx] as usize;
 
         if reorder_syn.bRefPicListReorderingFlag[listIdx] {
             let mut iPredFrameNum = iCurFrameNum;
@@ -1174,9 +1252,8 @@ pub fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&
                 let uiReorderingOfPicNumsIdc =
                     reorder_syn.sReorderingSyn[listIdx][i].uiReorderingOfPicNumsIdc;
                 if uiReorderingOfPicNumsIdc < 2 {
-                    let iAbsDiffPicNum = (reorder_syn.sReorderingSyn[listIdx][i]
-                        .uiAbsDiffPicNumMinus1
-                        + 1) as i32;
+                    let iAbsDiffPicNum =
+                        (reorder_syn.sReorderingSyn[listIdx][i].uiAbsDiffPicNumMinus1 + 1) as i32;
                     if uiReorderingOfPicNumsIdc == 0 {
                         if iPredFrameNum - iAbsDiffPicNum < 0 {
                             iPredFrameNum -= iAbsDiffPicNum - iMaxPicNum;
@@ -1213,8 +1290,7 @@ pub fn WelsReorderRefList2(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&
                         }
                     }
                 } else {
-                    iPredFrameNum =
-                        reorder_syn.sReorderingSyn[listIdx][i].uiLongTermPicNum as i32;
+                    iPredFrameNum = reorder_syn.sReorderingSyn[listIdx][i].uiLongTermPicNum as i32;
                     for j in 0..iLongRefCount {
                         let cur = long_ref_pic(&pCtx.pPicBuff, &pCtx.sRefPic, j);
                         if cur.is_some_and(|c| c.uiLongTermPicNum == iPredFrameNum as u32) {
@@ -1367,8 +1443,8 @@ pub fn WelsMarkAsRef(
     }
 
     if !dec!().is_some_and(|pDec| pDec.bIsLongRef) {
-        let num_ref_frames = active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
-            .map_or(1, |sps| sps.iNumRefFrames as u8);
+        let num_ref_frames =
+            active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).map_or(1, |sps| sps.iNumRefFrames as u8);
         let counts = ref_set(pCtx, bTmpRefSet);
         let bDpbFull =
             counts.uiLongRefCount[LIST_0] + counts.uiShortRefCount[LIST_0] >= num_ref_frames.max(1);
@@ -1396,7 +1472,7 @@ pub fn WelsMarkAsRef(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_set_unref_resets_fields() {
         let mut pic = SPicture::default();
@@ -1421,7 +1497,6 @@ mod tests {
         pic1.iFrameNum = 10;
         let mut pic2 = SPicture::default();
         pic2.iFrameNum = 12;
-
 
         {
             let pool = crate::decoder::pic_queue::PicPool::over(vec![

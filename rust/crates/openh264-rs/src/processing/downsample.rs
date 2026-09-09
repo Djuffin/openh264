@@ -72,10 +72,9 @@ fn DyadicBilinearDownsampler(
         for i in 0..kiDstWidth {
             let kiSrcX = srcLine + (i << 1);
             let kiTempRow1 = (pSrc[kiSrcX] as i32 + pSrc[kiSrcX + 1] as i32 + 1) >> 1;
-            let kiTempRow2 = (pSrc[kiSrcX + kiSrcStride] as i32
-                + pSrc[kiSrcX + kiSrcStride + 1] as i32
-                + 1)
-                >> 1;
+            let kiTempRow2 =
+                (pSrc[kiSrcX + kiSrcStride] as i32 + pSrc[kiSrcX + kiSrcStride + 1] as i32 + 1)
+                    >> 1;
             pDst[dstLine + i] = ((kiTempRow1 + kiTempRow2 + 1) >> 1) as u8;
         }
     }
@@ -100,10 +99,9 @@ fn DyadicBilinearQuarterDownsampler(
         for i in 0..kiDstWidth {
             let kiSrcX = srcLine + (i << 2);
             let kiTempRow1 = (pSrc[kiSrcX] as i32 + pSrc[kiSrcX + 1] as i32 + 1) >> 1;
-            let kiTempRow2 = (pSrc[kiSrcX + kiSrcStride] as i32
-                + pSrc[kiSrcX + kiSrcStride + 1] as i32
-                + 1)
-                >> 1;
+            let kiTempRow2 =
+                (pSrc[kiSrcX + kiSrcStride] as i32 + pSrc[kiSrcX + kiSrcStride + 1] as i32 + 1)
+                    >> 1;
             pDst[dstLine + i] = ((kiTempRow1 + kiTempRow2 + 1) >> 1) as u8;
         }
     }
@@ -129,10 +127,9 @@ fn DyadicBilinearOneThirdDownsampler(
         for i in 0..kiDstWidth {
             let kiSrcX = srcLine + i * 3;
             let kiTempRow1 = (pSrc[kiSrcX] as i32 + pSrc[kiSrcX + 1] as i32 + 1) >> 1;
-            let kiTempRow2 = (pSrc[kiSrcX + kiSrcStride] as i32
-                + pSrc[kiSrcX + kiSrcStride + 1] as i32
-                + 1)
-                >> 1;
+            let kiTempRow2 =
+                (pSrc[kiSrcX + kiSrcStride] as i32 + pSrc[kiSrcX + kiSrcStride + 1] as i32 + 1)
+                    >> 1;
             pDst[dstLine + i] = ((kiTempRow1 + kiTempRow2 + 1) >> 1) as u8;
         }
     }
@@ -331,23 +328,113 @@ pub fn Downsample(
     if (iSrcWidthY >> 1) > MAX_SAMPLE_WIDTH || (iSrcHeightY >> 1) > MAX_SAMPLE_HEIGHT {
         let [dy, du, dv] = &mut pDst.planes;
         if (iSrcWidthY >> 1) == iDstWidthY && (iSrcHeightY >> 1) == iDstHeightY {
-            DownsampleHalfAverage(dy, dst_stride[0], pSrc.planes[0], pSrc.stride[0], iSrcWidthY, iSrcHeightY);
-            DownsampleHalfAverage(du, dst_stride[1], pSrc.planes[1], pSrc.stride[1], iSrcWidthUV, iSrcHeightUV);
-            DownsampleHalfAverage(dv, dst_stride[2], pSrc.planes[2], pSrc.stride[2], iSrcWidthUV, iSrcHeightUV);
+            DownsampleHalfAverage(
+                dy,
+                dst_stride[0],
+                pSrc.planes[0],
+                pSrc.stride[0],
+                iSrcWidthY,
+                iSrcHeightY,
+            );
+            DownsampleHalfAverage(
+                du,
+                dst_stride[1],
+                pSrc.planes[1],
+                pSrc.stride[1],
+                iSrcWidthUV,
+                iSrcHeightUV,
+            );
+            DownsampleHalfAverage(
+                dv,
+                dst_stride[2],
+                pSrc.planes[2],
+                pSrc.stride[2],
+                iSrcWidthUV,
+                iSrcHeightUV,
+            );
         } else if (iSrcWidthY >> 2) == iDstWidthY && (iSrcHeightY >> 2) == iDstHeightY {
-            DyadicBilinearQuarterDownsampler(dy, dst_stride[0], pSrc.planes[0], pSrc.stride[0], iSrcWidthY, iSrcHeightY);
-            DyadicBilinearQuarterDownsampler(du, dst_stride[1], pSrc.planes[1], pSrc.stride[1], iSrcWidthUV, iSrcHeightUV);
-            DyadicBilinearQuarterDownsampler(dv, dst_stride[2], pSrc.planes[2], pSrc.stride[2], iSrcWidthUV, iSrcHeightUV);
+            DyadicBilinearQuarterDownsampler(
+                dy,
+                dst_stride[0],
+                pSrc.planes[0],
+                pSrc.stride[0],
+                iSrcWidthY,
+                iSrcHeightY,
+            );
+            DyadicBilinearQuarterDownsampler(
+                du,
+                dst_stride[1],
+                pSrc.planes[1],
+                pSrc.stride[1],
+                iSrcWidthUV,
+                iSrcHeightUV,
+            );
+            DyadicBilinearQuarterDownsampler(
+                dv,
+                dst_stride[2],
+                pSrc.planes[2],
+                pSrc.stride[2],
+                iSrcWidthUV,
+                iSrcHeightUV,
+            );
         } else if (iSrcWidthY / 3) == iDstWidthY && (iSrcHeightY / 3) == iDstHeightY {
             // the odd one out: this kernel's last argument is the *destination* height
-            DyadicBilinearOneThirdDownsampler(dy, dst_stride[0], pSrc.planes[0], pSrc.stride[0], iSrcWidthY, iDstHeightY);
-            DyadicBilinearOneThirdDownsampler(du, dst_stride[1], pSrc.planes[1], pSrc.stride[1], iSrcWidthUV, iDstHeightUV);
-            DyadicBilinearOneThirdDownsampler(dv, dst_stride[2], pSrc.planes[2], pSrc.stride[2], iSrcWidthUV, iDstHeightUV);
+            DyadicBilinearOneThirdDownsampler(
+                dy,
+                dst_stride[0],
+                pSrc.planes[0],
+                pSrc.stride[0],
+                iSrcWidthY,
+                iDstHeightY,
+            );
+            DyadicBilinearOneThirdDownsampler(
+                du,
+                dst_stride[1],
+                pSrc.planes[1],
+                pSrc.stride[1],
+                iSrcWidthUV,
+                iDstHeightUV,
+            );
+            DyadicBilinearOneThirdDownsampler(
+                dv,
+                dst_stride[2],
+                pSrc.planes[2],
+                pSrc.stride[2],
+                iSrcWidthUV,
+                iDstHeightUV,
+            );
         } else {
             // aarch64 binds luma to the *accurate* wrapper, not the fast one
-            GeneralBilinearAccurateDownsampler(dy, dst_stride[0], iDstWidthY, iDstHeightY, pSrc.planes[0], pSrc.stride[0], iSrcWidthY, iSrcHeightY);
-            GeneralBilinearAccurateDownsampler(du, dst_stride[1], iDstWidthUV, iDstHeightUV, pSrc.planes[1], pSrc.stride[1], iSrcWidthUV, iSrcHeightUV);
-            GeneralBilinearAccurateDownsampler(dv, dst_stride[2], iDstWidthUV, iDstHeightUV, pSrc.planes[2], pSrc.stride[2], iSrcWidthUV, iSrcHeightUV);
+            GeneralBilinearAccurateDownsampler(
+                dy,
+                dst_stride[0],
+                iDstWidthY,
+                iDstHeightY,
+                pSrc.planes[0],
+                pSrc.stride[0],
+                iSrcWidthY,
+                iSrcHeightY,
+            );
+            GeneralBilinearAccurateDownsampler(
+                du,
+                dst_stride[1],
+                iDstWidthUV,
+                iDstHeightUV,
+                pSrc.planes[1],
+                pSrc.stride[1],
+                iSrcWidthUV,
+                iSrcHeightUV,
+            );
+            GeneralBilinearAccurateDownsampler(
+                dv,
+                dst_stride[2],
+                iDstWidthUV,
+                iDstHeightUV,
+                pSrc.planes[2],
+                pSrc.stride[2],
+                iSrcWidthUV,
+                iSrcHeightUV,
+            );
         }
         return RET_SUCCESS;
     }
@@ -425,9 +512,36 @@ pub fn Downsample(
                 Some(0) => (&buf0[0][..], &buf0[1][..], &buf0[2][..]),
                 _ => (&buf1[0][..], &buf1[1][..], &buf1[2][..]),
             };
-            GeneralBilinearAccurateDownsampler(dy, dst_stride[0], iDstWidthY, iDstHeightY, sy, stY, iSrcWidthY, iSrcHeightY);
-            GeneralBilinearAccurateDownsampler(du, dst_stride[1], iDstWidthUV, iDstHeightUV, su, stU, iSrcWidthUV, iSrcHeightUV);
-            GeneralBilinearAccurateDownsampler(dv, dst_stride[2], iDstWidthUV, iDstHeightUV, sv, stV, iSrcWidthUV, iSrcHeightUV);
+            GeneralBilinearAccurateDownsampler(
+                dy,
+                dst_stride[0],
+                iDstWidthY,
+                iDstHeightY,
+                sy,
+                stY,
+                iSrcWidthY,
+                iSrcHeightY,
+            );
+            GeneralBilinearAccurateDownsampler(
+                du,
+                dst_stride[1],
+                iDstWidthUV,
+                iDstHeightUV,
+                su,
+                stU,
+                iSrcWidthUV,
+                iSrcHeightUV,
+            );
+            GeneralBilinearAccurateDownsampler(
+                dv,
+                dst_stride[2],
+                iDstWidthUV,
+                iDstHeightUV,
+                sv,
+                stV,
+                iSrcWidthUV,
+                iSrcHeightUV,
+            );
             break;
         }
     }
@@ -471,7 +585,10 @@ mod tests {
         // (1+2)>>2 = 0.  That one discriminates.
         let mut dst = [0u8; 1];
         DyadicBilinearDownsampler(&mut dst, 1, &[1u8, 0, 0, 0], 2, 2, 2);
-        assert_eq!(dst[0], 1, "two-stage rounding lifts this to 1; a flat average gives 0");
+        assert_eq!(
+            dst[0], 1,
+            "two-stage rounding lifts this to 1; a flat average gives 0"
+        );
     }
 
     /// `DownsampleHalfAverage`'s alignment branch is the subtle one: the width
@@ -491,7 +608,10 @@ mod tests {
         let mut d16 = vec![0u8; 48 * h];
         DownsampleHalfAverage(&mut d16, 32, &src, 48, w, h);
         assert_ne!(d16[23], 0, "column 23 written");
-        assert_eq!(d16[24], 0, "column 24 untouched: the width rounded to 48, not 64");
+        assert_eq!(
+            d16[24], 0,
+            "column 24 untouched: the width rounded to 48, not 64"
+        );
     }
 
     /// The general kernel's last row and last column are nearest-neighbour copies,
@@ -528,14 +648,23 @@ mod tests {
         let (su, sv) = (vec![0u8; 32 * 32], vec![0u8; 32 * 32]);
         let (mut dy, mut du, mut dv) = (vec![0u8; 64 * 64], vec![0u8; 32 * 32], vec![0u8; 32 * 32]);
         for (w, h) in [(32i32, 32i32), (16, 32), (32, 16), (64, 64)] {
-            let src = DownsampleSrc { planes: [&sy, &su, &sv], stride: [64, 32, 32], width: 32, height: 32 };
+            let src = DownsampleSrc {
+                planes: [&sy, &su, &sv],
+                stride: [64, 32, 32],
+                width: 32,
+                height: 32,
+            };
             let mut dst = DownsampleDst {
                 planes: [&mut dy, &mut du, &mut dv],
                 stride: [64, 32, 32],
                 width: w,
                 height: h,
             };
-            assert_eq!(ds.Process(&src, &mut dst), RET_INVALIDPARAM, "{w}x{h} from 32x32");
+            assert_eq!(
+                ds.Process(&src, &mut dst),
+                RET_INVALIDPARAM,
+                "{w}x{h} from 32x32"
+            );
         }
     }
 
@@ -549,9 +678,20 @@ mod tests {
         let sv = ramp(32 * 48, 9);
         let mut ds = CDownsampling::default();
         let run = |ds: &mut CDownsampling| {
-            let (mut dy, mut du, mut dv) = (vec![0u8; 32 * 40], vec![0u8; 16 * 24], vec![0u8; 16 * 24]);
-            let src = DownsampleSrc { planes: [&sy, &su, &sv], stride: [64, 32, 32], width: sw as i32, height: sh as i32 };
-            let mut dst = DownsampleDst { planes: [&mut dy, &mut du, &mut dv], stride: [32, 16, 16], width: 16, height: 16 };
+            let (mut dy, mut du, mut dv) =
+                (vec![0u8; 32 * 40], vec![0u8; 16 * 24], vec![0u8; 16 * 24]);
+            let src = DownsampleSrc {
+                planes: [&sy, &su, &sv],
+                stride: [64, 32, 32],
+                width: sw as i32,
+                height: sh as i32,
+            };
+            let mut dst = DownsampleDst {
+                planes: [&mut dy, &mut du, &mut dv],
+                stride: [32, 16, 16],
+                width: 16,
+                height: 16,
+            };
             assert_eq!(ds.Process(&src, &mut dst), RET_SUCCESS);
             (dy, du, dv)
         };

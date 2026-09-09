@@ -188,7 +188,9 @@ pub fn ScrollDetectionCore(
     let iYStride = pRefPixMap.iStride[0];
     let kiStride = iYStride as usize;
 
-    let iTestPos = SelectTestLine(pYSrc, iWidth, iHeight, iPicHeight, iYStride, iOffsetX, iOffsetY);
+    let iTestPos = SelectTestLine(
+        pYSrc, iWidth, iHeight, iPicHeight, iYStride, iOffsetX, iOffsetY,
+    );
 
     if iTestPos == -1 {
         sScrollDetectionParam.bScrollDetectFlag = false;
@@ -534,7 +536,11 @@ mod tests {
         // Content moved DOWN by K: the two frames swap roles.
         let r = detect(&refp, &cur, W as i32, H as i32);
         assert!(r.bScrollDetectFlag);
-        assert_eq!(r.iScrollMvY, -(K as i32), "content down by {K} rows is -{K}");
+        assert_eq!(
+            r.iScrollMvY,
+            -(K as i32),
+            "content down by {K} rows is -{K}"
+        );
         assert_eq!(r.iScrollMvX, 0);
     }
 
@@ -601,10 +607,20 @@ mod tests {
         p.bMaskInfoAvailable = true;
         // Wide enough that `iWidth /= 2` still clears MINIMUM_DETECT_WIDTH, tall
         // enough to clear 2 * CHECK_OFFSET.
-        p.sMaskRect = SRect { iRectTop: 20, iRectLeft: 8, iRectWidth: 260, iRectHeight: 140 };
+        p.sMaskRect = SRect {
+            iRectTop: 20,
+            iRectLeft: 8,
+            iRectWidth: 260,
+            iRectHeight: 140,
+        };
         d.Set(&p);
         let map = pixmap(W as i32, H as i32, W as i32);
-        let planes = ScdPlanes { cur: &cur, cur_stride: W, refp: &refp, ref_stride: W };
+        let planes = ScdPlanes {
+            cur: &cur,
+            cur_stride: W,
+            refp: &refp,
+            ref_stride: W,
+        };
         assert_eq!(d.Process(&map, &map, &planes), RET_SUCCESS);
         let mut out = SScrollDetectionParam::default();
         d.Get(&mut out);
@@ -626,10 +642,20 @@ mod tests {
         let mut p = SScrollDetectionParam::default();
         p.bMaskInfoAvailable = true;
         p.iScrollMvY = 99; // must be cleared by the mask path before its width test
-        p.sMaskRect = SRect { iRectTop: 10, iRectLeft: 0, iRectWidth: 100, iRectHeight: 140 };
+        p.sMaskRect = SRect {
+            iRectTop: 10,
+            iRectLeft: 0,
+            iRectWidth: 100,
+            iRectHeight: 140,
+        };
         d.Set(&p);
         let map = pixmap(W as i32, H as i32, W as i32);
-        let planes = ScdPlanes { cur: &p0, cur_stride: W, refp: &p0, ref_stride: W };
+        let planes = ScdPlanes {
+            cur: &p0,
+            cur_stride: W,
+            refp: &p0,
+            ref_stride: W,
+        };
         assert_eq!(d.Process(&map, &map, &planes), RET_SUCCESS);
         let mut out = SScrollDetectionParam::default();
         d.Get(&mut out);
@@ -637,7 +663,12 @@ mod tests {
         assert_eq!(out.iScrollMvY, 0, "the mask path zeroes the vector first");
 
         // A short mask is refused the same way: 2 * CHECK_OFFSET is also exclusive.
-        p.sMaskRect = SRect { iRectTop: 10, iRectLeft: 0, iRectWidth: 260, iRectHeight: 50 };
+        p.sMaskRect = SRect {
+            iRectTop: 10,
+            iRectLeft: 0,
+            iRectWidth: 260,
+            iRectHeight: 50,
+        };
         d.Set(&p);
         assert_eq!(d.Process(&map, &map, &planes), RET_SUCCESS);
         d.Get(&mut out);
@@ -652,12 +683,27 @@ mod tests {
         let map = pixmap(320, 192, 320);
         let buf = vec![0u8; 320 * 192];
 
-        let empty = ScdPlanes { cur: &[], cur_stride: 320, refp: &buf, ref_stride: 320 };
+        let empty = ScdPlanes {
+            cur: &[],
+            cur_stride: 320,
+            refp: &buf,
+            ref_stride: 320,
+        };
         assert_eq!(d.Process(&map, &map, &empty), RET_INVALIDPARAM);
-        let empty = ScdPlanes { cur: &buf, cur_stride: 320, refp: &[], ref_stride: 320 };
+        let empty = ScdPlanes {
+            cur: &buf,
+            cur_stride: 320,
+            refp: &[],
+            ref_stride: 320,
+        };
         assert_eq!(d.Process(&map, &map, &empty), RET_INVALIDPARAM);
 
-        let planes = ScdPlanes { cur: &buf, cur_stride: 320, refp: &buf, ref_stride: 320 };
+        let planes = ScdPlanes {
+            cur: &buf,
+            cur_stride: 320,
+            refp: &buf,
+            ref_stride: 320,
+        };
         let other = pixmap(320, 96, 320);
         assert_eq!(d.Process(&map, &other, &planes), RET_INVALIDPARAM);
         let other = pixmap(160, 192, 320);
@@ -706,7 +752,11 @@ mod tests {
             1,
             "a width at or below 12 answers `different` even on equal bytes"
         );
-        assert_eq!(CompareLine(&a, &b, 12), 1, "12 is `at or below`, not `above`");
+        assert_eq!(
+            CompareLine(&a, &b, 12),
+            1,
+            "12 is `at or below`, not `above`"
+        );
 
         // A difference inside the first twelve bytes short-circuits at any width.
         let mut c = b;
@@ -716,6 +766,10 @@ mod tests {
         let mut d = b;
         d[13] = 8;
         assert_eq!(CompareLine(&a, &d, 16), 1);
-        assert_eq!(CompareLine(&a, &d, 13), 0, "byte 13 is outside a width of 13");
+        assert_eq!(
+            CompareLine(&a, &d, 13),
+            0,
+            "byte 13 is outside a width of 13"
+        );
     }
 }

@@ -261,8 +261,14 @@ fn hadamard_t4_dc_neon(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
     let o2 = vsubq_s32(t0, t1);
     let o3 = vsubq_s32(t3, t2);
 
-    st8_i16(&mut luma_dc[..8], vqrshrn_high_n_s32::<1>(vqrshrn_n_s32::<1>(o0), o1));
-    st8_i16(&mut luma_dc[8..], vqrshrn_high_n_s32::<1>(vqrshrn_n_s32::<1>(o2), o3));
+    st8_i16(
+        &mut luma_dc[..8],
+        vqrshrn_high_n_s32::<1>(vqrshrn_n_s32::<1>(o0), o1),
+    );
+    st8_i16(
+        &mut luma_dc[8..],
+        vqrshrn_high_n_s32::<1>(vqrshrn_n_s32::<1>(o2), o3),
+    );
 }
 
 /// `WelsHadamardT4Dc_AArch64_neon`.
@@ -292,7 +298,10 @@ fn ihdm_rows(v: int16x8_t) -> int16x8_t {
     let lo = vreinterpretq_s16_s32(vuzp1q_s32(z, z));
     let sum = vaddq_s16(lo, hi);
     let dif = vrev32q_s16(vsubq_s16(lo, hi));
-    vreinterpretq_s16_s32(vzip1q_s32(vreinterpretq_s32_s16(sum), vreinterpretq_s32_s16(dif)))
+    vreinterpretq_s16_s32(vzip1q_s32(
+        vreinterpretq_s32_s16(sum),
+        vreinterpretq_s32_s16(dif),
+    ))
 }
 
 /// `MATRIX_TRANSFORM_EACH_16BITS_2x8_OUT2`: the 4x4 held as `[row0 | row1]`,
@@ -342,10 +351,12 @@ mod tests {
     use super::*;
     use crate::encoder::decode_mb_aux as dec;
     use crate::encoder::encode_mb_aux as enc;
-    use crate::encoder::encode_mb_aux::{g_kiQuantMF, G_KI_QUANT_INTER_FF};
+    use crate::encoder::encode_mb_aux::{G_KI_QUANT_INTER_FF, g_kiQuantMF};
 
     fn lcg(seed: &mut u64) -> i16 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*seed >> 32) as i32 % 4000 - 2000) as i16
     }
 
@@ -423,7 +434,18 @@ mod tests {
     /// scalar is the reference, over its full input space.
     #[test]
     fn quant_matches_the_scalar_at_the_extremes() {
-        let extremes = [i16::MIN, -32767, -32000, -31234, -1, 0, 1, 31234, 32000, 32767];
+        let extremes = [
+            i16::MIN,
+            -32767,
+            -32000,
+            -31234,
+            -1,
+            0,
+            1,
+            31234,
+            32000,
+            32767,
+        ];
         // `g_kiQuantMF` has 52 rows to the FF table's 58; every QP has both.
         for qp in 0..g_kiQuantMF.len() {
             let ff = G_KI_QUANT_INTER_FF.0[qp];
@@ -493,12 +515,20 @@ mod tests {
                 let r = lcg(&mut seed);
                 *v = if r % 3 == 0 { 0 } else { r };
             }
-            assert_eq!(get_none_zero_count(&block), enc::get_none_zero_count(&block));
+            assert_eq!(
+                get_none_zero_count(&block),
+                enc::get_none_zero_count(&block)
+            );
         }
         // Every mask, since the count is a function of the zero pattern alone.
         for mask in 0u32..=0xFFFF {
-            let block: [i16; 16] = core::array::from_fn(|i| if (mask >> i) & 1 != 0 { 256 } else { 0 });
-            assert_eq!(get_none_zero_count(&block), enc::get_none_zero_count(&block), "mask {mask:#06x}");
+            let block: [i16; 16] =
+                core::array::from_fn(|i| if (mask >> i) & 1 != 0 { 256 } else { 0 });
+            assert_eq!(
+                get_none_zero_count(&block),
+                enc::get_none_zero_count(&block),
+                "mask {mask:#06x}"
+            );
         }
     }
 
@@ -509,7 +539,9 @@ mod tests {
     // ========================================================================
 
     fn lcg_full_i16(seed: &mut u64) -> i16 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32) as u16 as i16
     }
 
@@ -533,11 +565,17 @@ mod tests {
     /// the `sqrshrn` saturation both ways.
     #[test]
     fn hadamard_t4_dc_saturates_like_the_scalar() {
-        const DC_IDX: [usize; 16] = [0, 16, 64, 80, 32, 48, 96, 112, 128, 144, 192, 208, 160, 176, 224, 240];
+        const DC_IDX: [usize; 16] = [
+            0, 16, 64, 80, 32, 48, 96, 112, 128, 144, 192, 208, 160, 176, 224, 240,
+        ];
         for pattern in 0u32..(1 << 16) {
             let mut dct = [0i16; 241];
             for (n, &idx) in DC_IDX.iter().enumerate() {
-                dct[idx] = if pattern & (1 << n) != 0 { i16::MAX } else { i16::MIN };
+                dct[idx] = if pattern & (1 << n) != 0 {
+                    i16::MAX
+                } else {
+                    i16::MIN
+                };
             }
             let mut want = [0i16; 16];
             let mut got = [0i16; 16];

@@ -66,7 +66,8 @@ fn idct_four_res_add_pred_transforms_a_dc_only_block_with_zero_nzc() {
                     }
                 }
                 assert_eq!(
-                    after, want,
+                    after,
+                    want,
                     "DC-only sub-block {k} at stride {stride}, center {center}, seed {:#x}",
                     rng.seed()
                 );
@@ -91,7 +92,10 @@ fn strides(min: usize) -> Vec<usize> {
     if cfg!(miri) {
         return vec![min];
     }
-    let mut v: Vec<usize> = [min, min + 7, 32, 240].into_iter().filter(|&s| s >= min).collect();
+    let mut v: Vec<usize> = [min, min + 7, 32, 240]
+        .into_iter()
+        .filter(|&s| s >= min)
+        .collect();
     v.sort_unstable();
     v.dedup();
     v
@@ -102,8 +106,8 @@ fn strides(min: usize) -> Vec<usize> {
 // ===========================================================================
 
 use openh264_rs::common::sad_common as sad;
-use openh264_rs::safe::plane::PlaneCursor;
 use openh264_rs::encoder::rec_view::RecCursor;
+use openh264_rs::safe::plane::PlaneCursor;
 
 /// Dispatches the const-generic safe kernel for a runtime shape, so the tables below
 /// can stay tables. Every arm is also the assertion that the instantiation is wired to
@@ -120,7 +124,13 @@ fn safe_sad(w: usize, h: usize, c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i
     }
 }
 
-fn safe_sad_four(w: usize, h: usize, c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>, out: &mut [i32; 4]) {
+fn safe_sad_four(
+    w: usize,
+    h: usize,
+    c1: &PlaneCursor<'_>,
+    c2: &PlaneCursor<'_>,
+    out: &mut [i32; 4],
+) {
     match (w, h) {
         (4, 4) => sad::sample_sad_four::<4, 4, _>(c1, c2, out),
         (8, 4) => sad::sample_sad_four::<8, 4, _>(c1, c2, out),
@@ -143,14 +153,20 @@ fn safe_sad_four(w: usize, h: usize, c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>,
 fn sad_kernels_stay_inside_the_spans_they_declare() {
     let mut rng = Prng::new(0x5AD0_0501);
 
-    const SAD_SHAPES: &[(usize, usize)] = &[(4, 4), (8, 4), (4, 8), (8, 8), (16, 8), (8, 16), (16, 16)];
+    const SAD_SHAPES: &[(usize, usize)] =
+        &[(4, 4), (8, 4), (4, 8), (8, 8), (16, 8), (8, 16), (16, 16)];
 
     for &(w, h) in SAD_SHAPES {
         for &s1 in &strides(w) {
             for &s2 in &strides(w) {
                 let exact1 = rng.bytes((h - 1) * s1 + w);
                 let exact2 = rng.bytes((h - 1) * s2 + w);
-                let got = safe_sad(w, h, &PlaneCursor::new(&exact1, 0, s1), &PlaneCursor::new(&exact2, 0, s2));
+                let got = safe_sad(
+                    w,
+                    h,
+                    &PlaneCursor::new(&exact1, 0, s1),
+                    &PlaneCursor::new(&exact2, 0, s2),
+                );
                 assert!(
                     (0..=(w * h * 255) as i32).contains(&got),
                     "sad {w}x{h}: {got} outside [0, {}] at strides {s1}/{s2}",
@@ -161,7 +177,12 @@ fn sad_kernels_stay_inside_the_spans_they_declare() {
                 let mut pad2 = rng.bytes(h * s2 + 64);
                 pad1[..exact1.len()].copy_from_slice(&exact1);
                 pad2[..exact2.len()].copy_from_slice(&exact2);
-                let want = safe_sad(w, h, &PlaneCursor::new(&pad1, 0, s1), &PlaneCursor::new(&pad2, 0, s2));
+                let want = safe_sad(
+                    w,
+                    h,
+                    &PlaneCursor::new(&pad1, 0, s1),
+                    &PlaneCursor::new(&pad2, 0, s2),
+                );
                 assert_eq!(got, want, "sad {w}x{h} strides {s1}/{s2}");
             }
         }
@@ -328,7 +349,11 @@ fn vaa_shims_stay_inside_the_spans_they_declare() {
         let tail_mad = mad[mbs..].to_vec();
 
         let frame = vaa::vaa_calc_sad(&cur, &refp, w, h, stride, &mut sad);
-        assert_eq!(&sad[mbs..], &tail_sad[..], "Sad wrote past the last MB, {at}");
+        assert_eq!(
+            &sad[mbs..],
+            &tail_sad[..],
+            "Sad wrote past the last MB, {at}"
+        );
         assert_eq!(
             frame,
             sad[..mbs].iter().flatten().sum::<i32>(),
@@ -336,27 +361,80 @@ fn vaa_shims_stay_inside_the_spans_they_declare() {
         );
 
         vaa::vaa_calc_sad_var(&cur, &refp, w, h, stride, &mut sad, &mut sum, &mut sqsum);
-        assert_eq!(&sad[mbs..], &tail_sad[..], "SadVar wrote past the last MB, {at}");
-        assert_eq!(&sum[mbs..], &tail_sum[..], "SadVar wrote past sum16x16, {at}");
-        assert_eq!(&sqsum[mbs..], &tail_sqsum[..], "SadVar wrote past sqsum16x16, {at}");
+        assert_eq!(
+            &sad[mbs..],
+            &tail_sad[..],
+            "SadVar wrote past the last MB, {at}"
+        );
+        assert_eq!(
+            &sum[mbs..],
+            &tail_sum[..],
+            "SadVar wrote past sum16x16, {at}"
+        );
+        assert_eq!(
+            &sqsum[mbs..],
+            &tail_sqsum[..],
+            "SadVar wrote past sqsum16x16, {at}"
+        );
 
         vaa::vaa_calc_sad_ssd(
-            &cur, &refp, w, h, stride, &mut sad, &mut sum, &mut sqsum, &mut sqdiff,
+            &cur,
+            &refp,
+            w,
+            h,
+            stride,
+            &mut sad,
+            &mut sum,
+            &mut sqsum,
+            &mut sqdiff,
         );
-        assert_eq!(&sqdiff[mbs..], &tail_sqdiff[..], "SadSsd wrote past sqdiff16x16, {at}");
+        assert_eq!(
+            &sqdiff[mbs..],
+            &tail_sqdiff[..],
+            "SadSsd wrote past sqdiff16x16, {at}"
+        );
 
         vaa::vaa_calc_sad_bgd(&cur, &refp, w, h, stride, &mut sad, &mut sd, &mut mad);
         assert_eq!(&sd[mbs..], &tail_sd[..], "SadBgd wrote past pSd8x8, {at}");
-        assert_eq!(&mad[mbs..], &tail_mad[..], "SadBgd wrote past pMad8x8, {at}");
+        assert_eq!(
+            &mad[mbs..],
+            &tail_mad[..],
+            "SadBgd wrote past pMad8x8, {at}"
+        );
 
         vaa::vaa_calc_sad_ssd_bgd(
-            &cur, &refp, w, h, stride, &mut sad, &mut sum, &mut sqsum, &mut sqdiff,
-            &mut sd, &mut mad,
+            &cur,
+            &refp,
+            w,
+            h,
+            stride,
+            &mut sad,
+            &mut sum,
+            &mut sqsum,
+            &mut sqdiff,
+            &mut sd,
+            &mut mad,
         );
-        assert_eq!(&sad[mbs..], &tail_sad[..], "SadSsdBgd wrote past the last MB, {at}");
-        assert_eq!(&sd[mbs..], &tail_sd[..], "SadSsdBgd wrote past pSd8x8, {at}");
-        assert_eq!(&sqdiff[mbs..], &tail_sqdiff[..], "SadSsdBgd wrote past sqdiff16x16, {at}");
-        assert_eq!(&mad[mbs..], &tail_mad[..], "SadSsdBgd wrote past pMad8x8, {at}");
+        assert_eq!(
+            &sad[mbs..],
+            &tail_sad[..],
+            "SadSsdBgd wrote past the last MB, {at}"
+        );
+        assert_eq!(
+            &sd[mbs..],
+            &tail_sd[..],
+            "SadSsdBgd wrote past pSd8x8, {at}"
+        );
+        assert_eq!(
+            &sqdiff[mbs..],
+            &tail_sqdiff[..],
+            "SadSsdBgd wrote past sqdiff16x16, {at}"
+        );
+        assert_eq!(
+            &mad[mbs..],
+            &tail_mad[..],
+            "SadSsdBgd wrote past pMad8x8, {at}"
+        );
     }
 }
 
@@ -426,8 +504,14 @@ fn sample_variance_16x16_accumulators_cannot_wrap() {
         let got = aq::sample_variance_16x16(&refy, 16, &srcy, 16);
         // A uniform block has zero variance either way round, and a uniform
         // difference has zero variance of differences.
-        assert_eq!(got.uiMotionIndex, 0, "uniform difference, ref {refv} src {srcv}");
-        assert_eq!(got.uiTextureIndex, 0, "uniform picture, ref {refv} src {srcv}");
+        assert_eq!(
+            got.uiMotionIndex, 0,
+            "uniform difference, ref {refv} src {srcv}"
+        );
+        assert_eq!(
+            got.uiTextureIndex, 0,
+            "uniform picture, ref {refv} src {srcv}"
+        );
     }
 }
 
@@ -491,7 +575,8 @@ fn expand_picture_writes_every_padding_byte_and_reads_none() {
                     // content untouched: inputs differing only in padding
                     // must converge byte-for-byte.
                     assert_eq!(
-                        a, b,
+                        a,
+                        b,
                         "{name} {w}x{h} stride {stride}: some padding byte survived \
                          (was read or left unwritten) — seed {:#x}",
                         rng.seed()
@@ -540,7 +625,11 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
             &PlaneCursor::new(&b2, 0, s2),
         );
         let mut golden = [0i16; 16];
-        ema::dct_4x4(&mut golden, &PlaneCursor::new(&k1, 0, s1), &PlaneCursor::new(&k2, 0, s2));
+        ema::dct_4x4(
+            &mut golden,
+            &PlaneCursor::new(&k1, 0, s1),
+            &PlaneCursor::new(&k2, 0, s2),
+        );
         assert_eq!(dct, golden, "DctT4 shim vs direct at s1={s1} s2={s2}");
         assert_eq!((b1, b2), (k1, k2), "DctT4 shim moved a source byte");
     }
@@ -555,7 +644,11 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
             &PlaneCursor::new(&b2, 0, s2),
         );
         let mut golden = [0i16; 64];
-        ema::dct_four_4x4(&mut golden, &PlaneCursor::new(&k1, 0, s1), &PlaneCursor::new(&k2, 0, s2));
+        ema::dct_four_4x4(
+            &mut golden,
+            &PlaneCursor::new(&k1, 0, s1),
+            &PlaneCursor::new(&k2, 0, s2),
+        );
         assert_eq!(dct, golden, "DctFourT4 shim vs direct at s1={s1} s2={s2}");
         assert_eq!((b1, b2), (k1, k2), "DctFourT4 shim moved a source byte");
     }
@@ -573,15 +666,26 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         for k in 0..4 {
             let mut one: [i16; 16] = base[k * 16..k * 16 + 16].try_into().unwrap();
             ema::quant_4x4(&mut one, ff, mf);
-            assert_eq!(&four[k * 16..k * 16 + 16], &one[..], "QuantFour4x4 quadrant {k}");
+            assert_eq!(
+                &four[k * 16..k * 16 + 16],
+                &one[..],
+                "QuantFour4x4 quadrant {k}"
+            );
         }
 
         let mut with_max = base;
         let mut g_max = [0i16; 4];
         ema::quant_four_4x4_max(&mut with_max, ff, mf, &mut g_max);
-        assert_eq!(with_max, four, "QuantFour4x4Max wrote different coefficients");
+        assert_eq!(
+            with_max, four,
+            "QuantFour4x4Max wrote different coefficients"
+        );
         for k in 0..4 {
-            let want = four[k * 16..k * 16 + 16].iter().map(|v| v.abs()).max().unwrap();
+            let want = four[k * 16..k * 16 + 16]
+                .iter()
+                .map(|v| v.abs())
+                .max()
+                .unwrap();
             assert_eq!(g_max[k], want, "QuantFour4x4Max quadrant {k} maximum");
             assert!(g_max[k] >= 0, "a max magnitude is never negative");
         }
@@ -605,7 +709,10 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
     // set pinned to {0, 16, 32, 48}, and the skip variant read-only.
     for _ in 0..scale(20) {
         let base: [i16; 49] = coeffs(&mut rng);
-        let (ff, mf) = (ema::g_kiQuantInterFF[30][0] << 1, ema::g_kiQuantMF[30][0] >> 1);
+        let (ff, mf) = (
+            ema::g_kiQuantInterFF[30][0] << 1,
+            ema::g_kiQuantMF[30][0] >> 1,
+        );
 
         // **The two kernels are deliberately not cross-asserted**: `skip`
         // thresholds on `(1<<16 - 1) / mf - ff` in `i32` while the full kernel
@@ -618,7 +725,10 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         let mut g = base;
         let (mut g_dct, mut g_blk) = ([0i16; 4], [0i16; 4]);
         let nnz = ema::hadamard_quant_2x2(&mut g, ff, mf, &mut g_dct, &mut g_blk);
-        assert_eq!(g_dct, g_blk, "HadamardQuant2x2 writes the same four values twice");
+        assert_eq!(
+            g_dct, g_blk,
+            "HadamardQuant2x2 writes the same four values twice"
+        );
         assert_eq!(
             nnz,
             g_dct.iter().filter(|&&v| v != 0).count() as i32,
@@ -629,7 +739,10 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
             if matches!(i, 0 | 16 | 32 | 48) {
                 assert_eq!(now, 0, "HadamardQuant2x2 must zero its four DC slots");
             } else {
-                assert_eq!(now, was, "HadamardQuant2x2 touched index {i}, outside its touch set");
+                assert_eq!(
+                    now, was,
+                    "HadamardQuant2x2 touched index {i}, outside its touch set"
+                );
             }
         }
     }
@@ -665,7 +778,11 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         // The AC scan is the DC/AC scan shifted by one zigzag position.
         let mut ac = [0i16; 16];
         ema::scan_4x4_ac(&mut ac, &dct);
-        assert_eq!(&ac[..15], &g[1..], "Scan4x4Ac is not Scan4x4DcAc without the DC");
+        assert_eq!(
+            &ac[..15],
+            &g[1..],
+            "Scan4x4Ac is not Scan4x4DcAc without the DC"
+        );
 
         // A scan is a permutation: the multiset of coefficients is preserved.
         let (mut sa, mut sb) = (g, dct);
@@ -742,7 +859,6 @@ fn bounded_coeffs<const N: usize>(rng: &mut Prng, bound: i32) -> [i16; N] {
     core::array::from_fn(|_| rng.range_i32(-bound, bound) as i16)
 }
 
-
 #[test]
 fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
     let mut rng = Prng::new(0xEDA0_59A9);
@@ -759,7 +875,11 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
         for k in 0..4 {
             let mut one: [i16; 16] = base[k * 16..k * 16 + 16].try_into().unwrap();
             eda::dequant_4x4(&mut one, mf_row);
-            assert_eq!(&g[k * 16..k * 16 + 16], &one[..], "DequantFour4x4 block {k}");
+            assert_eq!(
+                &g[k * 16..k * 16 + 16],
+                &one[..],
+                "DequantFour4x4 block {k}"
+            );
         }
 
         // The inverse Hadamard with MF 1 spreads a lone DC evenly (gain 16 over the
@@ -820,7 +940,11 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
             &PlaneCursor::new(&pred, 0, ps),
             &dct,
         );
-        assert_eq!((&pred, m_dct), (&pred_before, dct), "{name}: a source moved");
+        assert_eq!(
+            (&pred, m_dct),
+            (&pred_before, dct),
+            "{name}: a source moved"
+        );
         for y in 0..h {
             let tail = y * rs + w;
             let next = ((y + 1) * rs).min(rec.len());
@@ -841,12 +965,28 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
     }
     for &(rs, ps) in &[(8usize, 16usize), (21, 8), (240, 25)] {
         for _ in 0..scale(10) {
-            probe_rec::<64>("IDctFourT4Rec", &mut rng, 8, 8, rs, ps, eda::idct_four_t4_rec);
+            probe_rec::<64>(
+                "IDctFourT4Rec",
+                &mut rng,
+                8,
+                8,
+                rs,
+                ps,
+                eda::idct_four_t4_rec,
+            );
         }
     }
     for &(rs, ps) in &[(16usize, 16usize), (21, 16), (240, 25)] {
         for _ in 0..scale(10) {
-            probe_rec::<16>("IDctRecI16x16Dc", &mut rng, 16, 16, rs, ps, eda::idct_rec_i16x16_dc);
+            probe_rec::<16>(
+                "IDctRecI16x16Dc",
+                &mut rng,
+                16,
+                16,
+                rs,
+                ps,
+                eda::idct_rec_i16x16_dc,
+            );
         }
     }
 }
@@ -885,14 +1025,20 @@ fn satd_kernels_stay_inside_the_spans_they_declare() {
                 let exact1 = rng.bytes((h - 1) * s1 + w);
                 let exact2 = rng.bytes((h - 1) * s2 + w);
 
-                let got = safe(&PlaneCursor::new(&exact1, 0, s1), &PlaneCursor::new(&exact2, 0, s2));
+                let got = safe(
+                    &PlaneCursor::new(&exact1, 0, s1),
+                    &PlaneCursor::new(&exact2, 0, s2),
+                );
 
                 // Same content embedded in generously padded surfaces.
                 let mut pad1 = rng.bytes(h * s1 + 64);
                 let mut pad2 = rng.bytes(h * s2 + 64);
                 pad1[..exact1.len()].copy_from_slice(&exact1);
                 pad2[..exact2.len()].copy_from_slice(&exact2);
-                let want = safe(&PlaneCursor::new(&pad1, 0, s1), &PlaneCursor::new(&pad2, 0, s2));
+                let want = safe(
+                    &PlaneCursor::new(&pad1, 0, s1),
+                    &PlaneCursor::new(&pad2, 0, s2),
+                );
 
                 assert_eq!(got, want, "{name} s1={s1} s2={s2}: exact-span disagreement");
             }
@@ -920,4 +1066,3 @@ fn nonzero_count_duplicates_agree() {
         assert_eq!(a, c, "encoder copy disagrees with the safe kernel");
     }
 }
-

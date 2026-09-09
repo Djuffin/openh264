@@ -1,9 +1,4 @@
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
@@ -13,14 +8,13 @@
 //! Translated from `codec/decoder/core/inc/decoder_context.h` and `codec/decoder/core/src/decoder.cpp`.
 
 use crate::decoder::bit_stream::BsReader;
-use crate::safe::plane::PlaneCursorMut;
-use crate::decoder::fmo::{SFmo};
-use crate::decoder::slice::EWelsSliceType;
 use crate::decoder::decode_slice::IntraPredConstraint;
-use crate::decoder::parse_mb_syn_cavlc::SVlcTable;
 use crate::decoder::error_concealment::{ERROR_CON_IDC, SMcFunc};
+use crate::decoder::fmo::SFmo;
+use crate::decoder::parse_mb_syn_cavlc::SVlcTable;
+use crate::decoder::slice::EWelsSliceType;
+use crate::safe::plane::PlaneCursorMut;
 use std::ffi::c_void;
-
 
 // ---------------------------------------------------------------------------
 // Constants & Defines
@@ -222,7 +216,6 @@ pub type PGetIntraPred8x8Func =
 
 pub use crate::decoder::error_concealment::SCopyFunc;
 
-
 /// The per-slice deblocking scratch — C++ `SDeblockingFilter`
 /// (`decoder_context.h:214-223`).
 #[derive(Copy, Clone, Default)]
@@ -251,20 +244,11 @@ pub struct SDeblockingFilter {
 
 pub use crate::decoder::parameter_sets::SPosOffset;
 
+pub use crate::decoder::parameter_sets::{SPps, SSps, SSubsetSps};
 
-pub use crate::decoder::parameter_sets::{SSps, SPps, SSubsetSps};
+pub use crate::decoder::nalu::{SNalUnit, SNalUnitHeader, SNalUnitHeaderExt};
 
-
-pub use crate::decoder::nalu::{
-    SNalUnitHeader, SNalUnitHeaderExt, SNalUnit, 
-};
-
-
-
-pub use crate::decoder::slice::{
-    SSliceHeader, SSliceHeaderExt, SRefBasePicMarking, 
-};
-
+pub use crate::decoder::slice::{SRefBasePicMarking, SSliceHeader, SSliceHeaderExt};
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -379,9 +363,7 @@ impl Default for SWelsDecoderSpsPpsCTX {
 
 pub use crate::decoder::picture::{SPicture, SPicture as Picture};
 
-
-
-pub use crate::decoder::pic_queue::{PicPool, PicId, PicRefs, SPicBuff};
+pub use crate::decoder::pic_queue::{PicId, PicPool, PicRefs, SPicBuff};
 
 /// The decoder picture buffer's three lists, as **slot handles**.
 ///
@@ -512,9 +494,7 @@ pub use crate::api::codec_api::{SVideoProperty, VIDEO_BITSTREAM_TYPE};
 // the very same type as the public API struct (`codec_app_def.h`).
 pub use crate::api::codec_api::SDecodingParam;
 
-
 pub use crate::decoder::decoder_core::{DqLayerState, SLayerInfo};
-
 
 pub use crate::decoder::nalu::SAccessUnit;
 
@@ -534,7 +514,10 @@ pub fn pool_pic(pool: &Option<Box<SPicBuff>>, slot: Option<PicId>) -> Option<&SP
 
 /// [`pool_pic`]'s mutable form, for the paths that write through what they resolve.
 #[inline]
-pub fn pool_pic_mut(pool: &mut Option<Box<SPicBuff>>, slot: Option<PicId>) -> Option<&mut SPicture> {
+pub fn pool_pic_mut(
+    pool: &mut Option<Box<SPicBuff>>,
+    slot: Option<PicId>,
+) -> Option<&mut SPicture> {
     pool.as_deref_mut()?.slot_mut(slot?)
 }
 
@@ -844,7 +827,6 @@ pub fn mark_au_ready(pCtx: &mut SWelsDecoderContext) -> bool {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // The slice's view of the context
 // ---------------------------------------------------------------------------
@@ -998,7 +980,8 @@ impl<'a> SliceCtx<'a> {
     /// — [`uiChromaFormatIdc`](Self::uiChromaFormatIdc)'s clause, same reason.
     #[inline]
     pub fn bTransform8x8ModeFlag(&self) -> bool {
-        self.active_pps().is_some_and(|pps| pps.bTransform8x8ModeFlag)
+        self.active_pps()
+            .is_some_and(|pps| pps.bTransform8x8ModeFlag)
     }
 }
 
@@ -1088,7 +1071,11 @@ pub fn slice_split<'a>(
     let iThreadCount = crate::decoder::decoder_core::GetThreadCount(pCtx);
     let cur = pCtx.pDec;
     let (pDec, pRefs) = pic_and_refs(&mut pCtx.pPicBuff, cur);
-    let node = nal.and_then(|i| pCtx.access_unit.as_deref_mut().and_then(|au| au.node_mut(i)));
+    let node = nal.and_then(|i| {
+        pCtx.access_unit
+            .as_deref_mut()
+            .and_then(|au| au.node_mut(i))
+    });
     // The window the view carries is derived from the reader's *position*, and the
     // slice borrows `sRawData` rather than the node — so the reader travels by value
     // and the node's borrow is free to leave with it.
@@ -1116,7 +1103,11 @@ pub fn pic_split<'a>(
 /// `sTmpRefPic` is the threading arm's set; `sRefPic` is every other caller's.
 #[inline]
 pub fn ref_set(pCtx: &mut SWelsDecoderContext, tmp: bool) -> &mut SRefPic {
-    if tmp { &mut pCtx.sTmpRefPic } else { &mut pCtx.sRefPic }
+    if tmp {
+        &mut pCtx.sTmpRefPic
+    } else {
+        &mut pCtx.sRefPic
+    }
 }
 
 /// A view over a test context, wired the way `Initialize` wires the real one.
@@ -1454,7 +1445,8 @@ impl Default for SWelsDecoderContext {
             pLastDecPicInfo: SWelsLastDecPicInfo::default(),
             // 191,360 bytes of it, and `WelsCabacGlobalInit` overwrites every entry on
             // the first CABAC access unit — `bCabacInited` below is the guard.
-            sWelsCabacContexts: [[[SWelsCabacCtx::default(); WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
+            sWelsCabacContexts: [[[SWelsCabacCtx::default(); WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1];
+                4],
             bCabacInited: false,
             pCabacCtx: [SWelsCabacCtx::default(); WELS_CONTEXT_COUNT],
             // A zeroed engine is inert rather than null-pointered: `pos = 0` against an
@@ -1542,15 +1534,16 @@ mod tests {
             ctx.active_sps
         );
         // The prefix NAL's VCL arm, which nothing writes and nothing reads.
-        assert!(ctx
-            .sSpsPpsCtx
-            .sPrefixNal
-            .sNalData
-            .sVclNal
-            .sSliceHeaderExt
-            .sSliceHeader
-            .sps_ref
-            .is_none());
+        assert!(
+            ctx.sSpsPpsCtx
+                .sPrefixNal
+                .sNalData
+                .sVclNal
+                .sSliceHeaderExt
+                .sSliceHeader
+                .sps_ref
+                .is_none()
+        );
     }
 
     #[test]
@@ -1583,6 +1576,3 @@ mod tests {
         }
     }
 }
-
-
-

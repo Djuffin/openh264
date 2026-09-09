@@ -79,20 +79,12 @@ impl Default for CBackgroundDetection {
 
 #[inline]
 fn WELS_MAX(a: i32, b: i32) -> i32 {
-    if a > b {
-        a
-    } else {
-        b
-    }
+    if a > b { a } else { b }
 }
 
 #[inline]
 fn WELS_MIN(a: i32, b: i32) -> i32 {
-    if a < b {
-        a
-    } else {
-        b
-    }
+    if a < b { a } else { b }
 }
 
 /// The three planes of each picture [`CBackgroundDetection::Process`] reads,
@@ -167,8 +159,13 @@ impl CBackgroundDetection {
         pBgdOU.iMAD = WELS_MAX(WELS_MAX(m[0], m[1]), WELS_MAX(m[2], m[3]));
         pBgdOU.iMinSubMad = WELS_MIN(WELS_MIN(m[0], m[1]), WELS_MIN(m[2], m[3]));
 
-        pBgdOU.iMaxDiffSubSd = WELS_MAX(WELS_MAX(iSubSD[0], iSubSD[1]), WELS_MAX(iSubSD[2], iSubSD[3]))
-            - WELS_MIN(WELS_MIN(iSubSD[0], iSubSD[1]), WELS_MIN(iSubSD[2], iSubSD[3]));
+        pBgdOU.iMaxDiffSubSd = WELS_MAX(
+            WELS_MAX(iSubSD[0], iSubSD[1]),
+            WELS_MAX(iSubSD[2], iSubSD[3]),
+        ) - WELS_MIN(
+            WELS_MIN(iSubSD[0], iSubSD[1]),
+            WELS_MIN(iSubSD[2], iSubSD[3]),
+        );
     }
 
     /// `CBackgroundDetection::ForegroundBackgroundDivision` — `BackgroundDetection.cpp:157`.

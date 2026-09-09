@@ -4,9 +4,9 @@
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::encoder::wels_encoder_ext::{SLTRMarkingFeedback, SLTRRecoverRequest};
+use std::ffi::c_char;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::ffi::c_char;
 
 // ---------------------------------------------------------------------------
 // The log referee's capture side — `cxx_enc.cpp`'s mirror.
@@ -96,7 +96,11 @@ fn main() {
     let gop: i32 = a[7].parse().unwrap();
     let out = &a[8];
     // Optional 9th argument: iRCMode. Defaults to RC_OFF_MODE, the gate configuration.
-    let rcmode: i32 = if a.len() > 9 { a[9].parse().unwrap() } else { RC_MODES::RC_OFF_MODE as i32 };
+    let rcmode: i32 = if a.len() > 9 {
+        a[9].parse().unwrap()
+    } else {
+        RC_MODES::RC_OFF_MODE as i32
+    };
     // Optional 10th argument: 1 selects Initialize(SEncParamBase), the path
     // upstream's BaseEncoderTest::InitWithParam takes and the one the SHA-1 parity
     // test exercises. It leaves FillDefault's values in place, so scene-change
@@ -105,50 +109,110 @@ fn main() {
     // 2 selects the GetDefaultParams + InitializeExt path: FillDefault's values with
     // only width/height/framerate/bitrate/threads set on top — the ordinary API flow,
     // the one c_vs_rust_bench drives. qp/cabac/gop/rcmode/slice args are ignored.
-    let baseinit: i32 = if a.len() > 10 { a[10].parse().unwrap() } else { 0 };
+    let baseinit: i32 = if a.len() > 10 {
+        a[10].parse().unwrap()
+    } else {
+        0
+    };
     // Optional 11th/12th: uiSliceMode and uiSliceNum. See cxx_enc.cpp.
     //   0 = SM_SINGLE_SLICE, 1 = SM_FIXEDSLCNUM_SLICE, 2 = SM_RASTER_SLICE,
     //   3 = SM_SIZELIMITED_SLICE (uiSliceNum is then the size constraint in bytes).
-    let slicemode: i32 = if a.len() > 11 { a[11].parse().unwrap() } else { 0 };
-    let slicenum: i32 = if a.len() > 12 { a[12].parse().unwrap() } else { 1 };
+    let slicemode: i32 = if a.len() > 11 {
+        a[11].parse().unwrap()
+    } else {
+        0
+    };
+    let slicenum: i32 = if a.len() > 12 {
+        a[12].parse().unwrap()
+    } else {
+        1
+    };
     // Optional 13th: iMultipleThreadIdc. 1 (default) is single-threaded.
-    let threads: i32 = if a.len() > 13 { a[13].parse().unwrap() } else { 1 };
+    let threads: i32 = if a.len() > 13 {
+        a[13].parse().unwrap()
+    } else {
+        1
+    };
     // Optional 14th: iComplexityMode. 0 LOW (default, and what every sweep preset
     // runs), 1 MEDIUM, 2 HIGH. See cxx_enc.cpp.
-    let complexity: i32 = if a.len() > 14 { a[14].parse().unwrap() } else { 0 };
+    let complexity: i32 = if a.len() > 14 {
+        a[14].parse().unwrap()
+    } else {
+        0
+    };
     // Optional 15th: iLTRRefNum. 0 (default) leaves long-term reference OFF; N > 0
     // turns bEnableLongTermReference on and asks for N long-term slots. See
     // cxx_enc.cpp.
-    let ltr: i32 = if a.len() > 15 { a[15].parse().unwrap() } else { 0 };
+    let ltr: i32 = if a.len() > 15 {
+        a[15].parse().unwrap()
+    } else {
+        0
+    };
     // Optional 16th: iLtrMarkPeriod. 30 is FillDefault's.
-    let ltrperiod: i32 = if a.len() > 16 { a[16].parse().unwrap() } else { 30 };
+    let ltrperiod: i32 = if a.len() > 16 {
+        a[16].parse().unwrap()
+    } else {
+        30
+    };
     // Optional 17th: LTR feedback bitmask. 1 = marking feedback, 2 = recovery
     // request. See cxx_enc.cpp — the schedule is fixed and identical on both sides.
-    let ltrfb: i32 = if a.len() > 17 { a[17].parse().unwrap() } else { 0 };
+    let ltrfb: i32 = if a.len() > 17 {
+        a[17].parse().unwrap()
+    } else {
+        0
+    };
     // Optional 18th: eSpsPpsIdStrategy, as the enum's own value. See
     // cxx_enc.cpp — 0/1/2/3/6, and not a dense range.
-    let psstrategy: i32 = if a.len() > 18 { a[18].parse().unwrap() } else { 0 };
+    let psstrategy: i32 = if a.len() > 18 {
+        a[18].parse().unwrap()
+    } else {
+        0
+    };
     // Optional 19th/20th: iSpatialLayerNum and bEnableDenoise. The two axes
     // `METHOD_DOWNSAMPLE` and `METHOD_DENOISE` sit behind. Layer geometry is
     // `BaseEncoderTest`'s (`test/api/BaseEncoderTest.cpp:43`).
-    let dlayers: i32 = if a.len() > 19 { a[19].parse().unwrap() } else { 1 };
-    let denoise: i32 = if a.len() > 20 { a[20].parse().unwrap() } else { 0 };
+    let dlayers: i32 = if a.len() > 19 {
+        a[19].parse().unwrap()
+    } else {
+        1
+    };
+    let denoise: i32 = if a.len() > 20 {
+        a[20].parse().unwrap()
+    } else {
+        0
+    };
     // Optional 21st: bEnableBackgroundDetection. See cxx_enc.cpp. It does NOT reach
     // the scene-change family: `WelsInitSCDPskipFunc` also requires `bScreenContent`,
     // which is the `usage` argument below.
-    let bgd: i32 = if a.len() > 21 { a[21].parse().unwrap() } else { 0 };
+    let bgd: i32 = if a.len() > 21 {
+        a[21].parse().unwrap()
+    } else {
+        0
+    };
     // 23rd: the log referee's reach into `SetOption` — see `cxx_enc.cpp` for why.
     // N > 0 re-applies the same `SEncParamExt` through
     // `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` after frame N-1. 0 in every
     // sweep row.
-    let setoptext: i32 = if a.len() > 22 { a[22].parse().unwrap() } else { 0 };
+    let setoptext: i32 = if a.len() > 22 {
+        a[22].parse().unwrap()
+    } else {
+        0
+    };
     // 24th/25th: iUsageType (0 camera — the default — 1 SCREEN_CONTENT_REAL_TIME)
     // and bIsLosslessLink, which the encoder reads only
     // under screen usage (`ParamValidationExt` turns long-term reference off
     // without it). See cxx_enc.cpp for the forcing screen usage applies to the
     // three pinned flags below, and the `scc` preset in sweep.sh.
-    let usage: i32 = if a.len() > 23 { a[23].parse().unwrap() } else { 0 };
-    let lossless: i32 = if a.len() > 24 { a[24].parse().unwrap() } else { 0 };
+    let usage: i32 = if a.len() > 23 {
+        a[23].parse().unwrap()
+    } else {
+        0
+    };
+    let lossless: i32 = if a.len() > 24 {
+        a[24].parse().unwrap()
+    } else {
+        0
+    };
 
     unsafe {
         let mut pEnc: *mut ISVCEncoder = std::ptr::null_mut();
@@ -175,110 +239,114 @@ fn main() {
             p.sSpatialLayers[0].fFrameRate = 30.0;
             p.sSpatialLayers[0].iSpatialBitrate = 2_000_000;
         } else {
-        p.iUsageType = if usage != 0 { EUsageType::SCREEN_CONTENT_REAL_TIME } else { EUsageType::CAMERA_VIDEO_REAL_TIME };
-        p.iPicWidth = w;
-        p.iPicHeight = h;
-        p.iTargetBitrate = 500000;
-        p.iMaxBitrate = UNSPECIFIED_BIT_RATE;
-        p.iRCMode = std::mem::transmute::<i32, RC_MODES>(rcmode);
-        p.fMaxFrameRate = 30.0;
-        p.iTemporalLayerNum = 1;
-        p.iSpatialLayerNum = 1;
-        p.iComplexityMode = match complexity {
-            1 => ECOMPLEXITY_MODE::MEDIUM_COMPLEXITY,
-            2 => ECOMPLEXITY_MODE::HIGH_COMPLEXITY,
-            _ => ECOMPLEXITY_MODE::LOW_COMPLEXITY,
-        };
-        p.uiIntraPeriod = gop as u32;
-        p.iNumRefFrame = AUTO_REF_PIC_COUNT;
-        p.eSpsPpsIdStrategy = match psstrategy {
-            1 => EParameterSetStrategy::INCREASING_ID,
-            2 => EParameterSetStrategy::SPS_LISTING,
-            3 => EParameterSetStrategy::SPS_LISTING_AND_PPS_INCREASING,
-            6 => EParameterSetStrategy::SPS_PPS_LISTING,
-            _ => EParameterSetStrategy::CONSTANT_ID,
-        };
-        p.bPrefixNalAddingCtrl = false;
-        p.bEnableSSEI = false;
-        p.bSimulcastAVC = false;
-        p.iPaddingFlag = 0;
-        p.iEntropyCodingModeFlag = cabac;
-        p.bEnableFrameSkip = false;
-        p.iMaxQp = 51;
-        p.iMinQp = 0;
-        p.uiMaxNalSize = 0;
-        p.bEnableLongTermReference = ltr > 0;
-        p.iLTRRefNum = ltr;
-        p.iLtrMarkPeriod = ltrperiod as u32;
-        p.iMultipleThreadIdc = threads as u16;
-        p.bUseLoadBalancing = false;
-        p.iLoopFilterDisableIdc = 0;
-        p.iLoopFilterAlphaC0Offset = 0;
-        p.iLoopFilterBetaOffset = 0;
-        p.bEnableDenoise = false;
-        p.bEnableBackgroundDetection = false;
-        p.bEnableAdaptiveQuant = false;
-        p.bEnableFrameCroppingFlag = true;
-        p.bEnableSceneChangeDetect = false;
-        p.bIsLosslessLink = lossless != 0;
-        p.bFixRCOverShoot = false;
-        p.iIdrBitrateRatio = 400;
-        p.bPsnrY = false;
-        p.bPsnrU = false;
-        p.bPsnrV = false;
+            p.iUsageType = if usage != 0 {
+                EUsageType::SCREEN_CONTENT_REAL_TIME
+            } else {
+                EUsageType::CAMERA_VIDEO_REAL_TIME
+            };
+            p.iPicWidth = w;
+            p.iPicHeight = h;
+            p.iTargetBitrate = 500000;
+            p.iMaxBitrate = UNSPECIFIED_BIT_RATE;
+            p.iRCMode = std::mem::transmute::<i32, RC_MODES>(rcmode);
+            p.fMaxFrameRate = 30.0;
+            p.iTemporalLayerNum = 1;
+            p.iSpatialLayerNum = 1;
+            p.iComplexityMode = match complexity {
+                1 => ECOMPLEXITY_MODE::MEDIUM_COMPLEXITY,
+                2 => ECOMPLEXITY_MODE::HIGH_COMPLEXITY,
+                _ => ECOMPLEXITY_MODE::LOW_COMPLEXITY,
+            };
+            p.uiIntraPeriod = gop as u32;
+            p.iNumRefFrame = AUTO_REF_PIC_COUNT;
+            p.eSpsPpsIdStrategy = match psstrategy {
+                1 => EParameterSetStrategy::INCREASING_ID,
+                2 => EParameterSetStrategy::SPS_LISTING,
+                3 => EParameterSetStrategy::SPS_LISTING_AND_PPS_INCREASING,
+                6 => EParameterSetStrategy::SPS_PPS_LISTING,
+                _ => EParameterSetStrategy::CONSTANT_ID,
+            };
+            p.bPrefixNalAddingCtrl = false;
+            p.bEnableSSEI = false;
+            p.bSimulcastAVC = false;
+            p.iPaddingFlag = 0;
+            p.iEntropyCodingModeFlag = cabac;
+            p.bEnableFrameSkip = false;
+            p.iMaxQp = 51;
+            p.iMinQp = 0;
+            p.uiMaxNalSize = 0;
+            p.bEnableLongTermReference = ltr > 0;
+            p.iLTRRefNum = ltr;
+            p.iLtrMarkPeriod = ltrperiod as u32;
+            p.iMultipleThreadIdc = threads as u16;
+            p.bUseLoadBalancing = false;
+            p.iLoopFilterDisableIdc = 0;
+            p.iLoopFilterAlphaC0Offset = 0;
+            p.iLoopFilterBetaOffset = 0;
+            p.bEnableDenoise = false;
+            p.bEnableBackgroundDetection = false;
+            p.bEnableAdaptiveQuant = false;
+            p.bEnableFrameCroppingFlag = true;
+            p.bEnableSceneChangeDetect = false;
+            p.bIsLosslessLink = lossless != 0;
+            p.bFixRCOverShoot = false;
+            p.iIdrBitrateRatio = 400;
+            p.bPsnrY = false;
+            p.bPsnrU = false;
+            p.bPsnrV = false;
 
-        // See cxx_enc.cpp: a baseline layer forces CAVLC, so the profile has to
-        // follow the cabac flag or `cabac 1` never reaches the CABAC writers.
-        p.sSpatialLayers[0].uiProfileIdc = if cabac != 0 {
-            EProfileIdc::PRO_HIGH
-        } else {
-            EProfileIdc::PRO_BASELINE
-        };
-        p.sSpatialLayers[0].uiLevelIdc = ELevelIdc::LEVEL_UNKNOWN;
-        p.sSpatialLayers[0].iVideoWidth = w;
-        p.sSpatialLayers[0].iVideoHeight = h;
-        p.sSpatialLayers[0].fFrameRate = 30.0;
-        p.sSpatialLayers[0].iSpatialBitrate = 500000;
-        p.sSpatialLayers[0].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
-        p.sSpatialLayers[0].iDLayerQp = qp;
-        match slicemode {
-            1 => {
-                p.sSpatialLayers[0].sSliceArgument.uiSliceMode =
-                    SliceModeEnum::SM_FIXEDSLCNUM_SLICE;
-                p.sSpatialLayers[0].sSliceArgument.uiSliceNum = slicenum as u32;
+            // See cxx_enc.cpp: a baseline layer forces CAVLC, so the profile has to
+            // follow the cabac flag or `cabac 1` never reaches the CABAC writers.
+            p.sSpatialLayers[0].uiProfileIdc = if cabac != 0 {
+                EProfileIdc::PRO_HIGH
+            } else {
+                EProfileIdc::PRO_BASELINE
+            };
+            p.sSpatialLayers[0].uiLevelIdc = ELevelIdc::LEVEL_UNKNOWN;
+            p.sSpatialLayers[0].iVideoWidth = w;
+            p.sSpatialLayers[0].iVideoHeight = h;
+            p.sSpatialLayers[0].fFrameRate = 30.0;
+            p.sSpatialLayers[0].iSpatialBitrate = 500000;
+            p.sSpatialLayers[0].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
+            p.sSpatialLayers[0].iDLayerQp = qp;
+            match slicemode {
+                1 => {
+                    p.sSpatialLayers[0].sSliceArgument.uiSliceMode =
+                        SliceModeEnum::SM_FIXEDSLCNUM_SLICE;
+                    p.sSpatialLayers[0].sSliceArgument.uiSliceNum = slicenum as u32;
+                }
+                2 => {
+                    p.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_RASTER_SLICE;
+                    p.sSpatialLayers[0].sSliceArgument.uiSliceNum = slicenum as u32;
+                    p.sSpatialLayers[0].sSliceArgument.uiSliceMbNum[0] = slicenum as u32;
+                }
+                3 => {
+                    p.sSpatialLayers[0].sSliceArgument.uiSliceMode =
+                        SliceModeEnum::SM_SIZELIMITED_SLICE;
+                    p.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint = slicenum as u32;
+                }
+                _ => {
+                    p.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
+                    p.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+                }
             }
-            2 => {
-                p.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_RASTER_SLICE;
-                p.sSpatialLayers[0].sSliceArgument.uiSliceNum = slicenum as u32;
-                p.sSpatialLayers[0].sSliceArgument.uiSliceMbNum[0] = slicenum as u32;
-            }
-            3 => {
-                p.sSpatialLayers[0].sSliceArgument.uiSliceMode =
-                    SliceModeEnum::SM_SIZELIMITED_SLICE;
-                p.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint = slicenum as u32;
-            }
-            _ => {
-                p.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
-                p.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
-            }
-        }
 
-        p.bEnableDenoise = denoise != 0;
-        p.bEnableBackgroundDetection = bgd != 0;
-        if dlayers > 1 {
-            let template = p.sSpatialLayers[0];
-            p.iSpatialLayerNum = dlayers;
-            for i in 0..dlayers as usize {
-                p.sSpatialLayers[i] = template;
-                p.sSpatialLayers[i].iVideoWidth = w >> (dlayers - 1 - i as i32);
-                p.sSpatialLayers[i].iVideoHeight = h >> (dlayers - 1 - i as i32);
-                p.sSpatialLayers[i].fFrameRate = 30.0;
-                p.sSpatialLayers[i].iSpatialBitrate = p.iTargetBitrate;
-                p.sSpatialLayers[i].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
+            p.bEnableDenoise = denoise != 0;
+            p.bEnableBackgroundDetection = bgd != 0;
+            if dlayers > 1 {
+                let template = p.sSpatialLayers[0];
+                p.iSpatialLayerNum = dlayers;
+                for i in 0..dlayers as usize {
+                    p.sSpatialLayers[i] = template;
+                    p.sSpatialLayers[i].iVideoWidth = w >> (dlayers - 1 - i as i32);
+                    p.sSpatialLayers[i].iVideoHeight = h >> (dlayers - 1 - i as i32);
+                    p.sSpatialLayers[i].fFrameRate = 30.0;
+                    p.sSpatialLayers[i].iSpatialBitrate = p.iTargetBitrate;
+                    p.sSpatialLayers[i].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
+                }
+                // See cxx_enc.cpp: the multiply comes after, as BaseEncoderTest does it.
+                p.iTargetBitrate *= dlayers;
             }
-            // See cxx_enc.cpp: the multiply comes after, as BaseEncoderTest does it.
-            p.iTargetBitrate *= dlayers;
-        }
         }
 
         if baseinit == 1 {
@@ -338,7 +406,10 @@ fn main() {
                     std::ptr::from_mut(&mut p).cast::<std::ffi::c_void>(),
                 );
                 if opt_ret != 0 {
-                    eprintln!("SetOption(SVC_ENCODE_PARAM_EXT) failed at {}: {}", f, opt_ret);
+                    eprintln!(
+                        "SetOption(SVC_ENCODE_PARAM_EXT) failed at {}: {}",
+                        f, opt_ret
+                    );
                     break;
                 }
             }
@@ -355,7 +426,8 @@ fn main() {
                     len += *lay.pNalLengthInByte.add(n) as usize;
                 }
                 if len > 0 && !lay.pBsBuf.is_null() {
-                    fout.write_all(std::slice::from_raw_parts(lay.pBsBuf, len)).unwrap();
+                    fout.write_all(std::slice::from_raw_parts(lay.pBsBuf, len))
+                        .unwrap();
                 }
             }
             eprintln!(

@@ -5,9 +5,9 @@
 //! operand where a `row_n` walk paid two checks per row. See `RefSamples::span`.
 #![allow(unsafe_code)]
 
+use crate::safe::plane::{BlockRows, RefSamples};
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
-use crate::safe::plane::{BlockRows, RefSamples};
 
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
@@ -32,12 +32,7 @@ fn sum_sub(a: &mut __m128i, b: &mut __m128i) {
 /// in: r0, r1, r2, r3 -> out: r0, r2, r1, r3 (butterfly permutation).
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
-unsafe fn hdm4(
-    r0: &mut __m128i,
-    r1: &mut __m128i,
-    r2: &mut __m128i,
-    r3: &mut __m128i,
-) {
+unsafe fn hdm4(r0: &mut __m128i, r1: &mut __m128i, r2: &mut __m128i, r3: &mut __m128i) {
     sum_sub(r0, r1);
     sum_sub(r2, r3);
     sum_sub(r1, r3);
@@ -48,12 +43,7 @@ unsafe fn hdm4(
 /// Returns (col01, col23) where col01 = [col0 (64b), col1 (64b)] and col23 = [col2 (64b), col3 (64b)].
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
-fn transpose_4x4_w(
-    r0: __m128i,
-    r1: __m128i,
-    r2: __m128i,
-    r3: __m128i,
-) -> (__m128i, __m128i) {
+fn transpose_4x4_w(r0: __m128i, r1: __m128i, r2: __m128i, r3: __m128i) -> (__m128i, __m128i) {
     unsafe {
         let t01 = _mm_unpacklo_epi16(r0, r1);
         let t23 = _mm_unpacklo_epi16(r2, r3);
@@ -194,7 +184,7 @@ pub fn satd_16x16<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) ->
 #[cfg(test)]
 mod tests {
     use crate::encoder::sample::{
-        satd_16x16, satd_16x8, satd_4x4, satd_4x8, satd_8x16, satd_8x4, satd_8x8,
+        satd_4x4, satd_4x8, satd_8x4, satd_8x8, satd_8x16, satd_16x8, satd_16x16,
     };
     use crate::safe::plane::PlaneCursor;
 
@@ -229,9 +219,21 @@ mod tests {
         assert_eq!(satd_8x4(&c1, &c2), satd_8x4(&c1, &c2), "satd_8x4 mismatch");
         assert_eq!(satd_4x8(&c1, &c2), satd_4x8(&c1, &c2), "satd_4x8 mismatch");
         assert_eq!(satd_8x8(&c1, &c2), satd_8x8(&c1, &c2), "satd_8x8 mismatch");
-        assert_eq!(satd_16x8(&c1, &c2), satd_16x8(&c1, &c2), "satd_16x8 mismatch");
-        assert_eq!(satd_8x16(&c1, &c2), satd_8x16(&c1, &c2), "satd_8x16 mismatch");
-        assert_eq!(satd_16x16(&c1, &c2), satd_16x16(&c1, &c2), "satd_16x16 mismatch");
+        assert_eq!(
+            satd_16x8(&c1, &c2),
+            satd_16x8(&c1, &c2),
+            "satd_16x8 mismatch"
+        );
+        assert_eq!(
+            satd_8x16(&c1, &c2),
+            satd_8x16(&c1, &c2),
+            "satd_8x16 mismatch"
+        );
+        assert_eq!(
+            satd_16x16(&c1, &c2),
+            satd_16x16(&c1, &c2),
+            "satd_16x16 mismatch"
+        );
     }
 
     #[test]

@@ -83,18 +83,15 @@ const CPP_FRAME_HASHES: &[&str] = &[
 
 /// `DecodeFrame2`'s return code per call (57 calls, the last the drain).
 const CPP_CODES: &[i32] = &[
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
 ];
 
 /// …and its `iBufferStatus` per call.
 const CPP_BUFS: &[i32] = &[
-    0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
-    0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
 ];
 
 /// SHA-1 over the three planes at the strides `UsrData` reports — the same digest
@@ -127,7 +124,8 @@ fn num_ref_frame_change_resizes_the_pool_and_matches_the_reference() {
         .join("../../..")
         .join("res")
         .join("num_ref_change_320x192.264");
-    let data = std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let data =
+        std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
 
     let mut codes = Vec::new();
     let mut bufs = Vec::new();
@@ -150,9 +148,18 @@ fn num_ref_frame_change_resizes_the_pool_and_matches_the_reference() {
         let mut feed = |unit: &[u8]| {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
-            let src = if unit.is_empty() { std::ptr::null() } else { unit.as_ptr() };
-            let ret =
-                ISVCDecoder::DecodeFrame2(decoder, src, unit.len() as i32, p_dst.as_mut_ptr(), &mut buf_info);
+            let src = if unit.is_empty() {
+                std::ptr::null()
+            } else {
+                unit.as_ptr()
+            };
+            let ret = ISVCDecoder::DecodeFrame2(
+                decoder,
+                src,
+                unit.len() as i32,
+                p_dst.as_mut_ptr(),
+                &mut buf_info,
+            );
             codes.push(ret.0);
             bufs.push(buf_info.iBufferStatus);
             if buf_info.iBufferStatus == 1 {
@@ -183,8 +190,14 @@ fn num_ref_frame_change_resizes_the_pool_and_matches_the_reference() {
         "emitted frame count — the reference decodes every frame across the \
          num_ref_frames change"
     );
-    assert_eq!(codes, CPP_CODES, "DecodeFrame2 return codes must match the C++ decoder's");
-    assert_eq!(bufs, CPP_BUFS, "iBufferStatus per call must match the C++ decoder's");
+    assert_eq!(
+        codes, CPP_CODES,
+        "DecodeFrame2 return codes must match the C++ decoder's"
+    );
+    assert_eq!(
+        bufs, CPP_BUFS,
+        "iBufferStatus per call must match the C++ decoder's"
+    );
     for (i, (got, want)) in frames.iter().zip(CPP_FRAME_HASHES).enumerate() {
         assert_eq!(
             (got.0, got.1, got.2.as_str()),

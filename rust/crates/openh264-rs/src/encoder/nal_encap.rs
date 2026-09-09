@@ -34,17 +34,10 @@
 //! Annex B start code prefix injection (`0x00000001`), standard 1-byte AVC and 4-byte SVC
 //! extension NAL headers, emulation prevention byte escaping (`0x000003`), and SVC prefix NAL serialization.
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 // ============================================================================
 // Constants & Return Codes
 // ============================================================================
-
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
@@ -97,7 +90,6 @@ impl Default for SWelsNalRaw {
         }
     }
 }
-
 
 /// Top-level frame bitstream output container and NAL descriptor list manager.
 ///
@@ -241,11 +233,7 @@ pub use crate::encoder::vlc_encoder::{
 
 /// Initializes a new raw NAL unit entry in the global encoder output context.
 #[inline]
-pub fn WelsLoadNal(
-    pEncoderOuput: &mut SWelsEncoderOutput,
-    kiType: i32,
-    kiNalRefIdc: i32,
-) {
+pub fn WelsLoadNal(pEncoderOuput: &mut SWelsEncoderOutput, kiType: i32, kiNalRefIdc: i32) {
     if pEncoderOuput.sNalList.is_empty() {
         return;
     }
@@ -282,11 +270,7 @@ pub fn WelsUnloadNal(pEncoderOuput: &mut SWelsEncoderOutput) {
 
 /// Initializes a raw NAL unit entry for a thread-local slice bitstream context.
 #[inline]
-pub extern "C" fn WelsLoadNalForSlice(
-    pSliceBs: &mut SWelsSliceBs,
-    kiType: i32,
-    kiNalRefIdc: i32,
-) {
+pub extern "C" fn WelsLoadNalForSlice(pSliceBs: &mut SWelsSliceBs, kiType: i32, kiNalRefIdc: i32) {
     let pSlice = pSliceBs;
     let pRawNal = &mut pSlice.sNalList[pSlice.iNalIndex as usize];
     let sNalUnitHeader = &mut pRawNal.sNalExt.sNalUnitHeader;
@@ -373,7 +357,8 @@ pub fn WelsEncodeNal(
     if kbNALExt {
         // The C++ dereferenced its `void*` here unconditionally; every caller
         // that emits a prefix or extension NAL passes the layer's header.
-        let sNalExt = ext.expect("a prefix or extension NAL is encoded with its SVC extension header");
+        let sNalExt =
+            ext.expect("a prefix or extension NAL is encoded with its SVC extension header");
 
         // Extension Byte 1: reserved_one_bit (0x80) | idr_flag (bit 6)
         dst[iDstPos] = 0x80 | ((sNalExt.bIdrFlag as u8) << 6);
@@ -384,9 +369,8 @@ pub fn WelsEncodeNal(
         iDstPos += 1;
 
         // Extension Byte 3: temporal_id (bits 7..5) | discardable_flag (bit 3) | reserved_three_2bits (0x07)
-        dst[iDstPos] = ((sNalExt.uiTemporalId) << 5)
-            | ((sNalExt.bDiscardableFlag as u8) << 3)
-            | 0x07;
+        dst[iDstPos] =
+            ((sNalExt.uiTemporalId) << 5) | ((sNalExt.bDiscardableFlag as u8) << 3) | 0x07;
         iDstPos += 1;
     }
 
@@ -438,7 +422,7 @@ pub fn WelsWriteSVCPrefixNal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_wels_encode_nal_standard_avc() {
         let raw_payload = [0x00, 0x00, 0x01, 0xAA, 0x00, 0x00, 0x00, 0xBB];
@@ -473,7 +457,10 @@ mod tests {
         // [0x00, 0x00, 0x00] -> [0x00, 0x00, 0x03, 0x00]
         // [0xBB]
         let expected_payload = [0x00, 0x00, 0x03, 0x01, 0xAA, 0x00, 0x00, 0x03, 0x00, 0xBB];
-        assert_eq!(&dst_buffer[5..5 + expected_payload.len()], &expected_payload);
+        assert_eq!(
+            &dst_buffer[5..5 + expected_payload.len()],
+            &expected_payload
+        );
         assert_eq!(dst_len as usize, 5 + expected_payload.len());
     }
 
@@ -497,7 +484,7 @@ mod tests {
         let ret = WelsEncodeNal(
             &raw_nal,
             &raw_payload,
-                Some(&ext_header),
+            Some(&ext_header),
             Some(&mut dst_buffer),
             &mut dst_len,
         );

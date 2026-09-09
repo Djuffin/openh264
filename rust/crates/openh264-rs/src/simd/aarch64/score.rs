@@ -19,7 +19,7 @@
 
 use core::arch::aarch64::*;
 
-use super::lanes::{ld16, ld8_i16};
+use super::lanes::{ld8_i16, ld16};
 use crate::encoder::encode_mb_aux::KI_TRUN_TABLE;
 
 /// The 16-bit mask whose bit `i` is set when `dct[i]` is non-zero.
@@ -66,7 +66,11 @@ pub fn calculate_single_ctr_4x4(dct: &[i16; 16]) -> i32 {
         // Step past that coefficient, then measure the run of zeros below it.
         idx -= 1;
         let run_start = idx;
-        let below = if idx < 0 { 0 } else { nz & ((1u32 << (idx + 1)) - 1) };
+        let below = if idx < 0 {
+            0
+        } else {
+            nz & ((1u32 << (idx + 1)) - 1)
+        };
         idx = highest_set(below);
         let run = run_start - idx;
         if (run as usize) < KI_TRUN_TABLE.len() {
@@ -95,7 +99,11 @@ mod tests {
     fn single_ctr_matches_the_scalar_for_every_mask() {
         for mask in 0u32..=0xFFFF {
             let dct: [i16; 16] = core::array::from_fn(|i| ((mask >> i) & 1) as i16);
-            assert_eq!(calculate_single_ctr_4x4(&dct), scalar(&dct), "mask {mask:#06x}");
+            assert_eq!(
+                calculate_single_ctr_4x4(&dct),
+                scalar(&dct),
+                "mask {mask:#06x}"
+            );
         }
     }
 
@@ -108,7 +116,11 @@ mod tests {
             for pos in 0..16 {
                 let mut dct = [0i16; 16];
                 dct[pos] = v;
-                assert_eq!(calculate_single_ctr_4x4(&dct), scalar(&dct), "value {v} at {pos}");
+                assert_eq!(
+                    calculate_single_ctr_4x4(&dct),
+                    scalar(&dct),
+                    "value {v} at {pos}"
+                );
             }
         }
     }

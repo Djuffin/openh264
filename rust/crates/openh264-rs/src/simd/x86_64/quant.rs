@@ -153,12 +153,7 @@ fn quant_four_4x4_max_sse2_impl(
 ///
 /// C++: `WelsQuantFour4x4Max_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[inline]
-pub fn quant_four_4x4_max(
-    dct: &mut [i16; 64],
-    ff: &[i16; 8],
-    mf: &[i16; 8],
-    max: &mut [i16; 4],
-) {
+pub fn quant_four_4x4_max(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8], max: &mut [i16; 4]) {
     unsafe { quant_four_4x4_max_sse2_impl(dct, ff, mf, max) }
 }
 
@@ -174,7 +169,10 @@ fn dequant_4x4_sse2_impl(res: &mut [i16; 16], mf: &[u16; 8]) {
         let v1 = _mm_loadu_si128(res.as_ptr().add(8) as *const __m128i);
 
         _mm_storeu_si128(res.as_mut_ptr() as *mut __m128i, _mm_mullo_epi16(v0, vmf));
-        _mm_storeu_si128(res.as_mut_ptr().add(8) as *mut __m128i, _mm_mullo_epi16(v1, vmf));
+        _mm_storeu_si128(
+            res.as_mut_ptr().add(8) as *mut __m128i,
+            _mm_mullo_epi16(v1, vmf),
+        );
     }
 }
 
@@ -192,7 +190,10 @@ fn dequant_four_4x4_sse2_impl(res: &mut [i16; 64], mf: &[u16; 8]) {
         let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
         for k in 0..8usize {
             let v = _mm_loadu_si128(res.as_ptr().add(k << 3) as *const __m128i);
-            _mm_storeu_si128(res.as_mut_ptr().add(k << 3) as *mut __m128i, _mm_mullo_epi16(v, vmf));
+            _mm_storeu_si128(
+                res.as_mut_ptr().add(k << 3) as *mut __m128i,
+                _mm_mullo_epi16(v, vmf),
+            );
         }
     }
 }
@@ -302,10 +303,30 @@ fn hadamard_t4_dc_sse2_impl(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
     unsafe {
         // Lane k = scalar row k. Within a row: A = dct[idx], B = dct[idx + 16],
         // C = dct[idx + 64], D = dct[idx + 80] — the scalar's d0, d16, d64, d80.
-        let va = _mm_set_epi32(dct[160] as i32, dct[128] as i32, dct[32] as i32, dct[0] as i32);
-        let vb = _mm_set_epi32(dct[176] as i32, dct[144] as i32, dct[48] as i32, dct[16] as i32);
-        let vc = _mm_set_epi32(dct[224] as i32, dct[192] as i32, dct[96] as i32, dct[64] as i32);
-        let vd = _mm_set_epi32(dct[240] as i32, dct[208] as i32, dct[112] as i32, dct[80] as i32);
+        let va = _mm_set_epi32(
+            dct[160] as i32,
+            dct[128] as i32,
+            dct[32] as i32,
+            dct[0] as i32,
+        );
+        let vb = _mm_set_epi32(
+            dct[176] as i32,
+            dct[144] as i32,
+            dct[48] as i32,
+            dct[16] as i32,
+        );
+        let vc = _mm_set_epi32(
+            dct[224] as i32,
+            dct[192] as i32,
+            dct[96] as i32,
+            dct[64] as i32,
+        );
+        let vd = _mm_set_epi32(
+            dct[240] as i32,
+            dct[208] as i32,
+            dct[112] as i32,
+            dct[80] as i32,
+        );
 
         // Row pass. `pj` holds `p[4k + j]` in lane `k`.
         let s0 = _mm_add_epi32(va, vd);
@@ -330,7 +351,10 @@ fn hadamard_t4_dc_sse2_impl(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
         let o2 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t0, t1), one), 1);
         let o3 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t3, t2), one), 1);
 
-        _mm_storeu_si128(luma_dc.as_mut_ptr() as *mut __m128i, _mm_packs_epi32(o0, o1));
+        _mm_storeu_si128(
+            luma_dc.as_mut_ptr() as *mut __m128i,
+            _mm_packs_epi32(o0, o1),
+        );
         _mm_storeu_si128(
             luma_dc.as_mut_ptr().add(8) as *mut __m128i,
             _mm_packs_epi32(o2, o3),
@@ -433,14 +457,16 @@ pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
 
 #[cfg(test)]
 mod tests {
-    use crate::encoder::encode_mb_aux::{
-        get_none_zero_count, quant_4x4, quant_4x4_dc, quant_four_4x4, quant_four_4x4_max,
-        g_kiQuantMF, G_KI_QUANT_INTER_FF,
-    };
     use crate::encoder::decode_mb_aux::{dequant_4x4, dequant_four_4x4, dequant_ihadamard_4x4};
+    use crate::encoder::encode_mb_aux::{
+        G_KI_QUANT_INTER_FF, g_kiQuantMF, get_none_zero_count, quant_4x4, quant_4x4_dc,
+        quant_four_4x4, quant_four_4x4_max,
+    };
 
     fn lcg(seed: &mut u64) -> i16 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*seed >> 32) as i32 % 4000 - 2000) as i16
     }
 
@@ -591,7 +617,9 @@ mod tests {
     // ========================================================================
 
     fn lcg_full_i16(seed: &mut u64) -> i16 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32) as u16 as i16
     }
 
@@ -628,7 +656,11 @@ mod tests {
         for pattern in 0u32..(1 << 16) {
             let mut dct = [0i16; 241];
             for (n, &idx) in DC_IDX.iter().enumerate() {
-                dct[idx] = if pattern & (1 << n) != 0 { i16::MAX } else { i16::MIN };
+                dct[idx] = if pattern & (1 << n) != 0 {
+                    i16::MAX
+                } else {
+                    i16::MIN
+                };
             }
             let mut want = [0i16; 16];
             let mut got = [0i16; 16];
@@ -645,7 +677,11 @@ mod tests {
         }
         let mut want = [0i16; 16];
         hadamard_t4_dc(&mut want, &dct);
-        assert_eq!(want[0], i16::MAX, "the all-MAX case should saturate the DC output");
+        assert_eq!(
+            want[0],
+            i16::MAX,
+            "the all-MAX case should saturate the DC output"
+        );
     }
 
     #[test]

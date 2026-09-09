@@ -48,7 +48,10 @@ const OPTS: &[(&str, DECODER_OPTION)] = &[
     ("PROF", DECODER_OPTION::DECODER_OPTION_PROFILE),
     ("LEVEL", DECODER_OPTION::DECODER_OPTION_LEVEL),
     ("REF", DECODER_OPTION::DECODER_OPTION_IS_REF_PIC),
-    ("REM", DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER),
+    (
+        "REM",
+        DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+    ),
 ];
 
 /// `ecref`'s `int v = 0x5EED5EED;` — see the module docs.
@@ -87,7 +90,11 @@ unsafe fn options_transcript(data: &[u8]) -> Vec<String> {
 
         let mut lines = Vec::new();
         let mut idx = 0usize;
-        let feed = |dec: *mut ISVCDecoder, src: *const u8, len: i32, lines: &mut Vec<String>, idx: &mut usize| {
+        let feed = |dec: *mut ISVCDecoder,
+                    src: *const u8,
+                    len: i32,
+                    lines: &mut Vec<String>,
+                    idx: &mut usize| {
             let mut dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut info = SBufferInfo::default();
             ISVCDecoder::DecodeFrame2(dec, src, len, dst.as_mut_ptr(), &mut info);
@@ -155,7 +162,8 @@ fn get_option_matches_the_cxx_per_call() {
         for (i, want) in expected.iter().enumerate() {
             let have = got.get(i).map(String::as_str).unwrap_or("<no such call>");
             assert_eq!(
-                have, *want,
+                have,
+                *want,
                 "\n{asset}: option transcript diverges at call {i}\n  C++  {want}\n  Rust {have}\n\
                  (goldens: {}; regenerate with `ecref res/{asset}.264 99999999 --options`)",
                 golden_path.display()
@@ -269,7 +277,11 @@ fn option_error_codes_match_the_reference() {
             CM_RESULT_SUCCESS as i64
         );
         interval = 0;
-        ISVCDecoder::GetOption(dec, DECODER_OPTION::DECODER_OPTION_STATISTICS_LOG_INTERVAL, ip);
+        ISVCDecoder::GetOption(
+            dec,
+            DECODER_OPTION::DECODER_OPTION_STATISTICS_LOG_INTERVAL,
+            ip,
+        );
         assert_eq!(interval, 77, "the set arm writes what the get arm reads");
 
         // `:664-672` — `GET_SAR_INFO` before any SPS: the struct is zeroed *and*

@@ -59,11 +59,7 @@
 //! time** (`window_from`), one owner. `window.len() >= len + 4` structurally
 //! (`WelsDecodeBs` sizes every payload with four bytes to spare), which covers site
 //! 1's `len + 2`.
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
 pub const WELS_CABAC_HALF: u64 = 0x01FE;
@@ -109,33 +105,137 @@ pub const g_kRenormTable256: [u8; 256] = [
 pub const g_kMvdBinPos2Ctx: [i16; 8] = [0, 1, 2, 3, 3, 3, 3, 3];
 
 pub const g_kuiCabacRangeLps: [[u8; 4]; 64] = [
-    [128, 176, 208, 240], [128, 167, 197, 227], [128, 158, 187, 216], [123, 150, 178, 205],
-    [116, 142, 169, 195], [111, 135, 160, 185], [105, 128, 152, 175], [100, 122, 144, 166],
-    [95, 116, 137, 158],  [90, 110, 130, 150],  [85, 104, 123, 142],  [81, 99, 117, 135],
-    [77, 94, 111, 128],   [73, 89, 105, 122],   [69, 85, 100, 116],   [66, 80, 95, 110],
-    [62, 76, 90, 104],    [59, 72, 86, 99],     [56, 69, 81, 94],     [53, 65, 77, 89],
-    [51, 62, 73, 85],     [48, 59, 69, 80],     [46, 56, 66, 76],     [43, 53, 63, 72],
-    [41, 50, 59, 69],     [39, 48, 56, 65],     [37, 45, 54, 62],     [35, 43, 51, 59],
-    [33, 41, 48, 56],     [32, 39, 46, 53],     [30, 37, 43, 50],     [29, 35, 41, 48],
-    [27, 33, 39, 45],     [26, 31, 37, 43],     [24, 30, 35, 41],     [23, 28, 33, 39],
-    [22, 27, 32, 37],     [21, 26, 30, 35],     [20, 24, 29, 33],     [19, 23, 27, 31],
-    [18, 22, 26, 30],     [17, 21, 25, 28],     [16, 20, 23, 27],     [15, 19, 22, 25],
-    [14, 18, 21, 24],     [14, 17, 20, 23],     [13, 16, 19, 22],     [12, 15, 18, 21],
-    [12, 14, 17, 20],     [11, 14, 16, 19],     [11, 13, 15, 18],     [10, 12, 15, 17],
-    [10, 12, 14, 16],     [9, 11, 13, 15],      [9, 11, 12, 14],      [8, 10, 12, 14],
-    [8, 9, 11, 13],       [7, 9, 11, 12],       [7, 9, 10, 12],       [7, 8, 10, 11],
-    [6, 8, 9, 11],        [6, 7, 9, 10],        [6, 7, 8, 9],         [2, 2, 2, 2],
+    [128, 176, 208, 240],
+    [128, 167, 197, 227],
+    [128, 158, 187, 216],
+    [123, 150, 178, 205],
+    [116, 142, 169, 195],
+    [111, 135, 160, 185],
+    [105, 128, 152, 175],
+    [100, 122, 144, 166],
+    [95, 116, 137, 158],
+    [90, 110, 130, 150],
+    [85, 104, 123, 142],
+    [81, 99, 117, 135],
+    [77, 94, 111, 128],
+    [73, 89, 105, 122],
+    [69, 85, 100, 116],
+    [66, 80, 95, 110],
+    [62, 76, 90, 104],
+    [59, 72, 86, 99],
+    [56, 69, 81, 94],
+    [53, 65, 77, 89],
+    [51, 62, 73, 85],
+    [48, 59, 69, 80],
+    [46, 56, 66, 76],
+    [43, 53, 63, 72],
+    [41, 50, 59, 69],
+    [39, 48, 56, 65],
+    [37, 45, 54, 62],
+    [35, 43, 51, 59],
+    [33, 41, 48, 56],
+    [32, 39, 46, 53],
+    [30, 37, 43, 50],
+    [29, 35, 41, 48],
+    [27, 33, 39, 45],
+    [26, 31, 37, 43],
+    [24, 30, 35, 41],
+    [23, 28, 33, 39],
+    [22, 27, 32, 37],
+    [21, 26, 30, 35],
+    [20, 24, 29, 33],
+    [19, 23, 27, 31],
+    [18, 22, 26, 30],
+    [17, 21, 25, 28],
+    [16, 20, 23, 27],
+    [15, 19, 22, 25],
+    [14, 18, 21, 24],
+    [14, 17, 20, 23],
+    [13, 16, 19, 22],
+    [12, 15, 18, 21],
+    [12, 14, 17, 20],
+    [11, 14, 16, 19],
+    [11, 13, 15, 18],
+    [10, 12, 15, 17],
+    [10, 12, 14, 16],
+    [9, 11, 13, 15],
+    [9, 11, 12, 14],
+    [8, 10, 12, 14],
+    [8, 9, 11, 13],
+    [7, 9, 11, 12],
+    [7, 9, 10, 12],
+    [7, 8, 10, 11],
+    [6, 8, 9, 11],
+    [6, 7, 9, 10],
+    [6, 7, 8, 9],
+    [2, 2, 2, 2],
 ];
 
 pub const g_kuiStateTransTable: [[u8; 2]; 64] = [
-    [0, 1],   [0, 2],   [1, 3],   [2, 4],   [2, 5],   [4, 6],   [4, 7],   [5, 8],
-    [6, 9],   [7, 10],  [8, 11],  [9, 12],  [9, 13],  [11, 14], [11, 15], [12, 16],
-    [13, 17], [13, 18], [15, 19], [15, 20], [16, 21], [16, 22], [18, 23], [18, 24],
-    [19, 25], [19, 26], [21, 27], [21, 28], [22, 29], [22, 30], [23, 31], [24, 32],
-    [24, 33], [25, 34], [26, 35], [26, 36], [27, 37], [27, 38], [28, 39], [29, 40],
-    [29, 41], [30, 42], [30, 43], [30, 44], [31, 45], [32, 46], [32, 47], [33, 48],
-    [33, 49], [33, 50], [34, 51], [34, 52], [35, 53], [35, 54], [35, 55], [36, 56],
-    [36, 57], [36, 58], [37, 59], [37, 60], [37, 61], [38, 62], [38, 62], [63, 63],
+    [0, 1],
+    [0, 2],
+    [1, 3],
+    [2, 4],
+    [2, 5],
+    [4, 6],
+    [4, 7],
+    [5, 8],
+    [6, 9],
+    [7, 10],
+    [8, 11],
+    [9, 12],
+    [9, 13],
+    [11, 14],
+    [11, 15],
+    [12, 16],
+    [13, 17],
+    [13, 18],
+    [15, 19],
+    [15, 20],
+    [16, 21],
+    [16, 22],
+    [18, 23],
+    [18, 24],
+    [19, 25],
+    [19, 26],
+    [21, 27],
+    [21, 28],
+    [22, 29],
+    [22, 30],
+    [23, 31],
+    [24, 32],
+    [24, 33],
+    [25, 34],
+    [26, 35],
+    [26, 36],
+    [27, 37],
+    [27, 38],
+    [28, 39],
+    [29, 40],
+    [29, 41],
+    [30, 42],
+    [30, 43],
+    [30, 44],
+    [31, 45],
+    [32, 46],
+    [32, 47],
+    [33, 48],
+    [33, 49],
+    [33, 50],
+    [34, 51],
+    [34, 52],
+    [35, 53],
+    [35, 54],
+    [35, 55],
+    [36, 56],
+    [36, 57],
+    [36, 58],
+    [37, 59],
+    [37, 60],
+    [37, 61],
+    [38, 62],
+    [38, 62],
+    [63, 63],
 ];
 
 pub const CTX_NA: i8 = 0;
@@ -428,7 +528,12 @@ pub const g_kiCabacGlobalContextIdx: [[[i8; 2]; 4]; WELS_CONTEXT_COUNT] = [
     [[-13, 90], [-6, 79], [-1, 70], [-9, 83]],
     [[-14, 97], [-8, 85], [-4, 78], [-10, 87]],
     // 276 no use
-    [[CTX_NA, CTX_NA], [CTX_NA, CTX_NA], [CTX_NA, CTX_NA], [CTX_NA, CTX_NA]],
+    [
+        [CTX_NA, CTX_NA],
+        [CTX_NA, CTX_NA],
+        [CTX_NA, CTX_NA],
+        [CTX_NA, CTX_NA],
+    ],
     // 277-337 Table 9-22
     [[-6, 93], [-13, 106], [-21, 126], [-22, 127]],
     [[-6, 84], [-16, 106], [-23, 124], [-25, 127]],
@@ -661,7 +766,6 @@ pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer};
 
 pub use crate::decoder::decoder_context::SWelsDecoderContext;
 
-
 // 1. CABAC context initialization
 pub fn WelsCabacGlobalInit(contexts: &mut CabacModelTables, inited: &mut bool) {
     {
@@ -701,8 +805,6 @@ pub fn WelsCabacContextInit(
         let iIdx = if eSliceType as i32 == I_SLICE as i32 {
             0
         } else {
-
-
             (iCabacInitIdc + 1) as usize
         };
         if !*inited {
@@ -1209,7 +1311,7 @@ pub fn DecodeUEGMvCabac(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_renorm_table_bounds() {
         assert_eq!(g_kRenormTable256.len(), 256);
@@ -1283,7 +1385,10 @@ mod tests {
             let pos_before = bs.cursor.pos();
             let left_before = bs.cursor.left_bits();
 
-            assert_eq!(InitCabacDecEngineFromBS(&mut engine, &mut bs, &raw), ERR_NONE);
+            assert_eq!(
+                InitCabacDecEngineFromBS(&mut engine, &mut bs, &raw),
+                ERR_NONE
+            );
 
             // The engine started where the *bits* had got to, not where the
             // refill pointer had: `curr = pos - ((-left_bits >> 3) + 2)`, and it
@@ -1300,11 +1405,21 @@ mod tests {
             // Consume some bins so the engine's position is genuinely its own,
             // then hand back.
             let win = raw.rbsp_window(&bs);
-            assert_eq!(win.len(), payload.len(), "the window is the RBSP, not the allocation");
-            let mut ctx = SWelsCabacCtx { uiState: 20, uiMPS: 1 };
+            assert_eq!(
+                win.len(),
+                payload.len(),
+                "the window is the RBSP, not the allocation"
+            );
+            let mut ctx = SWelsCabacCtx {
+                uiState: 20,
+                uiMPS: 1,
+            };
             let mut bit: u32 = 0;
             for _ in 0..64 {
-                assert_eq!(DecodeBinCabac(win, &mut engine, &mut ctx, &mut bit), ERR_NONE);
+                assert_eq!(
+                    DecodeBinCabac(win, &mut engine, &mut ctx, &mut bit),
+                    ERR_NONE
+                );
             }
             let engine_pos = engine.pos;
             let engine_bits = engine.iBitsLeft;
@@ -1350,7 +1465,10 @@ mod tests {
             let mut bits: i32 = 0;
             // Walk the ladder from the last four bytes down: 4, then 3/2/1.
             engine.pos = 4;
-            assert_eq!(Read32BitsCabac(win, &mut engine, &mut value, &mut bits), ERR_NONE);
+            assert_eq!(
+                Read32BitsCabac(win, &mut engine, &mut value, &mut bits),
+                ERR_NONE
+            );
             assert_eq!((bits, engine.pos), (32, 8));
             // At the end: no bytes left, error, nothing loaded, position frozen.
             assert_eq!(
@@ -1361,7 +1479,10 @@ mod tests {
 
             for (start, want_bits, want_pos) in [(5usize, 24, 8), (6, 16, 8), (7, 8, 8)] {
                 engine.pos = start;
-                assert_eq!(Read32BitsCabac(win, &mut engine, &mut value, &mut bits), ERR_NONE);
+                assert_eq!(
+                    Read32BitsCabac(win, &mut engine, &mut value, &mut bits),
+                    ERR_NONE
+                );
                 assert_eq!((bits, engine.pos), (want_bits, want_pos));
             }
 

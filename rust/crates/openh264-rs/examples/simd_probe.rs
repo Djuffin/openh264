@@ -21,12 +21,12 @@
 
 use openh264_rs::encoder::rec_view::RecCursor;
 use openh264_rs::safe::plane::{PlaneCursor, PlaneCursorMut};
-#[cfg(target_arch = "x86_64")]
-use openh264_rs::simd::x86_64 as isa;
 #[cfg(all(target_arch = "aarch64", not(miri)))]
 use openh264_rs::simd::aarch64 as isa;
 #[cfg(feature = "wide")]
 use openh264_rs::simd::wide as wd;
+#[cfg(target_arch = "x86_64")]
+use openh264_rs::simd::x86_64 as isa;
 
 #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
@@ -153,7 +153,11 @@ pub fn probe_isa_dct_4x4(d: &mut [i16; 16], a: &PlaneCursor<'_>, b: &PlaneCursor
 #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
-pub fn probe_isa_pixel_avg_16x16(dst: &mut PlaneCursorMut<'_>, a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) {
+pub fn probe_isa_pixel_avg_16x16(
+    dst: &mut PlaneCursorMut<'_>,
+    a: &PlaneCursor<'_>,
+    b: &PlaneCursor<'_>,
+) {
     isa::mc::pixel_avg(dst, a, b, 16, 16)
 }
 
@@ -173,7 +177,11 @@ pub fn probe_isa_hor_ver02_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut
 #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
-pub fn probe_isa_pixel_avg_16x16_cells(dst: &mut PlaneCursorMut<'_>, a: &PlaneCursor<'_>, b: &RecCursor<'_>) {
+pub fn probe_isa_pixel_avg_16x16_cells(
+    dst: &mut PlaneCursorMut<'_>,
+    a: &PlaneCursor<'_>,
+    b: &RecCursor<'_>,
+) {
     isa::mc::pixel_avg(dst, a, b, 16, 16)
 }
 
@@ -318,7 +326,11 @@ mod wide_probes {
 
     #[unsafe(no_mangle)]
     #[inline(never)]
-    pub fn probe_wide_pixel_avg_16x16(dst: &mut PlaneCursorMut<'_>, a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) {
+    pub fn probe_wide_pixel_avg_16x16(
+        dst: &mut PlaneCursorMut<'_>,
+        a: &PlaneCursor<'_>,
+        b: &PlaneCursor<'_>,
+    ) {
         wd::mc::pixel_avg(dst, a, b, 16, 16)
     }
 
@@ -333,7 +345,10 @@ fn main() {
     let a = vec![7u8; 64 * 64];
     let b = vec![9u8; 64 * 64];
     let mut o = vec![0u8; 64 * 64];
-    let (ca, cb) = (PlaneCursor::new(&a, 20 * 64 + 19, 64), PlaneCursor::new(&b, 20 * 64 + 19, 64));
+    let (ca, cb) = (
+        PlaneCursor::new(&a, 20 * 64 + 19, 64),
+        PlaneCursor::new(&b, 20 * 64 + 19, 64),
+    );
     let mut d = [0i16; 16];
     let mut m = [0i16; 16];
     let big = [0i16; 241];
@@ -367,14 +382,39 @@ fn main() {
         {
             let mut ra = vec![7u8; 64 * 64];
             let ka = RecCursor::over_owned(&mut ra, 20 * 64 + 19, 64);
-            probe_isa_mc_luma_zero_16x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
-            probe_isa_mc_chroma_zero_8x8_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
-            probe_isa_pixel_avg_16x16_cells(&mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64), &ca, &ka);
-            probe_isa_hor_ver02_16x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
-            probe_isa_hor_ver20_17x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
-            probe_isa_hor_ver20_16x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
-            probe_isa_hor_ver22_16x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
-            probe_isa_mc_chroma_frac_8x8_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+            probe_isa_mc_luma_zero_16x16_cells(
+                &ka,
+                &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64),
+            );
+            probe_isa_mc_chroma_zero_8x8_cells(
+                &ka,
+                &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64),
+            );
+            probe_isa_pixel_avg_16x16_cells(
+                &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64),
+                &ca,
+                &ka,
+            );
+            probe_isa_hor_ver02_16x16_cells(
+                &ka,
+                &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64),
+            );
+            probe_isa_hor_ver20_17x16_cells(
+                &ka,
+                &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64),
+            );
+            probe_isa_hor_ver20_16x16_cells(
+                &ka,
+                &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64),
+            );
+            probe_isa_hor_ver22_16x16_cells(
+                &ka,
+                &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64),
+            );
+            probe_isa_mc_chroma_frac_8x8_cells(
+                &ka,
+                &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64),
+            );
         }
         {
             let mut ra = vec![7u8; 64 * 64];

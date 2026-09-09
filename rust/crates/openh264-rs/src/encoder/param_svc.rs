@@ -2,28 +2,24 @@
 //!
 //! Translated from `codec/encoder/core/inc/param_svc.h`.
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
 use crate::{
-    EComplexityMode, EParameterSetStrategy, EUsageType, RCMode, SEncParamBase, SEncParamExt, SSpatialLayerConfig, SliceMode,
+    EComplexityMode, EParameterSetStrategy, EUsageType, RCMode, SEncParamBase, SEncParamExt,
+    SSpatialLayerConfig, SliceMode,
 };
 // Profile/level/complexity/SPS-id enumerators live in api::codec_api (one definition
 // per type); glob-import the variants so the C++ spellings stay bare, as in the C++.
+use crate::api::codec_api::ECOMPLEXITY_MODE::*;
+use crate::api::codec_api::ELevelIdc::*;
+use crate::api::codec_api::EParameterSetStrategy::*;
 use crate::api::codec_api::EProfileIdc;
+use crate::api::codec_api::EProfileIdc::*;
 use crate::api::codec_api::{
     EColorMatrix, EColorPrimaries, ESampleAspectRatio, ETransferCharacteristics, EVideoFormatSPS,
 };
-use crate::api::codec_api::ECOMPLEXITY_MODE::*;
-use crate::api::codec_api::EProfileIdc::*;
-use crate::api::codec_api::ELevelIdc::*;
-use crate::api::codec_api::EParameterSetStrategy::*;
 pub use crate::encoder::encoder_context::SCropOffset;
 
 pub const INVALID_TEMPORAL_ID: u8 = 0xff;
@@ -39,14 +35,14 @@ pub const MAX_SPS_COUNT: usize = 32;
 /// limitation of receiver endpoints".
 pub use crate::encoder::encoder_context::MAX_PPS_COUNT;
 pub const MAX_SLICEGROUP_IDS: usize = 8;
-/// `svc_enc_slice_segment.h:62` — `(MAX_NAL_UNITS_IN_LAYER - SAVED_NALUNIT_NUM) / 3`
-/// = (128 - 21) / 3 = 35.
-pub use crate::encoder::wels_encoder_ext::MAX_SLICES_NUM;
 /// `codec_app_def.h:56` — `(MAX_NAL_UNITS_IN_LAYER - SAVED_NALUNIT_NUM_TMP) / 3`
 /// = (128 - 21) / 3 = **35**. Both `ParamTranscode` and `FillDefault`
 /// compute `kiLesserSliceNum = min (MAX_SLICES_NUM, MAX_SLICES_NUM_TMP)`
 /// (param_svc.h:203).
 pub use crate::api::codec_api::MAX_SLICES_NUM_TMP;
+/// `svc_enc_slice_segment.h:62` — `(MAX_NAL_UNITS_IN_LAYER - SAVED_NALUNIT_NUM) / 3`
+/// = (128 - 21) / 3 = 35.
+pub use crate::encoder::wels_encoder_ext::MAX_SLICES_NUM;
 
 /// `wels_const.h:60` says **60**.
 pub use crate::encoder::wels_encoder_ext::{MAX_FRAME_RATE, MIN_FRAME_RATE};
@@ -621,11 +617,8 @@ impl SWelsSvcCodingParam {
             1,
             MAX_DEPENDENCY_LAYER as i32,
         );
-        self.iTemporalLayerNum = WELS_CLIP3(
-            pCodingParam.iTemporalLayerNum,
-            1,
-            MAX_TEMPORAL_LEVEL as i32,
-        );
+        self.iTemporalLayerNum =
+            WELS_CLIP3(pCodingParam.iTemporalLayerNum, 1, MAX_TEMPORAL_LEVEL as i32);
 
         self.uiGopSize = 1 << (self.iTemporalLayerNum - 1);
         self.iDecompStages = (self.iTemporalLayerNum - 1) as i8;
@@ -633,8 +626,7 @@ impl SWelsSvcCodingParam {
         if self.uiIntraPeriod == u32::MAX {
             self.uiIntraPeriod = 0;
         } else if (self.uiIntraPeriod & (self.uiGopSize - 1)) != 0 {
-            self.uiIntraPeriod = self.uiIntraPeriod.div_ceil(self.uiGopSize)
-                * self.uiGopSize;
+            self.uiIntraPeriod = self.uiIntraPeriod.div_ceil(self.uiGopSize) * self.uiGopSize;
         }
 
         if (pCodingParam.iNumRefFrame != AUTO_REF_PIC_COUNT
@@ -956,7 +948,12 @@ impl SWelsSPS {
         uiLog2MaxFrameNum: 0,
         uiPocType: 0,
         iLog2MaxPocLsb: 0,
-        sFrameCrop: SCropOffset { iCropLeft: 0, iCropRight: 0, iCropTop: 0, iCropBottom: 0 },
+        sFrameCrop: SCropOffset {
+            iCropLeft: 0,
+            iCropRight: 0,
+            iCropTop: 0,
+            iCropBottom: 0,
+        },
         iNumRefFrames: 0,
         // 0 is not `PRO_BASELINE`; `WelsInitSps` sets it, and its subset-SPS caller
         // deliberately takes `uiProfileIdc` verbatim with no fallback for 0.
@@ -1151,7 +1148,7 @@ pub fn NewCodingParam() -> Box<SWelsSvcCodingParam> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_log_factor() {
         assert_eq!(GetLogFactor(1.0, 1.0), 0);

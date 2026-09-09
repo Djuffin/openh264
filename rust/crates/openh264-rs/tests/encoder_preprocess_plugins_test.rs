@@ -249,8 +249,13 @@ fn screen_content_ltr_without_lossless_link_is_accepted_at_init() {
 /// below is the row that does.
 #[test]
 fn screen_content_encodes_a_sequence() {
-    let screen = encode_bytes(320, 192, 12, |p| p.iUsageType = EUsageType::SCREEN_CONTENT_REAL_TIME);
-    assert!(!screen.is_empty(), "a screen-content encode must produce a stream");
+    let screen = encode_bytes(320, 192, 12, |p| {
+        p.iUsageType = EUsageType::SCREEN_CONTENT_REAL_TIME
+    });
+    assert!(
+        !screen.is_empty(),
+        "a screen-content encode must produce a stream"
+    );
 }
 
 /// The control: the configuration every gate in this project uses is still accepted.
@@ -269,7 +274,10 @@ fn denoise_is_accepted_and_changes_the_output() {
 
     let off = encode_bytes(320, 192, 3, |p| p.bEnableDenoise = false);
     let on = encode_bytes(320, 192, 3, |p| p.bEnableDenoise = true);
-    assert!(!off.is_empty() && !on.is_empty(), "both configurations coded something");
+    assert!(
+        !off.is_empty() && !on.is_empty(),
+        "both configurations coded something"
+    );
     assert_ne!(
         off, on,
         "bEnableDenoise produced identical bytes — the guard was removed but \

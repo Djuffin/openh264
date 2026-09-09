@@ -45,7 +45,9 @@ fn stderr_of(case: &str) -> String {
 /// The child's body. A no-op in the parent, where `CHILD_ENV` is unset.
 #[test]
 fn the_child_case() {
-    let Ok(case) = std::env::var(CHILD_ENV) else { return };
+    let Ok(case) = std::env::var(CHILD_ENV) else {
+        return;
+    };
     unsafe {
         match case.as_str() {
             // `welsDecoderExt.cpp:266-268` — the null-parameter arm logs at
@@ -101,7 +103,9 @@ fn the_child_case() {
             // run proves the sink is live rather than merely silent.
             "decoder_level" => {
                 let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../..").join("res").join("BA_MW_D_IDR_LOST.264");
+                    .join("../../..")
+                    .join("res")
+                    .join("BA_MW_D_IDR_LOST.264");
                 let data = std::fs::read(path).expect("asset");
                 let mut d: *mut ISVCDecoder = std::ptr::null_mut();
                 WelsCreateDecoder(&mut d);
@@ -113,7 +117,13 @@ fn the_child_case() {
                 for unit in openh264_rs::split_annexb_units(&data) {
                     let mut dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
                     let mut info = SBufferInfo::default();
-                    ISVCDecoder::DecodeFrame2(d, unit.as_ptr(), unit.len() as i32, dst.as_mut_ptr(), &mut info);
+                    ISVCDecoder::DecodeFrame2(
+                        d,
+                        unit.as_ptr(),
+                        unit.len() as i32,
+                        dst.as_mut_ptr(),
+                        &mut info,
+                    );
                 }
                 ISVCDecoder::Uninitialize(d);
                 WelsDestroyDecoder(d);
@@ -132,13 +142,20 @@ fn the_child_case() {
 ///
 /// # Safety
 /// Matches `WelsTraceCallback`; reads nothing.
-unsafe extern "C" fn quiet_sink(_ctx: *mut std::ffi::c_void, _level: i32, _s: *const std::ffi::c_char) {}
+unsafe extern "C" fn quiet_sink(
+    _ctx: *mut std::ffi::c_void,
+    _level: i32,
+    _s: *const std::ffi::c_char,
+) {
+}
 
 #[test]
 fn a_fresh_decoder_writes_its_error_to_stderr_with_no_callback_installed() {
     let err = stderr_of("decoder_default");
     assert!(
-        err.contains("[OpenH264]") && err.contains("Error:") && err.contains("invalid input argument"),
+        err.contains("[OpenH264]")
+            && err.contains("Error:")
+            && err.contains("invalid input argument"),
         "the default sink must be upstream's stderr writer; got:\n{err}"
     );
 }

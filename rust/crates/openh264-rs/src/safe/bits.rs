@@ -886,7 +886,10 @@ mod tests {
             }
         }
         assert_eq!(err, Some(ErrInfo::READ_OVERFLOW));
-        assert!(c.pos() > c.len(), "the C++ predicate allows one byte of slop");
+        assert!(
+            c.pos() > c.len(),
+            "the C++ predicate allows one byte of slop"
+        );
     }
 
     #[test]
@@ -894,7 +897,11 @@ mod tests {
         // Same payload, no slack: this is where BsCursor is *safer* than the C++.
         let buf = [0xFFu8, 0xFF];
         let mut c = BsCursor::init(&buf, 16);
-        assert_eq!(c, Err(ErrInfo::READ_OVERFLOW), "the 4-byte prime needs slack");
+        assert_eq!(
+            c,
+            Err(ErrInfo::READ_OVERFLOW),
+            "the 4-byte prime needs slack"
+        );
 
         let buf = [0xFFu8, 0xFF, 0xFF, 0xFF];
         c = BsCursor::init(&buf, 16);
@@ -960,11 +967,7 @@ mod tests {
     /// *shapes* tested are unchanged — every bit phase, every width — only the
     /// sampling shrinks.
     fn scale_unit(n: usize) -> usize {
-        if cfg!(miri) {
-            (n / 25).max(2)
-        } else {
-            n
-        }
+        if cfg!(miri) { (n / 25).max(2) } else { n }
     }
 
     /// A payload long enough that any `end_cavlc` prime in these tests is in bounds.
@@ -1010,9 +1013,14 @@ mod tests {
                     -16 + phase as i32,
                     "left_bits = -16 + (idx & 7) at phase {phase}"
                 );
-                let expect = u32::from_be_bytes([buf[byte], buf[byte + 1], buf[byte + 2], buf[byte + 3]])
-                    << phase;
-                assert_eq!(c.cur_bits(), expect, "the 4-byte prime is shifted by idx & 7");
+                let expect =
+                    u32::from_be_bytes([buf[byte], buf[byte + 1], buf[byte + 2], buf[byte + 3]])
+                        << phase;
+                assert_eq!(
+                    c.cur_bits(),
+                    expect,
+                    "the 4-byte prime is shifted by idx & 7"
+                );
             }
         }
     }
@@ -1034,7 +1042,11 @@ mod tests {
             }
             let mut cycled = untouched;
             cycled.start_cavlc();
-            assert_eq!(cycled.cavlc_bit_pos(), skip as isize, "the projection is the bit count");
+            assert_eq!(
+                cycled.cavlc_bit_pos(),
+                skip as isize,
+                "the projection is the bit count"
+            );
             cycled.end_cavlc(&buf);
 
             for _ in 0..8 {
@@ -1094,7 +1106,10 @@ mod tests {
         // And a cursor whose bit position differs is unequal, in both profiles.
         let mut moved = also_in_mode;
         moved.advance_cavlc_bits(1);
-        assert_ne!(in_mode, moved, "cavlc_bit_pos is one of the six compared fields");
+        assert_ne!(
+            in_mode, moved,
+            "cavlc_bit_pos is one of the six compared fields"
+        );
     }
 
     #[cfg(debug_assertions)]

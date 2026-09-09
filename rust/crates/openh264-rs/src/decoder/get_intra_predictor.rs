@@ -1,9 +1,5 @@
 #![deny(unsafe_code)]
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
 /*!
@@ -54,7 +50,12 @@ fn top8(pred: &PlaneCursorMut<'_>) -> [u8; 8] {
 /// The four samples of the column left of a 4x4 block, `dy` in `0..4`.
 #[inline]
 fn left4(pred: &PlaneCursorMut<'_>) -> [u8; 4] {
-    [pred.at(-1, 0), pred.at(-1, 1), pred.at(-1, 2), pred.at(-1, 3)]
+    [
+        pred.at(-1, 0),
+        pred.at(-1, 1),
+        pred.at(-1, 2),
+        pred.at(-1, 3),
+    ]
 }
 
 /// Writes `rows[k]` of a 4x4 block from `list[off[k] .. off[k] + 4]`.
@@ -64,7 +65,8 @@ fn left4(pred: &PlaneCursorMut<'_>) -> [u8; 4] {
 #[inline]
 fn write4x4_windows(pred: &mut PlaneCursorMut<'_>, list: &[u8], off: [usize; 4]) {
     for (dy, &o) in off.iter().enumerate() {
-        pred.row_mut(dy as isize, 0, 4).copy_from_slice(&list[o..o + 4]);
+        pred.row_mut(dy as isize, 0, 4)
+            .copy_from_slice(&list[o..o + 4]);
     }
 }
 
@@ -96,7 +98,12 @@ pub fn i4x4_luma_pred_h(pred: &mut PlaneCursorMut<'_>) {
 pub fn i4x4_luma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
     let left = left4(pred);
     let top = top4(pred);
-    let sum: u32 = left.iter().chain(top.iter()).map(|&v| v as u32).sum::<u32>() + 4;
+    let sum: u32 = left
+        .iter()
+        .chain(top.iter())
+        .map(|&v| v as u32)
+        .sum::<u32>()
+        + 4;
     fill4x4(pred, (sum >> 3) as u8);
 }
 
@@ -580,14 +587,22 @@ pub fn i8x8_luma_pred_vr(pred: &mut PlaneCursorMut<'_>, _tl_avail: bool, tr_avai
                         tap2(ftl, ft[0])
                     }
                 } else if zdiv > 1 {
-                    tap3(ft[(zdiv - 2) as usize], ft[(zdiv - 1) as usize], ft[zdiv as usize])
+                    tap3(
+                        ft[(zdiv - 2) as usize],
+                        ft[(zdiv - 1) as usize],
+                        ft[zdiv as usize],
+                    )
                 } else {
                     tap3(ftl, ft[0], ft[1])
                 }
             } else if z == -1 {
                 tap3(fl[0], ftl, ft[0])
             } else if z < -2 {
-                tap3(fl[(-z - 1) as usize], fl[(-z - 2) as usize], fl[(-z - 3) as usize])
+                tap3(
+                    fl[(-z - 1) as usize],
+                    fl[(-z - 2) as usize],
+                    fl[(-z - 3) as usize],
+                )
             } else {
                 tap3(fl[1], fl[0], ftl)
             };
@@ -640,12 +655,20 @@ pub fn i8x8_luma_pred_hd(pred: &mut PlaneCursorMut<'_>, _tl_avail: bool, tr_avai
                 } else if zdiv == 1 {
                     tap3(ftl, fl[0], fl[1])
                 } else {
-                    tap3(fl[(zdiv - 2) as usize], fl[(zdiv - 1) as usize], fl[zdiv as usize])
+                    tap3(
+                        fl[(zdiv - 2) as usize],
+                        fl[(zdiv - 1) as usize],
+                        fl[zdiv as usize],
+                    )
                 }
             } else if z == -1 {
                 tap3(fl[0], ftl, ft[0])
             } else if z < -2 {
-                tap3(ft[(-z - 1) as usize], ft[(-z - 2) as usize], ft[(-z - 3) as usize])
+                tap3(
+                    ft[(-z - 1) as usize],
+                    ft[(-z - 2) as usize],
+                    ft[(-z - 3) as usize],
+                )
             } else {
                 tap3(ft[1], ft[0], ftl)
             };
@@ -833,7 +856,7 @@ pub fn i16x16_luma_pred_dc_na(pred: &mut PlaneCursorMut<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_clip1() {
         assert_eq!(WelsClip1(-10), 0);

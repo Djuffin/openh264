@@ -24,7 +24,7 @@
 
 use core::arch::aarch64::*;
 
-use super::lanes::{ld16, ld8, ld8_i16, low4, to16, to8};
+use super::lanes::{ld8, ld8_i16, ld16, low4, to8, to16};
 use crate::encoder::rec_view::RecCursor;
 use crate::safe::plane::{PlaneCursorMut, RefSamples};
 
@@ -119,8 +119,16 @@ fn high4(v: uint8x8_t) -> [u8; 4] {
 #[inline]
 #[target_feature(enable = "neon")]
 fn i16x16_dc_mean<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
-    let sum_top = if use_top { vaddlvq_u8(ld16(&src.row_n::<16>(-1, 0))) as i32 } else { 0 };
-    let sum_left = if use_left { vaddlvq_u8(left16(src)) as i32 } else { 0 };
+    let sum_top = if use_top {
+        vaddlvq_u8(ld16(&src.row_n::<16>(-1, 0))) as i32
+    } else {
+        0
+    };
+    let sum_left = if use_left {
+        vaddlvq_u8(left16(src)) as i32
+    } else {
+        0
+    };
     match (use_top, use_left) {
         (true, true) => ((16 + sum_top + sum_left) >> 5) as u8,
         (true, false) => ((8 + sum_top) >> 4) as u8,
@@ -189,7 +197,10 @@ fn chroma_dc_rows<S: RefSamples>(src: &S) -> ([u8; 8], [u8; 8]) {
     let mean2 = vgetq_lane_u32::<1>(quads) as u8;
     let mean3 = vgetq_lane_u32::<3>(quads) as u8;
     let mean4 = vget_lane_u32::<1>(pairs) as u8;
-    ([mean1, mean1, mean1, mean1, mean2, mean2, mean2, mean2], [mean3, mean3, mean3, mean3, mean4, mean4, mean4, mean4])
+    (
+        [mean1, mean1, mean1, mean1, mean2, mean2, mean2, mean2],
+        [mean3, mean3, mean3, mean3, mean4, mean4, mean4, mean4],
+    )
 }
 
 /// `WelsIChromaPredPlane_AArch64_neon`, the coefficient half.
@@ -202,8 +213,26 @@ fn chroma_dc_rows<S: RefSamples>(src: &S) -> ([u8; 8], [u8; 8]) {
 fn chroma_plane_coeffs<S: RefSamples>(src: &S) -> (i16, i16, i16) {
     let t = src.row_n::<4>(-1, -1);
     let t4 = src.row_n::<4>(-1, 4);
-    let inner = ld8(&[t[3], t[2], t[1], t[0], src.at(-1, 2), src.at(-1, 1), src.at(-1, 0), src.at(-1, -1)]);
-    let outer = ld8(&[t4[0], t4[1], t4[2], t4[3], src.at(-1, 4), src.at(-1, 5), src.at(-1, 6), src.at(-1, 7)]);
+    let inner = ld8(&[
+        t[3],
+        t[2],
+        t[1],
+        t[0],
+        src.at(-1, 2),
+        src.at(-1, 1),
+        src.at(-1, 0),
+        src.at(-1, -1),
+    ]);
+    let outer = ld8(&[
+        t4[0],
+        t4[1],
+        t4[2],
+        t4[3],
+        src.at(-1, 4),
+        src.at(-1, 5),
+        src.at(-1, 6),
+        src.at(-1, 7),
+    ]);
     let d = vreinterpretq_s16_u16(vsubl_u8(outer, inner));
     let m = vmulq_s16(d, ld8_i16(&INTRA_1_TO_4));
     let p = vpaddlq_s16(m);
@@ -236,7 +265,16 @@ fn chroma_plane_fill<O: PredOut>(out: &mut O, a: i16, b: i16, c: i16) {
 #[target_feature(enable = "neon")]
 fn i4x4_dc<S: RefSamples>(src: &S) -> u8 {
     let t = src.row_n::<4>(-1, 0);
-    let both = ld8(&[t[0], t[1], t[2], t[3], src.at(-1, 0), src.at(-1, 1), src.at(-1, 2), src.at(-1, 3)]);
+    let both = ld8(&[
+        t[0],
+        t[1],
+        t[2],
+        t[3],
+        src.at(-1, 0),
+        src.at(-1, 1),
+        src.at(-1, 2),
+        src.at(-1, 3),
+    ]);
     ((vaddlv_u8(both) as u32 + 4) >> 3) as u8
 }
 
@@ -251,7 +289,12 @@ fn i4x4_ddl<S: RefSamples>(src: &S) -> [u8; 16] {
     let t2 = vext_u8::<2>(top, last);
     let sum = vaddq_u16(vaddl_u8(t2, top), vshll_n_u8::<1>(t1));
     let r = vqrshrn_n_u16::<2>(sum);
-    pack4(low4(r), low4(vext_u8::<1>(r, r)), low4(vext_u8::<2>(r, r)), low4(vext_u8::<3>(r, r)))
+    pack4(
+        low4(r),
+        low4(vext_u8::<1>(r, r)),
+        low4(vext_u8::<2>(r, r)),
+        low4(vext_u8::<3>(r, r)),
+    )
 }
 
 /// `WelsI4x4LumaPredVL_AArch64_neon`: the two-tap and three-tap lines of the top
@@ -264,7 +307,12 @@ fn i4x4_vl<S: RefSamples>(src: &S) -> [u8; 16] {
     let two = vqrshrn_n_u16::<1>(pairs);
     let triples = vaddq_u16(vextq_u16::<1>(pairs, pairs), pairs);
     let three = vqrshrn_n_u16::<2>(triples);
-    pack4(low4(two), low4(three), low4(vext_u8::<1>(two, two)), low4(vext_u8::<1>(three, three)))
+    pack4(
+        low4(two),
+        low4(three),
+        low4(vext_u8::<1>(two, two)),
+        low4(vext_u8::<1>(three, three)),
+    )
 }
 
 /// `WelsI4x4LumaPredVR_AArch64_neon` on the line `l2 l1 l0 lt t0 t1 t2 t3`.
@@ -272,7 +320,16 @@ fn i4x4_vl<S: RefSamples>(src: &S) -> [u8; 16] {
 #[target_feature(enable = "neon")]
 fn i4x4_vr<S: RefSamples>(src: &S) -> [u8; 16] {
     let t = src.row_n::<4>(-1, 0);
-    let line = ld8(&[src.at(-1, 2), src.at(-1, 1), src.at(-1, 0), src.at(-1, -1), t[0], t[1], t[2], t[3]]);
+    let line = ld8(&[
+        src.at(-1, 2),
+        src.at(-1, 1),
+        src.at(-1, 0),
+        src.at(-1, -1),
+        t[0],
+        t[1],
+        t[2],
+        t[3],
+    ]);
     let pairs = vaddl_u8(vext_u8::<7>(line, line), line);
     let triples = vaddq_u16(pairs, vextq_u16::<7>(pairs, pairs));
     let three = vqrshrn_n_u16::<2>(triples);
@@ -288,7 +345,16 @@ fn i4x4_vr<S: RefSamples>(src: &S) -> [u8; 16] {
 #[target_feature(enable = "neon")]
 fn i4x4_hu<S: RefSamples>(src: &S) -> [u8; 16] {
     let l3 = src.at(-1, 3);
-    let line = ld8(&[l3, l3, l3, l3, src.at(-1, 0), src.at(-1, 1), src.at(-1, 2), l3]);
+    let line = ld8(&[
+        l3,
+        l3,
+        l3,
+        l3,
+        src.at(-1, 0),
+        src.at(-1, 1),
+        src.at(-1, 2),
+        l3,
+    ]);
     let pairs = vaddl_u8(line, vext_u8::<1>(line, line));
     let triples = vaddq_u16(vextq_u16::<1>(pairs, pairs), pairs);
     let two = vqrshrn_n_u16::<1>(pairs);
@@ -303,14 +369,31 @@ fn i4x4_hu<S: RefSamples>(src: &S) -> [u8; 16] {
 #[target_feature(enable = "neon")]
 fn i4x4_hd<S: RefSamples>(src: &S) -> [u8; 16] {
     let t = src.row_n::<4>(-1, 0);
-    let line = ld8(&[src.at(-1, 3), src.at(-1, 2), src.at(-1, 1), src.at(-1, 0), src.at(-1, -1), t[0], t[1], t[2]]);
+    let line = ld8(&[
+        src.at(-1, 3),
+        src.at(-1, 2),
+        src.at(-1, 1),
+        src.at(-1, 0),
+        src.at(-1, -1),
+        t[0],
+        t[1],
+        t[2],
+    ]);
     let pairs = vaddl_u8(line, vext_u8::<1>(line, line));
     let triples = vaddq_u16(vextq_u16::<1>(pairs, pairs), pairs);
     let two = vqrshrn_n_u16::<1>(pairs); // hd6 hd4 hd2 hd0 ..
     let three = vqrshrn_n_u16::<2>(triples); // hd5 hd3 hd1 hd7 hd8 hd9 ..
     let z = vzip1_u8(two, three); // hd6 hd5 hd4 hd3 hd2 hd1 hd0 hd7
-    let tail = vreinterpret_u8_u16(vset_lane_u16::<0>(vget_lane_u16::<2>(vreinterpret_u16_u8(three)), vreinterpret_u16_u8(line)));
-    pack4(low4(vext_u8::<6>(z, tail)), high4(z), low4(vext_u8::<2>(z, tail)), low4(z))
+    let tail = vreinterpret_u8_u16(vset_lane_u16::<0>(
+        vget_lane_u16::<2>(vreinterpret_u16_u8(three)),
+        vreinterpret_u16_u8(line),
+    ));
+    pack4(
+        low4(vext_u8::<6>(z, tail)),
+        high4(z),
+        low4(vext_u8::<2>(z, tail)),
+        low4(z),
+    )
 }
 
 /// Diagonal down-right, in the idiom of `HD` and `VR` — see the header. On the line
@@ -341,7 +424,12 @@ fn i4x4_ddr<S: RefSamples>(src: &S) -> [u8; 16] {
     let (l0, l1, l2) = (ld8(&line[0..]), ld8(&line[1..]), ld8(&line[2..]));
     let sum = vaddq_u16(vaddl_u8(l0, l2), vshll_n_u8::<1>(l1));
     let f = vqrshrn_n_u16::<2>(sum);
-    pack4(low4(vext_u8::<3>(f, f)), low4(vext_u8::<2>(f, f)), low4(vext_u8::<1>(f, f)), low4(f))
+    pack4(
+        low4(vext_u8::<3>(f, f)),
+        low4(vext_u8::<2>(f, f)),
+        low4(vext_u8::<1>(f, f)),
+        low4(f),
+    )
 }
 
 /// Four packed rows into a `PredOut`.
@@ -607,7 +695,9 @@ mod tests {
 
     /// A 64-bit LCG, so a failing seed is replayable.
     fn lcg(seed: &mut u64) -> u8 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32) as u8
     }
 
@@ -650,7 +740,13 @@ mod tests {
 
     fn enc_planes() -> Vec<PaddedPlane> {
         let mut seed = 0x5DEECE66Du64;
-        let mut v = vec![test_plane(32, 32, 16, 64), flat_plane(0), flat_plane(255), step_plane(true), step_plane(false)];
+        let mut v = vec![
+            test_plane(32, 32, 16, 64),
+            flat_plane(0),
+            flat_plane(255),
+            step_plane(true),
+            step_plane(false),
+        ];
         for _ in 0..6 {
             v.push(noise_plane(&mut seed));
         }
@@ -663,11 +759,19 @@ mod tests {
             let view = shared_plane_for_test(&mut p);
             for anchor in [(0isize, 0isize), (16, 16), (8, 4)] {
                 let rec = view.cursor(anchor.0, anchor.1);
-                let pairs: [(&str, fn(&mut [u8; 256], &RecCursor), fn(&mut [u8; 256], &RecCursor)); 4] = [
+                let pairs: [(
+                    &str,
+                    fn(&mut [u8; 256], &RecCursor),
+                    fn(&mut [u8; 256], &RecCursor),
+                ); 4] = [
                     ("V", WelsI16x16LumaPredV_c, enc_i16x16_luma_pred_v),
                     ("H", WelsI16x16LumaPredH_c, enc_i16x16_luma_pred_h),
                     ("DC", WelsI16x16LumaPredDc_c, enc_i16x16_luma_pred_dc),
-                    ("Plane", WelsI16x16LumaPredPlane_c, enc_i16x16_luma_pred_plane),
+                    (
+                        "Plane",
+                        WelsI16x16LumaPredPlane_c,
+                        enc_i16x16_luma_pred_plane,
+                    ),
                 ];
                 for (name, scalar, simd) in pairs {
                     let mut want = [0u8; 256];
@@ -686,7 +790,11 @@ mod tests {
             let view = shared_plane_for_test(&mut p);
             for anchor in [(0isize, 0isize), (8, 8), (16, 4)] {
                 let rec = view.cursor(anchor.0, anchor.1);
-                let pairs: [(&str, fn(&mut [u8; 64], &RecCursor), fn(&mut [u8; 64], &RecCursor)); 4] = [
+                let pairs: [(
+                    &str,
+                    fn(&mut [u8; 64], &RecCursor),
+                    fn(&mut [u8; 64], &RecCursor),
+                ); 4] = [
                     ("V", WelsIChromaPredV_c, enc_chroma_pred_v),
                     ("H", WelsIChromaPredH_c, enc_chroma_pred_h),
                     ("DC", WelsIChromaPredDc_c, enc_chroma_pred_dc),
@@ -709,7 +817,11 @@ mod tests {
             let view = shared_plane_for_test(&mut p);
             for anchor in [(0isize, 0isize), (4, 4), (12, 8), (8, 20)] {
                 let rec = view.cursor(anchor.0, anchor.1);
-                let pairs: [(&str, fn(&mut [u8; 16], &RecCursor), fn(&mut [u8; 16], &RecCursor)); 9] = [
+                let pairs: [(
+                    &str,
+                    fn(&mut [u8; 16], &RecCursor),
+                    fn(&mut [u8; 16], &RecCursor),
+                ); 9] = [
                     ("V", WelsI4x4LumaPredV_c, enc_i4x4_luma_pred_v),
                     ("H", WelsI4x4LumaPredH_c, enc_i4x4_luma_pred_h),
                     ("DC", WelsI4x4LumaPredDc_c, enc_i4x4_luma_pred_dc),
@@ -737,9 +849,19 @@ mod tests {
     // `decoder::get_intra_predictor`, which has no SIMD dispatch of its own.
     // ========================================================================
 
-    fn assert_dec_parity(name: &str, scalar: fn(&mut PlaneCursorMut<'_>), simd: fn(&mut PlaneCursorMut<'_>)) {
+    fn assert_dec_parity(
+        name: &str,
+        scalar: fn(&mut PlaneCursorMut<'_>),
+        simd: fn(&mut PlaneCursorMut<'_>),
+    ) {
         let mut seed = 0xB502_6F5Au64;
-        let mut planes = vec![test_plane(32, 32, 16, 64), flat_plane(0), flat_plane(255), step_plane(true), step_plane(false)];
+        let mut planes = vec![
+            test_plane(32, 32, 16, 64),
+            flat_plane(0),
+            flat_plane(255),
+            step_plane(true),
+            step_plane(false),
+        ];
         planes.push(noise_plane(&mut seed));
         planes.push(noise_plane(&mut seed));
         for pa in planes {
@@ -748,7 +870,11 @@ mod tests {
                 let mut b = pa.clone();
                 scalar(&mut a.cursor_mut(anchor.0, anchor.1));
                 simd(&mut b.cursor_mut(anchor.0, anchor.1));
-                assert_eq!(a.as_slice(), b.as_slice(), "{name}: NEON and scalar disagree somewhere in the allocation");
+                assert_eq!(
+                    a.as_slice(),
+                    b.as_slice(),
+                    "{name}: NEON and scalar disagree somewhere in the allocation"
+                );
             }
         }
     }
@@ -758,10 +884,26 @@ mod tests {
         use crate::decoder::get_intra_predictor as dec;
         assert_dec_parity("16x16 V", dec::i16x16_luma_pred_v, dec_i16x16_luma_pred_v);
         assert_dec_parity("16x16 H", dec::i16x16_luma_pred_h, dec_i16x16_luma_pred_h);
-        assert_dec_parity("16x16 DC", dec::i16x16_luma_pred_dc, dec_i16x16_luma_pred_dc);
-        assert_dec_parity("16x16 DC top", dec::i16x16_luma_pred_dc_top, dec_i16x16_luma_pred_dc_top);
-        assert_dec_parity("16x16 DC n/a", dec::i16x16_luma_pred_dc_na, dec_i16x16_luma_pred_dc_na);
-        assert_dec_parity("16x16 Plane", dec::i16x16_luma_pred_plane, dec_i16x16_luma_pred_plane);
+        assert_dec_parity(
+            "16x16 DC",
+            dec::i16x16_luma_pred_dc,
+            dec_i16x16_luma_pred_dc,
+        );
+        assert_dec_parity(
+            "16x16 DC top",
+            dec::i16x16_luma_pred_dc_top,
+            dec_i16x16_luma_pred_dc_top,
+        );
+        assert_dec_parity(
+            "16x16 DC n/a",
+            dec::i16x16_luma_pred_dc_na,
+            dec_i16x16_luma_pred_dc_na,
+        );
+        assert_dec_parity(
+            "16x16 Plane",
+            dec::i16x16_luma_pred_plane,
+            dec_i16x16_luma_pred_plane,
+        );
     }
 
     #[test]
@@ -770,7 +912,11 @@ mod tests {
         assert_dec_parity("Chroma V", dec::chroma_pred_v, dec_chroma_pred_v);
         assert_dec_parity("Chroma H", dec::chroma_pred_h, dec_chroma_pred_h);
         assert_dec_parity("Chroma DC", dec::chroma_pred_dc, dec_chroma_pred_dc);
-        assert_dec_parity("Chroma Plane", dec::chroma_pred_plane, dec_chroma_pred_plane);
+        assert_dec_parity(
+            "Chroma Plane",
+            dec::chroma_pred_plane,
+            dec_chroma_pred_plane,
+        );
     }
 
     #[test]
@@ -807,7 +953,10 @@ mod tests {
         ];
 
         let src = include_str!("intra_pred.rs");
-        let src = src.split("#[cfg(test)]").next().expect("source before the tests");
+        let src = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("source before the tests");
 
         // Body of the item starting at byte `i`, by brace matching.
         fn body_at(s: &str, i: usize) -> &str {
@@ -832,7 +981,11 @@ mod tests {
             &s[i..]
         }
 
-        let ident = |s: &str| -> String { s.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect() };
+        let ident = |s: &str| -> String {
+            s.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect()
+        };
 
         let mut bodies: Vec<(String, &str)> = Vec::new();
         for (off, _) in src.match_indices("fn ") {
@@ -854,28 +1007,45 @@ mod tests {
                 }
             }
         }
-        assert!(public.len() >= 30, "found only {} public kernels — the scan broke", public.len());
+        assert!(
+            public.len() >= 30,
+            "found only {} public kernels — the scan broke",
+            public.len()
+        );
 
         // A NEON intrinsic: `v…` with a lane-type suffix, which no other identifier
         // in this file has.
         fn is_intrinsic(tok: &str) -> bool {
             tok.starts_with('v')
-                && ["_u8", "_s8", "_u16", "_s16", "_u32", "_s32", "_u64", "_s64"].iter().any(|s| tok.ends_with(s))
+                && ["_u8", "_s8", "_u16", "_s16", "_u32", "_s32", "_u64", "_s64"]
+                    .iter()
+                    .any(|s| tok.ends_with(s))
         }
-        let intrinsics = |b: &str| b.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(is_intrinsic);
+        let intrinsics = |b: &str| {
+            b.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .any(is_intrinsic)
+        };
 
         let mut offenders = Vec::new();
         for name in &public {
             if SCALAR_BY_DESIGN.contains(&name.as_str()) {
                 continue;
             }
-            let body = bodies.iter().find(|(n, _)| n == name).map(|(_, b)| *b).unwrap_or("");
+            let body = bodies
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, b)| *b)
+                .unwrap_or("");
             if intrinsics(body) {
                 continue;
             }
-            let called: std::collections::HashSet<&str> =
-                body.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|t| !t.is_empty()).collect();
-            let reaches = bodies.iter().any(|(callee, cbody)| callee != name && called.contains(callee.as_str()) && intrinsics(cbody));
+            let called: std::collections::HashSet<&str> = body
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|t| !t.is_empty())
+                .collect();
+            let reaches = bodies.iter().any(|(callee, cbody)| {
+                callee != name && called.contains(callee.as_str()) && intrinsics(cbody)
+            });
             if !reaches {
                 offenders.push(name.clone());
             }
@@ -889,7 +1059,10 @@ mod tests {
         for name in SCALAR_BY_DESIGN {
             let body = bodies.iter().find(|(n, _)| n == name).map(|(_, b)| *b);
             let body = body.unwrap_or_else(|| panic!("`{name}` is exempt but no longer exists"));
-            assert!(!intrinsics(body), "`{name}` is exempt but now has intrinsics — drop it from the list");
+            assert!(
+                !intrinsics(body),
+                "`{name}` is exempt but now has intrinsics — drop it from the list"
+            );
         }
     }
 }

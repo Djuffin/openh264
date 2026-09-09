@@ -21,42 +21,45 @@
 //! output bytes.
 
 #![allow(non_snake_case, non_upper_case_globals, non_camel_case_types)]
-
 #![forbid(unsafe_code)]
-use crate::encoder::rec_view::{RecCursor, RecPicView, copy_block_to_view};
-use crate::encoder::svc_encode_slice::{WelsIMbChromaEncode, WelsPMbChromaEncode, current_layer_ref, layer_enc_view_expect, layer_ref_feature_storage};
+use crate::common::copy_mb::{copy_8x8, copy_8x16, copy_16x8, copy_16x16};
 use crate::common::mc::{mc_chroma, mc_luma};
-use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_8x16, copy_8x8};
-use crate::safe::plane::PlaneCursorMut;
-use crate::encoder::encoder_context::{sWelsEncCtx, SMVUnitXY};
+use crate::encoder::encoder_context::{SMVUnitXY, sWelsEncCtx};
+use crate::encoder::md::{
+    BsSizeUE, FillNeighborCacheIntra, InitMeRefinePointer, MB_TYPE_8x8, MB_TYPE_8x16, MB_TYPE_16x8,
+    MB_TYPE_16x16, MB_TYPE_INTRA4x4, MB_TYPE_INTRA16x16, MB_TYPE_SKIP, ME_REFINE_BUF_STRIDE_BLK8,
+    ME_REFINE_BUF_WIDTH_BLK8, MdIntraAnalysisVaaInfo, MeRefineFracPixel, PredictSad, SMB, SMbCache,
+    SMeRefinePointer, SWelsMD,
+};
+use crate::encoder::md::{LEFT_MB_POS, TOP_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS};
 use crate::encoder::md::{MB_BLOCK8x8_NUM, MbSideInfo, MdSliceCtx, g_kiMapModeIntraChroma};
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
-use crate::encoder::md::{
-    FillNeighborCacheIntra, InitMeRefinePointer, MdIntraAnalysisVaaInfo, MeRefineFracPixel, SMB,
-    SMbCache, SMeRefinePointer, SWelsMD, BsSizeUE, MB_TYPE_16x16, MB_TYPE_16x8, MB_TYPE_8x16,
-    MB_TYPE_8x8, MB_TYPE_INTRA16x16, MB_TYPE_INTRA4x4, MB_TYPE_SKIP, ME_REFINE_BUF_STRIDE_BLK8,
-    ME_REFINE_BUF_WIDTH_BLK8, PredictSad,
-};
+use crate::encoder::rec_view::{RecCursor, RecPicView, copy_block_to_view};
+use crate::encoder::svc_encode_mb::WelsEncRecI16x16Y;
 use crate::encoder::svc_encode_mb::{WelsDctMb, WelsEncRecI4x4Y, WelsTryPUVskip, WelsTryPYskip};
 use crate::encoder::svc_encode_slice::{SDqLayer, SSlice};
-use crate::encoder::svc_mode_decision::{
-    g_kuiMbCountScan4Idx, update_P8x16_motion_info,
-    InitMe, PredInter16x8Mv, PredInter8x16Mv, PredMv, PredSkipMv, UpdateP16x16MotionInfo,
-    UpdateP16x8Motion2Cache, UpdateP16x8MotionInfo, UpdateP8x16Motion2Cache,
-    UpdateP8x8MotionInfo, WelsMdInterDecidedPskip, WelsMdInterJudgePskip,
-    WelsMdInterSecondaryModesEnc, WelsMdIntraSecondaryModesEnc, BLOCK_16x16, BLOCK_16x8,
-    BLOCK_4x4, BLOCK_8x16, BLOCK_8x8, IS_SKIP,
-    REF_NOT_AVAIL, SUB_MB_TYPE_8x8,
+use crate::encoder::svc_encode_slice::{
+    WelsIMbChromaEncode, WelsPMbChromaEncode, current_layer_ref, layer_enc_view_expect,
+    layer_ref_feature_storage,
 };
-use crate::encoder::svc_motion_estimate::SetMvWithinIntegerMvRange;
-use crate::encoder::svc_set_mb_syn_cavlc::{g_kuiCache48CountScan4Idx, IS_INTRA16x16};
-use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
-use crate::encoder::md::{LEFT_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS, TOP_MB_POS};
-use crate::encoder::svc_encode_slice::{current_layer_expect, layer_rec_view_expect, layer_ref_view_expect};
-use crate::simd::kernels;
-use crate::encoder::svc_encode_mb::WelsEncRecI16x16Y;
+use crate::encoder::svc_encode_slice::{
+    current_layer_expect, layer_rec_view_expect, layer_ref_view_expect,
+};
+use crate::encoder::svc_mode_decision::{
+    BLOCK_4x4, BLOCK_8x8, BLOCK_8x16, BLOCK_16x8, BLOCK_16x16, IS_SKIP, InitMe, PredInter8x16Mv,
+    PredInter16x8Mv, PredMv, PredSkipMv, REF_NOT_AVAIL, SUB_MB_TYPE_8x8, UpdateP8x8MotionInfo,
+    UpdateP8x16Motion2Cache, UpdateP16x8Motion2Cache, UpdateP16x8MotionInfo,
+    UpdateP16x16MotionInfo, WelsMdInterDecidedPskip, WelsMdInterJudgePskip,
+    WelsMdInterSecondaryModesEnc, WelsMdIntraSecondaryModesEnc, g_kuiMbCountScan4Idx,
+    update_P8x16_motion_info,
+};
 use crate::encoder::svc_mode_decision::{WelsInterMbEncode, WelsMdI16x16FromLayer, WelsMdP8x8};
+use crate::encoder::svc_motion_estimate::SetMvWithinIntegerMvRange;
+use crate::encoder::svc_set_mb_syn_cavlc::{IS_INTRA16x16, g_kuiCache48CountScan4Idx};
+use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 use crate::safe::mb_grid::MbSplit;
+use crate::safe::plane::PlaneCursorMut;
+use crate::simd::kernels;
 
 // ============================================================================
 // Intra prediction mode ids — `wels_common_defs.h:329-370`
@@ -94,145 +97,346 @@ pub const C_PRED_DC_128: i8 = 6;
 /// `svc_base_layer_md.cpp:59`. `I4_PRED_MODE_EXTEND` is never defined anywhere in
 /// `codec/` — it appears only in the `#ifndef` guards — so the `#ifndef` arm is the
 /// live one here and in `g_kiIntra4AvailMode` below.
-pub const g_kiIntra4AvailCount: [u8; 16] =
-    [1, 3, 2, 4, 1, 3, 2, 7, 1, 3, 4, 6, 1, 3, 4, 9];
+pub const g_kiIntra4AvailCount: [u8; 16] = [1, 3, 2, 4, 1, 3, 2, 7, 1, 3, 4, 6, 1, 3, 4, 9];
 
 /// `svc_base_layer_md.cpp:68`. Indexed by
 /// `left_avail | (top_avail<<1) | (left_top_avail<<2) | (right_top_avail<<3)`.
 pub const g_kiIntra4AvailMode: [[i8; 16]; 16] = [
     // 0000
     [
-        I4_PRED_DC_128, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_128,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 0001
     [
-        I4_PRED_DC_L, I4_PRED_H, I4_PRED_HU, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_L,
+        I4_PRED_H,
+        I4_PRED_HU,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 0010
     [
-        I4_PRED_DC_T, I4_PRED_V, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_T,
+        I4_PRED_V,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 0011
     [
-        I4_PRED_DC, I4_PRED_H, I4_PRED_V, I4_PRED_HU,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC,
+        I4_PRED_H,
+        I4_PRED_V,
+        I4_PRED_HU,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 0100
     [
-        I4_PRED_DC_128, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_128,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 0101
     [
-        I4_PRED_DC_L, I4_PRED_H, I4_PRED_HU, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_L,
+        I4_PRED_H,
+        I4_PRED_HU,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 0110
     [
-        I4_PRED_DC_T, I4_PRED_V, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_T,
+        I4_PRED_V,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 0111
     [
-        I4_PRED_DC, I4_PRED_H, I4_PRED_V, I4_PRED_HU,
-        I4_PRED_DDR, I4_PRED_VR, I4_PRED_HD, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC,
+        I4_PRED_H,
+        I4_PRED_V,
+        I4_PRED_HU,
+        I4_PRED_DDR,
+        I4_PRED_VR,
+        I4_PRED_HD,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 1000
     [
-        I4_PRED_DC_128, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_128,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 1001
     [
-        I4_PRED_DC_L, I4_PRED_H, I4_PRED_HU, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_L,
+        I4_PRED_H,
+        I4_PRED_HU,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 1010
     [
-        I4_PRED_DC_T, I4_PRED_V, I4_PRED_DDL, I4_PRED_VL,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_T,
+        I4_PRED_V,
+        I4_PRED_DDL,
+        I4_PRED_VL,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 1011
     [
-        I4_PRED_DC, I4_PRED_H, I4_PRED_V, I4_PRED_HU,
-        I4_PRED_DDL, I4_PRED_VL, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC,
+        I4_PRED_H,
+        I4_PRED_V,
+        I4_PRED_HU,
+        I4_PRED_DDL,
+        I4_PRED_VL,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 1100
     [
-        I4_PRED_DC_128, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_128,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 1101
     [
-        I4_PRED_DC_L, I4_PRED_H, I4_PRED_HU, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_L,
+        I4_PRED_H,
+        I4_PRED_HU,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 1110
     [
-        I4_PRED_DC_T, I4_PRED_V, I4_PRED_DDL, I4_PRED_VL,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC_T,
+        I4_PRED_V,
+        I4_PRED_DDL,
+        I4_PRED_VL,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
     // 1111
     [
-        I4_PRED_DC, I4_PRED_H, I4_PRED_V, I4_PRED_HU,
-        I4_PRED_DDL, I4_PRED_VL, I4_PRED_DDR, I4_PRED_VR,
-        I4_PRED_HD, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
-        I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID, I4_PRED_INVALID,
+        I4_PRED_DC,
+        I4_PRED_H,
+        I4_PRED_V,
+        I4_PRED_HU,
+        I4_PRED_DDL,
+        I4_PRED_VL,
+        I4_PRED_DDR,
+        I4_PRED_VR,
+        I4_PRED_HD,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
+        I4_PRED_INVALID,
     ],
 ];
 
 /// `svc_base_layer_md.cpp:200`.
 pub const g_kiIntraChromaAvailMode: [[i8; 5]; 8] = [
-    [C_PRED_DC_128, C_PRED_INVALID, C_PRED_INVALID, C_PRED_INVALID, 1],
+    [
+        C_PRED_DC_128,
+        C_PRED_INVALID,
+        C_PRED_INVALID,
+        C_PRED_INVALID,
+        1,
+    ],
     [C_PRED_DC_L, C_PRED_H, C_PRED_INVALID, C_PRED_INVALID, 2],
     [C_PRED_DC_T, C_PRED_V, C_PRED_INVALID, C_PRED_INVALID, 2],
     [C_PRED_V, C_PRED_H, C_PRED_DC, C_PRED_INVALID, 3],
-    [C_PRED_DC_128, C_PRED_INVALID, C_PRED_INVALID, C_PRED_INVALID, 1],
+    [
+        C_PRED_DC_128,
+        C_PRED_INVALID,
+        C_PRED_INVALID,
+        C_PRED_INVALID,
+        1,
+    ],
     [C_PRED_DC_L, C_PRED_H, C_PRED_INVALID, C_PRED_INVALID, 2],
     [C_PRED_DC_T, C_PRED_V, C_PRED_INVALID, C_PRED_INVALID, 2],
     [C_PRED_V, C_PRED_H, C_PRED_DC, C_PRED_P, 4],
 ];
 
 /// `svc_base_layer_md.cpp:212`.
-pub const g_kiCoordinateIdx4x4X: [i8; 16] =
-    [0, 4, 0, 4, 8, 12, 8, 12, 0, 4, 0, 4, 8, 12, 8, 12];
+pub const g_kiCoordinateIdx4x4X: [i8; 16] = [0, 4, 0, 4, 8, 12, 8, 12, 0, 4, 0, 4, 8, 12, 8, 12];
 
 /// `svc_base_layer_md.cpp:218`.
-pub const g_kiCoordinateIdx4x4Y: [i8; 16] =
-    [0, 0, 4, 4, 0, 0, 4, 4, 8, 8, 12, 12, 8, 8, 12, 12];
+pub const g_kiCoordinateIdx4x4Y: [i8; 16] = [0, 0, 4, 4, 0, 0, 4, 4, 8, 8, 12, 12, 8, 8, 12, 12];
 
 /// `svc_base_layer_md.cpp:223`. Maps `uiNeighborIntra` and the 4x4 block index to the
 /// availability code that indexes `g_kiIntra4AvailCount` / `g_kiIntra4AvailMode`.
@@ -336,9 +540,10 @@ pub extern "C" fn WelsMdI4x4(
         let iCoordinateX = g_kiCoordinateIdx4x4X[i] as i32;
         let iCoordinateY = g_kiCoordinateIdx4x4Y[i] as i32;
 
-        let pCurDec = view
-            .plane(0)
-            .cursor(kiMbOrgX + iCoordinateX as isize, kiMbOrgY + iCoordinateY as isize);
+        let pCurDec = view.plane(0).cursor(
+            kiMbOrgX + iCoordinateX as isize,
+            kiMbOrgY + iCoordinateY as isize,
+        );
 
         //step 2: get predicted mode from neighbor
         let iPredMode = PredIntra4x4Mode(
@@ -369,11 +574,13 @@ pub extern "C" fn WelsMdI4x4(
                     0,
                     4,
                 );
-                let cEnc = pEncPicture
-                    .plane(0)
-                    .cursor(kiMbOrgX + iCoordinateX as isize, kiMbOrgY + iCoordinateY as isize);
+                let cEnc = pEncPicture.plane(0).cursor(
+                    kiMbOrgX + iCoordinateX as isize,
+                    kiMbOrgY + iCoordinateY as isize,
+                );
                 (pFunc.sSampleDealingFuncs.pfSampleSatd[BLOCK_4x4].unwrap())(&cPred, &cEnc)
-            } + lambda[(iPredMode == g_kiMapModeI4x4[iCurMode as usize] as i32) as usize];
+            } + lambda
+                [(iPredMode == g_kiMapModeI4x4[iCurMode as usize] as i32) as usize];
 
             if iCurCost < iBestCost {
                 iBestMode = iCurMode;
@@ -394,8 +601,11 @@ pub extern "C" fn WelsMdI4x4(
             pMbCache.bPrevIntra4x4PredModeFlag[i] = true;
         } else {
             pMbCache.bPrevIntra4x4PredModeFlag[i] = false;
-            pMbCache.iRemIntra4x4PredModeFlag[i] =
-                (if iFinalMode < iPredMode { iFinalMode } else { iFinalMode - 1 }) as i8;
+            pMbCache.iRemIntra4x4PredModeFlag[i] = (if iFinalMode < iPredMode {
+                iFinalMode
+            } else {
+                iFinalMode - 1
+            }) as i8;
         }
         pMbCache.iIntraPredMode[g_kuiCache48CountScan4Idx[i] as usize] = iFinalMode as i8;
 
@@ -454,9 +664,10 @@ pub extern "C" fn WelsMdI4x4Fast(
         let iCoordinateX = g_kiCoordinateIdx4x4X[i] as i32;
         let iCoordinateY = g_kiCoordinateIdx4x4Y[i] as i32;
 
-        let pCurDec = view
-            .plane(0)
-            .cursor(kiMbOrgX + iCoordinateX as isize, kiMbOrgY + iCoordinateY as isize);
+        let pCurDec = view.plane(0).cursor(
+            kiMbOrgX + iCoordinateX as isize,
+            kiMbOrgY + iCoordinateY as isize,
+        );
 
         //step 2: get predicted mode from neighbor
         let iPredMode = PredIntra4x4Mode(
@@ -484,9 +695,10 @@ pub extern "C" fn WelsMdI4x4Fast(
                 );
                 pfMdCost4x4(
                     &RecCursor::over_owned(&mut pMbCache.sMemPredBlk4[off..][..16], 0, 4),
-                    &pEncPicture
-                        .plane(0)
-                        .cursor(kiMbOrgX + iCoordinateX as isize, kiMbOrgY + iCoordinateY as isize),
+                    &pEncPicture.plane(0).cursor(
+                        kiMbOrgX + iCoordinateX as isize,
+                        kiMbOrgY + iCoordinateY as isize,
+                    ),
                 ) + lambda[(iPredMode == g_kiMapModeI4x4[m as usize]) as usize]
             }};
         }
@@ -611,8 +823,11 @@ pub extern "C" fn WelsMdI4x4Fast(
             pMbCache.bPrevIntra4x4PredModeFlag[i] = true;
         } else {
             pMbCache.bPrevIntra4x4PredModeFlag[i] = false;
-            pMbCache.iRemIntra4x4PredModeFlag[i] =
-                if iFinalMode < iPredMode { iFinalMode } else { iFinalMode - 1 };
+            pMbCache.iRemIntra4x4PredModeFlag[i] = if iFinalMode < iPredMode {
+                iFinalMode
+            } else {
+                iFinalMode - 1
+            };
         }
         pMbCache.iIntraPredMode[g_kuiCache48CountScan4Idx[i] as usize] = iFinalMode;
         //step 6: encoding I_4x4
@@ -783,10 +998,22 @@ pub fn WelsMdIntraMb(
 /// `encoder_data_tables.cpp:41`, declared in `mb_cache.h:59`. Byte offset of each
 /// 4x4 block inside a 16x16 prediction buffer, in raster-scan-of-4x4 order.
 pub const g_kuiSmb4AddrIn256: [u8; 16] = [
-    0,          4,           16 * 4,      16 * 4 + 4,
-    8,          12,          16 * 4 + 8,  16 * 4 + 12,
-    16 * 8,     16 * 8 + 4,  16 * 12,     16 * 12 + 4,
-    16 * 8 + 8, 16 * 8 + 12, 16 * 12 + 8, 16 * 12 + 12,
+    0,
+    4,
+    16 * 4,
+    16 * 4 + 4,
+    8,
+    12,
+    16 * 4 + 8,
+    16 * 4 + 12,
+    16 * 8,
+    16 * 8 + 4,
+    16 * 12,
+    16 * 12 + 4,
+    16 * 8 + 8,
+    16 * 8 + 12,
+    16 * 12 + 8,
+    16 * 12 + 12,
 ];
 
 /// `svc_base_layer_md.cpp:1543`.
@@ -964,13 +1191,7 @@ pub fn WelsMdInterFinePartition<'a>(
     iBestCost: i32,
 ) {
     let pCurDqLayer = current_layer_expect(pEncCtx);
-    let mut iCost = WelsMdP8x8(
-        pEncCtx,
-        pEncCtx.func_list(),
-        pCurDqLayer,
-        pWelsMd,
-        pSlice,
-    );
+    let mut iCost = WelsMdP8x8(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
 
     if iCost < iBestCost {
         pCurMb.uiMbType = MB_TYPE_8x8;
@@ -1004,21 +1225,14 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
     let pCurDqLayer = current_layer_expect(pEncCtx);
     let mut iBestCost = iBestCostIn;
     let uiMbSign = (pEncCtx.func_list().pfGetMbSignFromInterVaa)(
-        &pEncCtx.vaa_expect().sVaaCalcInfo.pSad8x8
-            [pCurMb.iMbXY as usize],
+        &pEncCtx.vaa_expect().sVaaCalcInfo.pSad8x8[pCurMb.iMbXY as usize],
     );
 
     if crate::encoder::dump_enabled(&FP_DUMP, "OH264_FPDUMP") {
         let sad = (&pEncCtx.vaa_expect().sVaaCalcInfo.pSad8x8)[pCurMb.iMbXY as usize];
         eprintln!(
             "FP mb={:3} sign={:2} best={:7} sad8x8={},{},{},{}",
-            pCurMb.iMbXY,
-            uiMbSign,
-            iBestCost,
-            sad[0],
-            sad[1],
-            sad[2],
-            sad[3]
+            pCurMb.iMbXY, uiMbSign, iBestCost, sad[0], sad[1], sad[2], sad[3]
         );
     }
 
@@ -1028,27 +1242,23 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
 
     match uiMbSign {
         3 | 12 => {
-            let iCostP16x8 = WelsMdP16x8(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
+            let iCostP16x8 =
+                WelsMdP16x8(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
             if iCostP16x8 < iBestCost {
                 iBestCost = iCostP16x8;
                 pCurMb.uiMbType = MB_TYPE_16x8;
             }
         }
         5 | 10 => {
-            let iCostP8x16 = WelsMdP8x16(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
+            let iCostP8x16 =
+                WelsMdP8x16(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
             if iCostP8x16 < iBestCost {
                 iBestCost = iCostP8x16;
                 pCurMb.uiMbType = MB_TYPE_8x16;
             }
         }
         6 | 9 => {
-            let iCostP8x8 = WelsMdP8x8(
-        pEncCtx,
-        pEncCtx.func_list(),
-                pCurDqLayer,
-                pWelsMd,
-                pSlice,
-            );
+            let iCostP8x8 = WelsMdP8x8(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
             if iCostP8x8 < iBestCost {
                 iBestCost = iCostP8x8;
                 pCurMb.uiMbType = MB_TYPE_8x8;
@@ -1056,25 +1266,21 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
             }
         }
         _ => {
-            let iCostP8x8 = WelsMdP8x8(
-        pEncCtx,
-        pEncCtx.func_list(),
-                pCurDqLayer,
-                pWelsMd,
-                pSlice,
-            );
+            let iCostP8x8 = WelsMdP8x8(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
             if iCostP8x8 < iBestCost {
                 iBestCost = iCostP8x8;
                 pCurMb.uiMbType = MB_TYPE_8x8;
                 pCurMb.uiSubMbType = [SUB_MB_TYPE_8x8; 4];
 
-                let iCostP16x8 = WelsMdP16x8(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
+                let iCostP16x8 =
+                    WelsMdP16x8(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
                 if iCostP16x8 <= iBestCost {
                     iBestCost = iCostP16x8;
                     pCurMb.uiMbType = MB_TYPE_16x8;
                 }
 
-                let iCostP8x16 = WelsMdP8x16(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
+                let iCostP8x16 =
+                    WelsMdP8x16(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
                 if iCostP8x16 <= iBestCost {
                     iBestCost = iCostP8x16;
                     pCurMb.uiMbType = MB_TYPE_8x16;
@@ -1148,7 +1354,9 @@ pub fn WelsMdPSkipEnc(
 
     // The reference cursors are at the *motion-compensated* position, so they are
     // not the macroblock's own — but the view they are cut from is the slice's.
-    let pRefPicture = sc.refv.expect("the layer's reference view is built for this frame");
+    let pRefPicture = sc
+        .refv
+        .expect("the layer's reference view is built for this frame");
 
     //luma
     {
@@ -1197,9 +1405,7 @@ pub fn WelsMdPSkipEnc(
 
     if iSadCostMb == 0
         || iSadCostMb < pWelsMd.iSadPredSkip
-        || (mbi.ref_is_p
-            && pMbCache.uiRefMbType == MB_TYPE_SKIP
-            && iSadCostMb < mbi.ref_skip_sad)
+        || (mbi.ref_is_p && pMbCache.uiRefMbType == MB_TYPE_SKIP && iSadCostMb < mbi.ref_skip_sad)
     {
         //update motion info to current MB
         AcceptPskip(pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb);
@@ -1207,7 +1413,12 @@ pub fn WelsMdPSkipEnc(
     }
 
     let pDstLuma = RecCursor::over_owned(&mut pMbCache.sSkipMb, 0, 16);
-    WelsDctMb(&mut pMbCache.sCoeffLevel, &pEncMb, &pDstLuma, pFunc.pfDctFourT4);
+    WelsDctMb(
+        &mut pMbCache.sCoeffLevel,
+        &pEncMb,
+        &pDstLuma,
+        pFunc.pfDctFourT4,
+    );
 
     if WelsTryPYskip(pEncCtx, pCurMb, pMbCache) {
         pEncMb = cEncCb;
@@ -1347,7 +1558,9 @@ pub fn WelsMdInterMbRefinement(
             mc_chroma_at!(1, kiOffCb, dx, dy, sMv, 8, 8); //Cb
             mc_chroma_at!(2, kiOffCr, dx, dy, sMv, 8, 8); //Cr
 
-            let cEncLuma = pEncPicture.plane(0).cursor(kiMbXChroma << 1, kiMbYChroma << 1);
+            let cEncLuma = pEncPicture
+                .plane(0)
+                .cursor(kiMbXChroma << 1, kiMbYChroma << 1);
             let cEncCb = pEncPicture.plane(1).cursor(kiMbXChroma, kiMbYChroma);
             let cEncCr = pEncPicture.plane(2).cursor(kiMbXChroma, kiMbYChroma);
             pWelsMd.iCostSkipMb = (pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].unwrap())(
@@ -1383,7 +1596,7 @@ pub fn WelsMdInterMbRefinement(
                     kiOffLuma + g_kuiSmb4AddrIn256[iIdx as usize] as usize,
                     &mut pWelsMd.sMe.sMe16x8[i],
                     &mut sMeRefine,
-                pMbCache,
+                    pMbCache,
                     16,
                     8,
                 );
@@ -1432,7 +1645,7 @@ pub fn WelsMdInterMbRefinement(
                     kiOffLuma + g_kuiSmb4AddrIn256[iIdx as usize] as usize,
                     &mut pWelsMd.sMe.sMe8x16[i],
                     &mut sMeRefine,
-                pMbCache,
+                    pMbCache,
                     8,
                     16,
                 );
@@ -1486,7 +1699,7 @@ pub fn WelsMdInterMbRefinement(
                             kiOffLuma + g_kuiSmb4AddrIn256[iBlk8Idx as usize] as usize,
                             &mut pWelsMd.sMe.sMe8x8[i],
                             &mut sMeRefine,
-                pMbCache,
+                            pMbCache,
                             8,
                             8,
                         );
@@ -1623,7 +1836,13 @@ pub fn WelsMdInterMb<'a>(
     let bSkip;
 
     //try BGD skip
-    if (sc.func.pfInterMdBackgroundDecision)(pEncCtx, pWelsMd, pSlice, mbs.cur_mut(), &mut bKeepSkip) {
+    if (sc.func.pfInterMdBackgroundDecision)(
+        pEncCtx,
+        pWelsMd,
+        pSlice,
+        mbs.cur_mut(),
+        &mut bKeepSkip,
+    ) {
         return;
     }
 
@@ -1650,8 +1869,14 @@ pub fn WelsMdInterMb<'a>(
         );
 
         //step 2: P_16x16
-        pWelsMd.iCostLuma =
-            crate::encoder::svc_mode_decision::WelsMdP16x16(pEncCtx, sc.func, pCurDqLayer, pWelsMd, pSlice, mbs);
+        pWelsMd.iCostLuma = crate::encoder::svc_mode_decision::WelsMdP16x16(
+            pEncCtx,
+            sc.func,
+            pCurDqLayer,
+            pWelsMd,
+            pSlice,
+            mbs,
+        );
         mbs.cur_mut().uiMbType = MB_TYPE_16x16;
     }
 
@@ -1684,11 +1909,7 @@ fn LD32_MV_PUB(pMv: &SMVUnitXY) -> u32 {
 
 /// `svc_base_layer_md.cpp:1964`. Transforms, quantises and reconstructs the chosen
 /// inter macroblock, then copies the prediction into the CS planes.
-pub fn WelsMdInterEncode(
-    pEncCtx: &sWelsEncCtx,
-    pSlice: &mut SSlice,
-    pCurMb: &mut SMB,
-) {
+pub fn WelsMdInterEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
     let pCurDqLayer = current_layer_expect(pEncCtx);
 
     //add pEnc&rec to MD--2010.3.15
@@ -1703,8 +1924,14 @@ pub fn WelsMdInterEncode(
     let kiLumaOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
     let kiChromaOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
     let src = &pMbCache.sMemPredMb;
-    copy_block_to_view::<16, 16>(&src[kiLumaOff..kiLumaOff + 256], &view.plane(0).cursor(lx, ly));
-    copy_block_to_view::<8, 8>(&src[kiChromaOff..kiChromaOff + 64], &view.plane(1).cursor(cx, cy));
+    copy_block_to_view::<16, 16>(
+        &src[kiLumaOff..kiLumaOff + 256],
+        &view.plane(0).cursor(lx, ly),
+    );
+    copy_block_to_view::<8, 8>(
+        &src[kiChromaOff..kiChromaOff + 64],
+        &view.plane(1).cursor(cx, cy),
+    );
     copy_block_to_view::<8, 8>(
         &src[kiChromaOff + 64..kiChromaOff + 128],
         &view.plane(2).cursor(cx, cy),
@@ -1715,23 +1942,22 @@ pub fn WelsMdInterEncode(
 /// for the next frame's predictors.
 ///
 /// Both arrays must have room for `pCurMb->iMbXY`.
-pub fn WelsMdInterSaveSadAndRefMbType(
-    pRecView: &RecPicView,
-    pCurMb: &SMB,
-    pMd: &SWelsMD<'_>,
-) {
+pub fn WelsMdInterSaveSadAndRefMbType(pRecView: &RecPicView, pCurMb: &SMB, pMd: &SWelsMD<'_>) {
     let kmtCurMbtype = pCurMb.uiMbType;
     let kiMbXY = pCurMb.iMbXY as usize;
 
     //sad
     pRecView.mb_skip_sad().set(
         kiMbXY,
-        if kmtCurMbtype == MB_TYPE_SKIP { pMd.iCostSkipMb } else { 0 },
+        if kmtCurMbtype == MB_TYPE_SKIP {
+            pMd.iCostSkipMb
+        } else {
+            0
+        },
     );
     //uiMbType
     pRecView.ref_mb_type().set(kiMbXY, kmtCurMbtype);
 }
-
 
 /// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
 static FP_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -1760,8 +1986,15 @@ mod tests {
         assert_eq!(
             &g_kiIntra4AvailMode[15][..9],
             &[
-                I4_PRED_DC, I4_PRED_H, I4_PRED_V, I4_PRED_HU, I4_PRED_DDL, I4_PRED_VL,
-                I4_PRED_DDR, I4_PRED_VR, I4_PRED_HD
+                I4_PRED_DC,
+                I4_PRED_H,
+                I4_PRED_V,
+                I4_PRED_HU,
+                I4_PRED_DDL,
+                I4_PRED_VL,
+                I4_PRED_DDR,
+                I4_PRED_VR,
+                I4_PRED_HD
             ]
         );
     }

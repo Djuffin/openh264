@@ -77,7 +77,10 @@ impl<'a> MvdCostCursor<'a> {
             return Self::none();
         }
         let at = iMvdCostTableSize as usize;
-        debug_assert!(at < table.len(), "the MVD table's origin is outside the table");
+        debug_assert!(
+            at < table.len(),
+            "the MVD table's origin is outside the table"
+        );
         Self { table, at }
     }
 
@@ -100,7 +103,10 @@ impl<'a> MvdCostCursor<'a> {
     /// and `SetFeatureSearchIn`'s per-axis rebase).
     #[inline(always)]
     pub const fn offset(self, d: i32) -> Self {
-        Self { table: self.table, at: self.at.wrapping_add_signed(d as isize) }
+        Self {
+            table: self.table,
+            at: self.at.wrapping_add_signed(d as isize),
+        }
     }
 }
 

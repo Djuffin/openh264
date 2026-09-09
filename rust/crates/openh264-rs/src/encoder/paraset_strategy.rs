@@ -31,23 +31,20 @@
 //! `Option<Box<CWelsParametersetIdStrategyObj>>` is 8 bytes by the null-pointer
 //! niche, so the size is kept without the indirection.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
-
 #![forbid(unsafe_code)]
-
 
 use crate::api::codec_api::EParameterSetStrategy;
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
+use crate::common::wels_trace::{WELS_LOG_WARNING, WelsLog};
 use crate::encoder::au_set::{WelsInitPps, WelsInitSps, WelsInitSubsetSps};
+use crate::encoder::encoder_context::SWelsEncoderOutput;
 use crate::encoder::encoder_context::{
-    sWelsEncCtx, SLogContext,
-    SParaSetOffset,
-    SParaSetOffsetVariable, MAX_DQ_LAYER_NUM, MAX_PPS_COUNT, PARA_SET_TYPE,
+    MAX_DQ_LAYER_NUM, MAX_PPS_COUNT, PARA_SET_TYPE, SLogContext, SParaSetOffset,
+    SParaSetOffsetVariable, sWelsEncCtx,
 };
 use crate::encoder::param_svc::{
-    SExistingParasetList, SSubsetSps, SWelsPPS, SWelsSPS, SWelsSvcCodingParam, MAX_SPS_COUNT,
+    MAX_SPS_COUNT, SExistingParasetList, SSubsetSps, SWelsPPS, SWelsSPS, SWelsSvcCodingParam,
 };
-use crate::common::wels_trace::{WELS_LOG_WARNING, WelsLog};
-use crate::encoder::encoder_context::SWelsEncoderOutput;
 
 /// `PARA_SET_TYPE_AVCSPS` / `_SUBSETSPS` / `_PPS` — `wels_const.h`.
 pub const PARA_SET_TYPE_AVCSPS: usize = 0;
@@ -94,7 +91,10 @@ impl ParasetIdKind {
     /// 0x02) and reads as an equality test if skimmed.
     #[inline]
     pub fn is_listing(self) -> bool {
-        matches!(self, Self::SpsListing | Self::SpsListingPpsIncreasing | Self::SpsPpsListing)
+        matches!(
+            self,
+            Self::SpsListing | Self::SpsListingPpsIncreasing | Self::SpsPpsListing
+        )
     }
 
     /// The two kinds whose `GetPpsIdOffset` / `Update` rotate ids —
@@ -218,9 +218,7 @@ impl CWelsParametersetIdStrategyObj {
     #[inline]
     pub fn Update(&mut self, kuiId: u32, iParasetType: i32) {
         match self.eIdKind {
-            ParasetIdKind::Constant
-            | ParasetIdKind::SpsListing
-            | ParasetIdKind::SpsPpsListing => {
+            ParasetIdKind::Constant | ParasetIdKind::SpsListing | ParasetIdKind::SpsPpsListing => {
                 self.m_sParaSetOffset = SParaSetOffset::default();
             }
             ParasetIdKind::Increasing | ParasetIdKind::SpsListingPpsIncreasing => {
@@ -280,7 +278,8 @@ impl CWelsParametersetIdStrategyObj {
         // The C tests `NULL != pCtx->pSubsetArray`; the test is the same one.
         if !pSubsetArray.is_empty() {
             pExistingParasetList.uiInUseSubsetSpsNum = self.m_sParaSetOffset.uiInUseSubsetSpsNum;
-            pExistingParasetList.sSubsetSps
+            pExistingParasetList
+                .sSubsetSps
                 .copy_from_slice(pSubsetArray);
         } else {
             pExistingParasetList.uiInUseSubsetSpsNum = 0;
@@ -418,11 +417,10 @@ impl CWelsParametersetIdStrategyObj {
         );
         if !pSpsArray.is_empty() {
             let n = MAX_SPS_COUNT.min(pSpsArray.len());
-                pSpsArray[..n].copy_from_slice(&pExistingParasetList.sSps[..n]);
+            pSpsArray[..n].copy_from_slice(&pExistingParasetList.sSps[..n]);
         }
         if self.GetNeededSubsetSpsNum() > 0 {
-            self.m_sParaSetOffset.uiInUseSubsetSpsNum =
-                pExistingParasetList.uiInUseSubsetSpsNum;
+            self.m_sParaSetOffset.uiInUseSubsetSpsNum = pExistingParasetList.uiInUseSubsetSpsNum;
             debug_assert!(
                 pSubsetArray.is_empty() || pSubsetArray.len() >= MAX_SPS_COUNT,
                 "pSubsetArray holds {} entries; LoadPrevious copies {MAX_SPS_COUNT}",
@@ -522,8 +520,7 @@ impl CWelsParametersetIdStrategyObj {
                 WELS_LOG_WARNING,
                 &format!(
                     "ParamValidationExt(), eSpsPpsIdStrategy setting ({:?}) with multiple svc SpatialLayers ({}) not supported! eSpsPpsIdStrategy adjusted to CONSTANT_ID",
-                    pCodingParam.eSpsPpsIdStrategy,
-                    pCodingParam.iSpatialLayerNum
+                    pCodingParam.eSpsPpsIdStrategy, pCodingParam.iSpatialLayerNum
                 ),
             );
             pCodingParam.eSpsPpsIdStrategy = EParameterSetStrategy::CONSTANT_ID;
@@ -727,7 +724,12 @@ impl CWelsParametersetIdStrategyObj {
     /// list it was configured for.
     ///
     /// Callers use [`ctx_strategy_and_counts`].
-    pub fn UpdateParaSetNum(&mut self, pSpsNum: &mut i32, pSubsetSpsNum: &mut i32, pPpsNum: &mut i32) {
+    pub fn UpdateParaSetNum(
+        &mut self,
+        pSpsNum: &mut i32,
+        pSubsetSpsNum: &mut i32,
+        pPpsNum: &mut i32,
+    ) {
         if !self.eIdKind.is_listing() {
             return;
         }
@@ -755,11 +757,7 @@ impl CWelsParametersetIdStrategyObj {
     /// strategy has a list and the caller's index is the index.
     #[inline]
     pub fn GetSpsIdx(&self, iIdx: i32) -> i32 {
-        if self.eIdKind.is_listing() {
-            iIdx
-        } else {
-            0
-        }
+        if self.eIdKind.is_listing() { iIdx } else { 0 }
     }
 }
 
@@ -783,7 +781,11 @@ pub fn WelsGenerateNewSps(
     let kiMaxNumRefFrame = pParam.iMaxNumRefFrame;
     let kbEnableFrameCropping = pParam.bEnableFrameCroppingFlag;
     let kbEnableRc = pParam.iRCMode != RC_OFF_MODE;
-    let SWelsSvcCodingParam { sSpatialLayers, sDependencyLayers, .. } = &mut *pParam;
+    let SWelsSvcCodingParam {
+        sSpatialLayers,
+        sDependencyLayers,
+        ..
+    } = &mut *pParam;
     let pDlayerParam = &mut sSpatialLayers[iDlayerIndex as usize];
     let pDlayerInternal = &sDependencyLayers[iDlayerIndex as usize];
     // Need port pSps/pPps initialization due to spatial scalability changed
@@ -889,7 +891,11 @@ pub fn ParasetStrategy(pCtx: &mut sWelsEncCtx) -> &mut CWelsParametersetIdStrate
 #[inline]
 pub fn ctx_strategy_and_pps(
     pCtx: &mut sWelsEncCtx,
-) -> (&mut CWelsParametersetIdStrategyObj, &mut [SWelsPPS], &mut i32) {
+) -> (
+    &mut CWelsParametersetIdStrategyObj,
+    &mut [SWelsPPS],
+    &mut i32,
+) {
     (
         pCtx.pFuncList
             .pParametersetStrategy
@@ -904,7 +910,12 @@ pub fn ctx_strategy_and_pps(
 #[inline]
 pub fn ctx_strategy_and_paraset_arrays(
     pCtx: &mut sWelsEncCtx,
-) -> (&mut CWelsParametersetIdStrategyObj, &mut [SWelsSPS], &mut [SSubsetSps], &mut [SWelsPPS]) {
+) -> (
+    &mut CWelsParametersetIdStrategyObj,
+    &mut [SWelsSPS],
+    &mut [SSubsetSps],
+    &mut [SWelsPPS],
+) {
     (
         pCtx.pFuncList
             .pParametersetStrategy
@@ -929,7 +940,14 @@ pub fn ctx_strategy_and_param_arrays(
     &mut [SSubsetSps],
     &mut [SWelsPPS],
 ) {
-    let sWelsEncCtx { pFuncList, pSvcParam, pSpsArray, pSubsetArray, pPPSArray, .. } = pCtx;
+    let sWelsEncCtx {
+        pFuncList,
+        pSvcParam,
+        pSpsArray,
+        pSubsetArray,
+        pPPSArray,
+        ..
+    } = pCtx;
     (
         pFuncList
             .pParametersetStrategy
@@ -951,7 +969,9 @@ pub fn ctx_strategy_and_param_arrays(
 pub fn ctx_strategy_and_out(
     pCtx: &mut sWelsEncCtx,
 ) -> (&mut CWelsParametersetIdStrategyObj, &mut SWelsEncoderOutput) {
-    let sWelsEncCtx { pFuncList, pOut, .. } = pCtx;
+    let sWelsEncCtx {
+        pFuncList, pOut, ..
+    } = pCtx;
     (
         pFuncList
             .pParametersetStrategy
@@ -966,7 +986,12 @@ pub fn ctx_strategy_and_out(
 #[inline]
 pub fn ctx_strategy_and_counts(
     pCtx: &mut sWelsEncCtx,
-) -> (&mut CWelsParametersetIdStrategyObj, &mut i32, &mut i32, &mut i32) {
+) -> (
+    &mut CWelsParametersetIdStrategyObj,
+    &mut i32,
+    &mut i32,
+    &mut i32,
+) {
     (
         pCtx.pFuncList
             .pParametersetStrategy
@@ -1141,7 +1166,11 @@ pub fn FindExistingSps(
     let kiMaxNumRefFrame = pParam.iMaxNumRefFrame;
     let kbEnableFrameCropping = pParam.bEnableFrameCroppingFlag;
     let kbEnableRc = pParam.iRCMode != RC_OFF_MODE;
-    let SWelsSvcCodingParam { sSpatialLayers, sDependencyLayers, .. } = &mut *pParam;
+    let SWelsSvcCodingParam {
+        sSpatialLayers,
+        sDependencyLayers,
+        ..
+    } = &mut *pParam;
     let pDlayerParam = &mut sSpatialLayers[iDlayerIndex as usize];
     let pDlayerInternal = &sDependencyLayers[iDlayerIndex as usize];
 
@@ -1237,13 +1266,22 @@ mod tests {
     fn every_strategy_builds_and_maps_to_its_class() {
         let cases = [
             (EParameterSetStrategy::CONSTANT_ID, ParasetIdKind::Constant),
-            (EParameterSetStrategy::INCREASING_ID, ParasetIdKind::Increasing),
-            (EParameterSetStrategy::SPS_LISTING, ParasetIdKind::SpsListing),
+            (
+                EParameterSetStrategy::INCREASING_ID,
+                ParasetIdKind::Increasing,
+            ),
+            (
+                EParameterSetStrategy::SPS_LISTING,
+                ParasetIdKind::SpsListing,
+            ),
             (
                 EParameterSetStrategy::SPS_LISTING_AND_PPS_INCREASING,
                 ParasetIdKind::SpsListingPpsIncreasing,
             ),
-            (EParameterSetStrategy::SPS_PPS_LISTING, ParasetIdKind::SpsPpsListing),
+            (
+                EParameterSetStrategy::SPS_PPS_LISTING,
+                ParasetIdKind::SpsPpsListing,
+            ),
         ];
         for (e, kind) in cases {
             let p = CreateParametersetStrategy(e, false, 1).expect("all five build");
@@ -1286,7 +1324,11 @@ mod tests {
         assert_ne!(p.GetPpsIdOffset(0), 0, "the PPS id must rotate");
         // …and the SPS side does not, however many times it is asked.
         p.Update(0, PARA_SET_TYPE_AVCSPS as i32);
-        assert_eq!(p.GetSpsIdOffset(0, 0), 0, "the SPS id offset is the Constant zero");
+        assert_eq!(
+            p.GetSpsIdOffset(0, 0),
+            0,
+            "the SPS id offset is the Constant zero"
+        );
     }
 
     /// `GetSpsIdx` — the constant kinds answer 0 for every index because they have one
@@ -1296,13 +1338,19 @@ mod tests {
     #[test]
     fn get_sps_idx_is_the_identity_only_for_listing_kinds() {
         assert_eq!(strategy(EParameterSetStrategy::CONSTANT_ID).GetSpsIdx(3), 0);
-        assert_eq!(strategy(EParameterSetStrategy::INCREASING_ID).GetSpsIdx(3), 0);
+        assert_eq!(
+            strategy(EParameterSetStrategy::INCREASING_ID).GetSpsIdx(3),
+            0
+        );
         assert_eq!(strategy(EParameterSetStrategy::SPS_LISTING).GetSpsIdx(3), 3);
         assert_eq!(
             strategy(EParameterSetStrategy::SPS_LISTING_AND_PPS_INCREASING).GetSpsIdx(3),
             3
         );
-        assert_eq!(strategy(EParameterSetStrategy::SPS_PPS_LISTING).GetSpsIdx(3), 3);
+        assert_eq!(
+            strategy(EParameterSetStrategy::SPS_PPS_LISTING).GetSpsIdx(3),
+            3
+        );
     }
 
     /// `GetCurrentPpsId` — only `SPS_PPS_LISTING` rotates by IDR round, and it reads
@@ -1329,7 +1377,10 @@ mod tests {
                     ((iIdrRound * 2 + iPpsId) % MAX_PPS_COUNT) as i32;
             }
         }
-        assert_eq!(p.GetCurrentPpsId(1, 5), ((5 * 2 + 1) % MAX_PPS_COUNT) as i32);
+        assert_eq!(
+            p.GetCurrentPpsId(1, 5),
+            ((5 * 2 + 1) % MAX_PPS_COUNT) as i32
+        );
     }
 
     /// `ParasetIdAdditionIdAdjust` rotates the id written to the bitstream and records
@@ -1341,7 +1392,11 @@ mod tests {
         let mut p = strategy(EParameterSetStrategy::INCREASING_ID);
         for expected in 0..MAX_SPS_COUNT as i32 {
             p.Update(0, PARA_SET_TYPE_AVCSPS as i32);
-            assert_eq!(p.GetSpsIdOffset(0, 0), expected, "delta after update #{expected}");
+            assert_eq!(
+                p.GetSpsIdOffset(0, 0),
+                expected,
+                "delta after update #{expected}"
+            );
         }
         // 33rd update wraps uiNextParaSetIdToUseInBs back to 0.
         p.Update(0, PARA_SET_TYPE_AVCSPS as i32);
