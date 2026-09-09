@@ -4,7 +4,11 @@ This directory holds a line-by-line Rust port of Cisco's [OpenH264](../README.md
 (reference version 2.6.0, the C++ in `../codec/`): the H.264/AVC encoder, the
 decoder, and the encoder's video-processing plugins. It builds as a Rust library
 and as a drop-in `libopenh264` shared library that exports exactly the seven
-symbols upstream does, and it has no dependencies.
+symbols upstream does, and it has no dependencies. The reference here is 2.6.0
+plus exactly one local decoder patch: `codec/decoder/core/src/rec_mb.cpp`'s
+`GetInterBPred` combined a B partition's two hypotheses into one destination, so
+bi-predicted 16x8, 8x16 and 4x4 sub-partitions came out wrong; upstream is still
+affected, this tree is not, and the port matches the patched tree.
 
 The one property everything here is organised around: **for the same input and
 the same parameters, the port produces the same bytes as the C++**. Every
