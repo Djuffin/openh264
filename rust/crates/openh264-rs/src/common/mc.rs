@@ -255,11 +255,11 @@ pub(crate) fn copy_rows<const WIDTH: usize, S: RefSamples + Copy>(
         4 => copy_block::<WIDTH, 4, _>(src, dst),
         2 => copy_block::<WIDTH, 2, _>(src, dst),
         _ => {
+            note_runtime_shape();
             for dy in 0..height as isize {
-                let sv = src.row_view(dy, 0, WIDTH);
-                let s: &[u8; WIDTH] = (&*sv).try_into().unwrap();
+                let s = src.row_n::<WIDTH>(dy, 0);
                 let d: &mut [u8; WIDTH] = dst.row_mut(dy, 0, WIDTH).try_into().unwrap();
-                *d = *s;
+                *d = s;
             }
         }
     }
@@ -318,6 +318,225 @@ pub fn mc_copy<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, widt
     }
 }
 
+// ============================================================================
+// The block shapes, and the dispatch onto them
+// ============================================================================
+//
+// **What the run-time width and height cost.** Every kernel below used to take
+// `width` and `height` as arguments and read its input a row at a time through
+// [`RefSamples::row_view`], the run-time-length accessor. On a plane cursor that is
+// two slice checks a row; on the [`RecCursor`](crate::encoder::rec_view::RecCursor)
+// the encoder hands them — a view over shared cells, which cannot lend a `&[u8]` —
+// it is an anchor computation, two checks, a zeroed 32-byte `RowBuf` and a
+// cell-by-cell copy loop, all before the kernel's own vector load.
+//
+// [`RefSamples::span`] is the accessor that removes the checks, and it needs the
+// block's shape as **const parameters**. So each entry point matches `(width,
+// height)` onto a const instantiation, exactly as [`copy_rows`] matches the height
+// onto [`copy_block`], and the kernel inside cuts one span per operand and walks it
+// with constant row offsets.
+//
+// **The shape table is the call sites'**, and [`SHAPES_LUMA`], [`SHAPES_REFINE_*`]
+// and [`SHAPES_CHROMA`] below are it, written down so a test can drive every entry
+// of it and assert that none reached the fallback.
+//
+// **`SW`, `SH`, and why they are parameters rather than arithmetic.** The horizontal
+// filter reads `W + 5` samples a row, the vertical `H + 5` rows, the bilinear chroma
+// one extra of each. Stable Rust has no arithmetic in a const-argument position, so
+// `span::<{W + 5}, H>` cannot be written; the reach is passed as its own const
+// parameter by the dispatch arm, which is the spelling `sad::sample_sad_four_16x16`
+// already uses for its `W + 2`. Every arm below pairs them, and
+// [`shapes_are_consistent`](tests::shapes_are_consistent) checks the pairing.
+
+/// The seven luma partition shapes: `BaseMC`'s block sizes in the decoder, and the
+/// sizes `mc_luma`'s quarter-pel composites run their leaves at.
+pub(crate) const SHAPES_LUMA: [(usize, usize); 7] =
+    [(16, 16), (16, 8), (8, 16), (8, 8), (8, 4), (4, 8), (4, 4)];
+
+/// `MeRefineFracPixel`'s horizontal filter, `(kiW + 1, kiH)` at the four block sizes
+/// the motion search refines (`svc_base_layer_md.rs`; the sub-8x8 partitions are
+/// `#if 0` upstream and `unreachable!` here).
+pub(crate) const SHAPES_REFINE_HOR: [(usize, usize); 4] = [(17, 16), (17, 8), (9, 16), (9, 8)];
+
+/// The same refinement's vertical filter, `(kiW, kiH + 1)`.
+pub(crate) const SHAPES_REFINE_VER: [(usize, usize); 4] = [(16, 17), (16, 9), (8, 17), (8, 9)];
+
+/// The same refinement's centre filter, `(kiW + 1, kiH + 1)`.
+pub(crate) const SHAPES_REFINE_CEN: [(usize, usize); 4] = [(17, 17), (17, 9), (9, 17), (9, 9)];
+
+/// The chroma shapes: half of each luma partition, so the decoder's 4x4 partitions
+/// reach 2x2 and the encoder's 8x8 ones reach 4x4.
+pub(crate) const SHAPES_CHROMA: [(usize, usize); 7] =
+    [(8, 8), (8, 4), (4, 8), (4, 4), (4, 2), (2, 4), (2, 2)];
+
+#[cfg(test)]
+thread_local! {
+    /// Counts the shapes that reached a run-time-width fallback on **this thread**.
+    ///
+    /// The fallbacks exist so that an unforeseen shape is slow rather than a panic —
+    /// the decoder's error-concealment slots hold these kernels and a `match` that
+    /// panicked on a shape they passed would be a crash in production. But nothing
+    /// the codec itself calls should reach one, and that is a claim worth testing
+    /// rather than asserting: `mc_shapes_all_reach_a_const_arm` drives every entry of
+    /// the tables above and reads this back. Thread-local because the test suite runs
+    /// in parallel.
+    pub(crate) static RUNTIME_SHAPES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Called from every run-time-shape fallback arm; compiles to nothing outside tests.
+#[inline(always)]
+pub(crate) fn note_runtime_shape() {
+    #[cfg(test)]
+    RUNTIME_SHAPES.with(|c| c.set(c.get() + 1));
+}
+
+/// Runs `f` and reports how many MC calls inside it fell back to a run-time shape.
+#[cfg(test)]
+pub(crate) fn runtime_shapes_during(f: impl FnOnce()) -> usize {
+    RUNTIME_SHAPES.with(|c| c.set(0));
+    f();
+    RUNTIME_SHAPES.with(|c| c.get())
+}
+
+/// `McHorVer20` and its two `_AVERAGE_WITH_` forms, dispatched onto a const shape.
+///
+/// `AVG` is 0 for the plain half-pel filter, or the tap the result is averaged with:
+/// 2 for quarter-pel `(1, 0)` and 3 for `(3, 0)`.
+#[inline(always)]
+pub(crate) fn hor_shaped<L: McLeaves, S: RefSamples + Copy, const AVG: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    match (width, height) {
+        (16, 16) => L::hor::<S, 16, 21, 16, AVG>(src, dst),
+        (16, 8) => L::hor::<S, 16, 21, 8, AVG>(src, dst),
+        (8, 16) => L::hor::<S, 8, 13, 16, AVG>(src, dst),
+        (8, 8) => L::hor::<S, 8, 13, 8, AVG>(src, dst),
+        (8, 4) => L::hor::<S, 8, 13, 4, AVG>(src, dst),
+        (4, 8) => L::hor::<S, 4, 9, 8, AVG>(src, dst),
+        (4, 4) => L::hor::<S, 4, 9, 4, AVG>(src, dst),
+        (17, 16) => L::hor::<S, 17, 22, 16, AVG>(src, dst),
+        (17, 8) => L::hor::<S, 17, 22, 8, AVG>(src, dst),
+        (9, 16) => L::hor::<S, 9, 14, 16, AVG>(src, dst),
+        (9, 8) => L::hor::<S, 9, 14, 8, AVG>(src, dst),
+        _ => {
+            note_runtime_shape();
+            L::hor_any::<S, AVG>(src, dst, width, height)
+        }
+    }
+}
+
+/// `McHorVer02` and its `_AVERAGE_WITH_` forms — `AVG` as [`hor_shaped`]'s, for
+/// quarter-pel `(0, 1)` and `(0, 3)`.
+#[inline(always)]
+pub(crate) fn ver_shaped<L: McLeaves, S: RefSamples + Copy, const AVG: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    match (width, height) {
+        (16, 16) => L::ver::<S, 16, 16, 21, AVG>(src, dst),
+        (16, 8) => L::ver::<S, 16, 8, 13, AVG>(src, dst),
+        (8, 16) => L::ver::<S, 8, 16, 21, AVG>(src, dst),
+        (8, 8) => L::ver::<S, 8, 8, 13, AVG>(src, dst),
+        (8, 4) => L::ver::<S, 8, 4, 9, AVG>(src, dst),
+        (4, 8) => L::ver::<S, 4, 8, 13, AVG>(src, dst),
+        (4, 4) => L::ver::<S, 4, 4, 9, AVG>(src, dst),
+        (16, 17) => L::ver::<S, 16, 17, 22, AVG>(src, dst),
+        (16, 9) => L::ver::<S, 16, 9, 14, AVG>(src, dst),
+        (8, 17) => L::ver::<S, 8, 17, 22, AVG>(src, dst),
+        (8, 9) => L::ver::<S, 8, 9, 14, AVG>(src, dst),
+        _ => {
+            note_runtime_shape();
+            L::ver_any::<S, AVG>(src, dst, width, height)
+        }
+    }
+}
+
+/// `McHorVer22`, dispatched onto a const shape.
+#[inline(always)]
+pub(crate) fn cen_shaped<L: McLeaves, S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    match (width, height) {
+        (16, 16) => L::cen::<S, 16, 21, 16, 21>(src, dst),
+        (16, 8) => L::cen::<S, 16, 21, 8, 13>(src, dst),
+        (8, 16) => L::cen::<S, 8, 13, 16, 21>(src, dst),
+        (8, 8) => L::cen::<S, 8, 13, 8, 13>(src, dst),
+        (8, 4) => L::cen::<S, 8, 13, 4, 9>(src, dst),
+        (4, 8) => L::cen::<S, 4, 9, 8, 13>(src, dst),
+        (4, 4) => L::cen::<S, 4, 9, 4, 9>(src, dst),
+        (17, 17) => L::cen::<S, 17, 22, 17, 22>(src, dst),
+        (17, 9) => L::cen::<S, 17, 22, 9, 14>(src, dst),
+        (9, 17) => L::cen::<S, 9, 14, 17, 22>(src, dst),
+        (9, 9) => L::cen::<S, 9, 14, 9, 14>(src, dst),
+        _ => {
+            note_runtime_shape();
+            L::cen_any::<S>(src, dst, width, height)
+        }
+    }
+}
+
+/// `McSampleAvg`, dispatched onto a const shape. The refinement averages the block
+/// sizes it searches; the composites average the luma partitions.
+#[inline(always)]
+pub(crate) fn avg_shaped<L: McLeaves, A: RefSamples, B: RefSamples>(
+    dst: &mut PlaneCursorMut<'_>,
+    a: &A,
+    b: &B,
+    width: usize,
+    height: usize,
+) {
+    match (width, height) {
+        (16, 16) => L::avg::<A, B, 16, 16>(dst, a, b),
+        (16, 8) => L::avg::<A, B, 16, 8>(dst, a, b),
+        (8, 16) => L::avg::<A, B, 8, 16>(dst, a, b),
+        (8, 8) => L::avg::<A, B, 8, 8>(dst, a, b),
+        (8, 4) => L::avg::<A, B, 8, 4>(dst, a, b),
+        (4, 8) => L::avg::<A, B, 4, 8>(dst, a, b),
+        (4, 4) => L::avg::<A, B, 4, 4>(dst, a, b),
+        _ => {
+            note_runtime_shape();
+            L::avg_any::<A, B>(dst, a, b, width, height)
+        }
+    }
+}
+
+/// `McChromaWithFragMv`, dispatched onto a const shape. The bilinear filter reads
+/// one extra column and one extra row, so the spans are `W + 1` by `H + 1`.
+#[inline(always)]
+pub(crate) fn chroma_shaped<L: McLeaves, S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    w: &[u8; 4],
+    width: usize,
+    height: usize,
+) {
+    match (width, height) {
+        (8, 8) => L::chroma::<S, 8, 9, 8, 9>(src, dst, w),
+        (8, 4) => L::chroma::<S, 8, 9, 4, 5>(src, dst, w),
+        (4, 8) => L::chroma::<S, 4, 5, 8, 9>(src, dst, w),
+        (4, 4) => L::chroma::<S, 4, 5, 4, 5>(src, dst, w),
+        (4, 2) => L::chroma::<S, 4, 5, 2, 3>(src, dst, w),
+        (2, 4) => L::chroma::<S, 2, 3, 4, 5>(src, dst, w),
+        (2, 2) => L::chroma::<S, 2, 3, 2, 3>(src, dst, w),
+        _ => {
+            note_runtime_shape();
+            L::chroma_any::<S>(src, dst, w, width, height)
+        }
+    }
+}
+
+// ============================================================================
+// Kernels
+// ============================================================================
+
 /// C++: `PixelAvg_c` — the rounded average of two surfaces, `SMcFunc::pfSampleAveraging`.
 #[inline(always)]
 pub fn pixel_avg_c<A: RefSamples, B: RefSamples>(
@@ -327,14 +546,7 @@ pub fn pixel_avg_c<A: RefSamples, B: RefSamples>(
     width: usize,
     height: usize,
 ) {
-    for dy in 0..height as isize {
-        let ra = a.row_view(dy, 0, width);
-        let rb = b.row_view(dy, 0, width);
-        let out = dst.row_mut(dy, 0, width);
-        for j in 0..width {
-            out[j] = (((ra[j] as u32) + (rb[j] as u32) + 1) >> 1) as u8;
-        }
-    }
+    avg_shaped::<ScalarLeaves, A, B>(dst, a, b, width, height)
 }
 
 /// Rounded average of two surfaces, dispatching to SSE2 if available.
@@ -359,13 +571,7 @@ pub fn mc_hor_ver20_c<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    for dy in 0..height as isize {
-        let row = src.row_view(dy, -2, width + 5);
-        let out = dst.row_mut(dy, 0, width);
-        for (o, w) in out.iter_mut().zip(row.windows(6)) {
-            *o = WelsClip1((filter_input_8bit(w.try_into().unwrap()) + 16) >> 5);
-        }
-    }
+    hor_shaped::<ScalarLeaves, S, 0>(src, dst, width, height)
 }
 
 /// Horizontal half-pel filter, dispatching to SSE2 if available.
@@ -389,29 +595,7 @@ pub fn mc_hor_ver02_c<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
-        src.row_view(-2, 0, width),
-        src.row_view(-1, 0, width),
-        src.row_view(0, 0, width),
-        src.row_view(1, 0, width),
-        src.row_view(2, 0, width),
-    );
-    for dy in 0..height as isize {
-        let r5 = src.row_view(dy + 3, 0, width);
-        let out = dst.row_mut(dy, 0, width);
-        for ((((((o, &a), &b), &c), &d), &e), &f) in out
-            .iter_mut()
-            .zip(r0.iter())
-            .zip(r1.iter())
-            .zip(r2.iter())
-            .zip(r3.iter())
-            .zip(r4.iter())
-            .zip(r5.iter())
-        {
-            *o = WelsClip1((filter_input_8bit(&[a, b, c, d, e, f]) + 16) >> 5);
-        }
-        (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
-    }
+    ver_shaped::<ScalarLeaves, S, 0>(src, dst, width, height)
 }
 
 /// Vertical half-pel filter, dispatching to SSE2 if available.
@@ -436,34 +620,7 @@ pub fn mc_hor_ver22_c<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    let mut iTmp = [0i16; 17 + 5];
-    let n = width + 5;
-    let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
-        src.row_view(-2, -2, n),
-        src.row_view(-1, -2, n),
-        src.row_view(0, -2, n),
-        src.row_view(1, -2, n),
-        src.row_view(2, -2, n),
-    );
-    for dy in 0..height as isize {
-        let r5 = src.row_view(dy + 3, -2, n);
-        for ((((((t, &a), &b), &c), &d), &e), &f) in iTmp[..n]
-            .iter_mut()
-            .zip(r0.iter())
-            .zip(r1.iter())
-            .zip(r2.iter())
-            .zip(r3.iter())
-            .zip(r4.iter())
-            .zip(r5.iter())
-        {
-            *t = filter_input_8bit(&[a, b, c, d, e, f]) as i16;
-        }
-        (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
-        let out = dst.row_mut(dy, 0, width);
-        for (o, w) in out.iter_mut().zip(iTmp[..n].windows(6)) {
-            *o = WelsClip1((hor_filter_input_16bit(w.try_into().unwrap()) + 512) >> 10);
-        }
-    }
+    cen_shaped::<ScalarLeaves, S>(src, dst, width, height)
 }
 
 /// Center half-pel filter, dispatching to SSE2 if available.
@@ -484,38 +641,341 @@ fn scratch() -> [u8; 256] {
     [0u8; 256]
 }
 
-
 // ============================================================================
 // The quarter-pel composites, once
 // ============================================================================
 
-/// **The three half-pel leaves and the averaging step, as one substitutable set.**
+/// **The four half-pel leaves and the averaging step, as one substitutable set.**
 ///
 /// Twelve of the fifteen `McHorVerXY` kernels are not filters at all: they are
 /// compositions of `McHorVer20` (horizontal), `McHorVer02` (vertical),
 /// `McHorVer22` (centre) and `McSampleAvg`, at fixed offsets the standard fixes.
-/// Only those four do arithmetic, and only they have an SSE2 form worth writing.
+/// Only those four do arithmetic, and only they have an SSE2 form worth writing;
+/// `McChromaWithFragMv`'s bilinear filter is here too, because it wants the same
+/// const-shape treatment and nothing else about it is shared.
 ///
 /// The scalar and SSE2 chains share these bodies and differ only in `L`, so they cannot
 /// drift apart. The trade is that a structural mistake in a composite can no longer be
 /// caught by comparing two spellings, because there is one; the leaves stay
 /// individually tested, and `mc_luma_parity` compares the two instantiations across all
 /// sixteen quarter-pel positions.
+///
+/// # The const parameters
+///
+/// Every method takes the block's `W`x`H` **and the reach its reads need**, so the
+/// kernel can cut one [`RefSamples::span`] per operand instead of a `row_view` per
+/// row. `SW` is the row length the horizontal six-tap reads (`W + 5`) or the bilinear
+/// chroma reads (`W + 1`); `SH` is the row count the vertical six-tap reads (`H + 5`)
+/// or chroma's (`H + 1`). They are separate parameters because stable Rust has no
+/// arithmetic in a const-argument position — see the shape tables above.
+///
+/// `AVG` on [`hor`](Self::hor) and [`ver`](Self::ver) is 0 for the plain half-pel
+/// filter, or the tap the result is averaged with: 2 for the `_AVERAGE_WITH_0`
+/// quarter-pel kernels and 3 for `_AVERAGE_WITH_1`. Only the sets that fuse those
+/// forms instantiate it non-zero.
+///
+/// Each method has an `_any` twin taking the shape at run time. Those exist so that a
+/// shape the tables above do not carry is **slow rather than a panic** — the decoder's
+/// `SMcFunc` slots hold these kernels — and `mc_shapes_all_reach_a_const_arm` proves
+/// nothing the codec calls reaches one.
 pub trait McLeaves {
-    /// `McHorVer20` — the horizontal half-pel filter.
-    fn hor<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
-    /// `McHorVer02` — the vertical half-pel filter.
-    fn ver<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
+    /// **Whether this set fuses the `_AVERAGE_WITH_` quarter-pel kernels into the two
+    /// direct filters**, as `McLuma_AArch64_neon` does — `McHorVer10/30/01/03` are
+    /// the horizontal or vertical filter with a rounded average against one of its
+    /// own taps, and the asm has them as single kernels rather than a filter into
+    /// scratch and an averaging pass over it.
+    ///
+    /// The fused form is byte-identical to the composite it replaces — the same
+    /// rounded average of the same two values — and `mc_luma_parity` says so for all
+    /// sixteen positions in every set. Only the sets that have written the fused arms
+    /// turn this on; the rest take the composites, and their `AVG != 0` instantiations
+    /// are then never generated.
+    const FUSED_QPEL: bool = false;
+
+    /// `McHorVer20` — the horizontal half-pel filter. Reads `SW = W + 5` per row.
+    fn hor<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const AVG: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+    );
+    fn hor_any<S: RefSamples + Copy, const AVG: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+        width: usize,
+        height: usize,
+    );
+    /// `McHorVer02` — the vertical half-pel filter. Reads `SH = H + 5` rows.
+    fn ver<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+    );
+    fn ver_any<S: RefSamples + Copy, const AVG: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+        width: usize,
+        height: usize,
+    );
     /// `McHorVer22` — the centre filter, vertical into 16-bit then horizontal.
-    fn cen<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
+    fn cen<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+    );
+    fn cen_any<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
     /// `McSampleAvg` — the rounded two-source average.
-    fn avg<A: RefSamples, B: RefSamples>(
+    fn avg<A: RefSamples, B: RefSamples, const W: usize, const H: usize>(
+        dst: &mut PlaneCursorMut<'_>,
+        a: &A,
+        b: &B,
+    );
+    fn avg_any<A: RefSamples, B: RefSamples>(
         dst: &mut PlaneCursorMut<'_>,
         a: &A,
         b: &B,
         width: usize,
         height: usize,
     );
+    /// `McChromaWithFragMv` — the bilinear filter by the four weights `g_kuiABCD`
+    /// selects. Reads `SW = W + 1` per row over `SH = H + 1` rows.
+    fn chroma<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+        w: &[u8; 4],
+    );
+    fn chroma_any<S: RefSamples + Copy>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+        w: &[u8; 4],
+        width: usize,
+        height: usize,
+    );
+}
+
+// ----------------------------------------------------------------------------
+// The scalar leaf bodies
+// ----------------------------------------------------------------------------
+
+/// `McHorVer20_c` over one const-shape block: **one span for the source, one for the
+/// destination**, and `W` six-tap windows per row.
+#[inline(always)]
+fn hor_block_c<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const AVG: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let s = src.span::<SW, H>(0, -2);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    for y in 0..H {
+        let row = s.row::<SW>(y, 0);
+        let out = d.row_mut::<W>(y, 0);
+        for (o, w) in out.iter_mut().zip(row.windows(6)) {
+            let w: &[u8; 6] = w.try_into().expect("six taps");
+            let mut v = WelsClip1((filter_input_8bit(w) + 16) >> 5);
+            if AVG != 0 {
+                v = ((v as u32 + w[AVG] as u32 + 1) >> 1) as u8;
+            }
+            *o = v;
+        }
+    }
+}
+
+/// The run-time-shape twin, sample by sample through [`RefSamples::at`] — cold, and
+/// spelled for simplicity rather than speed. See [`McLeaves`].
+fn hor_any_c<S: RefSamples + Copy, const AVG: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    for dy in 0..height as isize {
+        let out = dst.row_mut(dy, 0, width);
+        for (x, o) in out.iter_mut().enumerate() {
+            let w: [u8; 6] = std::array::from_fn(|k| src.at(x as isize + k as isize - 2, dy));
+            let mut v = WelsClip1((filter_input_8bit(&w) + 16) >> 5);
+            if AVG != 0 {
+                v = ((v as u32 + w[AVG] as u32 + 1) >> 1) as u8;
+            }
+            *o = v;
+        }
+    }
+}
+
+/// `McHorVer02_c` over one const-shape block: one `SH`-row span, and a six-row
+/// window sliding down it.
+#[inline(always)]
+fn ver_block_c<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let s = src.span::<W, SH>(-2, 0);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
+        s.row::<W>(0, 0),
+        s.row::<W>(1, 0),
+        s.row::<W>(2, 0),
+        s.row::<W>(3, 0),
+        s.row::<W>(4, 0),
+    );
+    for y in 0..H {
+        let r5 = s.row::<W>(y + 5, 0);
+        let out = d.row_mut::<W>(y, 0);
+        for j in 0..W {
+            let w = [r0[j], r1[j], r2[j], r3[j], r4[j], r5[j]];
+            let mut v = WelsClip1((filter_input_8bit(&w) + 16) >> 5);
+            if AVG != 0 {
+                v = ((v as u32 + w[AVG] as u32 + 1) >> 1) as u8;
+            }
+            out[j] = v;
+        }
+        (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
+    }
+}
+
+/// The run-time-shape twin; see [`hor_any_c`].
+fn ver_any_c<S: RefSamples + Copy, const AVG: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    for dy in 0..height as isize {
+        let out = dst.row_mut(dy, 0, width);
+        for (x, o) in out.iter_mut().enumerate() {
+            let w: [u8; 6] = std::array::from_fn(|k| src.at(x as isize, dy + k as isize - 2));
+            let mut v = WelsClip1((filter_input_8bit(&w) + 16) >> 5);
+            if AVG != 0 {
+                v = ((v as u32 + w[AVG] as u32 + 1) >> 1) as u8;
+            }
+            *o = v;
+        }
+    }
+}
+
+/// `McHorVer22_c` over one const-shape block. `iTmp` is the C++'s `int16_t[17 + 5]`,
+/// which is what bounds `SW` at 22 and so the width at 17.
+#[inline(always)]
+fn cen_block_c<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let s = src.span::<SW, SH>(-2, -2);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    let mut iTmp = [0i16; 17 + 5];
+    let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
+        s.row::<SW>(0, 0),
+        s.row::<SW>(1, 0),
+        s.row::<SW>(2, 0),
+        s.row::<SW>(3, 0),
+        s.row::<SW>(4, 0),
+    );
+    for y in 0..H {
+        let r5 = s.row::<SW>(y + 5, 0);
+        for (j, t) in iTmp[..SW].iter_mut().enumerate() {
+            *t = filter_input_8bit(&[r0[j], r1[j], r2[j], r3[j], r4[j], r5[j]]) as i16;
+        }
+        (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
+        let out = d.row_mut::<W>(y, 0);
+        for (o, w) in out.iter_mut().zip(iTmp[..SW].windows(6)) {
+            *o = WelsClip1((hor_filter_input_16bit(w.try_into().expect("six taps")) + 512) >> 10);
+        }
+    }
+}
+
+/// The run-time-shape twin; see [`hor_any_c`].
+fn cen_any_c<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+    let n = width + 5;
+    let mut iTmp = [0i16; 17 + 5];
+    for dy in 0..height as isize {
+        for (j, t) in iTmp[..n].iter_mut().enumerate() {
+            let x = j as isize - 2;
+            let w: [u8; 6] = std::array::from_fn(|k| src.at(x, dy + k as isize - 2));
+            *t = filter_input_8bit(&w) as i16;
+        }
+        let out = dst.row_mut(dy, 0, width);
+        for (o, w) in out.iter_mut().zip(iTmp[..n].windows(6)) {
+            *o = WelsClip1((hor_filter_input_16bit(w.try_into().expect("six taps")) + 512) >> 10);
+        }
+    }
+}
+
+/// `PixelAvg_c` over one const-shape block: one span per operand and one per row.
+#[inline(always)]
+fn avg_block_c<A: RefSamples, B: RefSamples, const W: usize, const H: usize>(
+    dst: &mut PlaneCursorMut<'_>,
+    a: &A,
+    b: &B,
+) {
+    let sa = a.span::<W, H>(0, 0);
+    let sb = b.span::<W, H>(0, 0);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    for y in 0..H {
+        let (ra, rb) = (sa.row::<W>(y, 0), sb.row::<W>(y, 0));
+        let out = d.row_mut::<W>(y, 0);
+        for j in 0..W {
+            out[j] = (((ra[j] as u32) + (rb[j] as u32) + 1) >> 1) as u8;
+        }
+    }
+}
+
+/// The run-time-shape twin; see [`hor_any_c`].
+fn avg_any_c<A: RefSamples, B: RefSamples>(
+    dst: &mut PlaneCursorMut<'_>,
+    a: &A,
+    b: &B,
+    width: usize,
+    height: usize,
+) {
+    for dy in 0..height as isize {
+        let out = dst.row_mut(dy, 0, width);
+        for (j, o) in out.iter_mut().enumerate() {
+            *o = (((a.at(j as isize, dy) as u32) + (b.at(j as isize, dy) as u32) + 1) >> 1) as u8;
+        }
+    }
+}
+
+/// `McChromaWithFragMv_c` over one const-shape block: the `W + 1` by `H + 1` window
+/// the bilinear filter reads, cut once.
+#[inline(always)]
+fn chroma_block_c<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    w: &[u8; 4],
+) {
+    let (iA, iB, iC, iD) = (w[0] as i32, w[1] as i32, w[2] as i32, w[3] as i32);
+    let s = src.span::<SW, SH>(0, 0);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    for y in 0..H {
+        let (r0, r1) = (s.row::<SW>(y, 0), s.row::<SW>(y + 1, 0));
+        let out = d.row_mut::<W>(y, 0);
+        for j in 0..W {
+            out[j] = ((iA * (r0[j] as i32)
+                + iB * (r0[j + 1] as i32)
+                + iC * (r1[j] as i32)
+                + iD * (r1[j + 1] as i32)
+                + 32)
+                >> 6) as u8;
+        }
+    }
+}
+
+/// The run-time-shape twin; see [`hor_any_c`].
+fn chroma_any_c<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    w: &[u8; 4],
+    width: usize,
+    height: usize,
+) {
+    let (iA, iB, iC, iD) = (w[0] as i32, w[1] as i32, w[2] as i32, w[3] as i32);
+    for dy in 0..height as isize {
+        let out = dst.row_mut(dy, 0, width);
+        for (j, o) in out.iter_mut().enumerate() {
+            let x = j as isize;
+            *o = ((iA * (src.at(x, dy) as i32)
+                + iB * (src.at(x + 1, dy) as i32)
+                + iC * (src.at(x, dy + 1) as i32)
+                + iD * (src.at(x + 1, dy + 1) as i32)
+                + 32)
+                >> 6) as u8;
+        }
+    }
 }
 
 /// The scalar leaf set. Every method is a `_c` kernel, so a composite instantiated
@@ -524,32 +984,386 @@ pub struct ScalarLeaves;
 
 impl McLeaves for ScalarLeaves {
     #[inline(always)]
-    fn hor<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
-        mc_hor_ver20_c(src, dst, width, height)
+    fn hor<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const AVG: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+    ) {
+        hor_block_c::<S, W, SW, H, AVG>(src, dst)
     }
     #[inline(always)]
-    fn ver<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
-        mc_hor_ver02_c(src, dst, width, height)
+    fn hor_any<S: RefSamples + Copy, const AVG: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+        width: usize,
+        height: usize,
+    ) {
+        hor_any_c::<S, AVG>(src, dst, width, height)
     }
     #[inline(always)]
-    fn cen<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
-        mc_hor_ver22_c(src, dst, width, height)
+    fn ver<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+    ) {
+        ver_block_c::<S, W, H, SH, AVG>(src, dst)
     }
     #[inline(always)]
-    fn avg<A: RefSamples, B: RefSamples>(
+    fn ver_any<S: RefSamples + Copy, const AVG: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+        width: usize,
+        height: usize,
+    ) {
+        ver_any_c::<S, AVG>(src, dst, width, height)
+    }
+    #[inline(always)]
+    fn cen<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+    ) {
+        cen_block_c::<S, W, SW, H, SH>(src, dst)
+    }
+    #[inline(always)]
+    fn cen_any<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+        cen_any_c::<S>(src, dst, width, height)
+    }
+    #[inline(always)]
+    fn avg<A: RefSamples, B: RefSamples, const W: usize, const H: usize>(
+        dst: &mut PlaneCursorMut<'_>,
+        a: &A,
+        b: &B,
+    ) {
+        avg_block_c::<A, B, W, H>(dst, a, b)
+    }
+    #[inline(always)]
+    fn avg_any<A: RefSamples, B: RefSamples>(
         dst: &mut PlaneCursorMut<'_>,
         a: &A,
         b: &B,
         width: usize,
         height: usize,
     ) {
-        pixel_avg_c(dst, a, b, width, height)
+        avg_any_c::<A, B>(dst, a, b, width, height)
+    }
+    #[inline(always)]
+    fn chroma<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+        w: &[u8; 4],
+    ) {
+        chroma_block_c::<S, W, SW, H, SH>(src, dst, w)
+    }
+    #[inline(always)]
+    fn chroma_any<S: RefSamples + Copy>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+        w: &[u8; 4],
+        width: usize,
+        height: usize,
+    ) {
+        chroma_any_c::<S>(src, dst, w, width, height)
+    }
+}
+
+// ----------------------------------------------------------------------------
+// The twelve composites, at a const shape
+// ----------------------------------------------------------------------------
+//
+// Each is `McHorVerXY_c`'s body with the leaf shapes fixed by the caller, so the
+// leaf's own `(width, height)` match is gone: `mc_luma_with` dispatches the shape
+// once and everything below it is const. The intermediates stay the C++'s
+// `uint8_t uiTmp[256]` at stride 16, which is what bounds a luma MC block at 16x16
+// and why `mc_luma_with`'s const table is the luma partitions and nothing wider.
+
+/// C++: `McHorVer01_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver01_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut tmp = scratch();
+    L::ver::<_, W, H, SH, 0>(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16));
+    L::avg::<_, _, W, H>(dst, src, &PlaneCursor::new(&tmp, 0, 16));
+}
+
+/// C++: `McHorVer03_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver03_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut tmp = scratch();
+    L::ver::<_, W, H, SH, 0>(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16));
+    L::avg::<_, _, W, H>(dst, &src.advance(0, 1), &PlaneCursor::new(&tmp, 0, 16));
+}
+
+/// C++: `McHorVer10_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver10_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut tmp = scratch();
+    L::hor::<_, W, SW, H, 0>(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16));
+    L::avg::<_, _, W, H>(dst, src, &PlaneCursor::new(&tmp, 0, 16));
+}
+
+/// C++: `McHorVer11_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver11_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut hor = scratch();
+    let mut ver = scratch();
+    L::hor::<_, W, SW, H, 0>(src, &mut PlaneCursorMut::new(&mut hor, 0, 16));
+    L::ver::<_, W, H, SH, 0>(src, &mut PlaneCursorMut::new(&mut ver, 0, 16));
+    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ver, 0, 16));
+}
+
+/// C++: `McHorVer12_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver12_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut ver = scratch();
+    let mut ctr = scratch();
+    L::ver::<_, W, H, SH, 0>(src, &mut PlaneCursorMut::new(&mut ver, 0, 16));
+    L::cen::<_, W, SW, H, SH>(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16));
+    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&ver, 0, 16), &PlaneCursor::new(&ctr, 0, 16));
+}
+
+/// C++: `McHorVer13_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver13_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut hor = scratch();
+    let mut ver = scratch();
+    L::hor::<_, W, SW, H, 0>(&src.advance(0, 1), &mut PlaneCursorMut::new(&mut hor, 0, 16));
+    L::ver::<_, W, H, SH, 0>(src, &mut PlaneCursorMut::new(&mut ver, 0, 16));
+    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ver, 0, 16));
+}
+
+/// C++: `McHorVer21_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver21_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut hor = scratch();
+    let mut ctr = scratch();
+    L::hor::<_, W, SW, H, 0>(src, &mut PlaneCursorMut::new(&mut hor, 0, 16));
+    L::cen::<_, W, SW, H, SH>(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16));
+    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ctr, 0, 16));
+}
+
+/// C++: `McHorVer23_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver23_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut hor = scratch();
+    let mut ctr = scratch();
+    L::hor::<_, W, SW, H, 0>(&src.advance(0, 1), &mut PlaneCursorMut::new(&mut hor, 0, 16));
+    L::cen::<_, W, SW, H, SH>(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16));
+    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ctr, 0, 16));
+}
+
+/// C++: `McHorVer30_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver30_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut hor = scratch();
+    L::hor::<_, W, SW, H, 0>(src, &mut PlaneCursorMut::new(&mut hor, 0, 16));
+    L::avg::<_, _, W, H>(dst, &src.advance(1, 0), &PlaneCursor::new(&hor, 0, 16));
+}
+
+/// C++: `McHorVer31_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver31_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut hor = scratch();
+    let mut ver = scratch();
+    L::hor::<_, W, SW, H, 0>(src, &mut PlaneCursorMut::new(&mut hor, 0, 16));
+    L::ver::<_, W, H, SH, 0>(&src.advance(1, 0), &mut PlaneCursorMut::new(&mut ver, 0, 16));
+    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ver, 0, 16));
+}
+
+/// C++: `McHorVer32_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver32_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut ver = scratch();
+    let mut ctr = scratch();
+    L::ver::<_, W, H, SH, 0>(&src.advance(1, 0), &mut PlaneCursorMut::new(&mut ver, 0, 16));
+    L::cen::<_, W, SW, H, SH>(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16));
+    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&ver, 0, 16), &PlaneCursor::new(&ctr, 0, 16));
+}
+
+/// C++: `McHorVer33_c` — the composite, over `L`'s leaves.
+#[inline(never)]
+fn mc_hor_ver33_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let mut hor = scratch();
+    let mut ver = scratch();
+    L::hor::<_, W, SW, H, 0>(&src.advance(0, 1), &mut PlaneCursorMut::new(&mut hor, 0, 16));
+    L::ver::<_, W, H, SH, 0>(&src.advance(1, 0), &mut PlaneCursorMut::new(&mut ver, 0, 16));
+    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ver, 0, 16));
+}
+
+/// `McLuma_c`'s `switch` on `(mv_x & 3, mv_y & 3)` at a shape fixed by the caller.
+#[inline(always)]
+fn luma_shaped<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    mv_x: i16,
+    mv_y: i16,
+) {
+    match ((mv_x & 0x03) as u8, (mv_y & 0x03) as u8) {
+        (0, 0) => copy_block::<W, H, S>(src, dst),
+        // The four `_AVERAGE_WITH_` positions, fused where the set has them; see
+        // [`McLeaves::FUSED_QPEL`].
+        (0, 1) if L::FUSED_QPEL => L::ver::<_, W, H, SH, 2>(src, dst),
+        (0, 3) if L::FUSED_QPEL => L::ver::<_, W, H, SH, 3>(src, dst),
+        (1, 0) if L::FUSED_QPEL => L::hor::<_, W, SW, H, 2>(src, dst),
+        (3, 0) if L::FUSED_QPEL => L::hor::<_, W, SW, H, 3>(src, dst),
+        (0, 1) => mc_hor_ver01_with::<L, S, W, SW, H, SH>(src, dst),
+        (0, 2) => L::ver::<_, W, H, SH, 0>(src, dst),
+        (0, 3) => mc_hor_ver03_with::<L, S, W, SW, H, SH>(src, dst),
+        (1, 0) => mc_hor_ver10_with::<L, S, W, SW, H, SH>(src, dst),
+        (1, 1) => mc_hor_ver11_with::<L, S, W, SW, H, SH>(src, dst),
+        (1, 2) => mc_hor_ver12_with::<L, S, W, SW, H, SH>(src, dst),
+        (1, 3) => mc_hor_ver13_with::<L, S, W, SW, H, SH>(src, dst),
+        (2, 0) => L::hor::<_, W, SW, H, 0>(src, dst),
+        (2, 1) => mc_hor_ver21_with::<L, S, W, SW, H, SH>(src, dst),
+        (2, 2) => L::cen::<_, W, SW, H, SH>(src, dst),
+        (2, 3) => mc_hor_ver23_with::<L, S, W, SW, H, SH>(src, dst),
+        (3, 0) => mc_hor_ver30_with::<L, S, W, SW, H, SH>(src, dst),
+        (3, 1) => mc_hor_ver31_with::<L, S, W, SW, H, SH>(src, dst),
+        (3, 2) => mc_hor_ver32_with::<L, S, W, SW, H, SH>(src, dst),
+        _ => mc_hor_ver33_with::<L, S, W, SW, H, SH>(src, dst),
+    }
+}
+
+/// The run-time-shape twin of [`luma_shaped`] — cold, for a shape
+/// [`SHAPES_LUMA`] does not carry; see [`McLeaves`]. The same sixteen arms over the
+/// `_any` leaves and the same 16-stride scratch, so it is correct wherever the const
+/// path is and slow everywhere.
+fn luma_any<L: McLeaves, S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    mv_x: i16,
+    mv_y: i16,
+    w: usize,
+    h: usize,
+) {
+    let (mut p, mut q) = (scratch(), scratch());
+    let (qx, qy) = ((mv_x & 0x03) as u8, (mv_y & 0x03) as u8);
+    // The leaf that fills a scratch plane, and the cursor to read it back through.
+    macro_rules! hor_to {
+        ($t:expr, $s:expr) => {
+            L::hor_any::<_, 0>(&$s, &mut PlaneCursorMut::new(&mut $t, 0, 16), w, h)
+        };
+    }
+    macro_rules! ver_to {
+        ($t:expr, $s:expr) => {
+            L::ver_any::<_, 0>(&$s, &mut PlaneCursorMut::new(&mut $t, 0, 16), w, h)
+        };
+    }
+    macro_rules! cen_to {
+        ($t:expr, $s:expr) => {
+            L::cen_any(&$s, &mut PlaneCursorMut::new(&mut $t, 0, 16), w, h)
+        };
+    }
+    macro_rules! plane {
+        ($t:expr) => {
+            PlaneCursor::new(&$t, 0, 16)
+        };
+    }
+    match (qx, qy) {
+        (0, 0) => mc_copy(src, dst, w, h),
+        (0, 1) if L::FUSED_QPEL => L::ver_any::<_, 2>(src, dst, w, h),
+        (0, 3) if L::FUSED_QPEL => L::ver_any::<_, 3>(src, dst, w, h),
+        (1, 0) if L::FUSED_QPEL => L::hor_any::<_, 2>(src, dst, w, h),
+        (3, 0) if L::FUSED_QPEL => L::hor_any::<_, 3>(src, dst, w, h),
+        (0, 1) => {
+            ver_to!(p, *src);
+            L::avg_any(dst, src, &plane!(p), w, h)
+        }
+        (0, 2) => L::ver_any::<_, 0>(src, dst, w, h),
+        (0, 3) => {
+            ver_to!(p, *src);
+            L::avg_any(dst, &src.advance(0, 1), &plane!(p), w, h)
+        }
+        (1, 0) => {
+            hor_to!(p, *src);
+            L::avg_any(dst, src, &plane!(p), w, h)
+        }
+        (1, 1) => {
+            hor_to!(p, *src);
+            ver_to!(q, *src);
+            L::avg_any(dst, &plane!(p), &plane!(q), w, h)
+        }
+        (1, 2) => {
+            ver_to!(p, *src);
+            cen_to!(q, *src);
+            L::avg_any(dst, &plane!(p), &plane!(q), w, h)
+        }
+        (1, 3) => {
+            hor_to!(p, src.advance(0, 1));
+            ver_to!(q, *src);
+            L::avg_any(dst, &plane!(p), &plane!(q), w, h)
+        }
+        (2, 0) => L::hor_any::<_, 0>(src, dst, w, h),
+        (2, 1) => {
+            hor_to!(p, *src);
+            cen_to!(q, *src);
+            L::avg_any(dst, &plane!(p), &plane!(q), w, h)
+        }
+        (2, 2) => L::cen_any(src, dst, w, h),
+        (2, 3) => {
+            hor_to!(p, src.advance(0, 1));
+            cen_to!(q, *src);
+            L::avg_any(dst, &plane!(p), &plane!(q), w, h)
+        }
+        (3, 0) => {
+            hor_to!(p, *src);
+            L::avg_any(dst, &src.advance(1, 0), &plane!(p), w, h)
+        }
+        (3, 1) => {
+            hor_to!(p, *src);
+            ver_to!(q, src.advance(1, 0));
+            L::avg_any(dst, &plane!(p), &plane!(q), w, h)
+        }
+        (3, 2) => {
+            ver_to!(p, src.advance(1, 0));
+            cen_to!(q, *src);
+            L::avg_any(dst, &plane!(p), &plane!(q), w, h)
+        }
+        _ => {
+            hor_to!(p, src.advance(0, 1));
+            ver_to!(q, src.advance(1, 0));
+            L::avg_any(dst, &plane!(p), &plane!(q), w, h)
+        }
     }
 }
 
 /// `mc_luma`'s fan-out, over whichever leaf set `L` names.
 ///
-/// C++: `McLuma_c`'s `switch` on `(mv_x & 3, mv_y & 3)`.
+/// C++: `McLuma_c`'s `switch` on `(mv_x & 3, mv_y & 3)`, with the block shape
+/// resolved to consts **once** — see the shape tables above. Every arm below is a
+/// luma partition, which is also what bounds the composites' 16-stride scratch.
 pub fn mc_luma_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -558,277 +1372,20 @@ pub fn mc_luma_with<L: McLeaves, S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    match ((mv_x & 0x03) as u8, (mv_y & 0x03) as u8) {
-        (0, 0) => mc_copy(src, dst, width, height),
-        (0, 1) => mc_hor_ver01_with::<L, S>(src, dst, width, height),
-        (0, 2) => L::ver(src, dst, width, height),
-        (0, 3) => mc_hor_ver03_with::<L, S>(src, dst, width, height),
-        (1, 0) => mc_hor_ver10_with::<L, S>(src, dst, width, height),
-        (1, 1) => mc_hor_ver11_with::<L, S>(src, dst, width, height),
-        (1, 2) => mc_hor_ver12_with::<L, S>(src, dst, width, height),
-        (1, 3) => mc_hor_ver13_with::<L, S>(src, dst, width, height),
-        (2, 0) => L::hor(src, dst, width, height),
-        (2, 1) => mc_hor_ver21_with::<L, S>(src, dst, width, height),
-        (2, 2) => L::cen(src, dst, width, height),
-        (2, 3) => mc_hor_ver23_with::<L, S>(src, dst, width, height),
-        (3, 0) => mc_hor_ver30_with::<L, S>(src, dst, width, height),
-        (3, 1) => mc_hor_ver31_with::<L, S>(src, dst, width, height),
-        (3, 2) => mc_hor_ver32_with::<L, S>(src, dst, width, height),
-        _ => mc_hor_ver33_with::<L, S>(src, dst, width, height),
+    match (width, height) {
+        (16, 16) => luma_shaped::<L, S, 16, 21, 16, 21>(src, dst, mv_x, mv_y),
+        (16, 8) => luma_shaped::<L, S, 16, 21, 8, 13>(src, dst, mv_x, mv_y),
+        (8, 16) => luma_shaped::<L, S, 8, 13, 16, 21>(src, dst, mv_x, mv_y),
+        (8, 8) => luma_shaped::<L, S, 8, 13, 8, 13>(src, dst, mv_x, mv_y),
+        (8, 4) => luma_shaped::<L, S, 8, 13, 4, 9>(src, dst, mv_x, mv_y),
+        (4, 8) => luma_shaped::<L, S, 4, 9, 8, 13>(src, dst, mv_x, mv_y),
+        (4, 4) => luma_shaped::<L, S, 4, 9, 4, 9>(src, dst, mv_x, mv_y),
+        _ => {
+            note_runtime_shape();
+            luma_any::<L, S>(src, dst, mv_x, mv_y, width, height)
+        }
     }
 }
-
-/// C++: `McHorVer01_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver01_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut tmp = scratch();
-    L::ver(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    L::avg(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
-}
-/// C++: `McHorVer03_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver03_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut tmp = scratch();
-    L::ver(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    L::avg(
-        dst,
-        &src.advance(0, 1),
-        &PlaneCursor::new(&tmp, 0, 16),
-        width,
-        height,
-    );
-}
-/// C++: `McHorVer10_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver10_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut tmp = scratch();
-    L::hor(src, &mut PlaneCursorMut::new(&mut tmp, 0, 16), width, height);
-    L::avg(dst, src, &PlaneCursor::new(&tmp, 0, 16), width, height);
-}
-/// C++: `McHorVer11_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver11_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ver = scratch();
-    L::hor(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    L::ver(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    L::avg(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ver, 0, 16),
-        width,
-        height,
-    );
-}
-/// C++: `McHorVer12_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver12_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut ver = scratch();
-    let mut ctr = scratch();
-    L::ver(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    L::cen(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    L::avg(
-        dst,
-        &PlaneCursor::new(&ver, 0, 16),
-        &PlaneCursor::new(&ctr, 0, 16),
-        width,
-        height,
-    );
-}
-/// C++: `McHorVer13_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver13_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ver = scratch();
-    L::hor(
-        &src.advance(0, 1),
-        &mut PlaneCursorMut::new(&mut hor, 0, 16),
-        width,
-        height,
-    );
-    L::ver(src, &mut PlaneCursorMut::new(&mut ver, 0, 16), width, height);
-    L::avg(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ver, 0, 16),
-        width,
-        height,
-    );
-}
-/// C++: `McHorVer21_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver21_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ctr = scratch();
-    L::hor(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    L::cen(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    L::avg(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ctr, 0, 16),
-        width,
-        height,
-    );
-}
-/// C++: `McHorVer23_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver23_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ctr = scratch();
-    L::hor(
-        &src.advance(0, 1),
-        &mut PlaneCursorMut::new(&mut hor, 0, 16),
-        width,
-        height,
-    );
-    L::cen(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    L::avg(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ctr, 0, 16),
-        width,
-        height,
-    );
-}
-/// C++: `McHorVer30_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver30_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    L::hor(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    L::avg(
-        dst,
-        &src.advance(1, 0),
-        &PlaneCursor::new(&hor, 0, 16),
-        width,
-        height,
-    );
-}
-/// C++: `McHorVer31_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver31_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ver = scratch();
-    L::hor(src, &mut PlaneCursorMut::new(&mut hor, 0, 16), width, height);
-    L::ver(
-        &src.advance(1, 0),
-        &mut PlaneCursorMut::new(&mut ver, 0, 16),
-        width,
-        height,
-    );
-    L::avg(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ver, 0, 16),
-        width,
-        height,
-    );
-}
-/// C++: `McHorVer32_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver32_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut ver = scratch();
-    let mut ctr = scratch();
-    L::ver(
-        &src.advance(1, 0),
-        &mut PlaneCursorMut::new(&mut ver, 0, 16),
-        width,
-        height,
-    );
-    L::cen(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16), width, height);
-    L::avg(
-        dst,
-        &PlaneCursor::new(&ver, 0, 16),
-        &PlaneCursor::new(&ctr, 0, 16),
-        width,
-        height,
-    );
-}
-/// C++: `McHorVer33_c` — the composite, over `L`'s leaves.
-#[inline(never)]
-pub fn mc_hor_ver33_with<L: McLeaves, S: RefSamples + Copy>(
-    src: &S,
-    dst: &mut PlaneCursorMut<'_>,
-    width: usize,
-    height: usize,
-) {
-    let mut hor = scratch();
-    let mut ver = scratch();
-    L::hor(
-        &src.advance(0, 1),
-        &mut PlaneCursorMut::new(&mut hor, 0, 16),
-        width,
-        height,
-    );
-    L::ver(
-        &src.advance(1, 0),
-        &mut PlaneCursorMut::new(&mut ver, 0, 16),
-        width,
-        height,
-    );
-    L::avg(
-        dst,
-        &PlaneCursor::new(&hor, 0, 16),
-        &PlaneCursor::new(&ver, 0, 16),
-        width,
-        height,
-    );
-}
-
 
 /// C++: `McLuma_c` — quarter-pel dispatch on the low two bits of each MV component.
 ///
@@ -873,24 +1430,7 @@ pub fn mc_chroma_with_frag_mv<S: RefSamples + Copy>(
         return;
     }
     let pABCD = &g_kuiABCD[(mv_y & 0x07) as usize][(mv_x & 0x07) as usize];
-    let iA = pABCD[0] as i32;
-    let iB = pABCD[1] as i32;
-    let iC = pABCD[2] as i32;
-    let iD = pABCD[3] as i32;
-
-    for dy in 0..height as isize {
-        let r0 = src.row_view(dy, 0, width + 1);
-        let r1 = src.row_view(dy + 1, 0, width + 1);
-        let out = dst.row_mut(dy, 0, width);
-        for j in 0..width {
-            out[j] = ((iA * (r0[j] as i32)
-                + iB * (r0[j + 1] as i32)
-                + iC * (r1[j] as i32)
-                + iD * (r1[j + 1] as i32)
-                + 32)
-                >> 6) as u8;
-        }
-    }
+    chroma_shaped::<ScalarLeaves, S>(src, dst, pABCD, width, height)
 }
 
 /// C++: `McChroma_c` — the copy path when the eighth-pel fraction is zero.
@@ -1500,6 +2040,116 @@ mod tests {
     /// the comparison is meaningful. Not under Miri: it mints a fresh synthetic
     /// address for each reified function pointer, so even two calls of the
     /// *same* installer compare unequal there.
+    /// **Every shape the codec calls motion compensation with reaches a const
+    /// instantiation**, and none of them falls through to a run-time-shape kernel.
+    ///
+    /// The tables at the head of this module are transcribed from the call sites —
+    /// `decoder/decode_slice.rs`'s `BaseMC` for the luma partitions and their chroma
+    /// halves, `encoder/svc_base_layer_md.rs` and `encoder/svc_mode_decision.rs` for
+    /// the skip and partition candidates, and `encoder/md.rs`'s `MeRefineFracPixel`
+    /// for the `kiW + 1` / `kiH + 1` half-pel buffers — and this drives every entry of
+    /// them through the kernel set this build compiled, over **both** operand
+    /// storages: the plain plane cursor the decoder hands them and the shared cell
+    /// view the encoder does.
+    ///
+    /// The fallbacks it proves unreachable still have to exist and still have to be
+    /// correct: the decoder's `SMcFunc` slots hold these kernels, and a `match` that
+    /// panicked on a shape they were handed would be a crash in production. The
+    /// parity tests in each kernel set drive shapes outside the tables for exactly
+    /// that reason.
+    ///
+    /// Runs under Miri, which sees the scalar set — the const-shape kernels here are
+    /// where the new safe accessor use lives, and this is what drives all of them.
+    #[test]
+    fn mc_shapes_all_reach_a_const_arm() {
+        let base = filled_plane();
+        let mut cells = filled_plane();
+        let mut dst = vec![0u8; STRIDE * ROWS];
+        let (src_c, dst_c) = (10 * STRIDE + 10, 20 * STRIDE + 10);
+
+        let fallbacks = runtime_shapes_during(|| {
+            let src = PlaneCursor::new(&base, src_c, STRIDE);
+            let rec = crate::encoder::rec_view::RecCursor::over_owned(&mut cells, src_c, STRIDE);
+            // Both operand storages, at each shape; a closure cannot stand in for
+            // the source because the kernels are generic over it.
+            macro_rules! both {
+                ($call:ident $(, $arg:expr)*) => {{
+                    kernels::mc::$call(&src, &mut PlaneCursorMut::new(&mut dst, dst_c, STRIDE) $(, $arg)*);
+                    kernels::mc::$call(&rec, &mut PlaneCursorMut::new(&mut dst, dst_c, STRIDE) $(, $arg)*);
+                }};
+            }
+            for &(w, h) in SHAPES_LUMA.iter().chain(SHAPES_REFINE_HOR.iter()) {
+                both!(mc_hor_ver20, w, h);
+            }
+            for &(w, h) in SHAPES_LUMA.iter().chain(SHAPES_REFINE_VER.iter()) {
+                both!(mc_hor_ver02, w, h);
+            }
+            for &(w, h) in SHAPES_LUMA.iter().chain(SHAPES_REFINE_CEN.iter()) {
+                both!(mc_hor_ver22, w, h);
+            }
+            for &(w, h) in SHAPES_LUMA.iter() {
+                // `pixel_avg`'s two operands are a scratch plane and either another
+                // scratch plane or the reference, so both storages appear as `b`.
+                let a = PlaneCursor::new(&base, src_c, STRIDE);
+                kernels::mc::pixel_avg(&mut PlaneCursorMut::new(&mut dst, dst_c, STRIDE), &a, &src, w, h);
+                kernels::mc::pixel_avg(&mut PlaneCursorMut::new(&mut dst, dst_c, STRIDE), &a, &rec, w, h);
+                for qy in 0..4i16 {
+                    for qx in 0..4i16 {
+                        both!(mc_luma, qx, qy, w, h);
+                    }
+                }
+            }
+            for &(w, h) in SHAPES_CHROMA.iter() {
+                for (mx, my) in [(0i16, 0i16), (3, 5)] {
+                    both!(mc_chroma, mx, my, w, h);
+                }
+            }
+        });
+        assert_eq!(
+            fallbacks, 0,
+            "{fallbacks} motion-compensation calls at shapes the codec uses fell through to a \
+             run-time-shape kernel; every one of them should have reached a const arm"
+        );
+
+        // And the counter is what makes that assertion mean anything, so show it
+        // moves: 5x4 is a shape no table carries, and it has to reach the fallback.
+        let odd = runtime_shapes_during(|| {
+            let src = PlaneCursor::new(&base, src_c, STRIDE);
+            kernels::mc::mc_hor_ver20(&src, &mut PlaneCursorMut::new(&mut dst, dst_c, STRIDE), 5, 4);
+        });
+        assert_eq!(odd, 1, "a shape outside the tables should reach the run-time fallback");
+    }
+
+    /// **The `_AVERAGE_WITH_` forms of the scalar filters agree with the composites
+    /// they would replace.**
+    ///
+    /// [`McLeaves::FUSED_QPEL`] is off for [`ScalarLeaves`], so `mc_luma_c` takes the
+    /// composite at quarter-pel `(1, 0)`, `(3, 0)`, `(0, 1)` and `(0, 3)` and the
+    /// `AVG` arms of [`McLeaves::hor`] and [`McLeaves::ver`] are never instantiated by
+    /// the codec. They are still part of the trait and still have to be right — the
+    /// NEON set's fused kernels are the same arithmetic — so drive them here.
+    #[test]
+    fn the_fused_quarter_pel_arms_agree_with_the_composites() {
+        let base = filled_plane();
+        let src = PlaneCursor::new(&base, 10 * STRIDE + 10, STRIDE);
+        let dst_c = 20 * STRIDE + 10;
+        for (qx, qy) in [(1i16, 0i16), (3, 0), (0, 1), (0, 3)] {
+            let mut want = vec![0u8; STRIDE * ROWS];
+            let mut got = vec![0u8; STRIDE * ROWS];
+            mc_luma_c(&src, &mut PlaneCursorMut::new(&mut want, dst_c, STRIDE), qx, qy, 16, 16);
+            {
+                let mut d = PlaneCursorMut::new(&mut got, dst_c, STRIDE);
+                match (qx, qy) {
+                    (1, 0) => ScalarLeaves::hor::<_, 16, 21, 16, 2>(&src, &mut d),
+                    (3, 0) => ScalarLeaves::hor::<_, 16, 21, 16, 3>(&src, &mut d),
+                    (_, 1) => ScalarLeaves::ver::<_, 16, 16, 21, 2>(&src, &mut d),
+                    _ => ScalarLeaves::ver::<_, 16, 16, 21, 3>(&src, &mut d),
+                }
+            }
+            assert_eq!(want, got, "fused quarter-pel ({qx}, {qy}) differs from the composite");
+        }
+    }
+
     /// **Scope: `InitMcFunc` only.** The slots this checks are never read — see the
     /// note on `InitMcFunc`. Passing does not mean a `uiCpuFlag` without
     /// `WELS_CPU_SSE2` produces scalar motion compensation; it does not.
