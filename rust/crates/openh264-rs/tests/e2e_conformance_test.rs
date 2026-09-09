@@ -117,6 +117,28 @@ fn decode_to_y4m(encoded_video_buffer: &[u8]) -> Result<Vec<u8>, String> {
                 &mut buf_info,
             );
             process_frame(p_dst, &buf_info);
+
+            // The null `DecodeFrame2` that `h264dec` follows every NAL with:
+            // `h264dec.cpp:418-430` on the `-legacy` path — its own zeroed
+            // `SBufferInfo`, and whatever frame it returns written out, which is
+            // the shape here — and `DecodeFrameNoDelay` (`welsDecoderExt.cpp:720-725`)
+            // otherwise. It constructs the access unit the NAL completed instead
+            // of leaving it pending, and that is observable: a same-id PPS
+            // arriving next is parked in the spare slot for
+            // `WriteBackActiveParameters` rather than overwriting `sPpsBuffer[id]`
+            // in place under the pending picture (`au_parser.cpp:1458` against
+            // `:1465`). Every `#[ignore]` reason in this file referees a
+            // gold against `h264dec`, so the call sequence has to be `h264dec`'s.
+            let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+            let mut buf_info = SBufferInfo::default();
+            let _ = ISVCDecoder::DecodeFrame2(
+                p_decoder,
+                std::ptr::null(),
+                0,
+                p_dst.as_mut_ptr(),
+                &mut buf_info,
+            );
+            process_frame(p_dst, &buf_info);
         }
 
         // Flush remaining frames
@@ -311,7 +333,7 @@ pub fn test_SVA_Base_B() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from this JVT gold at the same byte; upstream gap, not a port regression; the port ALSO diverges from h264dec here"]
+#[ignore = "openh264's C++ h264dec diverges from this JVT gold at the same byte; upstream gap, not a port regression"]
 pub fn test_CACQP3_Sony_D() -> Result<(), String> {
     // Single-slice-per-picture stream with a fresh PPS update before every
     // picture's slice (varying chroma_qp_index_offset across pictures).
