@@ -675,9 +675,7 @@ pub fn WelsFillCacheConstrain1IntraNxN(
 
         if na.iTopAvail != 0 && IS_INTRANxN(na.iTopType) {
             let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize);
-            for k in 0..4 {
-                pIntraPredMode[1 + k] = pTopMode[k];
-            }
+            pIntraPredMode[1..5].copy_from_slice(&pTopMode[..4]);
         } else {
             let iPred: i8 = if IS_INTRA16x16(na.iTopType) || (MB_TYPE_INTRA_PCM == na.iTopType) {
                 0x02
@@ -2007,9 +2005,7 @@ pub fn WelsFillCacheConstrain0IntraNxN(
 
         if na.iTopAvail != 0 && IS_INTRANxN(na.iTopType) {
             let pTopMode = dq.grid.intra_pred_mode.get(iTopXy as usize);
-            for k in 0..4 {
-                pIntraPredMode[1 + k] = pTopMode[k];
-            }
+            pIntraPredMode[1..5].copy_from_slice(&pTopMode[..4]);
         } else {
             let iPred: i8 = if na.iTopAvail != 0 { 0x02 } else { -1 };
             for k in 0..4 {

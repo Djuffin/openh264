@@ -1186,9 +1186,7 @@ pub fn DecodeFrameConstruction(
         );
     }
 
-    for i in 0..3 {
-        pDstInfo.pDst[i] = ppDst[i];
-    }
+    pDstInfo.pDst[..3].copy_from_slice(&ppDst[..3]);
     pDstInfo.iBufferStatus = 1;
 
     let bOutResChange = pCtx.iLastImgWidthInPixel != pDstInfo.UsrData.sys().iWidth
