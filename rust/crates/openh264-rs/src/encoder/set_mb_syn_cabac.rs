@@ -65,7 +65,7 @@ pub const WELS_CONTEXT_COUNT: usize = 460;
 pub type cabac_low_t = u64;
 
 /// Total bit-width of the `cabac_low_t` arithmetic interval register (64 bits).
-pub const CABAC_LOW_WIDTH: usize = size_of::<cabac_low_t>() * 8;
+pub const CABAC_LOW_WIDTH: usize = cabac_low_t::BITS as usize;
 
 const CTX_NA: i8 = 0;
 
@@ -916,7 +916,7 @@ pub fn WelsCabacEncodeTerminate(buf: &mut [u8], pCbCtx: &mut SCabacCtx, uiBin: u
         pCbCtx.m_uiLow |= 0x80;
     } else {
         let kiRenormAmount = ((pCbCtx.m_uiRange >> 8) ^ 1) as i32;
-        pCbCtx.m_uiRange = pCbCtx.m_uiRange << (kiRenormAmount as u32);
+        pCbCtx.m_uiRange <<= kiRenormAmount as u32;
         pCbCtx.m_iRenormCnt += kiRenormAmount;
     }
 }
@@ -1021,7 +1021,7 @@ mod tests {
         WelsCabacEncodeBypassOne(&mut buf, &mut cb_ctx, 0);
 
         WelsCabacEncodeFlush(&mut buf, &mut cb_ctx);
-        assert!(WelsCabacEncodePos(&mut cb_ctx) > 0);
+        assert!(WelsCabacEncodePos(&cb_ctx) > 0);
     }
 
     /// A slice that does not start at the allocation's base: the walk must stop

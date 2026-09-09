@@ -191,6 +191,11 @@ impl BsCursor {
         self.len
     }
 
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Size of the RBSP in bits — the C++ `iBits`.
     #[inline]
     pub fn bits(&self) -> i32 {
@@ -1143,7 +1148,7 @@ mod tests {
         c.end_cavlc(&buf);
         assert_eq!(c.cavlc_bit_pos_state(), 19);
         // …and the accumulator is usable again.
-        assert_eq!(c.get_bits(&buf, 4).is_ok(), true);
+        assert!(c.get_bits(&buf, 4).is_ok());
     }
 
     #[test]

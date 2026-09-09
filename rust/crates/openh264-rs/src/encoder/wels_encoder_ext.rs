@@ -1001,7 +1001,7 @@ pub fn WelsEncoderApplyLTR(
     pLTRValue: &mut SLTRConfig,
 ) -> i32 {
     let mut sConfig: SWelsSvcCodingParam = match ppCtx.as_mut() {
-        Some(pEncContext) => pEncContext.param().clone(),
+        Some(pEncContext) => *pEncContext.param(),
         None => return 1,
     };
     let mut iNumRefFrame;
@@ -1799,7 +1799,7 @@ impl CWelsH264SVCEncoder {
         self.m_iMaxPicWidth = pCfg.iPicWidth;
         self.m_iMaxPicHeight = pCfg.iPicHeight;
 
-        self.TraceParamInfo(&mut pCfg.to_param_ext());
+        self.TraceParamInfo(&pCfg.to_param_ext());
         let log_ctx = self.m_pWelsTrace.m_sLogCtx;
 
         if WelsInitEncoderExt(
@@ -2030,15 +2030,15 @@ uiProfileIdc = {};uiLevelIdc = {};iDLayerQp = {}",
                 self.log_ctx(),
                 WELS_LOG_INFO,
                 &format!(
-                    "EncoderStatistics: SpatialId = {},{}x{}, SpeedInMs: {}, fAverageFrameRate={}, \
-LastFrameRate={}, LatestBitRate={}, LastFrameQP={}, uiInputFrameCount={}, uiSkippedFrameCount={}, \
+                    "EncoderStatistics: SpatialId = {},{}x{}, SpeedInMs: {:.6}, fAverageFrameRate={:.6}, \
+LastFrameRate={:.6}, LatestBitRate={}, LastFrameQP={}, uiInputFrameCount={}, uiSkippedFrameCount={}, \
 uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTotalEncodedBytes={} at Ts = {}",
                     iDid,
                     pStatistics.uiWidth as i32,
                     pStatistics.uiHeight as i32,
-                    format!("{:.6}", pStatistics.fAverageFrameSpeedInMs),
-                    format!("{:.6}", pStatistics.fAverageFrameRate),
-                    format!("{:.6}", pStatistics.fLatestFrameRate),
+                    pStatistics.fAverageFrameSpeedInMs,
+                    pStatistics.fAverageFrameRate,
+                    pStatistics.fLatestFrameRate,
                     pStatistics.uiBitRate as i32,
                     pStatistics.uiAverageFrameQP as i32,
                     pStatistics.uiInputFrameCount as i32,
@@ -2108,7 +2108,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
             let bLtrMarkingFlag = ctx
                 .pLtr
                 .first()
-                .map_or(false, |pLtr| pLtr.bLTRMarkingFlag);
+                .is_some_and(|pLtr| pLtr.bLTRMarkingFlag);
             let uiAverageFrameQP = if !ctx.rc().is_empty() {
                 ctx.rc_at(iDid as usize).iAverageFrameQp as u32
             } else {

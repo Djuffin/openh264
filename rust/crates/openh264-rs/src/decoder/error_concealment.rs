@@ -220,12 +220,11 @@ pub extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCurDqLaye
     let iStrideUV = pDstPic.linesize(1);
     pDstPic.iMbEcedNum = (iMbWidth * iMbHeight) as i32;
 
-    if pCurDqLayer.is_some() {
-        if ec_active_idc(&pCtx.pParam) == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
-            && pCurDqLayer.as_ref().unwrap().sLayerInfo.sNalHeaderExt.bIdrFlag
-        {
-            pSrcPic = RefSlot::Empty;
-        }
+    if let Some(layer) = pCurDqLayer.as_ref()
+        && ec_active_idc(&pCtx.pParam) == ERROR_CON_IDC::ERROR_CON_FRAME_COPY
+        && layer.sLayerInfo.sNalHeaderExt.bIdrFlag
+    {
+        pSrcPic = RefSlot::Empty;
     }
 
     if matches!(pSrcPic, RefSlot::Empty) {
@@ -573,10 +572,10 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
                                 }
                             }
                         }
-                        MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
+                        MB_TYPE_8x8 | MB_TYPE_8x8_REF0
                             if !pDec.pRefIndex[0].as_slice().is_empty()
                                 && !pDec.pMv[0].as_slice().is_empty()
-                            {
+                            => {
                                 let sub_types = *pCurDqLayer.grid.sub_mb_type.get(iMbXyIndex);
                                 let ref_row = *pDec.pRefIndex[0].get(iMbXyIndex);
                                 let mv_row = *pDec.pMv[0].get(iMbXyIndex);
@@ -621,7 +620,6 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
                                     }
                                 }
                             }
-                        }
                         _ => {}
                     }
                 }
@@ -755,7 +753,7 @@ pub extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLa
     {
         GetAvilInfoFromCorrectMb(pCtx, pCurDqLayer.as_deref_mut());
         {
-            DoErrorConSliceMVCopy(pCtx, pCurDqLayer.as_deref_mut());
+            DoErrorConSliceMVCopy(pCtx, pCurDqLayer);
         }
     }
 
@@ -768,6 +766,10 @@ pub extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLa
 // ============================================================================
 // Unit Tests
 // ============================================================================
+
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
+pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE2};
 
 #[cfg(test)]
 mod tests {
@@ -789,9 +791,9 @@ mod tests {
         ctx.active_sps = Some(SpsRef { id: 0, subset: false });
 
         {
-            assert_eq!(NeedErrorCon(&mut *ctx, Some(&mut dq_layer)), false);
+            assert!(!NeedErrorCon(&mut ctx, Some(&mut dq_layer)));
             *dq_layer.grid.mb_correctly_decoded_flag.get_mut(2) = false;
-            assert_eq!(NeedErrorCon(&mut *ctx, Some(&mut dq_layer)), true);
+            assert!(NeedErrorCon(&mut ctx, Some(&mut dq_layer)));
         }
     }
 
@@ -856,7 +858,7 @@ mod tests {
                 // `new_boxed()` leaves it zeroed, which would make both arms write
                 // nothing and the test vacuous.
                 ctx.sCopyFunc = SCopyFunc::default();
-                DoErrorConSliceCopy(&mut *ctx, Some(&mut dq_layer));
+                DoErrorConSliceCopy(&mut ctx, Some(&mut dq_layer));
                 // The destination is the pool's, so the marker is read back out
                 // of the slot.
                 let pool = ctx.pPicBuff.as_deref().expect("the fixture's pool");
@@ -954,11 +956,8 @@ mod tests {
         ctx.pParam = param;
 
         {
-            ImplementErrorCon(&mut *ctx, None);
+            ImplementErrorCon(&mut ctx, None);
             assert_eq!(ctx.iErrorCode & dsBitstreamError, dsBitstreamError);
         }
     }
 }
-
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE2};

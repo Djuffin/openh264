@@ -20,7 +20,7 @@ fn test_decoder_error_concealment_modes() {
         unsafe {
             let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
             let ret = WelsCreateDecoder(&mut p_decoder);
-            assert_eq!(i64::from(ret), CM_RESULT_SUCCESS as i64);
+            assert_eq!(ret, CM_RESULT_SUCCESS as i64);
             assert!(!p_decoder.is_null());
 
             let mut param = SDecodingParam::default();
@@ -28,7 +28,7 @@ fn test_decoder_error_concealment_modes() {
             param.eEcActiveIdc = ec_mode;
 
             let init_ret = ISVCDecoder::Initialize(p_decoder, &param as *const SDecodingParam);
-            assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64);
+            assert_eq!(init_ret, CM_RESULT_SUCCESS as i64);
 
             let mut current_ec: i32 = 0;
             let get_opt_ret = ISVCDecoder::GetOption(
@@ -36,10 +36,10 @@ fn test_decoder_error_concealment_modes() {
                 DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC,
                 &mut current_ec as *mut i32 as *mut std::ffi::c_void,
             );
-            assert_eq!(i64::from(get_opt_ret), CM_RESULT_SUCCESS as i64);
+            assert_eq!(get_opt_ret, CM_RESULT_SUCCESS as i64);
 
             let uninit_ret = ISVCDecoder::Uninitialize(p_decoder);
-            assert_eq!(i64::from(uninit_ret), CM_RESULT_SUCCESS as i64);
+            assert_eq!(uninit_ret, CM_RESULT_SUCCESS as i64);
 
             WelsDestroyDecoder(p_decoder);
         }
@@ -54,14 +54,14 @@ fn test_decoder_error_concealment_modes() {
 unsafe fn decode_states(data: &[u8], init_ec: ERROR_CON_IDC, switch_to: Option<ERROR_CON_IDC>) -> i32 {
     unsafe {
         let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
-        assert_eq!(i64::from(WelsCreateDecoder(&mut p_decoder)), CM_RESULT_SUCCESS as i64);
+        assert_eq!(WelsCreateDecoder(&mut p_decoder), CM_RESULT_SUCCESS as i64);
 
         let mut param = SDecodingParam::default();
         param.uiTargetDqLayer = u8::MAX;
         param.eEcActiveIdc = init_ec;
         param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
         assert_eq!(
-            i64::from(ISVCDecoder::Initialize(p_decoder, &param)),
+            ISVCDecoder::Initialize(p_decoder, &param),
             CM_RESULT_SUCCESS as i64
         );
 

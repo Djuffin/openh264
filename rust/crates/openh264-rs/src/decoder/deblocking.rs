@@ -2123,6 +2123,12 @@ pub fn WelsDeblockingInitFilter(
     pFilter.ref_ids = snapshot_ref_ids(pCtx.sRefPic);
 }
 
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
+pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSSE3};
+pub use crate::decoder::decode_slice::{g_kuiMbCountScan4Idx};
+use crate::decoder::fmo::FmoNextMb;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2223,8 +2229,3 @@ mod tests {
     }
 
 }
-
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSSE3};
-pub use crate::decoder::decode_slice::{g_kuiMbCountScan4Idx};
-use crate::decoder::fmo::FmoNextMb;

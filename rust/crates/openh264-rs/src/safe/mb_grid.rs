@@ -967,7 +967,7 @@ mod tests {
             let d = MbDims::new(w, h);
             for xy in 0..d.count() {
                 let (x, y) = (xy % w, xy / w);
-                let want = |cond: bool, v: isize| cond.then(|| v as usize);
+                let want = |cond: bool, v: isize| cond.then_some(v as usize);
                 assert_eq!(d.left(xy), want(x > 0, xy as isize - 1), "left of {xy} in {w}x{h}");
                 assert_eq!(
                     d.top(xy),

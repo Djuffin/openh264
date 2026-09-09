@@ -1678,7 +1678,7 @@ pub fn ParseInterPMotionInfoCabac(
             let pPic0 = pRefs.resolve(ppRefPic[iRef[0] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
             *pCtx.bMbRefConcealed = pCtx.bRPLRError
                 || *pCtx.bMbRefConcealed
-                || !pPic0.map_or(true, |c| c || bIsPending);
+                || !pPic0.is_none_or(|c| c || bIsPending);
 
             PredMv(pMotionVector, pRefIndex, LIST_0, 0, 4, iRef[0], &mut pMv);
             let mut err = ParseMvdInfoCabac(pCtx, pNeighAvail, pRefIndex, pMvdCache, iPartIdx, LIST_0 as i8, 0, &mut pMvd[0]);
@@ -1724,7 +1724,7 @@ pub fn ParseInterPMotionInfoCabac(
                 let pPic = pRefs.resolve(ppRefPic[iRef[i as usize] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
-                    || !pPic.map_or(true, |c| c || bIsPending);
+                    || !pPic.is_none_or(|c| c || bIsPending);
                 UpdateP16x8RefIdxCabac(pCurDqLayer, &mut *pDec, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
             }
             for i in 0..2 {
@@ -1774,7 +1774,7 @@ pub fn ParseInterPMotionInfoCabac(
                 let pPic = pRefs.resolve(ppRefPic[iRef[i as usize] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
-                    || !pPic.map_or(true, |c| c || bIsPending);
+                    || !pPic.is_none_or(|c| c || bIsPending);
                 UpdateP8x16RefIdxCabac(pCurDqLayer, &mut *pDec, pRefIndex, iPartIdx, iRef[i as usize], LIST_0 as i8);
             }
             for i in 0..2 {
@@ -1851,7 +1851,7 @@ pub fn ParseInterPMotionInfoCabac(
                 let pPic = pRefs.resolve(ppRefPic[pRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
-                    || !pPic.map_or(true, |c| c || bIsPending);
+                    || !pPic.is_none_or(|c| c || bIsPending);
                 UpdateP8x8RefIdxCabac(pCurDqLayer, &mut *pDec, iIdx8, pRefIdx[i], LIST_0 as i8);
             }
 

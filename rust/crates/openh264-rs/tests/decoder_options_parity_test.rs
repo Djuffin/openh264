@@ -63,7 +63,7 @@ unsafe fn options_line(dec: *mut ISVCDecoder, idx: usize, what: &str) -> String 
     for (name, id) in OPTS {
         let mut v: i32 = SENTINEL;
         let rc = unsafe { ISVCDecoder::GetOption(dec, *id, std::ptr::addr_of_mut!(v).cast()) };
-        out.push_str(&format!(" {name}={}/{v}", rc as i64));
+        out.push_str(&format!(" {name}={}/{v}", { rc }));
     }
     out
 }
@@ -75,13 +75,13 @@ unsafe fn options_line(dec: *mut ISVCDecoder, idx: usize, what: &str) -> String 
 unsafe fn options_transcript(data: &[u8]) -> Vec<String> {
     unsafe {
         let mut dec: *mut ISVCDecoder = std::ptr::null_mut();
-        assert_eq!(i64::from(WelsCreateDecoder(&mut dec)), CM_RESULT_SUCCESS as i64);
+        assert_eq!(WelsCreateDecoder(&mut dec), CM_RESULT_SUCCESS as i64);
         let mut param = SDecodingParam::default();
         param.uiTargetDqLayer = u8::MAX;
         param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
         param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
         assert_eq!(
-            i64::from(ISVCDecoder::Initialize(dec, &param as *const SDecodingParam)),
+            ISVCDecoder::Initialize(dec, &param as *const SDecodingParam),
             CM_RESULT_SUCCESS as i64
         );
 
@@ -180,7 +180,7 @@ fn get_option_matches_the_cxx_per_call() {
 fn option_error_codes_match_the_reference() {
     unsafe {
         let mut dec: *mut ISVCDecoder = std::ptr::null_mut();
-        assert_eq!(i64::from(WelsCreateDecoder(&mut dec)), CM_RESULT_SUCCESS as i64);
+        assert_eq!(WelsCreateDecoder(&mut dec), CM_RESULT_SUCCESS as i64);
 
         // ---- before Initialize -------------------------------------------
         // `:586-589`: `NUM_OF_THREADS` is answered from the object and succeeds;
@@ -189,29 +189,29 @@ fn option_error_codes_match_the_reference() {
         let mut v = 0i32;
         let p: *mut std::ffi::c_void = std::ptr::addr_of_mut!(v).cast();
         assert_eq!(
-            i64::from(ISVCDecoder::GetOption(dec, DECODER_OPTION::DECODER_OPTION_NUM_OF_THREADS, p)),
+            ISVCDecoder::GetOption(dec, DECODER_OPTION::DECODER_OPTION_NUM_OF_THREADS, p),
             CM_RESULT_SUCCESS as i64,
             "NUM_OF_THREADS is the object's field and works before Initialize"
         );
         assert_eq!(v, 0, "this port is single-threaded (D3)");
         assert_eq!(
-            i64::from(ISVCDecoder::GetOption(dec, DECODER_OPTION::DECODER_OPTION_VCL_NAL, p)),
+            ISVCDecoder::GetOption(dec, DECODER_OPTION::DECODER_OPTION_VCL_NAL, p),
             CM_INIT_EXPECTED as i64,
             "no context yet"
         );
         assert_eq!(
-            i64::from(ISVCDecoder::GetOption(
+            ISVCDecoder::GetOption(
                 dec,
                 DECODER_OPTION::DECODER_OPTION_VCL_NAL,
                 std::ptr::null_mut()
-            )),
+            ),
             CM_INIT_EXPECTED as i64,
             "the context is tested before pOption — welsDecoderExt.cpp:589 then :592"
         );
         // `:512`: with no context, a set of anything but the three trace ids is
         // `dsInitialOptExpected`.
         assert_eq!(
-            i64::from(ISVCDecoder::SetOption(dec, DECODER_OPTION::DECODER_OPTION_END_OF_STREAM, p)),
+            ISVCDecoder::SetOption(dec, DECODER_OPTION::DECODER_OPTION_END_OF_STREAM, p),
             i64::from(DECODING_STATE::dsInitialOptExpected.0),
         );
 
@@ -221,27 +221,27 @@ fn option_error_codes_match_the_reference() {
         param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
         param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
         assert_eq!(
-            i64::from(ISVCDecoder::Initialize(dec, &param as *const SDecodingParam)),
+            ISVCDecoder::Initialize(dec, &param as *const SDecodingParam),
             CM_RESULT_SUCCESS as i64
         );
 
         // `:592`: now a null `pOption` is `cmInitParaError`.
         assert_eq!(
-            i64::from(ISVCDecoder::GetOption(
+            ISVCDecoder::GetOption(
                 dec,
                 DECODER_OPTION::DECODER_OPTION_VCL_NAL,
                 std::ptr::null_mut()
-            )),
+            ),
             CM_INIT_PARA_ERROR as i64,
         );
 
         // `:562` and `:578` — the two get-only ids refuse a set.
         assert_eq!(
-            i64::from(ISVCDecoder::SetOption(dec, DECODER_OPTION::DECODER_OPTION_GET_STATISTICS, p)),
+            ISVCDecoder::SetOption(dec, DECODER_OPTION::DECODER_OPTION_GET_STATISTICS, p),
             CM_INIT_PARA_ERROR as i64,
         );
         assert_eq!(
-            i64::from(ISVCDecoder::SetOption(dec, DECODER_OPTION::DECODER_OPTION_GET_SAR_INFO, p)),
+            ISVCDecoder::SetOption(dec, DECODER_OPTION::DECODER_OPTION_GET_SAR_INFO, p),
             CM_INIT_PARA_ERROR as i64,
         );
 
@@ -251,21 +251,21 @@ fn option_error_codes_match_the_reference() {
         let mut interval = 0u32;
         let ip: *mut std::ffi::c_void = std::ptr::addr_of_mut!(interval).cast();
         assert_eq!(
-            i64::from(ISVCDecoder::GetOption(
+            ISVCDecoder::GetOption(
                 dec,
                 DECODER_OPTION::DECODER_OPTION_STATISTICS_LOG_INTERVAL,
                 ip
-            )),
+            ),
             CM_RESULT_SUCCESS as i64
         );
         assert_eq!(interval, 1000);
         let mut set_to = 77u32;
         assert_eq!(
-            i64::from(ISVCDecoder::SetOption(
+            ISVCDecoder::SetOption(
                 dec,
                 DECODER_OPTION::DECODER_OPTION_STATISTICS_LOG_INTERVAL,
                 std::ptr::addr_of_mut!(set_to).cast()
-            )),
+            ),
             CM_RESULT_SUCCESS as i64
         );
         interval = 0;
@@ -281,11 +281,11 @@ fn option_error_codes_match_the_reference() {
             bOverscanAppropriateFlag: true,
         };
         assert_eq!(
-            i64::from(ISVCDecoder::GetOption(
+            ISVCDecoder::GetOption(
                 dec,
                 DECODER_OPTION::DECODER_OPTION_GET_SAR_INFO,
                 std::ptr::addr_of_mut!(sar).cast()
-            )),
+            ),
             CM_INIT_EXPECTED as i64
         );
         assert_eq!((sar.uiSarWidth, sar.uiSarHeight), (0, 0));
@@ -301,7 +301,7 @@ fn option_error_codes_match_the_reference() {
             DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK_CONTEXT,
         ] {
             assert_eq!(
-                i64::from(ISVCDecoder::GetOption(dec, id, p)),
+                ISVCDecoder::GetOption(dec, id, p),
                 CM_INIT_PARA_ERROR as i64,
                 "{id:?} has no GetOption arm in welsDecoderExt.cpp:584-695"
             );
@@ -319,7 +319,7 @@ fn option_error_codes_match_the_reference() {
             DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
         ] {
             assert_eq!(
-                i64::from(ISVCDecoder::SetOption(dec, id, p)),
+                ISVCDecoder::SetOption(dec, id, p),
                 CM_INIT_PARA_ERROR as i64,
                 "{id:?} has no SetOption arm in welsDecoderExt.cpp:479-584"
             );

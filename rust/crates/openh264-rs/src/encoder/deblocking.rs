@@ -251,13 +251,7 @@ pub use crate::encoder::svc_encode_slice::{SDqLayer, SSlice, current_layer_ref};
 
 #[inline(always)]
 pub fn CLIP3_QP_0_51(x: i32) -> i32 {
-    if x < 0 {
-        0
-    } else if x > 51 {
-        51
-    } else {
-        x
-    }
+    x.clamp(0, 51)
 }
 
 #[inline(always)]
@@ -815,7 +809,7 @@ pub fn DeblockingInterMb(
 
         if uiBS[0][0][0] == 0x04 {
             FilteringEdgeLumaIntraV(&*pFilter, &mut pDestY, iLineSize);
-            FilteringEdgeChromaIntraV(&*pFilter, &mut &mut pDestCb, &mut &mut pDestCr, iLineSizeUV);
+            FilteringEdgeChromaIntraV(&*pFilter, &mut pDestCb, &mut pDestCr, iLineSizeUV);
         } else {
             let bs00_u32 = u32::from_ne_bytes(uiBS[0][0]);
             if bs00_u32 != 0 {
@@ -880,7 +874,7 @@ pub fn DeblockingInterMb(
 
         if uiBS[1][0][0] == 0x04 {
             FilteringEdgeLumaIntraH(&*pFilter, &mut pDestY, iLineSize);
-            FilteringEdgeChromaIntraH(&*pFilter, &mut &mut pDestCb, &mut &mut pDestCr, iLineSizeUV);
+            FilteringEdgeChromaIntraH(&*pFilter, &mut pDestCb, &mut pDestCr, iLineSizeUV);
         } else {
             let bs10_u32 = u32::from_ne_bytes(uiBS[1][0]);
             if bs10_u32 != 0 {
@@ -1019,7 +1013,7 @@ pub fn FilteringEdgeChromaHV(
     if iLeftFlag {
         pFilter.uiChromaQP =
             ((iCurQp as i32 + mbs.left().uiChromaQp as i32 + 1) >> 1) as u8;
-        FilteringEdgeChromaIntraV(&*pFilter, &mut &mut pDestCb, &mut &mut pDestCr, iLineSize);
+        FilteringEdgeChromaIntraV(&*pFilter, &mut pDestCb, &mut pDestCr, iLineSize);
     }
 
     pFilter.uiChromaQP = iCurQp as u8;
@@ -1048,7 +1042,7 @@ pub fn FilteringEdgeChromaHV(
     if iTopFlag {
         pFilter.uiChromaQP =
             ((iCurQp as i32 + mbs.top().uiChromaQp as i32 + 1) >> 1) as u8;
-        FilteringEdgeChromaIntraH(&*pFilter, &mut &mut pDestCb, &mut &mut pDestCr, iLineSize);
+        FilteringEdgeChromaIntraH(&*pFilter, &mut pDestCb, &mut pDestCr, iLineSize);
     }
 
     pFilter.uiChromaQP = iCurQp as u8;
@@ -1301,6 +1295,13 @@ pub fn DeblockingInit(pFunc: &mut DeblockingFunc, _iCpu: i32) {
 // Unit Tests
 // ============================================================================
 
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
+pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSSE3};
+use crate::common::deblocking_common::nonzero_count;
+use crate::encoder::slice_multi_threading::SSliceCtx;
+use crate::encoder::svc_encode_slice::{current_layer_expect_mut, slice_in_layer_mut};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1494,7 +1495,7 @@ mod tests {
                         };
                         let l = nb(lk, &mut r);
                         let t = nb(tk, &mut r);
-                        let (mut a, mut b) = (cur.clone(), cur.clone());
+                        let (mut a, mut b) = (cur, cur);
                         let (mut want, mut got) = ([[[0u8; 4]; 4]; 2], [[[0u8; 4]; 4]; 2]);
                         bs_calc_three_way(&mut a, l.as_ref(), t.as_ref(), &mut want);
                         bs_calc_via_kernel(&mut b, l.as_ref(), t.as_ref(), &mut got);
@@ -1586,9 +1587,3 @@ mod tests {
         }
     }
 }
-
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSSE3};
-use crate::common::deblocking_common::nonzero_count;
-use crate::encoder::slice_multi_threading::SSliceCtx;
-use crate::encoder::svc_encode_slice::{current_layer_expect_mut, slice_in_layer_mut};

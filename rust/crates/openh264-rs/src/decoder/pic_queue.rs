@@ -596,9 +596,7 @@ pub fn CreatePicBuff(
 
     {
         for _ in 0..kiSize {
-            let Some(pic) = alloc_picture(bParseOnly, kiPicWidth, kiPicHeight) else {
-                return None;
-            };
+            let pic = alloc_picture(bParseOnly, kiPicWidth, kiPicHeight)?;
             slots.push(Some(pic));
         }
 
@@ -811,7 +809,7 @@ mod tests {
         {
             let mut pic = alloc_picture(false, 160, 120)
                 .expect("the picture allocates");
-            let p_pic: &mut SPicture = &mut *pic;
+            let p_pic: &mut SPicture = &mut pic;
             assert_eq!(p_pic.iWidthInPixel, 160);
             assert_eq!(p_pic.iHeightInPixel, 120);
             assert!(!p_pic.data_ptr(0).is_null());
@@ -853,7 +851,7 @@ mod tests {
             );
             let mut pic = alloc_picture(parse_only(&pCtx.pParam), 160, 120)
                 .expect("the picture allocates");
-            let p_pic: &mut SPicture = &mut *pic;
+            let p_pic: &mut SPicture = &mut pic;
             assert_eq!(p_pic.linesize(0), 224);
             assert_eq!(p_pic.linesize(1), 112);
             assert_eq!(p_pic.linesize(2), 112);
@@ -940,7 +938,7 @@ mod tests {
         }
 
         {
-            DestroyPicBuff(&mut *ctx, Some(pool));
+            DestroyPicBuff(&mut ctx, Some(pool));
         }
     }
 
@@ -971,7 +969,7 @@ mod tests {
         {
             let pool = CreatePicBuff(false, 4, 64, 64);
             assert!(pool.is_some());
-            DestroyPicBuff(&mut *ctx, pool);
+            DestroyPicBuff(&mut ctx, pool);
         }
 
         // `fullReset = false`, so the loop covers `iLargestBufferedPicIndex + 1` entries
@@ -1025,7 +1023,7 @@ mod tests {
             assert!(same_picture(None, None));
             assert!(!same_picture(None, a));
 
-            DestroyPicBuff(&mut *ctx, Some(pool));
+            DestroyPicBuff(&mut ctx, Some(pool));
         }
     }
 
@@ -1070,7 +1068,7 @@ mod tests {
             assert_eq!(pool.cursor(), 0);
             assert_eq!(pool.slot(got).unwrap().iPicBuffIdx, 0, "the winner learns its slot");
 
-            DestroyPicBuff(&mut *ctx, Some(pool));
+            DestroyPicBuff(&mut ctx, Some(pool));
         }
     }
 
@@ -1102,7 +1100,7 @@ mod tests {
                 "the null test is the Option"
             );
 
-            DestroyPicBuff(&mut *ctx, Some(pool));
+            DestroyPicBuff(&mut ctx, Some(pool));
         }
     }
 }

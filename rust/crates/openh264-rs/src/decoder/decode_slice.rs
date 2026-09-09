@@ -1750,9 +1750,9 @@ pub fn GetInterBPred(
 #[inline]
 fn temp_pred_pic<'v>(pCtx: &'v mut SliceCtx<'_>) -> Option<&'v mut SPicture> {
     if pCtx.pTempDec.is_none() {
-        let (iMbWidth, iMbHeight) = match pCtx.active_sps() {
-            Some(sps) => (sps.iMbWidth, sps.iMbHeight),
-            None => return None,
+        let (iMbWidth, iMbHeight) = {
+            let sps = pCtx.active_sps()?;
+            (sps.iMbWidth, sps.iMbHeight)
         };
         *pCtx.pTempDec = alloc_picture(
             pCtx.bParseOnly,
@@ -2211,7 +2211,7 @@ pub fn WelsTargetSliceConstruction(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
         (iCurLayerWidth, iCurLayerHeight)
         };
 
-        if let Some(pDec) = pDec.as_deref_mut() {
+        if let Some(pDec) = pDec {
             pDec.iWidthInPixel = iCurLayerWidth;
             pDec.iHeightInPixel = iCurLayerHeight;
         }
@@ -2379,7 +2379,7 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
                 }
             }
             pCtx.eIntraPredConstraint.FillCacheIntraNxN(
-                &mut sNeighAvail,
+                &sNeighAvail,
                 &mut pNonZeroCount,
                 &mut pIntraPredMode,
                 dq,
@@ -2425,7 +2425,7 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             };
             uiCbpL = (*dq.grid.cbp.get(iMbXy) as u32) & 15;
             WelsFillCacheNonZeroCount(
-                &mut sNeighAvail,
+                &sNeighAvail,
                 &mut pNonZeroCount,
                 Some(&*dq),
             );
@@ -2865,7 +2865,7 @@ pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
                     }
                 }
                 pCtx.eIntraPredConstraint.FillCacheIntraNxN(
-                &mut sNeighAvail,
+                &sNeighAvail,
                 &mut pNonZeroCount,
                 &mut pIntraPredMode,
                 dq,
@@ -2891,7 +2891,7 @@ pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
                 };
                 uiCbpL = (*dq.grid.cbp.get(iMbXy) as u32) & 15;
                 WelsFillCacheNonZeroCount(
-                    &mut sNeighAvail,
+                    &sNeighAvail,
                     &mut pNonZeroCount,
                     Some(&*dq),
                 );
@@ -3191,7 +3191,7 @@ pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
                     }
                 }
                 pCtx.eIntraPredConstraint.FillCacheIntraNxN(
-                &mut sNeighAvail,
+                &sNeighAvail,
                 &mut pNonZeroCount,
                 &mut pIntraPredMode,
                 dq,
@@ -3217,7 +3217,7 @@ pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
                 };
                 uiCbpL = (*dq.grid.cbp.get(iMbXy) as u32) & 15;
                 WelsFillCacheNonZeroCount(
-                    &mut sNeighAvail,
+                    &sNeighAvail,
                     &mut pNonZeroCount,
                     Some(&*dq),
                 );
@@ -4279,7 +4279,7 @@ pub fn WelsDecodeMbCabacISliceBaseMode0(
         );
         let mut ret = ParseMBTypeISliceCabac(
             pCtx,
-            &mut sNeighAvail,
+            &sNeighAvail,
             &mut uiMbType,
         );
         if ret != ERR_NONE {
@@ -4538,7 +4538,7 @@ pub fn WelsDecodeMbCabacPSlice(
         );
         let mut ret = ParseSkipFlagCabac(
             pCtx,
-            &mut sNeighAvail,
+            &sNeighAvail,
             &mut uiCode,
         );
         if ret != ERR_NONE {
@@ -4761,7 +4761,7 @@ pub fn WelsDecodeMbCabacBSlice(
         );
         let mut ret = ParseSkipFlagCabac(
             pCtx,
-            &mut sNeighAvail,
+            &sNeighAvail,
             &mut uiCode,
         );
         if ret != ERR_NONE {
@@ -5107,6 +5107,20 @@ pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
     }
 }
 
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
+pub use crate::common::cpu_core::{WELS_CPU_NEON, WELS_CPU_SSE2};
+pub use crate::decoder::dec_golomb::{g_kuiIntra4x4CbpTable, g_kuiIntra4x4CbpTable400};
+use crate::common::deblocking_common::nonzero_count;
+use crate::decoder::cabac_decoder::{InitCabacDecEngineFromBS, RestoreCabacDecEngineToBS, WelsCabacContextInit};
+use crate::decoder::deblocking::{WelsDeblockingFilterSlice, WelsDeblockingMb};
+use crate::decoder::dec_golomb::{BsGetBits, BsGetOneBit, BsGetSe, BsGetUe, g_kuiInterCbpTable, g_kuiInterCbpTable400};
+use crate::decoder::decoder_context::{parse_only, pic_split};
+use crate::decoder::fmo::FmoNextMb;
+use crate::decoder::mv_pred::{PredBDirectTemporal, PredMvBDirectSpatial, PredPSkipMvFromNeighbor, SubMbType};
+use crate::decoder::parse_mb_syn_cabac::{ParseCbpInfoCabac, ParseDeltaQpCabac, ParseEndOfSliceCabac, ParseIPCMInfoCabac, ParseInterBMotionInfoCabac, ParseInterPMotionInfoCabac, ParseIntraPredModeChromaCabac, ParseIntraPredModeLumaCabac, ParseMBTypeBSliceCabac, ParseMBTypeISliceCabac, ParseMBTypePSliceCabac, ParseResidualBlockCabac, ParseResidualBlockCabac8x8, ParseSkipFlagCabac, ParseTransformSize8x8FlagCabac};
+use crate::decoder::parse_mb_syn_cavlc::{CheckIntra16x16PredMode, CheckIntraChromaPredMode, CheckIntraNxNPredMode, GetNeighborAvailMbType, ParseInterBInfo, ParseInterInfo, PredIntra4x4Mode, SVlcTable, WelsFillCacheConstrain1IntraNxN, WelsFillCacheInter, WelsFillCacheInterCabac, WelsFillCacheNonZeroCount, WelsFillDirectCacheCabac, WelsResidualBlockCavlc, WelsResidualBlockCavlc8x8};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5143,7 +5157,7 @@ mod tests {
                 ctx.sSpsPpsCtx.sPpsBuffer[1].iPpsId = 1;
                 ctx.active_sps = Some(SpsRef { id: 0, subset: false });
                 ctx.active_pps = Some(1);
-                let res = WelsCalcDeqCoeffScalingList(&mut *ctx);
+                let res = WelsCalcDeqCoeffScalingList(&mut ctx);
                 assert_eq!(res, ERR_NONE);
                 assert!(ctx.bUseScalingList);
                 assert!(ctx.bDequantCoeff4x4Init);
@@ -5234,16 +5248,3 @@ mod tests {
         }
     }
 }
-
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_NEON, WELS_CPU_SSE2};
-pub use crate::decoder::dec_golomb::{g_kuiIntra4x4CbpTable, g_kuiIntra4x4CbpTable400};
-use crate::common::deblocking_common::nonzero_count;
-use crate::decoder::cabac_decoder::{InitCabacDecEngineFromBS, RestoreCabacDecEngineToBS, WelsCabacContextInit};
-use crate::decoder::deblocking::{WelsDeblockingFilterSlice, WelsDeblockingMb};
-use crate::decoder::dec_golomb::{BsGetBits, BsGetOneBit, BsGetSe, BsGetUe, g_kuiInterCbpTable, g_kuiInterCbpTable400};
-use crate::decoder::decoder_context::{parse_only, pic_split};
-use crate::decoder::fmo::FmoNextMb;
-use crate::decoder::mv_pred::{PredBDirectTemporal, PredMvBDirectSpatial, PredPSkipMvFromNeighbor, SubMbType};
-use crate::decoder::parse_mb_syn_cabac::{ParseCbpInfoCabac, ParseDeltaQpCabac, ParseEndOfSliceCabac, ParseIPCMInfoCabac, ParseInterBMotionInfoCabac, ParseInterPMotionInfoCabac, ParseIntraPredModeChromaCabac, ParseIntraPredModeLumaCabac, ParseMBTypeBSliceCabac, ParseMBTypeISliceCabac, ParseMBTypePSliceCabac, ParseResidualBlockCabac, ParseResidualBlockCabac8x8, ParseSkipFlagCabac, ParseTransformSize8x8FlagCabac};
-use crate::decoder::parse_mb_syn_cavlc::{CheckIntra16x16PredMode, CheckIntraChromaPredMode, CheckIntraNxNPredMode, GetNeighborAvailMbType, ParseInterBInfo, ParseInterInfo, PredIntra4x4Mode, SVlcTable, WelsFillCacheConstrain1IntraNxN, WelsFillCacheInter, WelsFillCacheInterCabac, WelsFillCacheNonZeroCount, WelsFillDirectCacheCabac, WelsResidualBlockCavlc, WelsResidualBlockCavlc8x8};

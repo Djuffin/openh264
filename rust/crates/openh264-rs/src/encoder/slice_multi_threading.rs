@@ -231,7 +231,6 @@ pub fn WelsDivRound64(x: i64, y: i64) -> i64 {
     }
 }
 
-#[inline]
 // ============================================================================
 // Mutex helpers (`WelsMutexInit` / `WelsMutexLock` / `WelsMutexUnlock` /
 // `WelsMutexDestroy` from `codec/common/inc/WelsThreadLib.h`)
@@ -261,8 +260,6 @@ pub fn with_wels_mutex<R>(pMutex: Option<&std::sync::Mutex<()>>, f: impl FnOnce(
 // ============================================================================
 // Core Multithreading Functions
 // ============================================================================
-
-#[inline]
 
 /// Updates macroblock spatial neighbor availability bitmasks for all macroblocks
 /// belonging to a specific slice partition in parallel. The window is the
@@ -828,186 +825,6 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
 // Unit Tests
 // ============================================================================
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_div_round() {
-        assert_eq!(WelsDivRound(100, 10), 10);
-        assert_eq!(WelsDivRound(105, 10), 11);
-        assert_eq!(WelsDivRound(104, 10), 10);
-    }
-
-    /// Two workers write distinct patterns into their own taken slots while
-    /// both hold a shared borrow of the pool's owner, and the patterns must
-    /// land back in the owner's own slots.
-    #[test]
-    fn bs_pool_partition_carves_disjoint_slots_and_restores_them() {
-        const WORKERS: usize = 2;
-        const LEN: usize = 64;
-
-        let mut pSmt = SSliceThreading::default();
-        for k in 0..WORKERS {
-            pSmt.pThreadBsBuffer[k] = vec![0u8; LEN];
-        }
-        pSmt.uiThreadBsBufferNum = WORKERS;
-        pSmt.pool = WorkerPool::new(WORKERS);
-
-        // The take — the fork entries' partition.
-        let mut vTakenBsBufs: Vec<Vec<u8>> = (0..WORKERS)
-            .map(|k| std::mem::take(&mut pSmt.pThreadBsBuffer[k]))
-            .collect();
-
-        {
-            // The pool is reached through the same shared borrow of the owner
-            // the workers hold — production's shape exactly.
-            let pSmtShared: &SSliceThreading = &pSmt;
-            pSmtShared.pool.scope(|s| {
-                for (k, buf) in vTakenBsBufs.iter_mut().enumerate() {
-                    s.spawn(move || {
-                        // Production's shape: a shared borrow of the owner held
-                        // beside this worker's `&mut` slot, both live across
-                        // the writes.
-                        assert_eq!(pSmtShared.uiThreadBsBufferNum, WORKERS);
-                        for (i, b) in buf.iter_mut().enumerate() {
-                            *b = (k as u8) ^ (i as u8);
-                        }
-                        assert_eq!(pSmtShared.uiThreadBsBufferNum, WORKERS);
-                    });
-                }
-            });
-        }
-
-        // The restore — buffer `k` to slot `k`.
-        for (k, buf) in vTakenBsBufs.into_iter().enumerate() {
-            pSmt.pThreadBsBuffer[k] = buf;
-        }
-
-        for k in 0..WORKERS {
-            for i in 0..LEN {
-                assert_eq!(
-                    pSmt.pThreadBsBuffer[k][i],
-                    (k as u8) ^ (i as u8),
-                    "slot {k} byte {i} did not come back from its own worker"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_dynamic_detect_cpu_cores() {
-        let cores = DynamicDetectCpuCores();
-        assert!(cores >= 1);
-    }
-
-    /// A layer with one bank of `n` slices and `ppSliceInLayer` naming them in
-    /// order — the shape `InitSliceInLayer` builds, in the two lines a test needs.
-    /// The bank is returned so it outlives the layer that points into it.
-    fn layer_with_bank(n: usize) -> SDqLayer {
-        let mut dq_layer = SDqLayer::default();
-        dq_layer.sSliceBufferInfo[0].pSliceBuffer = (0..n).map(|_| SSlice::new()).collect();
-        dq_layer.sSliceBufferInfo[0].iMaxSliceNum = n as i32;
-        dq_layer.ppSliceInLayer = (0..n)
-            .map(|i| crate::encoder::svc_encode_slice::SliceIdx { bank: 0, offset: i as i32 })
-            .collect();
-        dq_layer
-    }
-
-    #[test]
-    fn test_need_dynamic_adjust_zero_consume() {
-        let mut dq_layer = layer_with_bank(2);
-        let ret = NeedDynamicAdjust(&mut dq_layer, 2);
-        assert_eq!(ret, 0);
-    }
-
-    #[test]
-    fn test_calc_slice_complex_ratio() {
-        let mut dq_layer = layer_with_bank(2);
-        for slice in dq_layer.sSliceBufferInfo[0].pSliceBuffer.iter_mut() {
-            slice.iCountMbNumInSlice = 100;
-            slice.uiSliceConsumeTime = 1000;
-        }
-        dq_layer.sSliceEncCtx.iSliceNumInFrame.store(2, Ordering::Relaxed);
-
-        CalcSliceComplexRatio(&mut dq_layer);
-
-        assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[0].iSliceComplexRatio, 50);
-        assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[1].iSliceComplexRatio, 50);
-    }
-
-    /// Runs the whole encoder with `bUseLoadBalancing` on, four threads and four
-    /// slices — the exact four-term guard `WelsEncoderEncodeExt` tests before it
-    /// calls the producer — for enough frames that frame N+1's boundaries are
-    /// computed from frame N's measured times.
-    ///
-    /// It asserts structure and never bytes, and it cannot do otherwise: the
-    /// boundaries this path produces are a function of wall-clock encode times, so
-    /// two runs of the **C++** disagree with each other; there is no reference to
-    /// compare against.
-    ///
-    /// **256x192 is forced, not chosen.** `MIN_NUM_MB_PER_SLICE` is 48, and
-    /// `SliceArgumentValidationFixedSliceMode` silently rewrites a request it cannot
-    /// honour down to a mode that needs no threads — so four slices need at least
-    /// 4 x 48 = 192 macroblocks, and a 16x12 grid is exactly 192. The
-    /// `vcl_nals == 4` assertion is what would catch the rewrite: on a smaller
-    /// picture every other assertion here passes while the encoder runs
-    /// single-slice, single-threaded, and the load-balancing path stays dark.
-    ///
-    /// Ignored under Miri: 192 macroblocks x 4 frames x 4 threads is roughly eight
-    /// times the work of the fork/join probe in `svc_encode_slice.rs`, which is
-    /// itself the most expensive test in the battery.
-    #[test]
-    #[cfg_attr(miri, ignore)]
-    fn load_balancing_completes_frames_with_sane_slice_counts() {
-        use crate::api::codec_api::abi_test_driver::{EncoderProbeOptions, drive_encoder_over};
-
-        let (frames, dims) = drive_encoder_over(
-            256,
-            192,
-            4,
-            EncoderProbeOptions {
-                slice_mode: crate::api::codec_api::SliceModeEnum::SM_FIXEDSLCNUM_SLICE,
-                slice_num: 4,
-                threads: 4,
-                load_balancing: true,
-                ..EncoderProbeOptions::default()
-            },
-        );
-
-        assert_eq!(dims, (256, 192), "the encoder must be configured for a 16x12 grid");
-        assert_eq!(frames.len(), 4, "the encode loop did not run to the end");
-        assert!(
-            frames.iter().all(|f| f.bytes > 0),
-            "a frame produced no NAL bytes, which is what a lost slice looks like from \
-             here: {:?}",
-            frames.iter().map(|f| (f.kind, f.bytes)).collect::<Vec<_>>()
-        );
-        // The assertion that keeps the test on the path it names. `DynamicAdjustSlicing`
-        // redistributes macroblocks *across* the slices; it never changes how many there
-        // are. Four every frame, or either the request was rewritten or a rebalance lost
-        // one.
-        assert!(
-            frames.iter().all(|f| f.vcl_nals == 4),
-            "a frame did not carry four VCL NALs, so the slice count moved under the \
-             rebalance or the mode was rewritten: {:?}",
-            frames.iter().map(|f| (f.kind, f.vcl_nals)).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            frames[0].kind,
-            crate::api::codec_api::EVideoFrameType::videoFrameTypeIDR,
-            "the sequence must open on an IDR"
-        );
-        assert!(
-            frames[1..]
-                .iter()
-                .all(|f| f.kind == crate::api::codec_api::EVideoFrameType::videoFrameTypeP),
-            "frames 1..4 must be inter-coded, or the rebalance never sees a second \
-             frame's times: {:?}",
-            frames.iter().map(|f| f.kind).collect::<Vec<_>>()
-        );
-    }
-}
 
 /// One worker's share of a frame's slices, and the one value in this crate that
 /// crosses a spawn.
@@ -1376,7 +1193,7 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
                     let mut iSliceIdx = job.iFirstSlice;
                     while iSliceIdx < job.iSliceCount {
                         let r = EncodeOneSliceInJob(
-                            &*job.pCtx,
+                            job.pCtx,
                             iSliceIdx,
                             job.iBsSlot,
                             job.bRecordsTime,
@@ -1853,7 +1670,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
                 handles.push(s.spawn(move || {
                     let mut job = job;
                     let r = EncodeOnePartitionSizeLimited(
-                        &*job.pCtx,
+                        job.pCtx,
                         job.iFirstSlice,
                         job.iBsSlot,
                         &mut *job.pBsBuf,
@@ -1901,4 +1718,185 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
     }
 
     iErr
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_div_round() {
+        assert_eq!(WelsDivRound(100, 10), 10);
+        assert_eq!(WelsDivRound(105, 10), 11);
+        assert_eq!(WelsDivRound(104, 10), 10);
+    }
+
+    /// Two workers write distinct patterns into their own taken slots while
+    /// both hold a shared borrow of the pool's owner, and the patterns must
+    /// land back in the owner's own slots.
+    #[test]
+    fn bs_pool_partition_carves_disjoint_slots_and_restores_them() {
+        const WORKERS: usize = 2;
+        const LEN: usize = 64;
+
+        let mut pSmt = SSliceThreading::default();
+        for k in 0..WORKERS {
+            pSmt.pThreadBsBuffer[k] = vec![0u8; LEN];
+        }
+        pSmt.uiThreadBsBufferNum = WORKERS;
+        pSmt.pool = WorkerPool::new(WORKERS);
+
+        // The take — the fork entries' partition.
+        let mut vTakenBsBufs: Vec<Vec<u8>> = (0..WORKERS)
+            .map(|k| std::mem::take(&mut pSmt.pThreadBsBuffer[k]))
+            .collect();
+
+        {
+            // The pool is reached through the same shared borrow of the owner
+            // the workers hold — production's shape exactly.
+            let pSmtShared: &SSliceThreading = &pSmt;
+            pSmtShared.pool.scope(|s| {
+                for (k, buf) in vTakenBsBufs.iter_mut().enumerate() {
+                    s.spawn(move || {
+                        // Production's shape: a shared borrow of the owner held
+                        // beside this worker's `&mut` slot, both live across
+                        // the writes.
+                        assert_eq!(pSmtShared.uiThreadBsBufferNum, WORKERS);
+                        for (i, b) in buf.iter_mut().enumerate() {
+                            *b = (k as u8) ^ (i as u8);
+                        }
+                        assert_eq!(pSmtShared.uiThreadBsBufferNum, WORKERS);
+                    });
+                }
+            });
+        }
+
+        // The restore — buffer `k` to slot `k`.
+        for (k, buf) in vTakenBsBufs.into_iter().enumerate() {
+            pSmt.pThreadBsBuffer[k] = buf;
+        }
+
+        for k in 0..WORKERS {
+            for i in 0..LEN {
+                assert_eq!(
+                    pSmt.pThreadBsBuffer[k][i],
+                    (k as u8) ^ (i as u8),
+                    "slot {k} byte {i} did not come back from its own worker"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_dynamic_detect_cpu_cores() {
+        let cores = DynamicDetectCpuCores();
+        assert!(cores >= 1);
+    }
+
+    /// A layer with one bank of `n` slices and `ppSliceInLayer` naming them in
+    /// order — the shape `InitSliceInLayer` builds, in the two lines a test needs.
+    /// The bank is returned so it outlives the layer that points into it.
+    fn layer_with_bank(n: usize) -> SDqLayer {
+        let mut dq_layer = SDqLayer::default();
+        dq_layer.sSliceBufferInfo[0].pSliceBuffer = (0..n).map(|_| SSlice::new()).collect();
+        dq_layer.sSliceBufferInfo[0].iMaxSliceNum = n as i32;
+        dq_layer.ppSliceInLayer = (0..n)
+            .map(|i| crate::encoder::svc_encode_slice::SliceIdx { bank: 0, offset: i as i32 })
+            .collect();
+        dq_layer
+    }
+
+    #[test]
+    fn test_need_dynamic_adjust_zero_consume() {
+        let mut dq_layer = layer_with_bank(2);
+        let ret = NeedDynamicAdjust(&mut dq_layer, 2);
+        assert_eq!(ret, 0);
+    }
+
+    #[test]
+    fn test_calc_slice_complex_ratio() {
+        let mut dq_layer = layer_with_bank(2);
+        for slice in dq_layer.sSliceBufferInfo[0].pSliceBuffer.iter_mut() {
+            slice.iCountMbNumInSlice = 100;
+            slice.uiSliceConsumeTime = 1000;
+        }
+        dq_layer.sSliceEncCtx.iSliceNumInFrame.store(2, Ordering::Relaxed);
+
+        CalcSliceComplexRatio(&mut dq_layer);
+
+        assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[0].iSliceComplexRatio, 50);
+        assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[1].iSliceComplexRatio, 50);
+    }
+
+    /// Runs the whole encoder with `bUseLoadBalancing` on, four threads and four
+    /// slices — the exact four-term guard `WelsEncoderEncodeExt` tests before it
+    /// calls the producer — for enough frames that frame N+1's boundaries are
+    /// computed from frame N's measured times.
+    ///
+    /// It asserts structure and never bytes, and it cannot do otherwise: the
+    /// boundaries this path produces are a function of wall-clock encode times, so
+    /// two runs of the **C++** disagree with each other; there is no reference to
+    /// compare against.
+    ///
+    /// **256x192 is forced, not chosen.** `MIN_NUM_MB_PER_SLICE` is 48, and
+    /// `SliceArgumentValidationFixedSliceMode` silently rewrites a request it cannot
+    /// honour down to a mode that needs no threads — so four slices need at least
+    /// 4 x 48 = 192 macroblocks, and a 16x12 grid is exactly 192. The
+    /// `vcl_nals == 4` assertion is what would catch the rewrite: on a smaller
+    /// picture every other assertion here passes while the encoder runs
+    /// single-slice, single-threaded, and the load-balancing path stays dark.
+    ///
+    /// Ignored under Miri: 192 macroblocks x 4 frames x 4 threads is roughly eight
+    /// times the work of the fork/join probe in `svc_encode_slice.rs`, which is
+    /// itself the most expensive test in the battery.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn load_balancing_completes_frames_with_sane_slice_counts() {
+        use crate::api::codec_api::abi_test_driver::{EncoderProbeOptions, drive_encoder_over};
+
+        let (frames, dims) = drive_encoder_over(
+            256,
+            192,
+            4,
+            EncoderProbeOptions {
+                slice_mode: crate::api::codec_api::SliceModeEnum::SM_FIXEDSLCNUM_SLICE,
+                slice_num: 4,
+                threads: 4,
+                load_balancing: true,
+                ..EncoderProbeOptions::default()
+            },
+        );
+
+        assert_eq!(dims, (256, 192), "the encoder must be configured for a 16x12 grid");
+        assert_eq!(frames.len(), 4, "the encode loop did not run to the end");
+        assert!(
+            frames.iter().all(|f| f.bytes > 0),
+            "a frame produced no NAL bytes, which is what a lost slice looks like from \
+             here: {:?}",
+            frames.iter().map(|f| (f.kind, f.bytes)).collect::<Vec<_>>()
+        );
+        // The assertion that keeps the test on the path it names. `DynamicAdjustSlicing`
+        // redistributes macroblocks *across* the slices; it never changes how many there
+        // are. Four every frame, or either the request was rewritten or a rebalance lost
+        // one.
+        assert!(
+            frames.iter().all(|f| f.vcl_nals == 4),
+            "a frame did not carry four VCL NALs, so the slice count moved under the \
+             rebalance or the mode was rewritten: {:?}",
+            frames.iter().map(|f| (f.kind, f.vcl_nals)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            frames[0].kind,
+            crate::api::codec_api::EVideoFrameType::videoFrameTypeIDR,
+            "the sequence must open on an IDR"
+        );
+        assert!(
+            frames[1..]
+                .iter()
+                .all(|f| f.kind == crate::api::codec_api::EVideoFrameType::videoFrameTypeP),
+            "frames 1..4 must be inter-coded, or the rebalance never sees a second \
+             frame's times: {:?}",
+            frames.iter().map(|f| f.kind).collect::<Vec<_>>()
+        );
+    }
 }

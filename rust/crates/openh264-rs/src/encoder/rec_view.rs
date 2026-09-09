@@ -843,7 +843,7 @@ mod tests {
                 // `row_view`: the run-time-length read, both types.
                 for len in [1usize, 4, 8] {
                     let want = plain.row(dy, dx, len).to_vec();
-                    assert_eq!(&*RefSamples::row_view(&plain, dy, dx, len), &want[..],
+                    assert_eq!(RefSamples::row_view(&plain, dy, dx, len), &want[..],
                         "plane row_view, stride {stride}, ({dx},{dy}), len {len}");
                     assert_eq!(&*RefSamples::row_view(&cells, dy, dx, len), &want[..],
                         "cell row_view, stride {stride}, ({dx},{dy}), len {len}");

@@ -52,9 +52,9 @@ fn the_child_case() {
             // `WELS_LOG_ERROR` and returns `cmInitParaError`.
             "decoder_default" => {
                 let mut d: *mut ISVCDecoder = std::ptr::null_mut();
-                assert_eq!(i64::from(WelsCreateDecoder(&mut d)), CM_RESULT_SUCCESS as i64);
+                assert_eq!(WelsCreateDecoder(&mut d), CM_RESULT_SUCCESS as i64);
                 let rc = ISVCDecoder::Initialize(d, std::ptr::null());
-                assert_eq!(i64::from(rc), CM_INIT_PARA_ERROR as i64);
+                assert_eq!(rc, CM_INIT_PARA_ERROR as i64);
                 WelsDestroyDecoder(d);
             }
             // `welsEncoderExt.cpp:192` — the same shape on the encoder.

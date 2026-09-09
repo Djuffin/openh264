@@ -319,14 +319,14 @@ pub extern "C" fn WelsMdI4x4(
     let pCurDqLayer = current_layer_expect(pEncCtx);
     let iLambda = pWelsMd.iLambda;
     let iBestCostLuma = pWelsMd.iCostLuma;
-    let view = layer_rec_view_expect(&*pCurDqLayer);
+    let view = layer_rec_view_expect(pCurDqLayer);
 
     let lambda: [i32; 2] = [iLambda << 2, iLambda];
     let kpNeighborIntraToI4x4 = &g_kiNeighborIntraToI4x4[pMbCache.uiNeighborIntra as usize];
     let mut iBestPredBufferNum: i32 = 0;
     let mut iCosti4x4: i32 = 0;
 
-    let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
+    let pEncPicture = layer_enc_view_expect(pCurDqLayer);
     let (kiMbOrgX, kiMbOrgY) = pMbCache.SPicData.luma_origin();
 
     for i in 0..16usize {
@@ -436,7 +436,7 @@ pub extern "C" fn WelsMdI4x4Fast(
     let pCurDqLayer = current_layer_expect(pEncCtx);
     let iLambda = pWelsMd.iLambda;
     let iBestCostLuma = pWelsMd.iCostLuma;
-    let view = layer_rec_view_expect(&*pCurDqLayer);
+    let view = layer_rec_view_expect(pCurDqLayer);
 
     let lambda: [i32; 2] = [iLambda << 2, iLambda];
     let kpNeighborIntraToI4x4 = &g_kiNeighborIntraToI4x4[pMbCache.uiNeighborIntra as usize];
@@ -444,7 +444,7 @@ pub extern "C" fn WelsMdI4x4Fast(
     let mut iCosti4x4: i32 = 0;
 
     let pfMdCost4x4 = pFunc.sSampleDealingFuncs.md_cost(BLOCK_4x4).unwrap();
-    let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
+    let pEncPicture = layer_enc_view_expect(pCurDqLayer);
     let (kiMbOrgX, kiMbOrgY) = pMbCache.SPicData.luma_origin();
 
     for i in 0..16usize {
@@ -739,7 +739,7 @@ pub fn WelsMdIntraFinePartitionVaa(
     pMbCache: &mut SMbCache,
 ) -> i32 {
     let pCurLayer = current_layer_expect(pEncCtx);
-    let encView = layer_enc_view_expect(&*pCurLayer);
+    let encView = layer_enc_view_expect(pCurLayer);
     let cEncMb = pMbCache.SPicData.mb_cursor_ro(encView, 0);
     if MdIntraAnalysisVaaInfo(pEncCtx, &cEncMb) {
         let iCosti4x4 = WelsMdI4x4Fast(pEncCtx, pWelsMd, pCurMb, pMbCache);
@@ -867,7 +867,7 @@ pub extern "C" fn WelsMdP16x8<'a>(
             pWelsMd.iMbPixY,
             pWelsMd.pMvdCost,
             BLOCK_16x8 as i32,
-            layer_ref_feature_storage(pEncCtx, &*pCurDqLayer),
+            layer_ref_feature_storage(pEncCtx, pCurDqLayer),
             sMe16x8,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -880,7 +880,7 @@ pub extern "C" fn WelsMdP16x8<'a>(
         PredInter16x8Mv(&pMbCache.sMvComponents, i << 3, 0, &mut sMe16x8.sMvp);
         {
             let pEncPicture = layer_enc_view_expect(pCurDqLayer);
-            let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
+            let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
             pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
                 &pFunc.sMeFuncs,
                 &pFunc.sSampleDealingFuncs,
@@ -920,7 +920,7 @@ pub extern "C" fn WelsMdP8x16<'a>(
             pWelsMd.iMbPixY,
             pWelsMd.pMvdCost,
             BLOCK_8x16 as i32,
-            layer_ref_feature_storage(pEncCtx, &*pCurLayer),
+            layer_ref_feature_storage(pEncCtx, pCurLayer),
             sMe8x16,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -933,7 +933,7 @@ pub extern "C" fn WelsMdP8x16<'a>(
         PredInter8x16Mv(&pMbCache.sMvComponents, i << 2, 0, &mut sMe8x16.sMvp);
         {
             let pEncPicture = layer_enc_view_expect(pCurLayer);
-            let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurLayer);
+            let pRefPicture = layer_ref_view_expect(pEncCtx, pCurLayer);
             pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
                 &pFunc.sMeFuncs,
                 &pFunc.sSampleDealingFuncs,
@@ -967,7 +967,7 @@ pub fn WelsMdInterFinePartition<'a>(
     let mut iCost = WelsMdP8x8(
         pEncCtx,
         pEncCtx.func_list(),
-        &*pCurDqLayer,
+        pCurDqLayer,
         pWelsMd,
         pSlice,
     );
@@ -976,13 +976,13 @@ pub fn WelsMdInterFinePartition<'a>(
         pCurMb.uiMbType = MB_TYPE_8x8;
         pCurMb.uiSubMbType = [SUB_MB_TYPE_8x8; 4];
 
-        let mut iCostPart = WelsMdP16x8(pEncCtx, pEncCtx.func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+        let mut iCostPart = WelsMdP16x8(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
         if iCostPart <= iCost {
             iCost = iCostPart;
             pCurMb.uiMbType = MB_TYPE_16x8;
         }
 
-        iCostPart = WelsMdP8x16(pEncCtx, pEncCtx.func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+        iCostPart = WelsMdP8x16(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
         if iCostPart <= iCost {
             pCurMb.uiMbType = MB_TYPE_8x16;
         }
@@ -1028,14 +1028,14 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
 
     match uiMbSign {
         3 | 12 => {
-            let iCostP16x8 = WelsMdP16x8(pEncCtx, pEncCtx.func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+            let iCostP16x8 = WelsMdP16x8(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
             if iCostP16x8 < iBestCost {
                 iBestCost = iCostP16x8;
                 pCurMb.uiMbType = MB_TYPE_16x8;
             }
         }
         5 | 10 => {
-            let iCostP8x16 = WelsMdP8x16(pEncCtx, pEncCtx.func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+            let iCostP8x16 = WelsMdP8x16(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
             if iCostP8x16 < iBestCost {
                 iBestCost = iCostP8x16;
                 pCurMb.uiMbType = MB_TYPE_8x16;
@@ -1045,7 +1045,7 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
             let iCostP8x8 = WelsMdP8x8(
         pEncCtx,
         pEncCtx.func_list(),
-                &*pCurDqLayer,
+                pCurDqLayer,
                 pWelsMd,
                 pSlice,
             );
@@ -1059,7 +1059,7 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
             let iCostP8x8 = WelsMdP8x8(
         pEncCtx,
         pEncCtx.func_list(),
-                &*pCurDqLayer,
+                pCurDqLayer,
                 pWelsMd,
                 pSlice,
             );
@@ -1068,13 +1068,13 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
                 pCurMb.uiMbType = MB_TYPE_8x8;
                 pCurMb.uiSubMbType = [SUB_MB_TYPE_8x8; 4];
 
-                let iCostP16x8 = WelsMdP16x8(pEncCtx, pEncCtx.func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+                let iCostP16x8 = WelsMdP16x8(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
                 if iCostP16x8 <= iBestCost {
                     iBestCost = iCostP16x8;
                     pCurMb.uiMbType = MB_TYPE_16x8;
                 }
 
-                let iCostP8x16 = WelsMdP8x16(pEncCtx, pEncCtx.func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+                let iCostP8x16 = WelsMdP8x16(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
                 if iCostP8x16 <= iBestCost {
                     iBestCost = iCostP8x16;
                     pCurMb.uiMbType = MB_TYPE_8x16;
@@ -1279,8 +1279,8 @@ pub fn WelsMdInterMbRefinement(
 ) {
     let pCurDqLayer = current_layer_expect(pEncCtx);
     let pFunc = pEncCtx.func_list();
-    let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
-    let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
+    let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
+    let pEncPicture = layer_enc_view_expect(pCurDqLayer);
     let mut iBestSadCost = 0i32;
     let mut iBestSatdCost = 0i32;
     let mut sMeRefine = SMeRefinePointer::default();
@@ -1696,7 +1696,7 @@ pub fn WelsMdInterEncode(
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
     WelsPMbChromaEncode(pEncCtx, pSlice, pCurMb);
 
-    let view = layer_rec_view_expect(&*pCurDqLayer);
+    let view = layer_rec_view_expect(pCurDqLayer);
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let (lx, ly) = pMbCache.SPicData.luma_origin();
     let (cx, cy) = pMbCache.SPicData.chroma_origin();
@@ -1731,6 +1731,10 @@ pub fn WelsMdInterSaveSadAndRefMbType(
     //uiMbType
     pRecView.ref_mb_type().set(kiMbXY, kmtCurMbtype);
 }
+
+
+/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+static FP_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 #[cfg(test)]
 mod tests {
@@ -1811,6 +1815,3 @@ mod tests {
         }
     }
 }
-
-/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
-static FP_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

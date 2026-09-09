@@ -489,7 +489,7 @@ pub fn WelsWriteSpsSyntax(
     BsWriteBits(buf, pBsWriter, 8, pSps.iLevelIdc as u32); // iLevelIdc
     // seq_parameter_set_id
     BsWriteUE(buf, pBsWriter,
-        (*pSps)
+        pSps
             .uiSpsId
             .wrapping_add(pSpsIdDelta[pSps.uiSpsId as usize] as u32),
     );
@@ -616,7 +616,7 @@ pub fn WelsWritePpsSyntax(
 ) -> i32 {
 
     BsWriteUE(buf, pBsWriter,
-        (*pPps)
+        pPps
             .iPpsId
             .wrapping_add(pParametersetStrategy.GetPpsIdOffset(pPps.iPpsId as i32) as u32),
     );
@@ -765,11 +765,7 @@ pub fn WelsInitSps(
 
     // bGapsInFrameNumValueAllowedFlag is false when spatial and temporal layer counts
     // are both 1 and ltr is 0.
-    if (kiDlayerCount == 1) && (pSps.iNumRefFrames == 1) {
-        pSps.bGapsInFrameNumValueAllowedFlag = false;
-    } else {
-        pSps.bGapsInFrameNumValueAllowedFlag = true;
-    }
+    pSps.bGapsInFrameNumValueAllowedFlag = !((kiDlayerCount == 1) && (pSps.iNumRefFrames == 1));
 
     pSps.bVuiParamPresentFlag = true;
 
@@ -897,9 +893,9 @@ mod tests {
     /// ```
     #[test]
     fn init_sps_matches_cxx_for_the_gate_configuration() {
-        let (mut lp, mut li) = gate_layer();
+        let (mut lp, li) = gate_layer();
         let mut sps = SWelsSPS::default();
-        assert_eq!(WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false), 0);
+        assert_eq!(WelsInitSps(&mut sps, &mut lp, &li, 0, 1, 0, true, false, 1, false), 0);
 
         assert_eq!(sps.iMbWidth, 10);
         assert_eq!(sps.iMbHeight, 6);
@@ -925,14 +921,14 @@ mod tests {
     /// Byte-exact against the C++ `WelsWriteSpsNal` for the same SPS.
     #[test]
     fn write_sps_nal_is_byte_exact_with_cxx() {
-        let (mut lp, mut li) = gate_layer();
+        let (mut lp, li) = gate_layer();
         let mut sps = SWelsSPS::default();
         let mut buf = [0u8; 512];
         let mut bs = BsWriter::new();
         let delta = [0i32; 32];
 
-        WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
-        WelsWriteSpsNal(&mut buf, &mut sps, &mut bs, &delta);
+        WelsInitSps(&mut sps, &mut lp, &li, 0, 1, 0, true, false, 1, false);
+        WelsWriteSpsNal(&mut buf, &sps, &mut bs, &delta);
         let written = bs.pos();
 
         assert_eq!(
@@ -945,10 +941,10 @@ mod tests {
     /// Against the C++ `WelsInitPps`: `ppsid=0 spsid=0 qp=26 qs=26 cqpo=0 ecm=0 dfcp=1`.
     #[test]
     fn init_pps_matches_cxx() {
-        let (mut lp, mut li) = gate_layer();
+        let (mut lp, li) = gate_layer();
         let mut sps = SWelsSPS::default();
         let mut pps = SWelsPPS::default();
-        WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
+        WelsInitSps(&mut sps, &mut lp, &li, 0, 1, 0, true, false, 1, false);
         assert_eq!(
             WelsInitPps(&mut pps, Some(&sps), None, 0, true, false, false),
             0
@@ -970,18 +966,18 @@ mod tests {
         use crate::api::codec_api::EParameterSetStrategy;
         use crate::encoder::paraset_strategy::CreateParametersetStrategy;
 
-        let (mut lp, mut li) = gate_layer();
+        let (mut lp, li) = gate_layer();
         let mut sps = SWelsSPS::default();
         let mut pps = SWelsPPS::default();
         let mut buf = [0u8; 256];
         let mut bs = BsWriter::new();
 
-        WelsInitSps(&mut sps, &mut lp, &mut li, 0, 1, 0, true, false, 1, false);
+        WelsInitSps(&mut sps, &mut lp, &li, 0, 1, 0, true, false, 1, false);
         WelsInitPps(&mut pps, Some(&sps), None, 0, true, false, false);
 
         let st = CreateParametersetStrategy(EParameterSetStrategy::CONSTANT_ID, false, 1)
             .expect("CONSTANT_ID is ported");
-        WelsWritePpsSyntax(&mut buf, &mut pps, &mut bs, &st);
+        WelsWritePpsSyntax(&mut buf, &pps, &mut bs, &st);
         let written = bs.pos();
 
         assert_eq!(

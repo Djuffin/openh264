@@ -576,7 +576,7 @@ pub fn UpdateDecStat(pCtx: &mut SWelsDecoderContext, pCurDq: Option<&DqLayerStat
                 }
             }
         } else if bOutput {
-            { UpdateDecStatNoFreezingInfo(pCtx, pCurDq) };
+            UpdateDecStatNoFreezingInfo(pCtx, pCurDq);
         }
     }
 }
@@ -1672,12 +1672,7 @@ pub fn FillDefaultSliceHeaderExt(
     pNalExt: &SNalUnitHeaderExt,
 ) -> bool {
     {
-        if pNalExt.bNoInterLayerPredFlag || pNalExt.uiQualityId > 0 {
-
-            pShExt.bBasePredWeightTableFlag = false;
-        } else {
-            pShExt.bBasePredWeightTableFlag = true;
-        }
+        pShExt.bBasePredWeightTableFlag = !(pNalExt.bNoInterLayerPredFlag || pNalExt.uiQualityId > 0);
         pShExt.uiRefLayerDqId = 255;
         pShExt.uiDisableInterLayerDeblockingFilterIdc = 0;
         pShExt.iInterLayerSliceAlphaC0Offset = 0;
@@ -2037,7 +2032,7 @@ pub fn DecoderConfigParam(pCtx: &mut SWelsDecoderContext, kpParam: &SDecodingPar
 pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext) -> i32 {
     let mut cpu_cores = 0i32;
     pCtx.uiCpuFlag = WelsCPUFeatureDetect(&mut cpu_cores);
-    { WelsInitDecoderFuncs(pCtx) };
+    WelsInitDecoderFuncs(pCtx);
     // `decoder.cpp:606` — the vlc tables, right after the function pointers.
     InitVlcTable(&mut pCtx.pVlcTable);
     pCtx.bParamSetsLostFlag = true;
@@ -2081,7 +2076,7 @@ pub fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
 pub fn WelsEndDecoder(pCtx: &mut SWelsDecoderContext) {
     {
         WelsFreeDynamicMemory(pCtx);
-        { WelsFreeStaticMemory(pCtx) };
+        WelsFreeStaticMemory(pCtx);
         pCtx.bParamSetsLostFlag = false;
         pCtx.bNewSeqBegin = false;
         pCtx.bPrintFrameErrorTraceFlag = false;
@@ -2927,7 +2922,7 @@ pub fn ResetCurrentAccessUnit(pCtx: &mut SWelsDecoderContext) {
     if pCurAu.uiActualUnitsNum > 0 {
         let kuiActualNum = pCurAu.uiActualUnitsNum;
         let kuiAvailNum = pCurAu.uiAvailUnitsNum;
-        let kuiLeftNum = if kuiAvailNum > kuiActualNum { kuiAvailNum - kuiActualNum } else { 0 };
+        let kuiLeftNum = kuiAvailNum.saturating_sub(kuiActualNum);
         for iIdx in 0..kuiLeftNum as usize {
             swap_au_nodes(
                 pCurAu,
@@ -2996,8 +2991,8 @@ pub fn CheckAvailNalUnitsListContinuity(
         let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
             return;
         };
-        let mut uiLastNuDependencyId = (*pCurAu.nal(iStartIdx as usize)).sNalHeaderExt.uiDependencyId;
-        let mut uiLastNuLayerDqId = (*pCurAu.nal(iStartIdx as usize)).sNalHeaderExt.uiLayerDqId;
+        let mut uiLastNuDependencyId = pCurAu.nal(iStartIdx as usize).sNalHeaderExt.uiDependencyId;
+        let mut uiLastNuLayerDqId = pCurAu.nal(iStartIdx as usize).sNalHeaderExt.uiLayerDqId;
         let mut iCurNalUnitIdx = iStartIdx + 1;
 
         while iCurNalUnitIdx <= iEndIdx {
@@ -3028,7 +3023,7 @@ pub fn CheckAvailNalUnitsListContinuity(
         }
         iCurNalUnitIdx -= 1;
         pCurAu.uiEndPos = iCurNalUnitIdx as u32;
-        let dq_id = (*pCurAu.nal(iCurNalUnitIdx as usize)).sNalHeaderExt.uiLayerDqId;
+        let dq_id = pCurAu.nal(iCurNalUnitIdx as usize).sNalHeaderExt.uiLayerDqId;
         pCtx.uiTargetDqId = dq_id;
     }
 }
@@ -3123,7 +3118,7 @@ pub fn CheckIntegrityNalUnitsList(pCtx: &mut SWelsDecoderContext) -> bool {
             pCurAu.uiStartPos = 0;
             let mut iIdxNoInterLayerPred = kiEndPos;
             while iIdxNoInterLayerPred >= 0 {
-                if (*pCurAu.nal(iIdxNoInterLayerPred as usize)).sNalHeaderExt.bNoInterLayerPredFlag {
+                if pCurAu.nal(iIdxNoInterLayerPred as usize).sNalHeaderExt.bNoInterLayerPredFlag {
                     break;
                 }
                 iIdxNoInterLayerPred -= 1;
@@ -3147,14 +3142,14 @@ pub fn CheckIntegrityNalUnitsList(pCtx: &mut SWelsDecoderContext) -> bool {
             let endIdx = pCurAu.uiEndPos as usize;
             let pEndNal = pCurAu.nal(endIdx);
             pCtx.iCurSeqIntervalTargetDependId = pEndNal.sNalHeaderExt.uiDependencyId as i32;
-            pCtx.iCurSeqIntervalMaxPicWidth = (*pEndNal)
+            pCtx.iCurSeqIntervalMaxPicWidth = pEndNal
                 .sNalData
                 .sVclNal
                 .sSliceHeaderExt
                 .sSliceHeader
                 .iMbWidth
                 << 4;
-            pCtx.iCurSeqIntervalMaxPicHeight = (*pEndNal)
+            pCtx.iCurSeqIntervalMaxPicHeight = pEndNal
                 .sNalData
                 .sVclNal
                 .sSliceHeaderExt
@@ -3173,9 +3168,9 @@ pub fn CheckOnlyOneLayerInAu(pCtx: &mut SWelsDecoderContext) {
         };
         let iEndIdx = pCurAu.uiEndPos as usize;
         let mut iCurIdx = pCurAu.uiStartPos as usize;
-        let uiDId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiDependencyId;
-        let uiQId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiQualityId;
-        let uiTId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiTemporalId;
+        let uiDId = pCurAu.nal(iCurIdx).sNalHeaderExt.uiDependencyId;
+        let uiQId = pCurAu.nal(iCurIdx).sNalHeaderExt.uiQualityId;
+        let uiTId = pCurAu.nal(iCurIdx).sNalHeaderExt.uiTemporalId;
 
         pCtx.bOnlyOneLayerInCurAuFlag = true;
         if iEndIdx == iCurIdx {
@@ -3183,9 +3178,9 @@ pub fn CheckOnlyOneLayerInAu(pCtx: &mut SWelsDecoderContext) {
         }
         iCurIdx += 1;
         while iCurIdx <= iEndIdx {
-            let uiCurDId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiDependencyId;
-            let uiCurQId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiQualityId;
-            let uiCurTId = (*pCurAu.nal(iCurIdx)).sNalHeaderExt.uiTemporalId;
+            let uiCurDId = pCurAu.nal(iCurIdx).sNalHeaderExt.uiDependencyId;
+            let uiCurQId = pCurAu.nal(iCurIdx).sNalHeaderExt.uiQualityId;
+            let uiCurTId = pCurAu.nal(iCurIdx).sNalHeaderExt.uiTemporalId;
             if uiDId != uiCurDId || uiQId != uiCurQId || uiTId != uiCurTId {
                 pCtx.bOnlyOneLayerInCurAuFlag = false;
                 return;
@@ -3209,7 +3204,7 @@ pub fn WelsDecodeAccessUnitStart(pCtx: &mut SWelsDecoderContext) -> i32 {
             { return dsBitstreamError; }
         }
         if !pCtx.sSpsPpsCtx.bAvcBasedFlag {
-            { CheckOnlyOneLayerInAu(pCtx) };
+            CheckOnlyOneLayerInAu(pCtx);
         }
         ERR_NONE
     }
@@ -3391,7 +3386,7 @@ pub fn AllocPicBuffOnNewSeqBegin(pCtx: &mut SWelsDecoderContext) -> i32 {
         let active = if pCtx.active_sps.is_some() {
             pCtx.active_sps
         } else {
-            (*pCtx)
+            pCtx
                 .sSpsPpsCtx
                 .sSpsBuffer
                 .iter()
@@ -3409,8 +3404,8 @@ pub fn AllocPicBuffOnNewSeqBegin(pCtx: &mut SWelsDecoderContext) -> i32 {
         if GetThreadCount(pCtx) <= 1 {
             WelsResetRefPic(pCtx);
         }
-        let iErr = SyncPictureResolutionExt(pCtx, iMbWidth, iMbHeight);
-        iErr
+        
+        SyncPictureResolutionExt(pCtx, iMbWidth, iMbHeight)
     }
 }
 
@@ -3443,7 +3438,7 @@ pub fn ConstructAccessUnit(
         }
     }
     let iErr = { DecodeCurrentAccessUnit(pCtx, ppDst, pDstInfo) };
-    { WelsDecodeAccessUnitEnd(pCtx) };
+    WelsDecodeAccessUnitEnd(pCtx);
     iErr
 }
 
@@ -3483,7 +3478,7 @@ pub fn WelsDecodeBs(
             pCtx.sRawData.rewind();
         }
 
-        for (_u_i, unit) in units.iter().enumerate() {
+        for unit in units.iter() {
             let mut payload_slice = *unit;
             if payload_slice.starts_with(&[0, 0, 0, 1]) {
                 payload_slice = &payload_slice[4..];
@@ -3693,7 +3688,7 @@ pub fn InitRefPicList(
     {
         let mut iRet = if pCtx.eSliceType == B_SLICE {
             let ret = WelsInitBSliceRefList(pCtx, pCurDqLayer.as_deref_mut(), iPoc);
-            { CreateImplicitWeightTable(pCtx, pCurDqLayer.as_deref_mut()) };
+            CreateImplicitWeightTable(pCtx, pCurDqLayer.as_deref_mut());
             ret
         } else {
             WelsInitRefList(pCtx, pCurDqLayer.as_deref_mut(), iPoc)
@@ -3706,7 +3701,7 @@ pub fn InitRefPicList(
             {
                 iRet = WelsReorderRefList2(pCtx, pCurDqLayer.as_deref_mut());
             } else {
-                iRet = WelsReorderRefList(pCtx, pCurDqLayer.as_deref_mut());
+                iRet = WelsReorderRefList(pCtx, pCurDqLayer);
             }
         }
         iRet
@@ -3945,7 +3940,7 @@ pub fn DecodeCurrentAccessUnit(
                 let nal_copy = pNalCur
                     .and_then(|i| pCtx.access_unit.as_deref().and_then(|au| au.node(i)))
                     .copied();
-                InitDqLayerInfo(pCtx, dq_cur.as_deref_mut(), &mut pLayerInfo, nal_copy.as_ref());
+                InitDqLayerInfo(pCtx, dq_cur.as_deref_mut(), &pLayerInfo, nal_copy.as_ref());
 
                 // Subclause 8.2.5.2, gaps in `frame_num`
                 // (`decoder_core.cpp:2675`). A non-IDR slice whose `frame_num` is
@@ -4293,10 +4288,8 @@ pub fn CheckAndFinishLastPic(
             pCtx.bFrameFinish = true;
         } else {
             if DecodeFrameConstruction(pCtx, dq_cur.as_deref(), ppDst, pDstInfo) != ERR_NONE {
-                if {
-                    pCtx.pLastDecPicInfo.sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0
-                        && pCtx.pLastDecPicInfo.sLastNalHdrExt.uiTemporalId == 0
-                }
+                if pCtx.pLastDecPicInfo.sLastNalHdrExt.sNalUnitHeader.uiNalRefIdc > 0
+                && pCtx.pLastDecPicInfo.sLastNalHdrExt.uiTemporalId == 0
                 {
                     pCtx.iErrorCode |= dsNoParamSets;
                 } else {
@@ -4606,7 +4599,7 @@ mod tests {
         {
             {
                 let mut ctx = SWelsDecoderContext::new_boxed();
-                assert_eq!(WelsOpenDecoder(&mut *ctx), ERR_NONE);
+                assert_eq!(WelsOpenDecoder(&mut ctx), ERR_NONE);
                 assert!(ctx.bParamSetsLostFlag);
                 assert!(ctx.bNewSeqBegin);
                 assert!(ctx.bPrintFrameErrorTraceFlag);
@@ -4614,7 +4607,7 @@ mod tests {
                 assert!(ctx.bFrameFinish);
                 assert_eq!(ctx.iSeqNum, 0);
 
-                WelsEndDecoder(&mut *ctx);
+                WelsEndDecoder(&mut ctx);
                 assert!(!ctx.bParamSetsLostFlag);
                 assert!(!ctx.bNewSeqBegin);
                 assert!(!ctx.bPrintFrameErrorTraceFlag);
@@ -4629,13 +4622,12 @@ mod tests {
             {
                 let mut ppDst = [std::ptr::null_mut(); 3];
                 let mut dst_info = SBufferInfo::default();
-                assert_eq!(
-                    CheckAndFinishLastPic(
+                assert!(
+                    !CheckAndFinishLastPic(
                         &mut SWelsDecoderContext::new_boxed(),
                         &mut ppDst,
                         &mut dst_info
-                    ),
-                    false
+                    )
                 );
                 // The absent layer is what the function refuses on.
                 assert_eq!(

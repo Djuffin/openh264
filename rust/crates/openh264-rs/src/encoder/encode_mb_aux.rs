@@ -871,6 +871,10 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
 // Unit Tests
 // ============================================================================
 
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
+pub use crate::common::cpu_core::{WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_LASX, WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MMXEXT, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1021,6 +1025,3 @@ mod tests {
         assert_eq!(count, 3);
     }
 }
-
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_LASX, WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MMXEXT, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3};

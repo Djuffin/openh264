@@ -171,8 +171,8 @@ impl CppLibrary {
                     if !create_sym.is_null() && !destroy_sym.is_null() {
                         return Some(Self {
                             _handle: handle,
-                            create_fn: std::mem::transmute(create_sym),
-                            destroy_fn: std::mem::transmute(destroy_sym),
+                            create_fn: std::mem::transmute::<*mut c_void, CppWelsCreateSVCEncoderFn>(create_sym),
+                            destroy_fn: std::mem::transmute::<*mut c_void, CppWelsDestroySVCEncoderFn>(destroy_sym),
                         });
                     }
                 }
@@ -459,7 +459,7 @@ fn main() {
     let load_balancing: Option<bool> = Some(
         std::env::var("BENCH_LOAD_BALANCING")
             .ok()
-            .map_or(false, |v| v.trim() != "0")
+            .is_some_and(|v| v.trim() != "0")
     );
 
     if let Some(cap) = frame_cap {

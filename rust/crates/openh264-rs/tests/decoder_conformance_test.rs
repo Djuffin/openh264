@@ -57,7 +57,7 @@ fn test_decoder_capability_query() {
         assert_eq!(dec_cap.iMaxCpb, 20000);
         assert_eq!(dec_cap.iMaxDpb, 20480);
         assert_eq!(dec_cap.iMaxBr, 20000);
-        assert_eq!(dec_cap.bRedPicCap, false);
+        assert!(!dec_cap.bRedPicCap);
     }
 }
 
@@ -91,7 +91,7 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
     unsafe {
         let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
         let ret = WelsCreateDecoder(&mut p_decoder);
-        assert_eq!(i64::from(ret), CM_RESULT_SUCCESS as i64, "Failed to create decoder for {}", file_name);
+        assert_eq!(ret, CM_RESULT_SUCCESS as i64, "Failed to create decoder for {}", file_name);
         assert!(!p_decoder.is_null());
 
         let mut dec_param = SDecodingParam::default();
@@ -100,13 +100,13 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
         dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
 
         let init_ret = ISVCDecoder::Initialize(p_decoder, &dec_param as *const SDecodingParam);
-        assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64, "Failed to initialize decoder for {}", file_name);
+        assert_eq!(init_ret, CM_RESULT_SUCCESS as i64, "Failed to initialize decoder for {}", file_name);
 
         let mut hasher = Sha1Hasher::new();
         let units = split_annexb_units(&data);
         let mut decoded_frames = 0;
 
-        for (_idx, unit) in units.iter().enumerate() {
+        for unit in units.iter() {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
             let dec_ret = ISVCDecoder::DecodeFrame2(

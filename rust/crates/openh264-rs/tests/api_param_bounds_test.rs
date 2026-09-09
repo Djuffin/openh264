@@ -42,11 +42,11 @@ fn test_decoder_null_param_rejected() {
     unsafe {
         let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
         let ret = WelsCreateDecoder(&mut p_decoder);
-        assert_eq!(i64::from(ret), CM_RESULT_SUCCESS as i64);
+        assert_eq!(ret, CM_RESULT_SUCCESS as i64);
         assert!(!p_decoder.is_null());
 
         let init_ret = ISVCDecoder::Initialize(p_decoder, std::ptr::null());
-        assert_ne!(i64::from(init_ret), CM_RESULT_SUCCESS as i64);
+        assert_ne!(init_ret, CM_RESULT_SUCCESS as i64);
 
         WelsDestroyDecoder(p_decoder);
     }
@@ -202,12 +202,12 @@ fn test_decoder_get_set_options_vcl_nal_framenum_idr_isref() {
     unsafe {
         let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
         let ret = WelsCreateDecoder(&mut p_decoder);
-        assert_eq!(i64::from(ret), CM_RESULT_SUCCESS as i64);
+        assert_eq!(ret, CM_RESULT_SUCCESS as i64);
 
         let mut dec_param = SDecodingParam::default();
         dec_param.uiTargetDqLayer = u8::MAX;
         let init_ret = ISVCDecoder::Initialize(p_decoder, &dec_param as *const SDecodingParam);
-        assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64);
+        assert_eq!(init_ret, CM_RESULT_SUCCESS as i64);
 
         let mut vcl_nal = 0i32;
         let opt_vcl = ISVCDecoder::GetOption(
@@ -215,7 +215,7 @@ fn test_decoder_get_set_options_vcl_nal_framenum_idr_isref() {
             DECODER_OPTION::DECODER_OPTION_VCL_NAL,
             &mut vcl_nal as *mut i32 as *mut std::ffi::c_void,
         );
-        assert_eq!(i64::from(opt_vcl), CM_RESULT_SUCCESS as i64);
+        assert_eq!(opt_vcl, CM_RESULT_SUCCESS as i64);
 
         let mut frame_num = 0i32;
         let opt_fn = ISVCDecoder::GetOption(
@@ -223,7 +223,7 @@ fn test_decoder_get_set_options_vcl_nal_framenum_idr_isref() {
             DECODER_OPTION::DECODER_OPTION_FRAME_NUM,
             &mut frame_num as *mut i32 as *mut std::ffi::c_void,
         );
-        assert_eq!(i64::from(opt_fn), CM_RESULT_SUCCESS as i64);
+        assert_eq!(opt_fn, CM_RESULT_SUCCESS as i64);
 
         let mut idr_id = 0i32;
         let opt_idr = ISVCDecoder::GetOption(
@@ -231,7 +231,7 @@ fn test_decoder_get_set_options_vcl_nal_framenum_idr_isref() {
             DECODER_OPTION::DECODER_OPTION_IDR_PIC_ID,
             &mut idr_id as *mut i32 as *mut std::ffi::c_void,
         );
-        assert_eq!(i64::from(opt_idr), CM_RESULT_SUCCESS as i64);
+        assert_eq!(opt_idr, CM_RESULT_SUCCESS as i64);
 
         let mut is_ref = 0i32;
         let opt_ref = ISVCDecoder::GetOption(
@@ -239,7 +239,7 @@ fn test_decoder_get_set_options_vcl_nal_framenum_idr_isref() {
             DECODER_OPTION::DECODER_OPTION_IS_REF_PIC,
             &mut is_ref as *mut i32 as *mut std::ffi::c_void,
         );
-        assert_eq!(i64::from(opt_ref), CM_RESULT_SUCCESS as i64);
+        assert_eq!(opt_ref, CM_RESULT_SUCCESS as i64);
 
         ISVCDecoder::Uninitialize(p_decoder);
         WelsDestroyDecoder(p_decoder);

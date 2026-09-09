@@ -98,13 +98,13 @@ const ROWS: &[Row] = &[
 unsafe fn nodelay_row(data: &[u8]) -> (usize, (i32, i32), String, Vec<i32>, Vec<i32>) {
     unsafe {
         let mut dec: *mut ISVCDecoder = std::ptr::null_mut();
-        assert_eq!(i64::from(WelsCreateDecoder(&mut dec)), CM_RESULT_SUCCESS as i64);
+        assert_eq!(WelsCreateDecoder(&mut dec), CM_RESULT_SUCCESS as i64);
         let mut param = SDecodingParam::default();
         param.uiTargetDqLayer = u8::MAX;
         param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
         param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
         assert_eq!(
-            i64::from(ISVCDecoder::Initialize(dec, &param as *const SDecodingParam)),
+            ISVCDecoder::Initialize(dec, &param as *const SDecodingParam),
             CM_RESULT_SUCCESS as i64
         );
 

@@ -628,7 +628,7 @@ pub fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
     if pRefList.pNextBuffer.is_none() && pRefList.uiShortRefCount > 0 {
         // The C++ counterpart is `ref_list_mgr_svc.cpp:343`
         // (`pShortRefList[pRefList->uiShortRefCount - 1]`), an unchecked *read*.
-        let lastIdx = (((pRefList.uiShortRefCount - 1) as usize))
+        let lastIdx = ((pRefList.uiShortRefCount - 1) as usize)
             .min(pRefList.pShortRefList.len() - 1);
         pRefList.pNextBuffer = pRefList.pShortRefList[lastIdx];
         if let Some(id) = pRefList.pNextBuffer {
@@ -645,7 +645,7 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    if pCtx.ref_list(uiDid).map_or(true, |l| l.pRef.is_empty()) {
+    if pCtx.ref_list(uiDid).is_none_or(|l| l.pRef.is_empty()) {
         return false;
     }
 
@@ -1336,7 +1336,7 @@ pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
         return false;
     }
     let uiDid = pCtx.uiDependencyId as usize;
-    if pCtx.ref_list(uiDid).map_or(true, |l| l.pRef.is_empty()) {
+    if pCtx.ref_list(uiDid).is_none_or(|l| l.pRef.is_empty()) {
         return false;
     }
     let (kiHighestTid, kiFrameNum, kiPOC) = {
@@ -1830,6 +1830,10 @@ impl RefStrategyKind {
     }
 }
 
+
+/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+static REC_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1873,6 +1877,3 @@ mod tests {
         assert_eq!(zeroed, RefStrategyKind::TemporalLayer);
     }
 }
-
-/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
-static REC_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

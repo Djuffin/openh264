@@ -1066,13 +1066,13 @@ pub fn UpdateP16x16MotionInfo(
 /// Updates reference index cache for a 16x16 macroblock.
 pub fn UpdateP16x16RefIdx(
     pCurDqLayer: &mut DqLayerState,
-    mut pDec: Option<&mut SPicture>,
+    pDec: Option<&mut SPicture>,
     listIdx: i32,
     iRef: i8,
 ) {
     let iMbXy = pCurDqLayer.iMbXyIndex as usize;
 
-    if let Some(pic) = pDec.as_deref_mut() {
+    if let Some(pic) = pDec {
         let ref_ptr = pic.pRefIndex[listIdx as usize].get_mut(iMbXy);
         for i in (0..16).step_by(4) {
             let kuiScan4Idx = g_kuiScan4[i] as usize;

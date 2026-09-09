@@ -2431,7 +2431,7 @@ impl Decoder {
         let Some(p_ctx) = self.ctx.as_deref_mut() else {
             return DECODING_STATE::dsInitialOptExpected;
         };
-        (*p_ctx).iErrorCode = DECODING_STATE::dsErrorFree.0;
+        p_ctx.iErrorCode = DECODING_STATE::dsErrorFree.0;
         // `welsDecoderExt.cpp:783`'s `iStart = WelsTime()`. The reference's
         // `dDecTime` is a millisecond accumulator over `gettimeofday`; a monotonic
         // `Instant` is the same accumulator and cannot run backwards. Its one
@@ -2449,31 +2449,31 @@ impl Decoder {
         ppDst[0] = ptr::null_mut();
         ppDst[1] = ptr::null_mut();
         ppDst[2] = ptr::null_mut();
-        (*p_ctx).iFeedbackVclNalInAu = crate::decoder::decoder_core::FEEDBACK_UNKNOWN_NAL;
+        p_ctx.iFeedbackVclNalInAu = crate::decoder::decoder_core::FEEDBACK_UNKNOWN_NAL;
         // `:789-793`: the whole `SBufferInfo` is zeroed and only `uiInBsTimeStamp`
         // survives, because it is the caller's *input* on this slot.
         let uiInBsTimeStamp = pDstInfo.uiInBsTimeStamp;
         *pDstInfo = SBufferInfo::default();
         pDstInfo.uiInBsTimeStamp = uiInBsTimeStamp;
         // `:795-800`, under `LONG_TERM_REF`.
-        (*p_ctx).bReferenceLostAtT0Flag = false;
-        (*p_ctx).bCurAuContainLtrMarkSeFlag = false;
-        (*p_ctx).iFrameNumOfAuMarkedLtr = 0;
-        (*p_ctx).iFrameNum = -1;
+        p_ctx.bReferenceLostAtT0Flag = false;
+        p_ctx.bCurAuContainLtrMarkSeFlag = false;
+        p_ctx.iFrameNumOfAuMarkedLtr = 0;
+        p_ctx.iFrameNum = -1;
         // `:804-805`.
-        (*p_ctx).iFeedbackTidInAu = -1;
-        (*p_ctx).iFeedbackNalRefIdc = -1;
+        p_ctx.iFeedbackTidInAu = -1;
+        p_ctx.iFeedbackNalRefIdc = -1;
         // `:807-811`. `pDstInfo` is a reference here, so the reference's null arm
         // (`uiTimeStamp = 0`) is unreachable — `decoder_decode_frame2_c` has already
         // returned `dsInitialOptExpected` for a null.
         pDstInfo.uiOutYuvTimeStamp = 0;
-        (*p_ctx).uiTimeStamp = uiInBsTimeStamp;
+        p_ctx.uiTimeStamp = uiInBsTimeStamp;
 
         if let Some(src) = src {
-            (*p_ctx).bEndOfStreamFlag = false;
-            if crate::decoder::decoder_core::GetThreadCount(&mut *p_ctx) <= 0 {
-                (*p_ctx).uiDecodeTimeStamp += 1;
-                (*p_ctx).uiDecodingTimeStamp = (*p_ctx).uiDecodeTimeStamp;
+            p_ctx.bEndOfStreamFlag = false;
+            if crate::decoder::decoder_core::GetThreadCount(&*p_ctx) <= 0 {
+                p_ctx.uiDecodeTimeStamp += 1;
+                p_ctx.uiDecodingTimeStamp = p_ctx.uiDecodeTimeStamp;
             }
             crate::decoder::decoder_core::WelsDecodeBs(
                 &mut *p_ctx,
@@ -2495,7 +2495,7 @@ impl Decoder {
             // So `DecodeFrame2 (NULL, 0, …)` *always* reconstructs, and this arm is
             // not gated on end of stream: `DecodeFrameNoDelay`'s second call is
             // exactly a null call made *before* end of stream.
-            (*p_ctx).bEndOfStreamFlag = true;
+            p_ctx.bEndOfStreamFlag = true;
             // The C++ sets this on exactly this arm (`welsDecoderExt.cpp:777`) and
             // clears it right after `WelsDecodeBs` (`:814`).
             // `DecodeFrameConstruction` is the reader:
@@ -2508,7 +2508,7 @@ impl Decoder {
             // With the flag false the early return never fires, so the flush call
             // falls through to the output path and emits a frame the C++ does not
             // emit.
-            (*p_ctx).bInstantDecFlag = true;
+            p_ctx.bInstantDecFlag = true;
             crate::decoder::decoder_core::WelsDecodeBs(
                 &mut *p_ctx,
                 &[],
@@ -2521,17 +2521,17 @@ impl Decoder {
         // `welsDecoderExt.cpp:814` — unconditionally, after `WelsDecodeBs`, in both
         // trees. The arm above is the only writer of `true`, so hoisting the clear
         // out of it is the same store.
-        (*p_ctx).bInstantDecFlag = false; // reset no-delay flag
+        p_ctx.bInstantDecFlag = false; // reset no-delay flag
 
         // ------------------------------------------------------------------
         // `welsDecoderExt.cpp:815–891`, the error-reporting block. Everything in it
         // is a status code, a recovery action or a statistic; it is transliterated
         // here in the reference's order.
         // ------------------------------------------------------------------
-        if (*p_ctx).iErrorCode != 0 {
+        if p_ctx.iErrorCode != 0 {
             // "for NBR, IDR frames are expected to decode as followed if error
             // decoding an IDR currently" (`:817`).
-            let eNalType = (*p_ctx).sCurNalHead.eNalUnitType;
+            let eNalType = p_ctx.sCurNalHead.eNalUnitType;
 
             // `:820–831` — the two reset arms, which differ only in the code they
             // report. `ResetDecoder` (`:439`) saves the parameter block and runs
@@ -2548,22 +2548,22 @@ impl Decoder {
             // `return dsErrorFree` is unreachable in the C++. Only the reachable
             // arm is written here; the other is named rather than transliterated
             // into a branch on a constant.
-            let reset_code = if (*p_ctx).iErrorCode & crate::decoder::decoder_core::dsOutOfMemory != 0
+            let reset_code = if p_ctx.iErrorCode & crate::decoder::decoder_core::dsOutOfMemory != 0
             {
                 Some(DECODING_STATE::dsOutOfMemory)
-            } else if (*p_ctx).iErrorCode & crate::decoder::decoder_core::dsRefListNullPtrs != 0 {
+            } else if p_ctx.iErrorCode & crate::decoder::decoder_core::dsRefListNullPtrs != 0 {
                 Some(DECODING_STATE::dsRefListNullPtrs)
             } else {
                 None
             };
             if let Some(code) = reset_code {
-                let sPrevParam = (*p_ctx).pParam;
+                let sPrevParam = p_ctx.pParam;
                 crate::decoder::decoder_core::WelsLog(
-                    (*p_ctx).sLogCtx,
+                    p_ctx.sLogCtx,
                     crate::decoder::decoder_core::WELS_LOG_INFO,
                     &format!(
                         "ResetDecoder(), context error code is {}",
-                        (*p_ctx).iErrorCode
+                        p_ctx.iErrorCode
                     ),
                 );
                 let _ = self.initialize(&sPrevParam);
@@ -2581,10 +2581,10 @@ impl Decoder {
             // `UpdateAccessUnit`'s mosaic-avoidance block reads.
             if IS_PARAM_SETS_NALS(eNalType)
                 || eNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
-                || (*p_ctx).eVideoType == VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_AVC
+                || p_ctx.eVideoType == VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_AVC
             {
-                if (*p_ctx).pParam.eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE {
-                    (*p_ctx).bParamSetsLostFlag = true;
+                if p_ctx.pParam.eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE {
+                    p_ctx.bParamSetsLostFlag = true;
                 }
             }
 
@@ -2592,23 +2592,23 @@ impl Decoder {
             // counter, so a stream that fails on every access unit does not fill
             // the caller's log. `bPrintFrameErrorTraceFlag` is re-armed by
             // `DecodeFrameConstruction` on a complete frame.
-            if (*p_ctx).bPrintFrameErrorTraceFlag {
+            if p_ctx.bPrintFrameErrorTraceFlag {
                 crate::decoder::decoder_core::WelsLog(
-                    (*p_ctx).sLogCtx,
+                    p_ctx.sLogCtx,
                     crate::decoder::decoder_core::WELS_LOG_INFO,
-                    &format!("decode failed, failure type:{} \n", (*p_ctx).iErrorCode),
+                    &format!("decode failed, failure type:{} \n", p_ctx.iErrorCode),
                 );
-                (*p_ctx).bPrintFrameErrorTraceFlag = false;
+                p_ctx.bPrintFrameErrorTraceFlag = false;
             } else {
-                (*p_ctx).iIgnoredErrorInfoPacketCount =
-                    (*p_ctx).iIgnoredErrorInfoPacketCount.wrapping_add(1);
-                if (*p_ctx).iIgnoredErrorInfoPacketCount == i32::MAX {
+                p_ctx.iIgnoredErrorInfoPacketCount =
+                    p_ctx.iIgnoredErrorInfoPacketCount.wrapping_add(1);
+                if p_ctx.iIgnoredErrorInfoPacketCount == i32::MAX {
                     crate::decoder::decoder_core::WelsLog(
-                        (*p_ctx).sLogCtx,
+                        p_ctx.sLogCtx,
                         crate::decoder::decoder_core::WELS_LOG_WARNING,
                         "continuous error reached INT_MAX! Restart as 0.",
                     );
-                    (*p_ctx).iIgnoredErrorInfoPacketCount = 0;
+                    p_ctx.iIgnoredErrorInfoPacketCount = 0;
                 }
             }
 
@@ -2617,15 +2617,15 @@ impl Decoder {
             // decoder, so the `|=` is usually a re-set of a bit that is already
             // there; the four counters behind it are what
             // `DECODER_OPTION_GET_STATISTICS` reports.
-            if (*p_ctx).pParam.eEcActiveIdc != ERROR_CON_IDC::ERROR_CON_DISABLE
+            if p_ctx.pParam.eEcActiveIdc != ERROR_CON_IDC::ERROR_CON_DISABLE
                 && pDstInfo.iBufferStatus == 1
             {
-                (*p_ctx).iErrorCode |= DECODING_STATE::dsDataErrorConcealed.0;
+                p_ctx.iErrorCode |= DECODING_STATE::dsDataErrorConcealed.0;
 
-                let iMbConcealedNum = (*p_ctx).iMbEcedNum.wrapping_add((*p_ctx).iMbEcedPropNum);
-                let iMbNum = (*p_ctx).iMbNum;
-                let iMbEcedPropNum = (*p_ctx).iMbEcedPropNum;
-                let stat = &mut (*p_ctx).pDecoderStatistics;
+                let iMbConcealedNum = p_ctx.iMbEcedNum.wrapping_add(p_ctx.iMbEcedPropNum);
+                let iMbNum = p_ctx.iMbNum;
+                let iMbEcedPropNum = p_ctx.iMbEcedPropNum;
+                let stat = &mut p_ctx.pDecoderStatistics;
 
                 stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
                 if stat.uiDecodedFrameCount == 0 {
@@ -2665,19 +2665,19 @@ impl Decoder {
                     stat.uiAvgEcPropRatio / stat.uiEcFrameNum
                 };
             }
-            (*p_ctx).dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
+            p_ctx.dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
             OutputStatisticsLog(&mut *p_ctx);
             // `:885–890`, `GetThreadCount` 0 in this port.
             ReorderPicturesInDisplay(&mut *p_ctx, ppDst, pDstInfo);
             // `welsDecoderExt.cpp:892` — the accumulator, whole.
-            return DECODING_STATE((*p_ctx).iErrorCode);
+            return DECODING_STATE(p_ctx.iErrorCode);
         }
 
         // `:894–905` — else error free, the current codec works well. The frame
         // counter is here and not only in the error branch, and it is the divisor
         // `DECODER_OPTION_GET_STATISTICS` reports its two speeds by.
         if pDstInfo.iBufferStatus == 1 {
-            let stat = &mut (*p_ctx).pDecoderStatistics;
+            let stat = &mut p_ctx.pDecoderStatistics;
             stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
             if stat.uiDecodedFrameCount == 0 {
                 ResetDecStatNums(stat);
@@ -2685,7 +2685,7 @@ impl Decoder {
             }
             OutputStatisticsLog(&mut *p_ctx);
         }
-        (*p_ctx).dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
+        p_ctx.dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
         // `ReorderPicturesInDisplay` at the tail of DecodeFrame2WithCtx.
         ReorderPicturesInDisplay(&mut *p_ctx, ppDst, pDstInfo);
 
@@ -2721,30 +2721,30 @@ impl Decoder {
         };
         // `:1189-1193` — the mode check: an entry point that refuses rather than
         // half-works.
-        if !(*p_ctx).pParam.bParseOnly {
+        if !p_ctx.pParam.bParseOnly {
             crate::common::wels_trace::WelsLog(
                 self.trace.m_sLogCtx,
                 crate::common::wels_trace::WELS_LOG_ERROR,
                 "bParseOnly should be true for this API calling! \n",
             );
-            (*p_ctx).iErrorCode |= DECODING_STATE::dsInvalidArgument.0;
+            p_ctx.iErrorCode |= DECODING_STATE::dsInvalidArgument.0;
             return DECODING_STATE::dsInvalidArgument;
         }
         let dec_started = std::time::Instant::now();
 
         if src.is_some() {
-            (*p_ctx).bEndOfStreamFlag = false;
+            p_ctx.bEndOfStreamFlag = false;
         } else {
             // "for CONSOLE MODE, when decoding LAST AU, kiSrcLen==0 && kpSrc==NULL"
-            (*p_ctx).bEndOfStreamFlag = true;
-            (*p_ctx).bInstantDecFlag = true;
+            p_ctx.bEndOfStreamFlag = true;
+            p_ctx.bInstantDecFlag = true;
         }
 
-        (*p_ctx).iErrorCode = DECODING_STATE::dsErrorFree.0;
+        p_ctx.iErrorCode = DECODING_STATE::dsErrorFree.0;
         // "add protection to disable EC here" (`:1216`).
-        (*p_ctx).pParam.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_DISABLE;
-        (*p_ctx).iFeedbackNalRefIdc = -1;
-        if !(*p_ctx).bFramePending {
+        p_ctx.pParam.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_DISABLE;
+        p_ctx.iFeedbackNalRefIdc = -1;
+        if !p_ctx.bFramePending {
             // `:1219-1220`. **The reference's `memset` counts bytes where the
             // array is `int32_t`** — `memset (pNalLenInByte, 0,
             // MAX_NAL_UNITS_IN_LAYER)` clears the first 32 of 130 elements. It is
@@ -2752,7 +2752,7 @@ impl Decoder {
             // `pNalLenInByte[iNalNum++] = …` before anything reads it, and the one
             // reader sums `0..iNalNum`. Cleared whole here.
             if let Some(p) = parser_bs(
-                &mut (*p_ctx).pParserBsInfo,
+                &mut p_ctx.pParserBsInfo,
             ) {
                 p.iNalNum = 0;
                 p.pNalLenInByte.fill(0);
@@ -2761,7 +2761,7 @@ impl Decoder {
         pDstInfo.iNalNum = 0;
         pDstInfo.iSpsWidthInPixel = 0;
         pDstInfo.iSpsHeightInPixel = 0;
-        (*p_ctx).uiTimeStamp = pDstInfo.uiInBsTimeStamp;
+        p_ctx.uiTimeStamp = pDstInfo.uiInBsTimeStamp;
         pDstInfo.uiOutBsTimeStamp = 0;
 
         // `WelsDecodeBs (pDecContext, kpSrc, kiSrcLen, NULL, NULL, pDstInfo)`
@@ -2788,8 +2788,8 @@ impl Decoder {
         // `:1231-1236` — out of memory rebuilds the decoder and reports success,
         // because the rebuild is the recovery. `ResetDecoder` is `initialize` over
         // the saved parameter block, as in `decode`'s error-reporting block.
-        if (*p_ctx).iErrorCode & crate::decoder::decoder_core::dsOutOfMemory != 0 {
-            let sPrevParam = (*p_ctx).pParam;
+        if p_ctx.iErrorCode & crate::decoder::decoder_core::dsOutOfMemory != 0 {
+            let sPrevParam = p_ctx.pParam;
             let _ = self.initialize(&sPrevParam);
             return DECODING_STATE::dsOutOfMemory;
         }
@@ -2798,10 +2798,10 @@ impl Decoder {
         // decoder-side descriptor and the boundary struct are the same C type;
         // here they are two, so it is field by field and the two raw pointers are
         // minted from the `Vec`s that own the bytes.
-        let bFrameDone = !(*p_ctx).bFramePending;
+        let bFrameDone = !p_ctx.bFramePending;
         if bFrameDone {
             let filled = match parser_bs(
-                &mut (*p_ctx).pParserBsInfo,
+                &mut p_ctx.pParserBsInfo,
             ) {
                 Some(p) if p.iNalNum != 0 => {
                     pDstInfo.iNalNum = p.iNalNum;
@@ -2820,8 +2820,8 @@ impl Decoder {
                 }
                 _ => false,
             };
-            if filled && (*p_ctx).iErrorCode == ERR_NONE {
-                let stat = &mut (*p_ctx).pDecoderStatistics;
+            if filled && p_ctx.iErrorCode == ERR_NONE {
+                let stat = &mut p_ctx.pDecoderStatistics;
                 stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
                 if stat.uiDecodedFrameCount == 0 {
                     ResetDecStatNums(stat);
@@ -2830,18 +2830,18 @@ impl Decoder {
             }
         }
 
-        (*p_ctx).bInstantDecFlag = false; // reset no-delay flag
+        p_ctx.bInstantDecFlag = false; // reset no-delay flag
 
-        if (*p_ctx).iErrorCode != 0 && (*p_ctx).bPrintFrameErrorTraceFlag {
+        if p_ctx.iErrorCode != 0 && p_ctx.bPrintFrameErrorTraceFlag {
             crate::common::wels_trace::WelsLog(
                 self.trace.m_sLogCtx,
                 crate::common::wels_trace::WELS_LOG_INFO,
-                &format!("decode failed, failure type:{} \n", (*p_ctx).iErrorCode),
+                &format!("decode failed, failure type:{} \n", p_ctx.iErrorCode),
             );
-            (*p_ctx).bPrintFrameErrorTraceFlag = false;
+            p_ctx.bPrintFrameErrorTraceFlag = false;
         }
-        (*p_ctx).dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
-        DECODING_STATE((*p_ctx).iErrorCode)
+        p_ctx.dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
+        DECODING_STATE(p_ctx.iErrorCode)
     }
 
     /// `CWelsDecoder::FlushFrame` — `welsDecoderExt.cpp:1094`: drains the display
@@ -2862,11 +2862,11 @@ impl Decoder {
         let Some(p_ctx) = self.ctx.as_deref_mut() else {
             return DECODING_STATE::dsErrorFree;
         };
-        if (*p_ctx).bEndOfStreamFlag && (*p_ctx).pPictReoderingStatus.iNumOfPicts > 0 {
+        if p_ctx.bEndOfStreamFlag && p_ctx.pPictReoderingStatus.iNumOfPicts > 0 {
             // `false` is the C's `NULL` context argument
             // (`welsDecoderExt.cpp:1103`): drain the slot list without touching
             // the live pool. See `pool_for`.
-            if !(*p_ctx).pPictReoderingStatus.bHasBSlice {
+            if !p_ctx.pPictReoderingStatus.bHasBSlice {
                 ReleaseBufferedReadyPictureNoReorder(&mut *p_ctx, false, ppDst, pDstInfo);
             } else {
                 ReleaseBufferedReadyPictureReorder(&mut *p_ctx, false, ppDst, pDstInfo, true);
@@ -2906,7 +2906,6 @@ impl Decoder {
 /// read as bytes and sanitised field-wise before it becomes an `SDecodingParam` —
 /// see the block at the head of the body. A `&SDecodingParam` here would be a
 /// safety claim the C ABI does not make.
-
 #[allow(unsafe_code)]
 unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDecodingParam) -> c_long {
     abi_guard!("ISVCDecoder::Initialize", unsafe { decoder_log(this) }, CM_INIT_PARA_ERROR as c_long, {
@@ -3128,7 +3127,7 @@ fn BufferingReadyPicture(
             // here rather than the pointer being stored. The thread count is read
             // before the pool borrow opens: the picture is `pPicBuff`'s and
             // `GetThreadCount` takes the context.
-            let bSingleThreaded = crate::decoder::decoder_core::GetThreadCount(&mut *pCtx) <= 1;
+            let bSingleThreaded = crate::decoder::decoder_core::GetThreadCount(&*pCtx) <= 1;
             let prev_id = prev_dpb_id(&pCtx.pLastDecPicInfo);
             if let Some(prev) =
                 prev_dpb_pic_mut(&mut pCtx.pPicBuff, prev_id)
@@ -3929,7 +3928,7 @@ pub(crate) mod abi_test_driver {
             {
                 let mut p_decoder: *mut ISVCDecoder = ptr::null_mut();
                 assert_eq!(
-                    i64::from(WelsCreateDecoder(&mut p_decoder)),
+                    WelsCreateDecoder(&mut p_decoder),
                     CM_RESULT_SUCCESS as i64
                 );
                 assert!(!p_decoder.is_null());
@@ -3940,7 +3939,7 @@ pub(crate) mod abi_test_driver {
                 dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
                 dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
                 assert_eq!(
-                    i64::from(((*vtbl).Initialize)(p_decoder, &dec_param as *const SDecodingParam)),
+                    ((*vtbl).Initialize)(p_decoder, &dec_param as *const SDecodingParam),
                     CM_RESULT_SUCCESS as i64
                 );
 
@@ -4399,7 +4398,7 @@ mod f23_boundary_provenance {
             // --- the decoder half -------------------------------------------
             let mut p_decoder = ptr::null_mut();
             assert_eq!(
-                i64::from(WelsCreateDecoder(&mut p_decoder)),
+                WelsCreateDecoder(&mut p_decoder),
                 CM_RESULT_SUCCESS as i64
             );
             assert!(!p_decoder.is_null());
@@ -4411,7 +4410,7 @@ mod f23_boundary_provenance {
             // The write that is out of bounds for an eight-byte borrow: this call
             // stores `*pParam` into `CWelsDecoderImpl::param`.
             assert_eq!(
-                i64::from(ISVCDecoder::Initialize(p_decoder, &dec_param)),
+                ISVCDecoder::Initialize(p_decoder, &dec_param),
                 CM_RESULT_SUCCESS as i64
             );
 
@@ -4432,7 +4431,7 @@ mod f23_boundary_provenance {
             assert_eq!(eos_back, 1, "END_OF_STREAM did not round-trip");
 
             assert_eq!(
-                i64::from(ISVCDecoder::Uninitialize(p_decoder)),
+                ISVCDecoder::Uninitialize(p_decoder),
                 CM_RESULT_SUCCESS as i64
             );
             WelsDestroyDecoder(p_decoder);
@@ -4552,10 +4551,10 @@ mod abi_panic_guard {
     fn a_panic_inside_a_decoder_thunk_becomes_dsbitstreamerror() {
         unsafe {
             let mut decoder: *mut ISVCDecoder = ptr::null_mut();
-            assert_eq!(i64::from(WelsCreateDecoder(&mut decoder)), CM_RESULT_SUCCESS as i64);
+            assert_eq!(WelsCreateDecoder(&mut decoder), CM_RESULT_SUCCESS as i64);
             let param = SDecodingParam { uiTargetDqLayer: u8::MAX, ..SDecodingParam::default() };
             assert_eq!(
-                i64::from(ISVCDecoder::Initialize(decoder, &param as *const SDecodingParam)),
+                ISVCDecoder::Initialize(decoder, &param as *const SDecodingParam),
                 CM_RESULT_SUCCESS as i64
             );
 

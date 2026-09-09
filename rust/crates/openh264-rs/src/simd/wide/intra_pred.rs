@@ -88,7 +88,7 @@ fn i16x16_plane_fill<O: PredOut>(out: &mut O, top_shift: i32, left_shift: i32, l
         let row_lo = (term_lo + s_vec) >> 5i32;
         let row_hi = (term_hi + s_vec) >> 5i32;
         out.put(dy, &narrow(row_lo, row_hi).to_array());
-        s_vec = s_vec + c_vec;
+        s_vec += c_vec;
     }
 }
 
@@ -233,7 +233,7 @@ fn chroma_plane_fill<O: PredOut>(out: &mut O, top_shift: i32, left_shift: i32, l
     for dy in 0..8 {
         let row_w = (term + s_vec) >> 5i32;
         out.put(dy, &low8(narrow(row_w, row_w)));
-        s_vec = s_vec + c_vec;
+        s_vec += c_vec;
     }
 }
 

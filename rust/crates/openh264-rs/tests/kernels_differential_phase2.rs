@@ -594,7 +594,7 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
         for v in byhand.iter_mut() {
             let s = (*v as i32) >> 31;
             let abs = (s ^ (*v as i32)) - s;
-            let q = ((((ff[0] << 1) as i32 + abs) * (mf[0] >> 1) as i32) >> 16) as i32;
+            let q = (((ff[0] << 1) as i32 + abs) * (mf[0] >> 1) as i32) >> 16;
             *v = ((s ^ q) - s) as i16;
         }
         assert_eq!(dc, byhand, "Quant4x4Dc dead zone");

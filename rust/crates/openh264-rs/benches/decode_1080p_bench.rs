@@ -337,15 +337,15 @@ impl<'a> CppDecoder<'a> {
             assert!(!dec.is_null());
 
             let vtable = *(dec as *mut *mut *const ());
-            let initialize: CppInitializeFn = std::mem::transmute(*vtable.add(VT_INITIALIZE));
+            let initialize = std::mem::transmute::<*const (), CppInitializeFn>(*vtable.add(VT_INITIALIZE));
             let this = Self {
                 lib,
                 dec,
-                uninitialize: std::mem::transmute(*vtable.add(VT_UNINITIALIZE)),
-                decode_frame2: std::mem::transmute(*vtable.add(VT_DECODE_FRAME2)),
-                flush_frame: std::mem::transmute(*vtable.add(VT_FLUSH_FRAME)),
-                set_option: std::mem::transmute(*vtable.add(VT_SET_OPTION)),
-                get_option: std::mem::transmute(*vtable.add(VT_GET_OPTION)),
+                uninitialize: std::mem::transmute::<*const (), CppUninitializeFn>(*vtable.add(VT_UNINITIALIZE)),
+                decode_frame2: std::mem::transmute::<*const (), CppDecodeFrame2Fn>(*vtable.add(VT_DECODE_FRAME2)),
+                flush_frame: std::mem::transmute::<*const (), CppFlushFrameFn>(*vtable.add(VT_FLUSH_FRAME)),
+                set_option: std::mem::transmute::<*const (), CppOptionFn>(*vtable.add(VT_SET_OPTION)),
+                get_option: std::mem::transmute::<*const (), CppOptionFn>(*vtable.add(VT_GET_OPTION)),
             };
 
             let param = decoding_param();

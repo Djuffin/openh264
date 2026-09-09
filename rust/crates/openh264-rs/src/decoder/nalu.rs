@@ -937,12 +937,10 @@ pub fn ParseNalHeader(
                     .try_into()
                     .unwrap();
                 let (qid, base_pic) =
-                    match cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(cur_idx)) {
-                        Some(nal) => {
-                            DecodeNalHeaderExt(nal, &hdr);
-                            (nal.sNalHeaderExt.uiQualityId, nal.sNalHeaderExt.bUseRefBasePicFlag)
-                        }
-                        None => return None,
+                    {
+                        let nal = cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(cur_idx))?;
+                        DecodeNalHeaderExt(nal, &hdr);
+                        (nal.sNalHeaderExt.uiQualityId, nal.sNalHeaderExt.bUseRefBasePicFlag)
                     };
                 if qid != 0 || base_pic {
                     // MGS not supported.
@@ -1016,12 +1014,10 @@ pub fn ParseNalHeader(
             // available one — the two indices are one, and this states it once.
             let last = (uiAvailNalNum - 1) as usize;
             debug_assert_eq!(last, cur_idx);
-            let iErr = match cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(last)) {
-                Some(nal) => {
-                    let pBs = &mut nal.sNalData.sVclNal.sSliceBitsRead;
-                    DecInitBits(pBs, &pCtx.sRawData, iNal, iBitSize)
-                }
-                None => return None,
+            let iErr = {
+                let nal = cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(last))?;
+                let pBs = &mut nal.sNalData.sVclNal.sSliceBitsRead;
+                DecInitBits(pBs, &pCtx.sRawData, iNal, iBitSize)
             };
             if iErr != ERR_NONE {
                 discard_nal_and_close_au(pCtx, uiAvailNalNum);
@@ -1034,15 +1030,12 @@ pub fn ParseNalHeader(
             // slice-data parse picks it up. It is not `pCtx.sBs`: that
             // one is the non-VCL parser's, and writing this back there would leave
             // every slice header re-read from its first bit.
-            let Some((start, mut cursor)) = cur_au(&mut pCtx.access_unit)
+            let (start, mut cursor) = cur_au(&mut pCtx.access_unit)
                 .and_then(|au| au.node(last))
                 .map(|nal| {
                     let r = &nal.sNalData.sVclNal.sSliceBitsRead;
                     (r.start, r.cursor)
-                })
-            else {
-                return None;
-            };
+                })?;
             let iErr = crate::decoder::decoder_core::ParseSliceHeaderSyntaxs(
                 pCtx,
                 start,
@@ -1080,14 +1073,14 @@ pub fn ParseNalHeader(
             }
             if uiAvailNalNum > 1 {
                 let prev = (uiAvailNalNum - 2) as usize;
-                let boundary = match pCtx.access_unit.as_deref() {
-                    Some(au) => match (au.node(last), au.node(prev)) {
-                        (Some(l), Some(pv)) => {
-                            CheckAccessUnitBoundary(&pCtx.sSpsPpsCtx, l, pv, p_last_sps)
-                        }
-                        _ => return None,
-                    },
-                    None => return None,
+                let boundary = {
+                    let au = pCtx.access_unit.as_deref()?;
+                    match (au.node(last), au.node(prev)) {
+                    (Some(l), Some(pv)) => {
+                        CheckAccessUnitBoundary(&pCtx.sSpsPpsCtx, l, pv, p_last_sps)
+                    }
+                    _ => return None,
+                }
                 };
                 if boundary {
                     if let Some(au) = cur_au(&mut pCtx.access_unit) {
@@ -1714,7 +1707,7 @@ pub fn ParseSps(
         pSubsetSps.sSps.bSeqScalingMatrixPresentFlag = uiCode != 0;
 
         if pSubsetSps.sSps.bSeqScalingMatrixPresentFlag {
-            let src = ScalingListSource::of(&mut pSubsetSps.sSps);
+            let src = ScalingListSource::of(&pSubsetSps.sSps);
             ParseScalingList(
                 &src,
                 buf,
@@ -1923,22 +1916,22 @@ pub fn ParseSps(
     } else {
         if CheckSpsActive(pCtx, tmp_ref, false) {
             // Overwriting the active SPS: only act when it actually changed.
-            if !bytes_equal(&pCtx.sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps) {
+            if !bytes_equal(&pCtx.sSpsPpsCtx.sSpsBuffer[idx], &pSubsetSps.sSps) {
                 if au_has_nals(pCtx) {
-                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], &mut pSubsetSps.sSps);
+                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], &pSubsetSps.sSps);
                     pCtx.sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                     mark_au_ready(pCtx);
                 } else if active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
                     .is_some_and(|s| s.iSpsId == pSubsetSps.sSps.iSpsId)
                 {
-                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], &mut pSubsetSps.sSps);
+                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[MAX_SPS_COUNT], &pSubsetSps.sSps);
                     pCtx.sSpsPpsCtx.iOverwriteFlags |= OVERWRITE_SPS;
                 } else {
-                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps);
+                    bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[idx], &pSubsetSps.sSps);
                 }
             }
         } else {
-            bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[idx], &mut pSubsetSps.sSps);
+            bytes_copy(&mut pCtx.sSpsPpsCtx.sSpsBuffer[idx], &pSubsetSps.sSps);
             pCtx.sSpsPpsCtx.bSpsAvailFlags[idx] = true;
             pCtx.sSpsPpsCtx.bSpsExistAheadFlag = true;
         }
@@ -2685,7 +2678,7 @@ mod au_list_tests {
         cur_hdr.uiTemporalId = 1;
         assert!(CheckAccessUnitBoundaryExt(None, &hdr, &cur_hdr, &sh, &sh));
 
-        let mut cur_sh = sh.clone();
+        let mut cur_sh = sh;
         cur_sh.iFrameNum = 1;
         assert!(CheckAccessUnitBoundaryExt(None, &hdr, &hdr, &sh, &cur_sh));
     }

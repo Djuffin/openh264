@@ -47,14 +47,14 @@ fn test_loopback_encode_and_decode_pipeline() {
 
             let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
             let dec_create = WelsCreateDecoder(&mut p_decoder);
-            assert_eq!(i64::from(dec_create), CM_RESULT_SUCCESS as i64);
+            assert_eq!(dec_create, CM_RESULT_SUCCESS as i64);
             assert!(!p_decoder.is_null());
 
             let mut dec_param = SDecodingParam::default();
             dec_param.uiTargetDqLayer = u8::MAX;
 
             let dec_init = ISVCDecoder::Initialize(p_decoder, &dec_param as *const SDecodingParam);
-            assert_eq!(i64::from(dec_init), CM_RESULT_SUCCESS as i64);
+            assert_eq!(dec_init, CM_RESULT_SUCCESS as i64);
 
             let mut bs_info = SFrameBSInfo::default();
             let ps_ret = ISVCEncoder::EncodeParameterSets(p_encoder, &mut bs_info);
@@ -111,7 +111,7 @@ fn test_loopback_encode_and_decode_pipeline() {
 
             // 5. Uninitialize and destroy safely
             assert_eq!(ISVCEncoder::Uninitialize(p_encoder), CM_RESULT_SUCCESS);
-            assert_eq!(i64::from(ISVCDecoder::Uninitialize(p_decoder)), CM_RESULT_SUCCESS as i64);
+            assert_eq!(ISVCDecoder::Uninitialize(p_decoder), CM_RESULT_SUCCESS as i64);
 
             WelsDestroySVCEncoder(p_encoder);
             WelsDestroyDecoder(p_decoder);
@@ -173,7 +173,7 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             // 1. Create decoder
             let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
             let dec_create = WelsCreateDecoder(&mut p_decoder);
-            assert_eq!(i64::from(dec_create), CM_RESULT_SUCCESS as i64);
+            assert_eq!(dec_create, CM_RESULT_SUCCESS as i64);
             assert!(!p_decoder.is_null());
 
             let mut dec_param = SDecodingParam::default();
@@ -182,7 +182,7 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
 
             let dec_init = ISVCDecoder::Initialize(p_decoder, &dec_param as *const SDecodingParam);
-            assert_eq!(i64::from(dec_init), CM_RESULT_SUCCESS as i64);
+            assert_eq!(dec_init, CM_RESULT_SUCCESS as i64);
 
             // 2. Create encoder
             let mut p_encoder: *mut ISVCEncoder = std::ptr::null_mut();

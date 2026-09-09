@@ -378,7 +378,7 @@ pub fn WelsEncRecI16x16Y(
     let pMF = &g_kiQuantMF[uiQp as usize];
     let pFF = get_quant_intra_ff(uiQp as usize);
 
-    let encView = layer_enc_view_expect(&*pCurDqLayer);
+    let encView = layer_enc_view_expect(pCurDqLayer);
     let pEncCur = pMbCache.SPicData.mb_cursor_ro(encView, 0);
     WelsDctMb(
         &mut pMbCache.sCoeffLevel,
@@ -445,7 +445,7 @@ pub fn WelsEncRecI16x16Y(
         // `pPred` offsets spell against `kiRecStride`; writing it once as
         // `QUADS` makes the two agree by construction instead of by inspection.
         const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
-        let view = layer_rec_view_expect(&*pCurDqLayer);
+        let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
         let dst = view.plane(0).cursor(lx, ly);
         let kiPredOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
@@ -460,7 +460,7 @@ pub fn WelsEncRecI16x16Y(
     } else if uiCountI16x16Dc > 0 {
         // This site writes the reconstruction plane from the same
         // `pPred` / `pBestPred` pair as the four calls above.
-        let view = layer_rec_view_expect(&*pCurDqLayer);
+        let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
         let kiPredOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
         idct_rec_i16x16_dc_to_view(
@@ -472,7 +472,7 @@ pub fn WelsEncRecI16x16Y(
     } else {
         // The residual-free branch: the prediction *is* the reconstruction,
         // copied straight across from `sMemPredMb`'s luma half.
-        let view = layer_rec_view_expect(&*pCurDqLayer);
+        let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
         let kiPredOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
         copy_block_to_view::<16, 16>(
@@ -499,7 +499,7 @@ pub fn WelsEncRecI4x4Y(
     let uiOffset = g_kuiMbCountScan4Idx[uiI4x4Idx as usize] as usize;
     // Source plane through the frame's read-only view, prediction scratch
     // through its own owned `[u8; 2*16]`. Stride 4 is the blk4 scratch's geometry.
-    let encView = layer_enc_view_expect(&*pCurDqLayer);
+    let encView = layer_enc_view_expect(pCurDqLayer);
     let pEncMb = pMbCache.SPicData.mb_cursor_ro(encView, 0);
     let pBestPred = RecCursor::over_owned(
         &mut pMbCache.sMemPredBlk4,
@@ -548,7 +548,7 @@ pub fn WelsEncRecI4x4Y(
         // sit at `dx, dy` in `{0,4,8,12}` and the stride is never below 16, so
         // neither term can wrap into the other. Prediction is `sMemPredBlk4` at
         // stride 4 (not 16 — this is the 4x4 arena, and its rows are four bytes).
-        let view = layer_rec_view_expect(&*pCurDqLayer);
+        let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
         let (dx, dy) = (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
         let kiPredOff = best_pred_i4x4_blk4_off(pMbCache.uiBestPredI4x4Blk4Half);
@@ -562,7 +562,7 @@ pub fn WelsEncRecI4x4Y(
         // As the `pfIDctT4` branch above: `dec_block_offset` divides by
         // `iRecStride` into the 4x4 block's `(dx, dy)` within the macroblock, and
         // the prediction is `sMemPredBlk4` at stride 4.
-        let view = layer_rec_view_expect(&*pCurDqLayer);
+        let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
         let (dx, dy) =
             (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);

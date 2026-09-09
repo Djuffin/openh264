@@ -633,7 +633,7 @@ impl SWelsSvcCodingParam {
         if self.uiIntraPeriod == u32::MAX {
             self.uiIntraPeriod = 0;
         } else if (self.uiIntraPeriod & (self.uiGopSize - 1)) != 0 {
-            self.uiIntraPeriod = ((self.uiIntraPeriod + self.uiGopSize - 1) / self.uiGopSize)
+            self.uiIntraPeriod = self.uiIntraPeriod.div_ceil(self.uiGopSize)
                 * self.uiGopSize;
         }
 
