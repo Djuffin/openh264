@@ -62,6 +62,7 @@ use crate::encoder::md::{LEFT_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS, TOP_MB_PO
 use crate::encoder::picture::SScreenBlockFeatureStorage;
 use crate::encoder::svc_encode_slice::{current_layer_expect, layer_rec_view_expect, layer_ref_pic_expect, layer_ref_view_expect};
 use crate::encoder::svc_encode_slice::layer_enc_view_expect;
+use crate::simd::kernels;
 
 /// `wels_const.h:112` — `MB_WIDTH_LUMA`/`MB_WIDTH_CHROMA`, the per-macroblock advance
 /// applied to the cached plane pointers when walking right along a macroblock row.
@@ -1075,18 +1076,22 @@ pub fn WelsMdPSkipEnc(
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool {
-    // The slice context and the macroblock's cursors: what used to be a
+    // The slice context and the three source cursors this reads: what used to be a
     // `current_layer_expect`, a `func_list`, a `layer_enc_view_expect`, a
     // `layer_ref_view_expect` *build*, three `layer_ref_pic*` resolutions, six
-    // `cursor` calls and three slot unwraps, per macroblock.
+    // `cursor` calls and three slot unwraps, per macroblock — and, until now, a copy
+    // of all nine cursors to reach three of them.
     let sc = pWelsMd.sc();
-    let mbc = *pWelsMd.mbc();
+    let (cEncLuma, cEncCb, cEncCr) = {
+        let mbc = pWelsMd.mbc();
+        (mbc.enc_y, mbc.enc_cb, mbc.enc_cr)
+    };
     let pFunc = sc.func;
 
     let mut sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };
     let mut n: i32;
 
-    let mut pEncMb = mbc.enc_y;
+    let mut pEncMb = cEncLuma;
     let kpEncBlockOffset = pEncCtx
         .pStrideTab
         .as_ref()
@@ -1138,7 +1143,7 @@ pub fn WelsMdPSkipEnc(
     }
     iSadCostLuma = {
         let cSkipLuma = RecCursor::over_owned(&mut pMbCache.sSkipMb[..256], 0, 16);
-        (sc.sad16)(&mbc.enc_y, &cSkipLuma)
+        (sc.sad16)(&cEncLuma, &cSkipLuma)
     };
 
     // `iStrideUV` was `(mvY >> 1) * strideUV + (mvX >> 1)` off the chroma macroblock
@@ -1154,7 +1159,7 @@ pub fn WelsMdPSkipEnc(
     }
     iSadCostChroma = {
         let cSkipCb = RecCursor::over_owned(&mut pMbCache.sSkipMb[256..320], 0, 8);
-        (sc.sad8)(&mbc.enc_cb, &cSkipCb)
+        kernels::sad::sample_sad_8x8(&cEncCb, &cSkipCb)
     };
 
     {
@@ -1167,7 +1172,7 @@ pub fn WelsMdPSkipEnc(
     }
     iSadCostChroma += {
         let cSkipCr = RecCursor::over_owned(&mut pMbCache.sSkipMb[320..384], 0, 8);
-        (sc.sad8)(&mbc.enc_cr, &cSkipCr)
+        kernels::sad::sample_sad_8x8(&cEncCr, &cSkipCr)
     };
 
     iSadCostMb = iSadCostLuma + iSadCostChroma;
@@ -1187,7 +1192,7 @@ pub fn WelsMdPSkipEnc(
     WelsDctMb(&mut pMbCache.sCoeffLevel, &pEncMb, &pDstLuma, pFunc.pfDctFourT4);
 
     if WelsTryPYskip(pEncCtx, pCurMb, pMbCache) {
-        pEncMb = mbc.enc_cb;
+        pEncMb = cEncCb;
 
         let pDstCb = RecCursor::over_owned(&mut pMbCache.sSkipMb, 256, 8);
         (pFunc.pfDctFourT4)(
@@ -1196,7 +1201,7 @@ pub fn WelsMdPSkipEnc(
             &pDstCb,
         );
         if WelsTryPUVskip(pEncCtx, pCurMb, pMbCache, 1) {
-            pEncMb = mbc.enc_cr;
+            pEncMb = cEncCr;
 
             let pDstCr = RecCursor::over_owned(&mut pMbCache.sSkipMb, 320, 8);
             (pFunc.pfDctFourT4)(
@@ -1525,11 +1530,16 @@ pub fn WelsMdFirstIntraMode(
     let sc = pWelsMd.sc();
     let pFunc = sc.func;
 
-    let mbc = *pWelsMd.mbc();
+    // The luma pair `WelsMdI16x16` reads, by field: the struct copy this used to take
+    // moved all nine cursors — 288 bytes through `memmove` — to hand over two.
+    let (cRecLuma, cEncLuma) = {
+        let mbc = pWelsMd.mbc();
+        (mbc.rec_y, mbc.enc_y)
+    };
     let iCostI16x16 = crate::encoder::svc_mode_decision::WelsMdI16x16(
         pFunc,
-        &mbc.rec_y,
-        &mbc.enc_y,
+        &cRecLuma,
+        &cEncLuma,
         pMbCache,
         pWelsMd.iLambda,
     );

@@ -445,7 +445,15 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     // `layer_enc_view_expect`, a `layer_rec_view_expect`, a `vaa_expect`, a
     // `layer_pps_ref` and seven `plane(i).cursor(..)` calls, per macroblock.
     let sc = pWelsMd.sc();
-    let mbc = *pWelsMd.mbc();
+    // **The three cursors this needs, not the struct.** `*pWelsMd.mbc()` copied all
+    // nine — 288 bytes through `memmove`, 0.8% of the flat 1080p frame — because
+    // `pWelsMd` is written further down. A `RecCursor` is a slice, an offset and a
+    // stride; the four the body reads are taken by field and stay in registers, and
+    // the reconstruction cursors are read from their own borrows where they are used.
+    let (cEncLuma, cRefLuma, cRefCb, cRefCr) = {
+        let mbc = pWelsMd.mbc();
+        (mbc.enc_y, mbc.ref_y, mbc.ref_cb, mbc.ref_cr)
+    };
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let sMvp = SMVUnitXY::default();
 
@@ -457,7 +465,6 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
 
     // MC
     {
-        let cRefLuma = mbc.ref_y;
         let mut cDstLuma = if bSkipMbFlag {
             let pSkipMb = &mut pMbCache.sSkipMb;
             PlaneCursorMut::new(&mut pSkipMb[..256], 0, 16)
@@ -469,7 +476,6 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
         mc_luma(&cRefLuma, &mut cDstLuma, 0, 0, 16, 16);
     }
     {
-        let cRefCb = mbc.ref_cb;
         let mut cDstCb = if bSkipMbFlag {
             let pSkipMb = &mut pMbCache.sSkipMb;
             PlaneCursorMut::new(&mut pSkipMb[256..320], 0, 8)
@@ -481,7 +487,6 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
         mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cb
     }
     {
-        let cRefCr = mbc.ref_cr;
         let mut cDstCr = if bSkipMbFlag {
             let pSkipMb = &mut pMbCache.sSkipMb;
             PlaneCursorMut::new(&mut pSkipMb[320..384], 0, 8)
@@ -496,7 +501,7 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     pCurMb.uiCbp = 0;
     pMbCache.bCollocatedPredFlag = true;
     pWelsMd.iCostLuma = 0; // BGD&RC integration
-    pCurMb.iSadCost = (sc.sad16)(&mbc.enc_y, &mbc.ref_y);
+    pCurMb.iSadCost = (sc.sad16)(&cEncLuma, &cRefLuma);
     pCurMb.sP16x16Mv = SMVUnitXY::default();
     sc.rec
         .mv_list()
@@ -515,7 +520,7 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
                 pCurMb.uiLumaQp as i32 + sc.chroma_qp_offset,
             )];
 
-        WelsRecPskip(&mbc, pCurMb, &mut *pMbCache);
+        WelsRecPskip(pWelsMd.mbc(), pCurMb, &mut *pMbCache);
         VaaBackgroundMbDataUpdate(&sc, pCurMb);
         return;
     }
@@ -542,7 +547,7 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     if pWelsMd.bMdUsingSad {
         pWelsMd.iCostLuma = pCurMb.iSadCost;
     } else {
-        pWelsMd.iCostLuma = (sc.satd16)(&mbc.enc_y, &mbc.ref_y);
+        pWelsMd.iCostLuma = (sc.satd16)(&cEncLuma, &cRefLuma);
     }
 
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
@@ -552,7 +557,8 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
         pCurMb,
     );
 
-    let pMbCache = &mut pSlice.sMbCacheInfo;
+    let mbc = pWelsMd.mbc();
+    let pMbCache = &pSlice.sMbCacheInfo;
     let kiLumaOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
     let kiChromaOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
     let src = &pMbCache.sMemPredMb;
@@ -1308,11 +1314,16 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
     } else {
         // Base layer is Intra (BLMODE == SVC_INTRA)
         let pMbCache = &mut pSlice.sMbCacheInfo;
-        let mbc = *pWelsMd.mbc();
+        // The two cursors, not the struct: `WelsMdI16x16` reads a luma pair and
+        // `*pWelsMd.mbc()` copied all nine to hand it two.
+        let (cRecLuma, cEncLuma) = {
+            let mbc = pWelsMd.mbc();
+            (mbc.rec_y, mbc.enc_y)
+        };
         let kiCostI16x16 = WelsMdI16x16(
             pWelsMd.sc().func,
-            &mbc.rec_y,
-            &mbc.enc_y,
+            &cRecLuma,
+            &cEncLuma,
             &mut *pMbCache,
             pWelsMd.iLambda,
         );
@@ -1346,19 +1357,6 @@ pub fn WelsMdInterMbEnhancelayer<'a>(
 // ============================================================================
 
 #[inline(always)]
-/// `svc_mode_decision.cpp:161`.
-/// The slot arrives already unwrapped: the slice context resolves
-/// `pfSampleSad[BLOCK_8x8]` once, and `WelsMdPSkipEnc` was `.unwrap()`ing the same
-/// slot on the same path, so an absent one was never survivable here either.
-pub fn GetChromaCost(
-    pSad: crate::encoder::md::PSampleSadSatdCostFunc,
-    cSrcChroma: &crate::encoder::rec_view::RecCursor<'_>,
-    cRefChroma: &crate::encoder::rec_view::RecCursor<'_>,
-) -> i32 {
-    pSad(cSrcChroma, cRefChroma)
-}
-
-#[inline(always)]
 pub fn IsCostLessEqualSkipCost(
     iCurCost: i32,
     iPredPskipSad: i32,
@@ -1377,15 +1375,28 @@ pub fn IsCostLessEqualSkipCost(
 }
 
 pub fn CheckChromaCost(pWelsMd: &mut SWelsMD<'_>, pMbCache: &mut SMbCache, iCurMbXy: i32) -> bool {
-    // The 8x8 SAD slot, the two picture views and the four chroma cursors all come
-    // off the slice context now: this used to be a `func_list`, a
-    // `current_layer_expect`, a `layer_enc_view_expect`, a `layer_ref_view_expect`
-    // *build*, four `cursor` calls and an `Option<fn>` unwrap per operand, twice.
+    // The two picture views and the four chroma cursors come off the slice context:
+    // this used to be a `func_list`, a `current_layer_expect`, a
+    // `layer_enc_view_expect`, a `layer_ref_view_expect` *build* and four `cursor`
+    // calls per operand, twice.
     let sc = pWelsMd.sc();
-    let mbc = *pWelsMd.mbc();
 
-    let iCbSad = GetChromaCost(sc.sad8, &mbc.enc_cb, &mbc.ref_cb);
-    let iCrSad = GetChromaCost(sc.sad8, &mbc.enc_cr, &mbc.ref_cr);
+    // **The two SADs, from a borrow and straight to the kernel.** `GetChromaCost`
+    // was `pfSampleSad[BLOCK_8x8]` — a pointer to the closure the table holds, an
+    // indirect call nothing can inline — and the borrow was a *copy* of all nine
+    // cursors (`memmove` was 0.9% of the flat 1080p frame here alone) because
+    // `pWelsMd` is written a few lines below. Both go: the values are taken inside a
+    // scope that ends before the write, and `pfSampleSad[BLOCK_8x8]` is
+    // `kernels::sad::sample_sad_8x8` in every build that installs kernels — under
+    // `--features scalar` it is the scalar set's forward to the same generic — so
+    // this is the same call with the indirection removed.
+    let (iCbSad, iCrSad) = {
+        let mbc = pWelsMd.mbc();
+        (
+            kernels::sad::sample_sad_8x8(&mbc.enc_cb, &mbc.ref_cb),
+            kernels::sad::sample_sad_8x8(&mbc.enc_cr, &mbc.ref_cr),
+        )
+    };
 
     let bChromaTooLarge = iCbSad > KNOWN_CHROMA_TOO_LARGE || iCrSad > KNOWN_CHROMA_TOO_LARGE;
     let iChromaSad = iCbSad + iCrSad;

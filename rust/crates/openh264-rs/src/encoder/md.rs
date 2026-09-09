@@ -232,8 +232,14 @@ pub struct MdSliceCtx<'a> {
     pub mb_height: i32,
     /// The cost slots this path calls, unwrapped once. `pfMdCost` is stamped
     /// per frame by `PreprocessSliceCoding`, so the selection is slice-invariant.
+    ///
+    /// **`sad16` stays a slot where `sad8` became a direct call**, and the reason is
+    /// the AVX2 arm of `WelsInitSampleSadFunc`: it overwrites `pfSampleSad[16x16]`
+    /// with `sample_sad_16x16_avx2` where the host has AVX2, so that slot is *not*
+    /// one function on every build and calling `kernels::sad::sample_sad_16x16`
+    /// directly would answer the same integer through the narrower kernel. Nothing
+    /// overrides `pfSampleSad[8x8]`.
     pub sad16: PSampleSadSatdCostFunc,
-    pub sad8: PSampleSadSatdCostFunc,
     pub satd16: PSampleSadSatdCostFunc,
     pub md_cost16: PSampleSadSatdCostFunc,
 }
@@ -276,7 +282,7 @@ impl<'a> MdSliceCtx<'a> {
         pLayer: &'a crate::encoder::svc_encode_slice::SDqLayer,
         ref_view: Option<&'a crate::encoder::rec_view::RoPicView>,
     ) -> Self {
-        use crate::encoder::svc_mode_decision::{BLOCK_16x16, BLOCK_8x8};
+        use crate::encoder::svc_mode_decision::BLOCK_16x16;
         use crate::encoder::svc_encode_slice as ses;
         let func = pCtx.func_list();
         let sdf = &func.sSampleDealingFuncs;
@@ -297,7 +303,6 @@ impl<'a> MdSliceCtx<'a> {
             mb_width: pLayer.iMbWidth as i32,
             mb_height: pLayer.iMbHeight as i32,
             sad16: sdf.pfSampleSad[BLOCK_16x16].expect("pfSampleSad[16x16] is installed"),
-            sad8: sdf.pfSampleSad[BLOCK_8x8].expect("pfSampleSad[8x8] is installed"),
             satd16: sdf.pfSampleSatd[BLOCK_16x16].expect("pfSampleSatd[16x16] is installed"),
             md_cost16: sdf.md_cost(BLOCK_16x16).expect("pfMdCost selects an installed 16x16 slot"),
         }
