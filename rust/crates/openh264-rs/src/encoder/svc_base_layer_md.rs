@@ -787,6 +787,7 @@ pub const g_kiPixStrideIdx8x8: [i32; 4] = [
 /// reference-plane pointers, and the integer MV clamp for this macroblock position.
 pub fn WelsMdInterInit(
     sc: &MdSliceCtx<'_>,
+    mbi: &crate::encoder::md::MbSideInfo,
     iMvRange: i32,
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -812,7 +813,9 @@ pub fn WelsMdInterInit(
     pMbCache.SPicData.iMbX = kiMbX;
     pMbCache.SPicData.iMbY = kiMbY;
 
-    pMbCache.uiRefMbType = (&sc.ref_pic().uiRefMbType)[kiMbXY as usize];
+    // `uiRefMbType[iMbXY]` of the layer's reference picture, stamped with the
+    // cursors: this was an `Option` unwrap, a `Vec` deref and a bounds check.
+    pMbCache.uiRefMbType = mbi.ref_mb_type;
     pMbCache.bCollocatedPredFlag = false;
 
     //comment: sometimes, mode decision process may skip the md_p16x16 and md_pskip function,
@@ -1081,7 +1084,8 @@ pub fn WelsMdPSkipEnc(
     // `layer_ref_view_expect` *build*, three `layer_ref_pic*` resolutions, six
     // `cursor` calls and three slot unwraps, per macroblock — and, until now, a copy
     // of all nine cursors to reach three of them.
-    let sc = pWelsMd.sc();
+    let sc = *pWelsMd.sc();
+    let mbi = pWelsMd.mbi;
     let (cEncLuma, cEncCb, cEncCr) = {
         let mbc = pWelsMd.mbc();
         (mbc.enc_y, mbc.enc_cb, mbc.enc_cr)
@@ -1179,9 +1183,9 @@ pub fn WelsMdPSkipEnc(
 
     if iSadCostMb == 0
         || iSadCostMb < pWelsMd.iSadPredSkip
-        || (sc.ref_pic.map_or(false, |p| p.iPictureType == EWelsSliceType::P_SLICE as i32)
+        || (mbi.ref_is_p
             && pMbCache.uiRefMbType == MB_TYPE_SKIP
-            && iSadCostMb < (&sc.ref_pic().pMbSkipSad)[pCurMb.iMbXY as usize])
+            && iSadCostMb < mbi.ref_skip_sad)
     {
         //update motion info to current MB
         AcceptPskip(pWelsMd, pCurMb, pMbCache, &sMvp, iSadCostLuma, iSadCostMb);
@@ -1230,7 +1234,7 @@ fn AcceptPskip(
     iSadCostLuma: i32,
     iSadCostMb: i32,
 ) {
-    let sc = pWelsMd.sc();
+    let sc = *pWelsMd.sc();
     let cEncLuma = pWelsMd.mbc().enc_y;
 
     // ST32 (pCurMb->pRefIndex, 0)
@@ -1527,7 +1531,7 @@ pub fn WelsMdFirstIntraMode(
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool {
-    let sc = pWelsMd.sc();
+    let sc = *pWelsMd.sc();
     let pFunc = sc.func;
 
     // The luma pair `WelsMdI16x16` reads, by field: the struct copy this used to take
@@ -1576,7 +1580,7 @@ pub fn WelsMdInterMb<'a>(
     pSlice: &mut SSlice,
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
 ) {
-    let sc = pWelsMd.sc();
+    let sc = *pWelsMd.sc();
     let pCurDqLayer = sc.layer;
     let kuiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let bMbLeftAvailPskip = if (kuiNeighborAvail & LEFT_MB_POS) != 0 {

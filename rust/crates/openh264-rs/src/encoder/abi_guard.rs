@@ -184,14 +184,16 @@ assert_size!(SWelsME, 80);
 // sMe8x8[4]) plus this struct's own `pMvdCost`. `SWelsMD` is encoder-internal and
 // crosses no ABI.
 //
-// The port's own two fields are on top of that, and neither has a counterpart in the
+// The port's own three fields are on top of that, and none has a counterpart in the
 // C++ struct: `sctx`, the slice context the P-slice mode decision used to re-resolve
-// per macroblock (nine references, four `i32`s and three cost slots — 112 bytes), and
-// `mbc`, the macroblock's nine plane cursors (9 x 32 bytes). Both `Option`s are free,
-// the reference inside each carrying the niche. Both fields are the C++'s pointer
-// arithmetic off `pCurLayer`/`kiMbX`/`kiMbY`, hoisted out of the macroblock loop, so
-// the pin is 800 + 112 + 288.
-assert_size!(SWelsMD, 1200);
+// per macroblock (nine references, four `i32`s and three cost slots — 112 bytes);
+// `mbc`, the macroblock's nine plane cursors (9 x 32 bytes); and `mbi`, the
+// reference picture's three entries for this macroblock, which the skip path
+// indexed out of the picture's `Vec`s (8 bytes: a QP, a flag, a type and a SAD).
+// The two `Option`s are free, the reference inside each carrying the niche. All
+// three are the C++'s pointer arithmetic off `pCurLayer`/`kiMbX`/`kiMbY`, hoisted
+// out of the macroblock loop, so the pin is 800 + 112 + 288 + 8.
+assert_size!(SWelsMD, 1208);
 // `SVAAFrameInfo`: 264 in the C++, and the pin is a *drift tracker* rather than an
 // ABI contract — `repr(C)` is off, so it moves with a deliberate field change. The
 // six per-frame result arrays and `pVaaBackgroundMbFlag` are the block's own `Vec`s;

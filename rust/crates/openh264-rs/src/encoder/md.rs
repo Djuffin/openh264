@@ -265,6 +265,57 @@ pub struct MbCursors<'a> {
     pub rec_cr: crate::encoder::rec_view::RecCursor<'a>,
 }
 
+/// The reference picture's three per-macroblock entries, **taken once** where
+/// [`MbCursors`] is stamped.
+///
+/// Each was an `Option` unwrap on the reference picture, a `Vec` deref and a
+/// bounds-checked index, spread over `WelsMdInterInit` (`uiRefMbType`), the
+/// background judgement (`pRefMbQp`) and the two skip-cost tests (`pMbSkipSad`,
+/// twice inside one comparison). The C++ reads the same words off pointers it has
+/// already formed. All three arrays are written by the *previous* frame, so only the
+/// number of reads changes, never the values.
+///
+/// **The background flags are not here**, and that was measured: stamping the flag
+/// and its four neighbours cost 1.0% of the flat 1080p frame, because the readers
+/// take them under `bKeepSkip` and under `uiNeighborAvail` — guards that skip the
+/// read at exactly the macroblocks a stamp cannot skip.
+///
+/// **This is not on [`MdSliceCtx`]**, for the same kind of reason: four more slices
+/// on the context cost 0.5%, the context being copied per macroblock at every body
+/// that reads it while this is read once.
+#[derive(Clone, Copy, Default)]
+pub struct MbSideInfo {
+    /// `SPicture::pRefMbQp[iMbXY]`.
+    pub ref_qp: u8,
+    /// `ref_pic.iPictureType == P_SLICE` — a property of the slice, carried here
+    /// because the byte beside `ref_qp` is free.
+    pub ref_is_p: bool,
+    /// `SPicture::uiRefMbType[iMbXY]`.
+    pub ref_mb_type: u32,
+    /// `SPicture::pMbSkipSad[iMbXY]`.
+    pub ref_skip_sad: i32,
+}
+
+impl MbSideInfo {
+    /// The entries for the macroblock at raster address `mb_xy`.
+    ///
+    /// # Panics
+    /// If no reference picture is bound — `WelsMdInterInit` read `uiRefMbType` off
+    /// it for every P macroblock, so this is the same requirement in the same place.
+    #[inline]
+    pub fn at(sc: &MdSliceCtx<'_>, mb_xy: i32) -> Self {
+        let xy = mb_xy as usize;
+        let rp = sc.ref_pic();
+        Self {
+            ref_qp: rp.pRefMbQp[xy],
+            ref_is_p: rp.iPictureType
+                == crate::common::wels_common_defs::EWelsSliceType::P_SLICE as i32,
+            ref_mb_type: rp.uiRefMbType[xy],
+            ref_skip_sad: rp.pMbSkipSad[xy],
+        }
+    }
+}
+
 impl<'a> MdSliceCtx<'a> {
     /// Resolves the slice's context, once, from the layer the slice belongs to.
     ///
@@ -354,6 +405,10 @@ pub struct SWelsMD<'a> {
     /// touching the fields.
     pub sctx: Option<MdSliceCtx<'a>>,
     pub mbc: Option<MbCursors<'a>>,
+    /// The reference picture's entries for this macroblock, stamped beside `mbc`.
+    /// Zero on the paths that stamp nothing (an I slice, and the unit tests), which
+    /// is also where nothing reads it.
+    pub mbi: MbSideInfo,
     pub iLambda: i32,
     /// `WelsInitInterMDStruc` re-parks it per macroblock on the current luma QP's
     /// row, and `InitMe` copies it into each search block.
@@ -382,8 +437,8 @@ impl<'a> SWelsMD<'a> {
     /// If no context was built — every P-slice entry point builds one before the
     /// macroblock loop.
     #[inline]
-    pub fn sc(&self) -> MdSliceCtx<'a> {
-        self.sctx.expect("the P-slice mode-decision context is built for this slice")
+    pub fn sc(&self) -> &MdSliceCtx<'a> {
+        self.sctx.as_ref().expect("the P-slice mode-decision context is built for this slice")
     }
 
     /// The current macroblock's plane cursors.
@@ -401,6 +456,7 @@ impl Default for SWelsMD<'_> {
         Self {
             sctx: None,
             mbc: None,
+            mbi: MbSideInfo::default(),
             iLambda: 0,
             pMvdCost: MvdCostCursor::none(),
             iCostLuma: 0,
