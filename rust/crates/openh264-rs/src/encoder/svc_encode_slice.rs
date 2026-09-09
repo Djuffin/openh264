@@ -2084,9 +2084,15 @@ pub fn WelsMdInterMbLoop<'a>(
         // off `pMd` instead of re-deriving `plane(i).cursor(kiMbX << 4, ..)` at each
         // of the fifteen or so sites the path used to; the C++ computes the same nine
         // pointers here, off `kiMbX`/`kiMbY`.
-        if let Some(sc) = pMd.sctx {
+        if let Some(sc) = pMd.sctx.as_ref() {
             let cur = pMbs.cur();
-            pMd.mbc = Some(crate::encoder::md::MbCursors::at(&sc, cur.iMbX as i32, cur.iMbY as i32));
+            let mbc = crate::encoder::md::MbCursors::at(sc, cur.iMbX as i32, cur.iMbY as i32);
+            // **And the reference picture's three entries for this macroblock**,
+            // which the judgement, the inter init and the two skip-cost tests each
+            // reached through an `Option` and a `Vec`.
+            let mbi = crate::encoder::md::MbSideInfo::at(sc, cur.iMbXY);
+            pMd.mbc = Some(mbc);
+            pMd.mbi = mbi;
         }
 
         //step(1): set QP for the current MB
@@ -2097,7 +2103,7 @@ pub fn WelsMdInterMbLoop<'a>(
         //step (2). save some value for future use, initial pWelsMd
         let pMbCache = &mut pSlice.sMbCacheInfo;
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut *pMbs, &mut *pMbCache);
-        crate::encoder::svc_base_layer_md::WelsMdInterInit(&pMd.sc(), pEncCtx.iMvRange, pSlice, &mut *pMbs);
+        crate::encoder::svc_base_layer_md::WelsMdInterInit(pMd.sc(), &pMd.mbi, pEncCtx.iMvRange, pSlice, &mut *pMbs);
 
         loop {
             WelsInitInterMDStruc(pMbs.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
@@ -2243,9 +2249,15 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         // off `pMd` instead of re-deriving `plane(i).cursor(kiMbX << 4, ..)` at each
         // of the fifteen or so sites the path used to; the C++ computes the same nine
         // pointers here, off `kiMbX`/`kiMbY`.
-        if let Some(sc) = pMd.sctx {
+        if let Some(sc) = pMd.sctx.as_ref() {
             let cur = pMbs.cur();
-            pMd.mbc = Some(crate::encoder::md::MbCursors::at(&sc, cur.iMbX as i32, cur.iMbY as i32));
+            let mbc = crate::encoder::md::MbCursors::at(sc, cur.iMbX as i32, cur.iMbY as i32);
+            // **And the reference picture's three entries for this macroblock**,
+            // which the judgement, the inter init and the two skip-cost tests each
+            // reached through an `Option` and a `Vec`.
+            let mbi = crate::encoder::md::MbSideInfo::at(sc, cur.iMbXY);
+            pMd.mbc = Some(mbc);
+            pMd.mbi = mbi;
         }
 
         func_list
@@ -2261,7 +2273,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         // step (2): save some values for future use, initialise pWelsMd.
         let pMbCache = &mut pSlice.sMbCacheInfo;
         crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut *pMbs, &mut *pMbCache);
-        crate::encoder::svc_base_layer_md::WelsMdInterInit(&pMd.sc(), pEncCtx.iMvRange, pSlice, &mut *pMbs);
+        crate::encoder::svc_base_layer_md::WelsMdInterInit(pMd.sc(), &pMd.mbi, pEncCtx.iMvRange, pSlice, &mut *pMbs);
 
         // TRY_REENCODING
         loop {

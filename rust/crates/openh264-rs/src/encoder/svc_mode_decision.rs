@@ -278,7 +278,7 @@ pub extern "C" fn WelsMdInterJudgePskip(
 
 /// `svc_base_layer_md.cpp:1954`. P_SKIP macroblock encode.
 pub fn WelsMdInterDecidedPskip(pWelsMd: &SWelsMD<'_>, pSlice: &mut SSlice, pCurMb: &mut SMB) {
-    let sc = pWelsMd.sc();
+    let sc = *pWelsMd.sc();
     pCurMb.uiMbType = MB_TYPE_SKIP;
     WelsRecPskip(pWelsMd.mbc(), pCurMb, &mut pSlice.sMbCacheInfo);
     WelsMdInterUpdatePskip(sc.chroma_qp_offset, &mut *pSlice, pCurMb);
@@ -444,7 +444,7 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     // `func_list`, **three** `layer_ref_view_expect` builds, an
     // `layer_enc_view_expect`, a `layer_rec_view_expect`, a `vaa_expect`, a
     // `layer_pps_ref` and seven `plane(i).cursor(..)` calls, per macroblock.
-    let sc = pWelsMd.sc();
+    let sc = *pWelsMd.sc();
     // **The three cursors this needs, not the struct.** `*pWelsMd.mbc()` copied all
     // nine — 288 bytes through `memmove`, 0.8% of the flat 1080p frame — because
     // `pWelsMd` is written further down. A `RecCursor` is a slice, an offset and a
@@ -1356,30 +1356,33 @@ pub fn WelsMdInterMbEnhancelayer<'a>(
 // 2. Background Detection (BGD) P-Skip Mode Decision & Chroma Verification
 // ============================================================================
 
+/// `svc_mode_decision.cpp:171`.
+///
+/// The reference picture's slice type and this macroblock's `pMbSkipSad` arrive as
+/// values, stamped with the cursors: what was an `Option` test, a `Vec` deref and
+/// two bounds-checked reads of the same entry is two comparisons.
 #[inline(always)]
 pub fn IsCostLessEqualSkipCost(
     iCurCost: i32,
     iPredPskipSad: i32,
     iRefMbType: Mb_Type,
-    pRef: Option<&SPicture>,
-    iMbXy: i32,
+    bRefIsP: bool,
+    iRefSkipSad: i32,
     iSmallestInvisibleTh: i32,
 ) -> bool {
     (iPredPskipSad > iSmallestInvisibleTh && iCurCost >= iPredPskipSad)
-        || pRef.map_or(false, |pRef| {
-            pRef.iPictureType == P_SLICE
-                && iRefMbType == MB_TYPE_SKIP
-                && pRef.pMbSkipSad[iMbXy as usize] > iSmallestInvisibleTh
-                && iCurCost >= pRef.pMbSkipSad[iMbXy as usize]
-        })
+        || (bRefIsP
+            && iRefMbType == MB_TYPE_SKIP
+            && iRefSkipSad > iSmallestInvisibleTh
+            && iCurCost >= iRefSkipSad)
 }
 
-pub fn CheckChromaCost(pWelsMd: &mut SWelsMD<'_>, pMbCache: &mut SMbCache, iCurMbXy: i32) -> bool {
+pub fn CheckChromaCost(pWelsMd: &mut SWelsMD<'_>, pMbCache: &mut SMbCache) -> bool {
     // The two picture views and the four chroma cursors come off the slice context:
     // this used to be a `func_list`, a `current_layer_expect`, a
     // `layer_enc_view_expect`, a `layer_ref_view_expect` *build* and four `cursor`
     // calls per operand, twice.
-    let sc = pWelsMd.sc();
+    let mbi = pWelsMd.mbi;
 
     // **The two SADs, from a borrow and straight to the kernel.** `GetChromaCost`
     // was `pfSampleSad[BLOCK_8x8]` — a pointer to the closure the table holds, an
@@ -1413,8 +1416,8 @@ pub fn CheckChromaCost(pWelsMd: &mut SWelsMD<'_>, pMbCache: &mut SMbCache, iCurM
         iChromaSad,
         pWelsMd.iSadPredSkip,
         pMbCache.uiRefMbType,
-        sc.ref_pic,
-        iCurMbXy,
+        mbi.ref_is_p,
+        mbi.ref_skip_sad,
         SMALLEST_INVISIBLE,
     );
 
@@ -1428,10 +1431,10 @@ pub fn WelsMdInterJudgeBGDPskip(
     pCurMb: &mut SMB,
     bKeepSkip: &mut bool,
 ) -> bool {
-    let sc = pWelsMd.sc();
+    let sc = *pWelsMd.sc();
     let pMbCache = &mut pSlice.sMbCacheInfo;
 
-    let kiRefMbQp = (&sc.ref_pic().pRefMbQp)[pCurMb.iMbXY as usize] as i32;
+    let kiRefMbQp = pWelsMd.mbi.ref_qp as i32;
     let kiCurMbQp = pCurMb.uiLumaQp as i32;
     let kpVaaBgFlags: &[i8] = &sc.vaa.pVaaBackgroundMbFlag;
     let kiXY = pCurMb.iMbXY as usize;
@@ -1446,7 +1449,7 @@ pub fn WelsMdInterJudgeBGDPskip(
         && !IS_INTRA(pMbCache.uiRefMbType)
         && ((kiRefMbQp - kiCurMbQp <= DELTA_QP_BGD_THD) || (kiRefMbQp <= 26))
     {
-        if CheckChromaCost(pWelsMd, &mut *pMbCache, pCurMb.iMbXY) {
+        if CheckChromaCost(pWelsMd, &mut *pMbCache) {
             let mut sVaaPredSkipMv = SMVUnitXY::default();
             PredSkipMv(&pMbCache.sMvComponents, &mut sVaaPredSkipMv);
             let bZeroMv = sVaaPredSkipMv.iMvX == 0 && sVaaPredSkipMv.iMvY == 0;
