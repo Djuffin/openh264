@@ -8,11 +8,25 @@
 //!   against ffmpeg's own decode of the same bitstream. These are skipped when
 //!   ffmpeg is not on `PATH`.
 //!
-//! A number of tests here are `#[ignore]`d because upstream openh264 itself
-//! does not decode them bit-exactly. They are kept (run them with
-//! `cargo test -- --ignored`) because they document real conformance gaps.
-//! Every such gap involves B slices, B-slice weighted prediction, or
-//! High-profile 8x8 coding.
+//! Nine tests here are `#[ignore]`d because upstream openh264 itself does not
+//! decode them bit-exactly. They are kept (run them with
+//! `cargo test -- --ignored`) because they document real conformance gaps, and
+//! each one's reason names the defect rather than the family.
+//!
+//! Three defects account for all nine, and each is upstream's, mirrored by the
+//! port: **picture output order** (`ReleaseBufferedReadyPictureReorder` does not
+//! reorder until a B slice has been seen, then works from a POC-distance
+//! heuristic), **MV prediction reading a not-yet-decoded direct sub-block** as an
+//! available neighbour C, and **the P-slice reference list** built from
+//! `ref_pic_list_modification` with duplicated entries.
+//!
+//! Two things that used to be on that list are not any more, and the difference is
+//! worth keeping straight. High-profile 8x8 coding is conformant on its own:
+//! `test_ffmpeg_high_cabac_8x8`, `_high_cavlc_8x8`, `_high_multi_slice` and
+//! `_high_custom_scaling_matrix` are bit-exact and run. And B-slice bi-prediction
+//! was a fourth defect until `codec/decoder/core/src/rec_mb.cpp`'s `GetInterBPred`
+//! was fixed in this tree — that fix is what activated eleven of the twenty tests
+//! ignored here before it.
 
 #![allow(non_snake_case)]
 
@@ -278,14 +292,14 @@ pub fn test_CABA2_SVA_B() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from this JVT gold at the same byte; upstream gap, not a port regression"]
+#[ignore = "upstream defect the port mirrors: B_8x8 macroblocks with B_Direct_8x8 sub-MBs and direct_8x8_inference_flag=0 -- openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used. Differences are at most 5 levels, inside those blocks"]
 pub fn test_CABA3_SVA_B() -> Result<(), String> {
     // IPB slices with CABAC. Temporal direct prediction. num_ref_frames=5.
     test_decoding_against_gold("res/CABA3_SVA_B.264", "res/CABA3_SVA_B_rec.y4m")
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from this JVT gold at the same byte; upstream gap, not a port regression"]
+#[ignore = "two upstream defects the port mirrors: picture output order: ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, so this stream's decode order I P P B ... emits the second P before the B; and, in MV prediction, openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used"]
 pub fn test_CVBS3_Sony_C() -> Result<(), String> {
     // IPB slices with CAVLC. Temporal direct prediction. direct_8x8_inference=on. num_ref_frames=4.
     test_decoding_against_gold("res/CVBS3_Sony_C.jsv", "res/CVBS3_Sony_C_rec.y4m")
@@ -298,14 +312,14 @@ pub fn test_CVWP1_TOSHIBA_E() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from this JVT gold at the same byte; upstream gap, not a port regression"]
+#[ignore = "upstream defects the port mirrors: picture output order: ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic -- the two P pictures at POC -4/-2 precede the IDR in the gold and openh264 emits the IDR first -- plus residuals from the direct-sub-block neighbour availability defect and from explicit weighted bipred (idc=1), which are not separately isolated"]
 pub fn test_CVWP2_TOSHIBA_E() -> Result<(), String> {
     // Explicit weighted prediction for B slices. CAVLC. weighted_bipred_idc=1.
     test_decoding_against_gold("res/CVWP2_TOSHIBA_E.264", "res/CVWP2_TOSHIBA_E_dec.y4m")
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from this JVT gold at the same byte; upstream gap, not a port regression"]
+#[ignore = "upstream defects the port mirrors: picture output order: ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic -- the two P pictures at POC -4/-2 precede the IDR in the gold and openh264 emits the IDR first -- plus residuals from the direct-sub-block neighbour availability defect and from implicit weighted bipred (idc=2), which are not separately isolated"]
 pub fn test_CVWP3_TOSHIBA_E() -> Result<(), String> {
     // Implicit weighted prediction for B slices. CAVLC. weighted_bipred_idc=2.
     test_decoding_against_gold("res/CVWP3_TOSHIBA_E.264", "res/CVWP3_TOSHIBA_E_dec.y4m")
@@ -318,7 +332,7 @@ pub fn test_CAWP1_TOSHIBA_E() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from this JVT gold at the same byte; upstream gap, not a port regression"]
+#[ignore = "upstream defect the port mirrors, and the only ignored test here with no B slice in it: ref_pic_list_modification builds 8-10 active P entries out of 4-5 pictures (duplicated refs carrying distinct explicit weights) and the list openh264 builds is wrong from frame 4, MB 9. CAWP1_TOSHIBA_E, the same weighting without the modification, passes. Suspects are WelsReorderRefList (manage_dec_ref.cpp:385, iMaxRefIdx = num_ref_frames + 2) and stale initial-list entries; not pinned down"]
 pub fn test_CAWP5_TOSHIBA_E() -> Result<(), String> {
     // Explicit weighted prediction for P slices. CABAC. weighted_pred_flag=1.
     test_decoding_against_gold("res/CAWP5_TOSHIBA_E.264", "res/CAWP5_TOSHIBA_E_dec.y4m")
@@ -333,7 +347,7 @@ pub fn test_SVA_Base_B() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from this JVT gold at the same byte; upstream gap, not a port regression"]
+#[ignore = "two upstream defects the port mirrors: picture output order: ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, so this stream's decode order I P P B ... emits the second P before the B; and, in MV prediction, openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used"]
 pub fn test_CACQP3_Sony_D() -> Result<(), String> {
     // Single-slice-per-picture stream with a fresh PPS update before every
     // picture's slice (varying chroma_qp_index_offset across pictures).
@@ -343,7 +357,7 @@ pub fn test_CACQP3_Sony_D() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from this JVT gold at the same byte; upstream gap, not a port regression"]
+#[ignore = "two upstream defects the port mirrors: picture output order: ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, and this stream mixes I, P and B slices within one picture, which needs two pictures of reorder depth; and, in MV prediction, openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used"]
 pub fn test_CABAST3_Sony_E() -> Result<(), String> {
     // Multi-slice picture: 4 slices per picture at first_mb_in_slice
     // 25 pictures.
@@ -462,7 +476,7 @@ fn test_ffmpeg_baseline() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
+#[ignore = "upstream defect the port mirrors: x264's defaults here (direct=spatial, b-pyramid, weightb, sub-8x8 partitions) reach the case where openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used; +-1..3 residuals in a few frames. The same configuration with direct=none or partitions=none is bit-exact against ffmpeg for both decoders"]
 fn test_ffmpeg_main() -> Result<(), String> {
     // Generate H.264 main stream using ffmpeg.
     // -bf 8: Allow up to 8 consecutive B-frames.
@@ -494,7 +508,6 @@ fn test_ffmpeg_main() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_multiple_reference_frames() -> Result<(), String> {
     // Multiple Reference Frames (-refs 5)
     // Force the encoder to keep a deeper history of frames to use for prediction.
@@ -522,7 +535,6 @@ fn test_ffmpeg_multiple_reference_frames() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_weighted_prediction() -> Result<(), String> {
     // Weighted Prediction (-x264-params weightp=2:weightb=1)
     // Weighted prediction allows the encoder to apply a multiplier and offset
@@ -549,7 +561,6 @@ fn test_ffmpeg_weighted_prediction() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_cavlc_b_frames() -> Result<(), String> {
     // CAVLC with B-Frames (-coder 0 on Main Profile)
     // While Main profile usually defaults to CABAC, it still fully supports CAVLC.
@@ -577,7 +588,6 @@ fn test_ffmpeg_cavlc_b_frames() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_dpb_flush_idr() -> Result<(), String> {
     // Force IDR frames often with B-frames in between so that IDR has to flush them.
     // -g 5:  Sets GOP size to 5, forcing an IDR frame every 5 frames.
@@ -607,7 +617,6 @@ fn test_ffmpeg_dpb_flush_idr() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_cropping() -> Result<(), String> {
     // 100x100 is not a multiple of the 16x16 macroblock size, so the SPS must
     // signal frame cropping and the decoder must honour it on output.
@@ -666,7 +675,6 @@ fn test_ffmpeg_all_intra() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_high_cavlc_8x8() -> Result<(), String> {
     // High profile + CAVLC + 8x8 transform with deblocking enabled.
     // -profile:v high:    High profile enables the 8x8 transform and 8x8 intra prediction.
@@ -697,7 +705,6 @@ fn test_ffmpeg_high_cavlc_8x8() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_high_cabac_8x8() -> Result<(), String> {
     // High profile + CABAC + 8x8 transform. Mirrors test_ffmpeg_high_cavlc_8x8
     // but uses -coder 1 (CABAC, the default High-profile coder) to exercise the
@@ -728,7 +735,6 @@ fn test_ffmpeg_high_cabac_8x8() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_high_custom_scaling_matrix() -> Result<(), String> {
     // High profile + CABAC + 8x8 transform + custom scaling matrices.
     // cqm=jvt tells x264 to emit the JVT default scaling matrices (non-flat),
@@ -803,7 +809,6 @@ fn test_ffmpeg_baseline_multi_slice() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_main_multi_slice() -> Result<(), String> {
     // Main profile (CABAC + B-frames), 4 slices per picture. B-slices use
     // temporal direct prediction off colocated pictures that themselves have
@@ -836,7 +841,6 @@ fn test_ffmpeg_main_multi_slice() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_high_multi_slice() -> Result<(), String> {
     // High profile (8x8 transform) with 3 slices per picture. Confirms the
     // 8x8 deblocking branch (filter only at the 8-sample MB boundary) picks
@@ -866,7 +870,7 @@ fn test_ffmpeg_high_multi_slice() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
+#[ignore = "upstream defect the port mirrors: x264's defaults here (direct=spatial, b-pyramid, weightb, sub-8x8 partitions) reach the case where openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used; +-1..3 residuals in a few frames. The same configuration with direct=none or partitions=none is bit-exact against ffmpeg for both decoders"]
 fn test_ffmpeg_multi_slice_variable_size() -> Result<(), String> {
     // Variable slice size via `slice-max-mbs`. Tests next_mb_addr tracking when
     // slices have non-uniform MB counts within a picture.
@@ -896,7 +900,6 @@ fn test_ffmpeg_multi_slice_variable_size() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_multi_slice_weighted() -> Result<(), String> {
     // Multi-slice combined with weighted prediction. Each slice carries its
     // own `pred_weight_table`; this confirms that picture-scope deblocking

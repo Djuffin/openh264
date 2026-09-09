@@ -1721,16 +1721,15 @@ pub fn GetInterBPred(
         }
     } else if IS_INTER_16x8(iMBType) {
         // **Each partition combines its own two hypotheses, at its own coordinate.**
-        // `rec_mb.cpp:737-783` runs one `BaseMC` per active list into the *same*
-        // `pMCRefMem`, whose `pDst*` `GetRefPic` (`rec_mb.cpp:217`) never resets: on a
-        // bi-predicted partition the LIST_1 pass overwrites the LIST_0 hypothesis
-        // already written into the picture, so `BiPrediction` averages LIST_1 with
-        // itself and LIST_0 is lost. The `if (i)` destination step is likewise applied
-        // once per active list, so such a partition's LIST_1 pass and its average land
-        // 8 rows below the partition, in the macroblock beneath. Rec. 8.4.2.3 combines
-        // predPartL0 and predPartL1 of *one* partition; that is what this does, and it
-        // is a deliberate divergence from the reference — see the commit that added
-        // this comment.
+        // `rec_mb.cpp:737-786`, which this mirrors arm for arm. Upstream 2.6.0 ran one
+        // `BaseMC` per active list into the *same* `pMCRefMem`, whose `pDst*`
+        // `GetRefPic` (`rec_mb.cpp:217`) never resets: on a bi-predicted partition the
+        // LIST_1 pass overwrote the LIST_0 hypothesis already written into the picture,
+        // so `BiPrediction` averaged LIST_1 with itself and LIST_0 was lost, and the
+        // `if (i)` destination step ran once per active list, so such a partition's
+        // average landed 8 rows below it in the macroblock beneath. Rec. 8.4.2.3
+        // combines predPartL0 and predPartL1 of *one* partition. This tree's
+        // `rec_mb.cpp` carries the fix; upstream does not.
         for i in 0..2usize {
             let iPartIdx = i << 3;
             let at = mb.blk(0, (i as isize) << 3);
@@ -1760,7 +1759,7 @@ pub fn GetInterBPred(
             }
         }
     } else if IS_INTER_8x16(iMBType) {
-        // The 16x8 arm's fix, in columns (`rec_mb.cpp:784-830`).
+        // The 16x8 arm's fix, in columns (`rec_mb.cpp:787-831`).
         for i in 0..2usize {
             let iPartIdx = i << 1;
             let at = mb.blk((i as isize) << 3, 0);
@@ -1971,11 +1970,12 @@ pub fn GetInterBPred(
                         let iBlk4Y = ((j >> 1) << 2) as i32;
 
                         let at = blk8.blk(iBlk4X as isize, iBlk4Y as isize);
-                        // `rec_mb.cpp:1014` indexes the LIST_1 *luma* destination with
-                        // iBlk8X/iBlk8Y rather than iBlk4X/iBlk4Y, applying the 8x8
-                        // step twice while its chroma takes the 4x4 step — so the two
-                        // hypotheses of a 4x4 are averaged from different samples. Both
-                        // belong at the same block, which is what this does.
+                        // Both hypotheses belong at the same 4x4 block, which is what
+                        // `rec_mb.cpp:1023` now does. Upstream 2.6.0 indexed the LIST_1
+                        // *luma* destination with iBlk8X/iBlk8Y rather than
+                        // iBlk4X/iBlk4Y, applying the 8x8 step twice while its chroma
+                        // took the 4x4 step, so the two hypotheses of one 4x4 were
+                        // averaged from different samples.
                         let tat = at;
 
                         iMVs = pMv(LIST_0, iIIdx + iJIdx);
