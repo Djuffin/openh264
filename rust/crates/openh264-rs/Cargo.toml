@@ -137,7 +137,6 @@ int_plus_one = "allow"
 explicit_counter_loop = "allow"
 neg_multiply = "allow"
 if_same_then_else = "allow"
-manual_memcpy = "allow"
 type_complexity = "allow"
 # `drop()` here ends a borrow so the next statement can reborrow; the type not
 # being Drop is the point, not a mistake.
