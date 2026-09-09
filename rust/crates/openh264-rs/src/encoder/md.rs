@@ -380,19 +380,37 @@ impl<'a> MbCursors<'a> {
     /// picture.
     #[inline]
     pub fn at(sc: &MdSliceCtx<'a>, mb_x: i32, mb_y: i32) -> Self {
+        let refv = sc.refv.expect("the layer's reference view is built for this frame");
+        Self::from_views(sc.enc, refv, sc.rec, mb_x, mb_y)
+    }
+
+    /// [`at`](Self::at) from the three views themselves.
+    ///
+    /// The loop stamps through this rather than through `at`, so that the borrow of
+    /// `SWelsMD::sctx` the views come from has ended before the result is written
+    /// back to `SWelsMD::mbc`: with the borrow still live the nine cursors are built
+    /// into a stack temporary and `memmove`d into place, which was 1.5% of the flat
+    /// 1080p frame.
+    #[inline]
+    pub fn from_views(
+        enc: &'a crate::encoder::rec_view::RoPicView,
+        refv: &'a crate::encoder::rec_view::RoPicView,
+        rec: &'a crate::encoder::rec_view::RecPicView,
+        mb_x: i32,
+        mb_y: i32,
+    ) -> Self {
         let (lx, ly) = ((mb_x as isize) << 4, (mb_y as isize) << 4);
         let (cx, cy) = ((mb_x as isize) << 3, (mb_y as isize) << 3);
-        let refv = sc.refv.expect("the layer's reference view is built for this frame");
         Self {
-            enc_y: sc.enc.plane(0).cursor(lx, ly),
-            enc_cb: sc.enc.plane(1).cursor(cx, cy),
-            enc_cr: sc.enc.plane(2).cursor(cx, cy),
+            enc_y: enc.plane(0).cursor(lx, ly),
+            enc_cb: enc.plane(1).cursor(cx, cy),
+            enc_cr: enc.plane(2).cursor(cx, cy),
             ref_y: refv.plane(0).cursor(lx, ly),
             ref_cb: refv.plane(1).cursor(cx, cy),
             ref_cr: refv.plane(2).cursor(cx, cy),
-            rec_y: sc.rec.plane(0).cursor(lx, ly),
-            rec_cb: sc.rec.plane(1).cursor(cx, cy),
-            rec_cr: sc.rec.plane(2).cursor(cx, cy),
+            rec_y: rec.plane(0).cursor(lx, ly),
+            rec_cb: rec.plane(1).cursor(cx, cy),
+            rec_cr: rec.plane(2).cursor(cx, cy),
         }
     }
 }
