@@ -1145,15 +1145,6 @@ impl McDst {
             chroma: (self.chroma.0 + (x >> 1), self.chroma.1 + (y >> 1)),
         }
     }
-
-    /// The two planes stepped independently — `rec_mb.cpp:1014`'s case, and only it.
-    #[inline]
-    fn split_blk(self, lx: isize, ly: isize, cx: isize, cy: isize) -> Self {
-        Self {
-            luma: (self.luma.0 + lx, self.luma.1 + ly),
-            chroma: (self.chroma.0 + cx, self.chroma.1 + cy),
-        }
-    }
 }
 
 /// Where motion compensation reads from — [`PicRefs::classify`]'s answer resolved
@@ -1729,99 +1720,73 @@ pub fn GetInterBPred(
             }
         }
     } else if IS_INTER_16x8(iMBType) {
-        // **The two destination walks accumulate.** `rec_mb.cpp:749` advances
-        // `pMCRefMem.pDst*` *inside* the list loop under `if (i)`, and `pMCRefMem` is
-        // function-scoped — so a second-half partition predicted from **both** lists
-        // advances it **twice**, and the LIST_1 hypothesis of that partition lands 8
-        // rows below where a single advance would put it. Reproduced verbatim; a
-        // fixed per-partition coordinate diverges on exactly the bi-predicted 16x8
-        // macroblock.
-        let mut at = mb;
-        let mut tat = mb;
+        // **Each partition combines its own two hypotheses, at its own coordinate.**
+        // `rec_mb.cpp:737-783` runs one `BaseMC` per active list into the *same*
+        // `pMCRefMem`, whose `pDst*` `GetRefPic` (`rec_mb.cpp:217`) never resets: on a
+        // bi-predicted partition the LIST_1 pass overwrites the LIST_0 hypothesis
+        // already written into the picture, so `BiPrediction` averages LIST_1 with
+        // itself and LIST_0 is lost. The `if (i)` destination step is likewise applied
+        // once per active list, so such a partition's LIST_1 pass and its average land
+        // 8 rows below the partition, in the macroblock beneath. Rec. 8.4.2.3 combines
+        // predPartL0 and predPartL1 of *one* partition; that is what this does, and it
+        // is a deliberate divergence from the reference — see the commit that added
+        // this comment.
         for i in 0..2usize {
             let iPartIdx = i << 3;
-            let mut listCount = 0u32;
-            let mut lastListIdx = LIST_0;
-            for listIdx in LIST_0..LIST_A {
-                if IS_DIR(iMBType, i, listIdx) {
-                    lastListIdx = listIdx;
-                    iMVs = pMv(listIdx, iPartIdx);
-                    iRefIndex = pRef(listIdx, iPartIdx);
-                    if i != 0 {
-                        at = at.blk(0, 8);
-                    }
-                    mc0!(
-                        at,
-                        listIdx,
-                        iRefIndex,
-                        iMBOffsetX,
-                        iMBOffsetY + iPartIdx as i32,
-                        16,
-                        8,
-                        iMVs
-                    );
-                    listCount += 1;
-                    if listCount == 2 {
-                        iMVs = pMv(LIST_1, iPartIdx);
-                        iRefIndex1 = pRef(LIST_1, iPartIdx);
-                        if i != 0 {
-                            tat = tat.blk(0, 8);
-                        }
-                        mc1!(
-                            tat,
-                            LIST_1,
-                            iRefIndex1,
-                            iMBOffsetX,
-                            iMBOffsetY + iPartIdx as i32,
-                            16,
-                            8,
-                            iMVs
-                        );
-                        iRefIndex0 = pRef(LIST_0, iPartIdx);
-                        iRefIndex1 = pRef(LIST_1, iPartIdx);
-                        blend!(at, tat, iRefIndex0, iRefIndex1, 16, 8);
-                    }
+            let at = mb.blk(0, (i as isize) << 3);
+            let iYOffset = iMBOffsetY + iPartIdx as i32;
+            let bL0 = IS_DIR(iMBType, i, LIST_0);
+            let bL1 = IS_DIR(iMBType, i, LIST_1);
+            if bL0 {
+                iMVs = pMv(LIST_0, iPartIdx);
+                iRefIndex0 = pRef(LIST_0, iPartIdx);
+                mc0!(at, LIST_0, iRefIndex0, iMBOffsetX, iYOffset, 16, 8, iMVs);
+            }
+            if bL1 {
+                iMVs = pMv(LIST_1, iPartIdx);
+                iRefIndex1 = pRef(LIST_1, iPartIdx);
+                if bL0 {
+                    mc1!(at, LIST_1, iRefIndex1, iMBOffsetX, iYOffset, 16, 8, iMVs);
+                } else {
+                    mc0!(at, LIST_1, iRefIndex1, iMBOffsetX, iYOffset, 16, 8, iMVs);
                 }
             }
-            if listCount == 1 && bWeightedBipredIdcIs1 {
-                iRefIndex = pRef(lastListIdx, iPartIdx);
-                WeightPrediction(pwt.as_ref(), pDec, at, lastListIdx, iRefIndex as i32, 16, 8);
+            if bL0 && bL1 {
+                blend!(at, at, iRefIndex0, iRefIndex1, 16, 8);
+            } else if (bL0 || bL1) && bWeightedBipredIdcIs1 {
+                let listIdx = if bL0 { LIST_0 } else { LIST_1 };
+                iRefIndex = pRef(listIdx, iPartIdx);
+                WeightPrediction(pwt.as_ref(), pDec, at, listIdx, iRefIndex as i32, 16, 8);
             }
         }
     } else if IS_INTER_8x16(iMBType) {
-        // The 16x8 arm's accumulation, in columns (`rec_mb.cpp:794`).
-        let mut at = mb;
-        let mut tat = mb;
+        // The 16x8 arm's fix, in columns (`rec_mb.cpp:784-830`).
         for i in 0..2usize {
+            let iPartIdx = i << 1;
+            let at = mb.blk((i as isize) << 3, 0);
             let iXOffset = iMBOffsetX + if i != 0 { 8 } else { 0 };
-            let mut listCount = 0u32;
-            let mut lastListIdx = LIST_0;
-            for listIdx in LIST_0..LIST_A {
-                if IS_DIR(iMBType, i, listIdx) {
-                    lastListIdx = listIdx;
-                    iMVs = pMv(listIdx, i << 1);
-                    iRefIndex = pRef(listIdx, i << 1);
-                    if i != 0 {
-                        at = at.blk(8, 0);
-                    }
-                    mc0!(at, listIdx, iRefIndex, iXOffset, iMBOffsetY, 8, 16, iMVs);
-                    listCount += 1;
-                    if listCount == 2 {
-                        iMVs = pMv(LIST_1, i << 1);
-                        iRefIndex1 = pRef(LIST_1, i << 1);
-                        if i != 0 {
-                            tat = tat.blk(8, 0);
-                        }
-                        mc1!(tat, LIST_1, iRefIndex1, iXOffset, iMBOffsetY, 8, 16, iMVs);
-                        iRefIndex0 = pRef(LIST_0, i << 1);
-                        iRefIndex1 = pRef(LIST_1, i << 1);
-                        blend!(at, tat, iRefIndex0, iRefIndex1, 8, 16);
-                    }
+            let bL0 = IS_DIR(iMBType, i, LIST_0);
+            let bL1 = IS_DIR(iMBType, i, LIST_1);
+            if bL0 {
+                iMVs = pMv(LIST_0, iPartIdx);
+                iRefIndex0 = pRef(LIST_0, iPartIdx);
+                mc0!(at, LIST_0, iRefIndex0, iXOffset, iMBOffsetY, 8, 16, iMVs);
+            }
+            if bL1 {
+                iMVs = pMv(LIST_1, iPartIdx);
+                iRefIndex1 = pRef(LIST_1, iPartIdx);
+                if bL0 {
+                    mc1!(at, LIST_1, iRefIndex1, iXOffset, iMBOffsetY, 8, 16, iMVs);
+                } else {
+                    mc0!(at, LIST_1, iRefIndex1, iXOffset, iMBOffsetY, 8, 16, iMVs);
                 }
             }
-            if listCount == 1 && bWeightedBipredIdcIs1 {
-                iRefIndex = pRef(lastListIdx, i << 1);
-                WeightPrediction(pwt.as_ref(), pDec, at, lastListIdx, iRefIndex as i32, 8, 16);
+            if bL0 && bL1 {
+                blend!(at, at, iRefIndex0, iRefIndex1, 8, 16);
+            } else if (bL0 || bL1) && bWeightedBipredIdcIs1 {
+                let listIdx = if bL0 { LIST_0 } else { LIST_1 };
+                iRefIndex = pRef(listIdx, iPartIdx);
+                WeightPrediction(pwt.as_ref(), pDec, at, listIdx, iRefIndex as i32, 8, 16);
             }
         }
     } else if IS_Inter_8x8(iMBType) {
@@ -2006,17 +1971,12 @@ pub fn GetInterBPred(
                         let iBlk4Y = ((j >> 1) << 2) as i32;
 
                         let at = blk8.blk(iBlk4X as isize, iBlk4Y as isize);
-                        // NOTE: C indexes the LIST_1 *luma* destination with
-                        // iBlk8X/iBlk8Y here, not iBlk4X/iBlk4Y, so the 8x8 offset is
-                        // applied twice — while its chroma takes the 4x4 offset like
-                        // everything else. Kept verbatim; `McDst`'s two coordinate
-                        // pairs exist for this line. See rec_mb.cpp:1014.
-                        let tat = blk8.split_blk(
-                            iBlk8X as isize,
-                            iBlk8Y as isize,
-                            (iBlk4X >> 1) as isize,
-                            (iBlk4Y >> 1) as isize,
-                        );
+                        // `rec_mb.cpp:1014` indexes the LIST_1 *luma* destination with
+                        // iBlk8X/iBlk8Y rather than iBlk4X/iBlk4Y, applying the 8x8
+                        // step twice while its chroma takes the 4x4 step — so the two
+                        // hypotheses of a 4x4 are averaged from different samples. Both
+                        // belong at the same block, which is what this does.
+                        let tat = at;
 
                         iMVs = pMv(LIST_0, iIIdx + iJIdx);
                         mc0!(
