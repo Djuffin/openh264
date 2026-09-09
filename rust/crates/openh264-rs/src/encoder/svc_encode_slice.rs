@@ -2096,15 +2096,31 @@ pub fn WelsMdInterMbLoop<'a>(
         // off `pMd` instead of re-deriving `plane(i).cursor(kiMbX << 4, ..)` at each
         // of the fifteen or so sites the path used to; the C++ computes the same nine
         // pointers here, off `kiMbX`/`kiMbY`.
-        if let Some(sc) = pMd.sctx.as_ref() {
+        if pMd.sctx.is_some() {
+            // The three views and the reference picture's three entries, taken
+            // before either write: the cursors are built straight into `pMd.mbc`
+            // only if nothing borrows `pMd` at the assignment.
+            let (enc, refv, rec, mbi) = {
+                let sc = pMd.sc();
+                (
+                    sc.enc,
+                    sc.refv.expect("the layer's reference view is built for this frame"),
+                    sc.rec,
+                    // **The reference picture's three entries for this macroblock**,
+                    // which the judgement, the inter init and the two skip-cost
+                    // tests each reached through an `Option` and a `Vec`.
+                    crate::encoder::md::MbSideInfo::at(sc, pMbs.cur().iMbXY),
+                )
+            };
             let cur = pMbs.cur();
-            let mbc = crate::encoder::md::MbCursors::at(sc, cur.iMbX as i32, cur.iMbY as i32);
-            // **And the reference picture's three entries for this macroblock**,
-            // which the judgement, the inter init and the two skip-cost tests each
-            // reached through an `Option` and a `Vec`.
-            let mbi = crate::encoder::md::MbSideInfo::at(sc, cur.iMbXY);
-            pMd.mbc = Some(mbc);
             pMd.mbi = mbi;
+            pMd.mbc = Some(crate::encoder::md::MbCursors::from_views(
+                enc,
+                refv,
+                rec,
+                cur.iMbX as i32,
+                cur.iMbY as i32,
+            ));
         }
 
         //step(1): set QP for the current MB
@@ -2277,15 +2293,31 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         // off `pMd` instead of re-deriving `plane(i).cursor(kiMbX << 4, ..)` at each
         // of the fifteen or so sites the path used to; the C++ computes the same nine
         // pointers here, off `kiMbX`/`kiMbY`.
-        if let Some(sc) = pMd.sctx.as_ref() {
+        if pMd.sctx.is_some() {
+            // The three views and the reference picture's three entries, taken
+            // before either write: the cursors are built straight into `pMd.mbc`
+            // only if nothing borrows `pMd` at the assignment.
+            let (enc, refv, rec, mbi) = {
+                let sc = pMd.sc();
+                (
+                    sc.enc,
+                    sc.refv.expect("the layer's reference view is built for this frame"),
+                    sc.rec,
+                    // **The reference picture's three entries for this macroblock**,
+                    // which the judgement, the inter init and the two skip-cost
+                    // tests each reached through an `Option` and a `Vec`.
+                    crate::encoder::md::MbSideInfo::at(sc, pMbs.cur().iMbXY),
+                )
+            };
             let cur = pMbs.cur();
-            let mbc = crate::encoder::md::MbCursors::at(sc, cur.iMbX as i32, cur.iMbY as i32);
-            // **And the reference picture's three entries for this macroblock**,
-            // which the judgement, the inter init and the two skip-cost tests each
-            // reached through an `Option` and a `Vec`.
-            let mbi = crate::encoder::md::MbSideInfo::at(sc, cur.iMbXY);
-            pMd.mbc = Some(mbc);
             pMd.mbi = mbi;
+            pMd.mbc = Some(crate::encoder::md::MbCursors::from_views(
+                enc,
+                refv,
+                rec,
+                cur.iMbX as i32,
+                cur.iMbY as i32,
+            ));
         }
 
         func_list
