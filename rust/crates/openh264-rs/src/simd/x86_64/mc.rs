@@ -28,7 +28,8 @@ const ROW_GROUP: usize = 4;
 
 /// Sixteen bytes of a span row as a vector.
 #[target_feature(enable = "sse2")]
-unsafe fn ld16(r: &[u8; 16]) -> __m128i {
+fn ld16(r: &[u8; 16]) -> __m128i {
+    // SAFETY: `&[u8; 16]` is sixteen readable bytes; the load is unaligned.
     unsafe { _mm_loadu_si128(r.as_ptr() as *const __m128i) }
 }
 
@@ -40,44 +41,45 @@ unsafe fn ld16(r: &[u8; 16]) -> __m128i {
 /// come from memory the `from_le_bytes` folds back into the `movq` it would have
 /// been.
 #[target_feature(enable = "sse2")]
-unsafe fn ld8(r: &[u8; 8]) -> __m128i {
+fn ld8(r: &[u8; 8]) -> __m128i {
     _mm_cvtsi64_si128(i64::from_le_bytes(*r))
 }
 
 /// Four bytes of a span row in the low quarter of a vector; see [`ld8`].
 #[target_feature(enable = "sse2")]
-unsafe fn ld4(r: &[u8; 4]) -> __m128i {
+fn ld4(r: &[u8; 4]) -> __m128i {
     _mm_cvtsi32_si128(i32::from_le_bytes(*r))
 }
 
 /// Sixteen bytes of `v` to the start of `out`.
 #[target_feature(enable = "sse2")]
-unsafe fn st16(out: &mut [u8], v: __m128i) {
+fn st16(out: &mut [u8], v: __m128i) {
+    // SAFETY: the slicing panics unless `out` holds sixteen writable bytes.
     unsafe { _mm_storeu_si128(out[..16].as_mut_ptr() as *mut __m128i, v) }
 }
 
 /// The low eight bytes of `v` to the start of `out`; see [`ld8`].
 #[target_feature(enable = "sse2")]
-unsafe fn st8(out: &mut [u8], v: __m128i) {
+fn st8(out: &mut [u8], v: __m128i) {
     out[..8].copy_from_slice(&_mm_cvtsi128_si64(v).to_le_bytes())
 }
 
 /// The low four bytes of `v` to the start of `out`; see [`ld8`].
 #[target_feature(enable = "sse2")]
-unsafe fn st4(out: &mut [u8], v: __m128i) {
+fn st4(out: &mut [u8], v: __m128i) {
     out[..4].copy_from_slice(&_mm_cvtsi128_si32(v).to_le_bytes())
 }
 
 /// Eight bytes of a window row widened to eight words.
 #[target_feature(enable = "sse2")]
-unsafe fn w8<R: BlockRows>(r: &R, y: usize, x: usize) -> __m128i {
-    unsafe { _mm_unpacklo_epi8(ld8(&r.row::<8>(y, x)), _mm_setzero_si128()) }
+fn w8<R: BlockRows>(r: &R, y: usize, x: usize) -> __m128i {
+    _mm_unpacklo_epi8(ld8(&r.row::<8>(y, x)), _mm_setzero_si128())
 }
 
 /// Four bytes of a window row widened to four words in the low half.
 #[target_feature(enable = "sse2")]
-unsafe fn w4<R: BlockRows>(r: &R, y: usize, x: usize) -> __m128i {
-    unsafe { _mm_unpacklo_epi8(ld4(&r.row::<4>(y, x)), _mm_setzero_si128()) }
+fn w4<R: BlockRows>(r: &R, y: usize, x: usize) -> __m128i {
+    _mm_unpacklo_epi8(ld4(&r.row::<4>(y, x)), _mm_setzero_si128())
 }
 
 // ============================================================================
@@ -90,53 +92,49 @@ unsafe fn w4<R: BlockRows>(r: &R, y: usize, x: usize) -> __m128i {
 /// — a row loop whose body still contains a loop is one the unroller declines, and
 /// with it every per-row bounds check stays. See [`ROW_GROUP`].
 #[target_feature(enable = "sse2")]
-unsafe fn avg_row<const W: usize>(out: &mut [u8; W], a: &[u8; W], b: &[u8; W]) {
-    unsafe {
-        let mut x = 0;
-        while x + 16 <= W {
-            st16(&mut out[x..], _mm_avg_epu8(ld16(a[x..][..16].try_into().unwrap()), ld16(b[x..][..16].try_into().unwrap())));
-            x += 16;
-        }
-        if x + 8 <= W {
-            st8(&mut out[x..], _mm_avg_epu8(ld8(a[x..][..8].try_into().unwrap()), ld8(b[x..][..8].try_into().unwrap())));
-            x += 8;
-        }
-        if x + 4 <= W {
-            st4(&mut out[x..], _mm_avg_epu8(ld4(a[x..][..4].try_into().unwrap()), ld4(b[x..][..4].try_into().unwrap())));
-            x += 4;
-        }
-        while x < W {
-            out[x] = (((a[x] as u32) + (b[x] as u32) + 1) >> 1) as u8;
-            x += 1;
-        }
+fn avg_row<const W: usize>(out: &mut [u8; W], a: &[u8; W], b: &[u8; W]) {
+    let mut x = 0;
+    while x + 16 <= W {
+        st16(&mut out[x..], _mm_avg_epu8(ld16(a[x..][..16].try_into().unwrap()), ld16(b[x..][..16].try_into().unwrap())));
+        x += 16;
+    }
+    if x + 8 <= W {
+        st8(&mut out[x..], _mm_avg_epu8(ld8(a[x..][..8].try_into().unwrap()), ld8(b[x..][..8].try_into().unwrap())));
+        x += 8;
+    }
+    if x + 4 <= W {
+        st4(&mut out[x..], _mm_avg_epu8(ld4(a[x..][..4].try_into().unwrap()), ld4(b[x..][..4].try_into().unwrap())));
+        x += 4;
+    }
+    while x < W {
+        out[x] = (((a[x] as u32) + (b[x] as u32) + 1) >> 1) as u8;
+        x += 1;
     }
 }
 
 /// `PixelAvg` over one const-shape block: one span per operand, walked a
 /// [`ROW_GROUP`] at a time.
 #[target_feature(enable = "sse2")]
-unsafe fn avg_block<A: RefSamples, B: RefSamples, const W: usize, const H: usize>(
+fn avg_block<A: RefSamples, B: RefSamples, const W: usize, const H: usize>(
     dst: &mut PlaneCursorMut<'_>,
     a: &A,
     b: &B,
 ) {
-    unsafe {
-        let sa = a.span::<W, H>(0, 0);
-        let sb = b.span::<W, H>(0, 0);
-        let mut d = dst.span_mut::<W, H>(0, 0);
-        let mut y = 0;
-        while y + ROW_GROUP <= H {
-            let (ga, gb) = (sa.window::<W>(y, ROW_GROUP), sb.window::<W>(y, ROW_GROUP));
-            let mut gd = d.window_mut::<W>(y, ROW_GROUP);
-            for k in 0..ROW_GROUP {
-                avg_row::<W>(gd.row_mut::<W>(k, 0), &ga.row::<W>(k, 0), &gb.row::<W>(k, 0));
-            }
-            y += ROW_GROUP;
+    let sa = a.span::<W, H>(0, 0);
+    let sb = b.span::<W, H>(0, 0);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    let mut y = 0;
+    while y + ROW_GROUP <= H {
+        let (ga, gb) = (sa.window::<W>(y, ROW_GROUP), sb.window::<W>(y, ROW_GROUP));
+        let mut gd = d.window_mut::<W>(y, ROW_GROUP);
+        for k in 0..ROW_GROUP {
+            avg_row::<W>(gd.row_mut::<W>(k, 0), &ga.row::<W>(k, 0), &gb.row::<W>(k, 0));
         }
-        while y < H {
-            avg_row::<W>(d.row_mut::<W>(y, 0), &sa.row::<W>(y, 0), &sb.row::<W>(y, 0));
-            y += 1;
-        }
+        y += ROW_GROUP;
+    }
+    while y < H {
+        avg_row::<W>(d.row_mut::<W>(y, 0), &sa.row::<W>(y, 0), &sb.row::<W>(y, 0));
+        y += 1;
     }
 }
 
@@ -174,7 +172,7 @@ pub fn pixel_avg<A: RefSamples, B: RefSamples>(
 /// One output row of the bilinear filter at width 8 or 4, over the two one-row
 /// windows `r0` and `r1`.
 #[target_feature(enable = "sse2")]
-unsafe fn chroma_row<R: BlockRows, const W: usize>(
+fn chroma_row<R: BlockRows, const W: usize>(
     out: &mut [u8; W],
     r0: &R,
     r1: &R,
@@ -183,61 +181,57 @@ unsafe fn chroma_row<R: BlockRows, const W: usize>(
     vC: __m128i,
     vD: __m128i,
 ) {
-    unsafe {
-        let (p00, p01, p10, p11) = if W == 8 {
-            (w8(r0, 0, 0), w8(r0, 0, 1), w8(r1, 0, 0), w8(r1, 0, 1))
-        } else {
-            (w4(r0, 0, 0), w4(r0, 0, 1), w4(r1, 0, 0), w4(r1, 0, 1))
-        };
-        let sum = _mm_add_epi16(
-            _mm_add_epi16(_mm_mullo_epi16(p00, vA), _mm_mullo_epi16(p01, vB)),
-            _mm_add_epi16(_mm_mullo_epi16(p10, vC), _mm_mullo_epi16(p11, vD)),
-        );
-        let shifted = _mm_srli_epi16(_mm_add_epi16(sum, _mm_set1_epi16(32)), 6);
-        let packed = _mm_packus_epi16(shifted, _mm_setzero_si128());
-        if W == 8 {
-            st8(out, packed);
-        } else {
-            st4(out, packed);
-        }
+    let (p00, p01, p10, p11) = if W == 8 {
+        (w8(r0, 0, 0), w8(r0, 0, 1), w8(r1, 0, 0), w8(r1, 0, 1))
+    } else {
+        (w4(r0, 0, 0), w4(r0, 0, 1), w4(r1, 0, 0), w4(r1, 0, 1))
+    };
+    let sum = _mm_add_epi16(
+        _mm_add_epi16(_mm_mullo_epi16(p00, vA), _mm_mullo_epi16(p01, vB)),
+        _mm_add_epi16(_mm_mullo_epi16(p10, vC), _mm_mullo_epi16(p11, vD)),
+    );
+    let shifted = _mm_srli_epi16(_mm_add_epi16(sum, _mm_set1_epi16(32)), 6);
+    let packed = _mm_packus_epi16(shifted, _mm_setzero_si128());
+    if W == 8 {
+        st8(out, packed);
+    } else {
+        st4(out, packed);
     }
 }
 
 /// The bilinear chroma filter over one const-shape block. Widths 8 and 4 take the
 /// lane path; width 2 is the scalar, as upstream has it.
 #[target_feature(enable = "sse2")]
-unsafe fn chroma_block<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn chroma_block<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     w: &[u8; 4],
 ) {
-    unsafe {
-        let (iA, iB, iC, iD) = (w[0] as i32, w[1] as i32, w[2] as i32, w[3] as i32);
-        let s = src.span::<SW, SH>(0, 0);
-        let mut d = dst.span_mut::<W, H>(0, 0);
-        if W == 8 || W == 4 {
-            let (vA, vB, vC, vD) = (
-                _mm_set1_epi16(iA as i16),
-                _mm_set1_epi16(iB as i16),
-                _mm_set1_epi16(iC as i16),
-                _mm_set1_epi16(iD as i16),
-            );
-            for y in 0..H {
-                let (r0, r1) = (s.window::<SW>(y, 1), s.window::<SW>(y + 1, 1));
-                chroma_row::<_, W>(d.row_mut::<W>(y, 0), &r0, &r1, vA, vB, vC, vD);
-            }
-        } else {
-            for y in 0..H {
-                let (r0, r1) = (s.row::<SW>(y, 0), s.row::<SW>(y + 1, 0));
-                let out = d.row_mut::<W>(y, 0);
-                for j in 0..W {
-                    out[j] = ((iA * (r0[j] as i32)
-                        + iB * (r0[j + 1] as i32)
-                        + iC * (r1[j] as i32)
-                        + iD * (r1[j + 1] as i32)
-                        + 32)
-                        >> 6) as u8;
-                }
+    let (iA, iB, iC, iD) = (w[0] as i32, w[1] as i32, w[2] as i32, w[3] as i32);
+    let s = src.span::<SW, SH>(0, 0);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    if W == 8 || W == 4 {
+        let (vA, vB, vC, vD) = (
+            _mm_set1_epi16(iA as i16),
+            _mm_set1_epi16(iB as i16),
+            _mm_set1_epi16(iC as i16),
+            _mm_set1_epi16(iD as i16),
+        );
+        for y in 0..H {
+            let (r0, r1) = (s.window::<SW>(y, 1), s.window::<SW>(y + 1, 1));
+            chroma_row::<_, W>(d.row_mut::<W>(y, 0), &r0, &r1, vA, vB, vC, vD);
+        }
+    } else {
+        for y in 0..H {
+            let (r0, r1) = (s.row::<SW>(y, 0), s.row::<SW>(y + 1, 0));
+            let out = d.row_mut::<W>(y, 0);
+            for j in 0..W {
+                out[j] = ((iA * (r0[j] as i32)
+                    + iB * (r0[j + 1] as i32)
+                    + iC * (r1[j] as i32)
+                    + iD * (r1[j + 1] as i32)
+                    + 32)
+                    >> 6) as u8;
             }
         }
     }
