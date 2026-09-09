@@ -7,21 +7,13 @@
     non_camel_case_types,
     non_upper_case_globals
 )]
-// The first two are warn-by-default and were blanket-allowed per module while the
-// port was landing files that only later gained callers; that phase is over, so a
-// body with no caller and a parameter with no reader are findings again. The last
-// three are allow-by-default and are on deliberately: this is a line-by-line port,
-// and an import nothing uses, a path spelled out where the name is already in
-// scope, and a cast from a type to itself are all residue of moving a C++ file
-// across rather than anything the Rust needs.
-#![warn(
+
+#![deny(
     dead_code,
     unused_variables,
     unused_imports,
     unused_qualifications,
-    trivial_numeric_casts
-)]
-#![deny(
+    trivial_numeric_casts,
     unused_assignments,
     unused_mut,
     unreachable_patterns,
