@@ -186,12 +186,12 @@ assert_size!(SWelsME, 80);
 //
 // The port's own two fields are on top of that, and neither has a counterpart in the
 // C++ struct: `sctx`, the slice context the P-slice mode decision used to re-resolve
-// per macroblock (nine references, four `i32`s and four cost slots — 120 bytes), and
+// per macroblock (nine references, four `i32`s and three cost slots — 112 bytes), and
 // `mbc`, the macroblock's nine plane cursors (9 x 32 bytes). Both `Option`s are free,
 // the reference inside each carrying the niche. Both fields are the C++'s pointer
 // arithmetic off `pCurLayer`/`kiMbX`/`kiMbY`, hoisted out of the macroblock loop, so
-// the pin is 800 + 120 + 288.
-assert_size!(SWelsMD, 1208);
+// the pin is 800 + 112 + 288.
+assert_size!(SWelsMD, 1200);
 // `SVAAFrameInfo`: 264 in the C++, and the pin is a *drift tracker* rather than an
 // ABI contract — `repr(C)` is off, so it moves with a deliberate field change. The
 // six per-frame result arrays and `pVaaBackgroundMbFlag` are the block's own `Vec`s;
