@@ -735,93 +735,97 @@ int32_t GetInterBPred (uint8_t* pPredYCbCr[3], uint8_t* pTempPredYCbCr[3], PWels
       }
     }
   } else if (IS_INTER_16x8 (iMBType)) {
+    // Local patch, not in upstream 2.6.0: predict each list into its own destination at
+    // the partition's own coordinate and combine once, per Rec. ITU-T H.264 8.4.2.3.
+    // Upstream ran one BaseMC () per active list into the same pMCRefMem, and GetRefPic ()
+    // sets only the source pointers, so on a bi-predicted partition the LIST_1 motion
+    // compensation overwrote the LIST_0 prediction and BiPrediction () then averaged the
+    // LIST_1 prediction with itself; the destination step under "if (i)" likewise ran once
+    // per list, so the bottom partition's average landed in the macroblock below.
     for (int32_t i = 0; i < 2; ++i) {
-      int32_t iPartIdx = i << 3;
-      uint32_t listCount = 0;
-      int32_t lastListIdx = LIST_0;
-      for (int32_t listIdx = LIST_0; listIdx < LIST_A; ++listIdx) {
-        if (IS_DIR (iMBType, i, listIdx)) {
-          lastListIdx = listIdx;
-          iMVs[0] = pCurDqLayer->pDec->pMv[listIdx][iMBXY][iPartIdx][0];
-          iMVs[1] = pCurDqLayer->pDec->pMv[listIdx][iMBXY][iPartIdx][1];
-          iRefIndex = pCurDqLayer->pDec->pRefIndex[listIdx][iMBXY][iPartIdx];
-          WELS_B_MB_REC_VERIFY (GetRefPic (&pMCRefMem, pCtx, iRefIndex, listIdx));
-          if (i) {
-            pMCRefMem.pDstY += (iDstLineLuma << 3);
-            pMCRefMem.pDstU += (iDstLineChroma << 2);
-            pMCRefMem.pDstV += (iDstLineChroma << 2);
-          }
-          BaseMC (pCtx, &pMCRefMem, listIdx, iRefIndex, iMBOffsetX, iMBOffsetY + iPartIdx, pMCFunc, 16, 8, iMVs);
-          if (++listCount == 2) {
-            iMVs[0] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][iPartIdx][0];
-            iMVs[1] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][iPartIdx][1];
-            iRefIndex1 = pCurDqLayer->pDec->pRefIndex[LIST_1][iMBXY][iPartIdx];
-            WELS_B_MB_REC_VERIFY (GetRefPic (&pTempMCRefMem, pCtx, iRefIndex1, LIST_1));
-            if (i) {
-              pTempMCRefMem.pDstY += (iDstLineLuma << 3);
-              pTempMCRefMem.pDstU += (iDstLineChroma << 2);
-              pTempMCRefMem.pDstV += (iDstLineChroma << 2);
-            }
-            BaseMC (pCtx, &pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX, iMBOffsetY + iPartIdx, pMCFunc, 16, 8, iMVs);
-            if (pCurDqLayer->bUseWeightedBiPredIdc) {
-              iRefIndex0 = pCurDqLayer->pDec->pRefIndex[LIST_0][iMBXY][iPartIdx];
-              iRefIndex1 = pCurDqLayer->pDec->pRefIndex[LIST_1][iMBXY][iPartIdx];
-              BiWeightPrediction (pCurDqLayer, &pMCRefMem, &pTempMCRefMem, iRefIndex0, iRefIndex1, bWeightedBipredIdcIs1, 16, 8);
-            } else {
-              BiPrediction (pCurDqLayer, &pMCRefMem, &pTempMCRefMem, 16, 8);
-            }
-          }
+      const int32_t iPartIdx = i << 3;
+      const bool bList0 = IS_DIR (iMBType, i, LIST_0) != 0;
+      const bool bList1 = IS_DIR (iMBType, i, LIST_1) != 0;
+      const int32_t iRowOffsetLuma = i ? (iDstLineLuma << 3) : 0;
+      const int32_t iRowOffsetChroma = i ? (iDstLineChroma << 2) : 0;
+      pMCRefMem.pDstY = pPredYCbCr[0] + iRowOffsetLuma;
+      pMCRefMem.pDstU = pPredYCbCr[1] + iRowOffsetChroma;
+      pMCRefMem.pDstV = pPredYCbCr[2] + iRowOffsetChroma;
+      if (bList0 && bList1) {
+        iMVs[0] = pCurDqLayer->pDec->pMv[LIST_0][iMBXY][iPartIdx][0];
+        iMVs[1] = pCurDqLayer->pDec->pMv[LIST_0][iMBXY][iPartIdx][1];
+        iRefIndex0 = pCurDqLayer->pDec->pRefIndex[LIST_0][iMBXY][iPartIdx];
+        WELS_B_MB_REC_VERIFY (GetRefPic (&pMCRefMem, pCtx, iRefIndex0, LIST_0));
+        BaseMC (pCtx, &pMCRefMem, LIST_0, iRefIndex0, iMBOffsetX, iMBOffsetY + iPartIdx, pMCFunc, 16, 8, iMVs);
+
+        pTempMCRefMem.pDstY = pTempPredYCbCr[0] + iRowOffsetLuma;
+        pTempMCRefMem.pDstU = pTempPredYCbCr[1] + iRowOffsetChroma;
+        pTempMCRefMem.pDstV = pTempPredYCbCr[2] + iRowOffsetChroma;
+        iMVs[0] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][iPartIdx][0];
+        iMVs[1] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][iPartIdx][1];
+        iRefIndex1 = pCurDqLayer->pDec->pRefIndex[LIST_1][iMBXY][iPartIdx];
+        WELS_B_MB_REC_VERIFY (GetRefPic (&pTempMCRefMem, pCtx, iRefIndex1, LIST_1));
+        BaseMC (pCtx, &pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX, iMBOffsetY + iPartIdx, pMCFunc, 16, 8, iMVs);
+
+        if (pCurDqLayer->bUseWeightedBiPredIdc) {
+          BiWeightPrediction (pCurDqLayer, &pMCRefMem, &pTempMCRefMem, iRefIndex0, iRefIndex1, bWeightedBipredIdcIs1, 16, 8);
+        } else {
+          BiPrediction (pCurDqLayer, &pMCRefMem, &pTempMCRefMem, 16, 8);
         }
-      }
-      if (listCount == 1) {
+      } else if (bList0 || bList1) {
+        const int32_t listIdx = bList0 ? LIST_0 : LIST_1;
+        iMVs[0] = pCurDqLayer->pDec->pMv[listIdx][iMBXY][iPartIdx][0];
+        iMVs[1] = pCurDqLayer->pDec->pMv[listIdx][iMBXY][iPartIdx][1];
+        iRefIndex = pCurDqLayer->pDec->pRefIndex[listIdx][iMBXY][iPartIdx];
+        WELS_B_MB_REC_VERIFY (GetRefPic (&pMCRefMem, pCtx, iRefIndex, listIdx));
+        BaseMC (pCtx, &pMCRefMem, listIdx, iRefIndex, iMBOffsetX, iMBOffsetY + iPartIdx, pMCFunc, 16, 8, iMVs);
         if (bWeightedBipredIdcIs1) {
-          iRefIndex = pCurDqLayer->pDec->pRefIndex[lastListIdx][iMBXY][iPartIdx];
-          WeightPrediction (pCurDqLayer, &pMCRefMem, lastListIdx, iRefIndex, 16, 8);
+          WeightPrediction (pCurDqLayer, &pMCRefMem, listIdx, iRefIndex, 16, 8);
         }
       }
     }
   } else if (IS_INTER_8x16 (iMBType)) {
+    // Local patch, not in upstream 2.6.0: the 16x8 arm's fix, in columns.
     for (int32_t i = 0; i < 2; ++i) {
-      uint32_t listCount = 0;
-      int32_t lastListIdx = LIST_0;
-      for (int32_t listIdx = LIST_0; listIdx < LIST_A; ++listIdx) {
-        if (IS_DIR (iMBType, i, listIdx)) {
-          lastListIdx = listIdx;
-          iMVs[0] = pCurDqLayer->pDec->pMv[listIdx][iMBXY][i << 1][0];
-          iMVs[1] = pCurDqLayer->pDec->pMv[listIdx][iMBXY][i << 1][1];
-          iRefIndex = pCurDqLayer->pDec->pRefIndex[listIdx][iMBXY][i << 1];
-          WELS_B_MB_REC_VERIFY (GetRefPic (&pMCRefMem, pCtx, iRefIndex, listIdx));
-          if (i) {
-            pMCRefMem.pDstY += 8;
-            pMCRefMem.pDstU += 4;
-            pMCRefMem.pDstV += 4;
-          }
-          BaseMC (pCtx, &pMCRefMem, listIdx, iRefIndex, iMBOffsetX + (i ? 8 : 0), iMBOffsetY, pMCFunc, 8, 16, iMVs);
-          if (++listCount == 2) {
-            iMVs[0] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][i << 1][0];
-            iMVs[1] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][i << 1][1];
-            iRefIndex1 = pCurDqLayer->pDec->pRefIndex[LIST_1][iMBXY][i << 1];
-            WELS_B_MB_REC_VERIFY (GetRefPic (&pTempMCRefMem, pCtx, iRefIndex1, LIST_1));
-            if (i) {
-              pTempMCRefMem.pDstY += 8;
-              pTempMCRefMem.pDstU += 4;
-              pTempMCRefMem.pDstV += 4;
-            }
-            BaseMC (pCtx, &pTempMCRefMem, LIST_1, iRefIndex1, iMBOffsetX + (i ? 8 : 0), iMBOffsetY, pMCFunc, 8, 16, iMVs);
-            if (pCurDqLayer->bUseWeightedBiPredIdc) {
-              iRefIndex0 = pCurDqLayer->pDec->pRefIndex[LIST_0][iMBXY][i << 1];
-              iRefIndex1 = pCurDqLayer->pDec->pRefIndex[LIST_1][iMBXY][i << 1];
-              BiWeightPrediction (pCurDqLayer, &pMCRefMem, &pTempMCRefMem, iRefIndex0, iRefIndex1, bWeightedBipredIdcIs1, 8, 16);
-            } else {
-              BiPrediction (pCurDqLayer, &pMCRefMem, &pTempMCRefMem, 8, 16);
-            }
-          }
+      const int32_t iBlkIdx = i << 1;
+      const int32_t iXOffset = iMBOffsetX + (i ? 8 : 0);
+      const bool bList0 = IS_DIR (iMBType, i, LIST_0) != 0;
+      const bool bList1 = IS_DIR (iMBType, i, LIST_1) != 0;
+      const int32_t iColOffsetLuma = i ? 8 : 0;
+      const int32_t iColOffsetChroma = i ? 4 : 0;
+      pMCRefMem.pDstY = pPredYCbCr[0] + iColOffsetLuma;
+      pMCRefMem.pDstU = pPredYCbCr[1] + iColOffsetChroma;
+      pMCRefMem.pDstV = pPredYCbCr[2] + iColOffsetChroma;
+      if (bList0 && bList1) {
+        iMVs[0] = pCurDqLayer->pDec->pMv[LIST_0][iMBXY][iBlkIdx][0];
+        iMVs[1] = pCurDqLayer->pDec->pMv[LIST_0][iMBXY][iBlkIdx][1];
+        iRefIndex0 = pCurDqLayer->pDec->pRefIndex[LIST_0][iMBXY][iBlkIdx];
+        WELS_B_MB_REC_VERIFY (GetRefPic (&pMCRefMem, pCtx, iRefIndex0, LIST_0));
+        BaseMC (pCtx, &pMCRefMem, LIST_0, iRefIndex0, iXOffset, iMBOffsetY, pMCFunc, 8, 16, iMVs);
+
+        pTempMCRefMem.pDstY = pTempPredYCbCr[0] + iColOffsetLuma;
+        pTempMCRefMem.pDstU = pTempPredYCbCr[1] + iColOffsetChroma;
+        pTempMCRefMem.pDstV = pTempPredYCbCr[2] + iColOffsetChroma;
+        iMVs[0] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][iBlkIdx][0];
+        iMVs[1] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][iBlkIdx][1];
+        iRefIndex1 = pCurDqLayer->pDec->pRefIndex[LIST_1][iMBXY][iBlkIdx];
+        WELS_B_MB_REC_VERIFY (GetRefPic (&pTempMCRefMem, pCtx, iRefIndex1, LIST_1));
+        BaseMC (pCtx, &pTempMCRefMem, LIST_1, iRefIndex1, iXOffset, iMBOffsetY, pMCFunc, 8, 16, iMVs);
+
+        if (pCurDqLayer->bUseWeightedBiPredIdc) {
+          BiWeightPrediction (pCurDqLayer, &pMCRefMem, &pTempMCRefMem, iRefIndex0, iRefIndex1, bWeightedBipredIdcIs1, 8, 16);
+        } else {
+          BiPrediction (pCurDqLayer, &pMCRefMem, &pTempMCRefMem, 8, 16);
         }
-      }
-      if (listCount == 1) {
+      } else if (bList0 || bList1) {
+        const int32_t listIdx = bList0 ? LIST_0 : LIST_1;
+        iMVs[0] = pCurDqLayer->pDec->pMv[listIdx][iMBXY][iBlkIdx][0];
+        iMVs[1] = pCurDqLayer->pDec->pMv[listIdx][iMBXY][iBlkIdx][1];
+        iRefIndex = pCurDqLayer->pDec->pRefIndex[listIdx][iMBXY][iBlkIdx];
+        WELS_B_MB_REC_VERIFY (GetRefPic (&pMCRefMem, pCtx, iRefIndex, listIdx));
+        BaseMC (pCtx, &pMCRefMem, listIdx, iRefIndex, iXOffset, iMBOffsetY, pMCFunc, 8, 16, iMVs);
         if (bWeightedBipredIdcIs1) {
-          iRefIndex = pCurDqLayer->pDec->pRefIndex[lastListIdx][iMBXY][i << 1];
-          WeightPrediction (pCurDqLayer, &pMCRefMem, lastListIdx, iRefIndex, 8, 16);
+          WeightPrediction (pCurDqLayer, &pMCRefMem, listIdx, iRefIndex, 8, 16);
         }
       }
     }
@@ -1011,9 +1015,14 @@ int32_t GetInterBPred (uint8_t* pPredYCbCr[3], uint8_t* pTempPredYCbCr[3], PWels
             iMVs[1] = pCurDqLayer->pDec->pMv[LIST_0][iMBXY][iIIdx + iJIdx][1];
             BaseMC (pCtx, &pMCRefMem, LIST_0, iRefIndex0, iXOffset + iBlk4X, iYOffset + iBlk4Y, pMCFunc, 4, 4, iMVs);
 
-            pTempMCRefMem.pDstY = pDstY2 + iBlk8X + iBlk8Y * iDstLineLuma;
+            // Local patch, not in upstream 2.6.0: the LIST_1 luma destination takes the
+            // 4x4 step, like its chroma and like the LIST_0 destination above. Upstream
+            // indexed it with iBlk8X/iBlk8Y, which pDstY2 already carries, so the 8x8 step
+            // was applied twice and the two hypotheses of one 4x4 block were averaged from
+            // different samples.
+            pTempMCRefMem.pDstY = pDstY2 + iBlk4X + iBlk4Y * iDstLineLuma;
             pTempMCRefMem.pDstU = pDstU2 + iUVLineStride;
-            pTempMCRefMem.pDstV = pDstV2 + iUVLineStride;;
+            pTempMCRefMem.pDstV = pDstV2 + iUVLineStride;
 
             iMVs[0] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][iIIdx + iJIdx][0];
             iMVs[1] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][iIIdx + iJIdx][1];
