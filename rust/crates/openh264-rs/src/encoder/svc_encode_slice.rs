@@ -1779,7 +1779,13 @@ pub fn WelsISliceMdEnc(
         func_list
             .pfRc
             .WelsRcMbInit(pEncCtx, pMbs.cur_mut(), &mut *pSlice, pCtxOutBs.as_deref());
-        crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut *pMbs, &mut pSlice.sMbCacheInfo);
+        // The macroblock and its raster predecessors, held once: `WelsMdIntraInit`
+        // and the neighbour cache under it took the window and re-indexed the
+        // current record and its left and top neighbours at each read.
+        crate::encoder::svc_base_layer_md::WelsMdIntraInit(
+            &mut pMbs.split_cur(),
+            &mut pSlice.sMbCacheInfo,
+        );
 
         // TRY_REENCODING
         loop {
@@ -1893,7 +1899,13 @@ pub fn WelsISliceMdEncDynamic(
             pMbs.cur_mut().uiLumaQp = max_qp as u8;
             pMbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
         }
-        crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut *pMbs, &mut pSlice.sMbCacheInfo);
+        // The macroblock and its raster predecessors, held once: `WelsMdIntraInit`
+        // and the neighbour cache under it took the window and re-indexed the
+        // current record and its left and top neighbours at each read.
+        crate::encoder::svc_base_layer_md::WelsMdIntraInit(
+            &mut pMbs.split_cur(),
+            &mut pSlice.sMbCacheInfo,
+        );
 
         // TRY_REENCODING
         loop {
@@ -2101,23 +2113,39 @@ pub fn WelsMdInterMbLoop<'a>(
             .WelsRcMbInit(pEncCtx, pMbs.cur_mut(), &mut *pSlice, pCtxOutBs.as_deref());
 
         //step (2). save some value for future use, initial pWelsMd
-        let pMbCache = &mut pSlice.sMbCacheInfo;
-        crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut *pMbs, &mut *pMbCache);
-        crate::encoder::svc_base_layer_md::WelsMdInterInit(pMd.sc(), &pMd.mbi, pEncCtx.iMvRange, pSlice, &mut *pMbs);
+        // **The macroblock and its four raster predecessors, held once.** Both
+        // inits, the neighbour caches under them and every mode-decision body below
+        // used to re-index the current record — four loads, a subtract, a bounds
+        // check and a multiply by `size_of::<SMB>()` — a dozen times a macroblock,
+        // and each neighbour read a modulo, a range check and an index on top. The
+        // split names all five for the whole stretch, which is what the C++ has in
+        // `pCurMb` and its neighbour pointers.
+        {
+            let mut split = pMbs.split_cur();
+            let pMbCache = &mut pSlice.sMbCacheInfo;
+            crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut split, &mut *pMbCache);
+            crate::encoder::svc_base_layer_md::WelsMdInterInit(
+                pMd.sc(),
+                &pMd.mbi,
+                pEncCtx.iMvRange,
+                pSlice,
+                &mut split,
+            );
+        }
 
         loop {
-            WelsInitInterMDStruc(pMbs.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
             {
+                // A second split: `WelsSpatialWriteMbSyn` below takes the window, and
+                // the re-encoding loop may come back through here.
+                let mut split = pMbs.split_cur();
+                WelsInitInterMDStruc(split.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
                 if let Some(func) = func_list.pfInterMd {
-                    func(pEncCtx, pMd, &mut *pSlice, &mut *pMbs);
+                    func(pEncCtx, pMd, &mut *pSlice, &mut split);
                 }
                 let bCollocatedPredFlag = pSlice.sMbCacheInfo.bCollocatedPredFlag;
 
                 //step (4): save from the MD process for future use
-                // Nothing between here and the cache update takes the window, so the
-                // current macroblock is taken once: `cur` is an index computation and
-                // a bounds check, and this loop ran it a dozen times a macroblock.
-                let pCurMb = pMbs.cur_mut();
+                let pCurMb = split.cur_mut();
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(kpRecView, pCurMb, pMd);
                 (func_list.pfMdBackgroundInfoUpdate)(
                     pEncCtx,
@@ -2271,23 +2299,39 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         }
 
         // step (2): save some values for future use, initialise pWelsMd.
-        let pMbCache = &mut pSlice.sMbCacheInfo;
-        crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut *pMbs, &mut *pMbCache);
-        crate::encoder::svc_base_layer_md::WelsMdInterInit(pMd.sc(), &pMd.mbi, pEncCtx.iMvRange, pSlice, &mut *pMbs);
+        // **The macroblock and its four raster predecessors, held once.** Both
+        // inits, the neighbour caches under them and every mode-decision body below
+        // used to re-index the current record — four loads, a subtract, a bounds
+        // check and a multiply by `size_of::<SMB>()` — a dozen times a macroblock,
+        // and each neighbour read a modulo, a range check and an index on top. The
+        // split names all five for the whole stretch, which is what the C++ has in
+        // `pCurMb` and its neighbour pointers.
+        {
+            let mut split = pMbs.split_cur();
+            let pMbCache = &mut pSlice.sMbCacheInfo;
+            crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut split, &mut *pMbCache);
+            crate::encoder::svc_base_layer_md::WelsMdInterInit(
+                pMd.sc(),
+                &pMd.mbi,
+                pEncCtx.iMvRange,
+                pSlice,
+                &mut split,
+            );
+        }
 
         // TRY_REENCODING
         loop {
-            WelsInitInterMDStruc(pMbs.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
+            // As `WelsMdInterMbLoop`: one split for the whole mode-decision stretch,
+            // ending before `WelsSpatialWriteMbSyn` takes the window back.
             {
+                let mut split = pMbs.split_cur();
+                WelsInitInterMDStruc(split.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
                 if let Some(func) = func_list.pfInterMd {
-                    func(pEncCtx, pMd, &mut *pSlice, &mut *pMbs);
+                    func(pEncCtx, pMd, &mut *pSlice, &mut split);
                 }
-            }
-            let bCollocatedPredFlag = pSlice.sMbCacheInfo.bCollocatedPredFlag;
-            // step (4): save from the MD process for future use
-            // As `WelsMdInterMbLoop`: one `cur_mut` for the three uses that follow.
-            {
-                let pCurMb = pMbs.cur_mut();
+                // step (4): save from the MD process for future use
+                let bCollocatedPredFlag = pSlice.sMbCacheInfo.bCollocatedPredFlag;
+                let pCurMb = split.cur_mut();
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(kpRecView, pCurMb, pMd);
                 (func_list.pfMdBackgroundInfoUpdate)(
                     pEncCtx,

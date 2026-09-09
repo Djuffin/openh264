@@ -507,29 +507,43 @@ impl<'a, T> MbWindow<'a, T> {
     }
 
     /// The window split at its cursor: exclusive access to the current record,
-    /// shared access to the two raster predecessors the filter's boundary-strength
-    /// and QP guards may read.
+    /// shared access to the four raster predecessors a per-macroblock body may
+    /// read.
     ///
-    /// The filter writes exactly one record field (`DeblockingBSCalc_c`
-    /// normalises the current macroblock's `iNonZeroCount`) and reads exactly
-    /// two neighbours (`cur - 1` and `cur - stride`, both strictly earlier in
-    /// raster order).
+    /// All four lie strictly earlier in raster order (`cur - 1`, `cur - stride`,
+    /// `cur - stride - 1`, `cur - stride + 1`), which is what lets one split hand
+    /// out the current record mutably beside them.
     ///
-    /// `left`/`top` are absent (`None` behind the accessors) at a grid edge or
-    /// where the neighbour's record lies outside this window. Calling the
-    /// accessor anyway panics — a validated edge whose record the window cannot
-    /// name is a bug that should say so, not an index error three frames down.
+    /// A neighbour is absent (`None` behind the accessor) at a grid edge or where
+    /// its record lies outside this window. Calling the accessor anyway panics — a
+    /// validated edge whose record the window cannot name is a bug that should say
+    /// so, not an index error three frames down.
+    ///
+    /// **The column is taken once.** Each of the four guards asks where the cursor
+    /// sits in its row, and `cur % stride` is a division by a value only known at
+    /// run time; the per-call form in [`left`](Self::left) and its siblings paid for
+    /// one at every read.
     #[inline]
     #[track_caller]
     pub fn split_cur(&mut self) -> MbSplit<'_, T> {
         let local = self.cur - self.base;
+        let (stride, cur) = (self.stride, self.cur);
+        // Two questions per neighbour, and they are different: whether the grid has
+        // that record at all (`cur`, against the whole picture) and whether *this*
+        // window holds it (`local`, against the split's `done` half). The named
+        // accessors ask them in that order too — an `assert!` then `rel`.
+        let col = cur % stride;
+        let has_row_above = cur >= stride;
         let (done, rest) = self.mbs.split_at_mut(local);
         MbSplit {
             cur: &mut rest[0],
-            left: (self.cur % self.stride != 0 && self.cur > self.base)
-                .then(|| &done[local - 1]),
-            top: (self.cur >= self.stride && self.cur >= self.base + self.stride)
-                .then(|| &done[local - self.stride]),
+            left: (col != 0 && local >= 1).then(|| &done[local - 1]),
+            top: (has_row_above && local >= stride).then(|| &done[local - stride]),
+            top_left: (has_row_above && col != 0 && local >= stride + 1)
+                .then(|| &done[local - stride - 1]),
+            top_right: (has_row_above && col + 1 != stride && local + 1 >= stride)
+                .then(|| &done[local + 1 - stride]),
+            stride,
         }
     }
 }
@@ -544,6 +558,9 @@ pub struct MbSplit<'a, T> {
     cur: &'a mut T,
     left: Option<&'a T>,
     top: Option<&'a T>,
+    top_left: Option<&'a T>,
+    top_right: Option<&'a T>,
+    stride: usize,
 }
 
 impl<'a, T> MbSplit<'a, T> {
@@ -575,6 +592,29 @@ impl<'a, T> MbSplit<'a, T> {
     pub fn top(&self) -> &T {
         self.top
             .expect("top neighbour read with no record in the window — the availability flag and the geometry disagree (F77)")
+    }
+
+    /// The record above-left. See [`left`](Self::left) for the contract.
+    #[inline]
+    #[track_caller]
+    pub fn top_left(&self) -> &T {
+        self.top_left
+            .expect("top-left neighbour read with no record in the window — the availability flag and the geometry disagree (F77)")
+    }
+
+    /// The record above-right. See [`left`](Self::left) for the contract.
+    #[inline]
+    #[track_caller]
+    pub fn top_right(&self) -> &T {
+        self.top_right
+            .expect("top-right neighbour read with no record in the window — the availability flag and the geometry disagree (F77)")
+    }
+
+    /// Records per grid row — the window's own stride, which the neighbour-cache
+    /// bodies read as `iMbWidth`.
+    #[inline]
+    pub fn stride(&self) -> usize {
+        self.stride
     }
 }
 

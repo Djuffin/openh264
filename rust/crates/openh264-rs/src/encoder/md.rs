@@ -821,7 +821,7 @@ pub const fn best_pred_i4x4_blk4_off(uiBestPredI4x4Blk4Half: u8) -> usize {
 /// It lives on the one `SVAAFrameInfo` every worker shares.
 pub type PFillInterNeighborCacheFunc = fn(
     pMbCache: &mut SMbCache,
-    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &crate::safe::mb_grid::MbSplit<'_, SMB>,
     pVaaBgMbFlag: &[i8],
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 );
@@ -992,7 +992,7 @@ pub fn IS_SVC_INTER(uiMbType: u32) -> bool {
 // Function Implementations
 pub fn FillNeighborCacheIntra(
     pMbCache: &mut SMbCache,
-    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &crate::safe::mb_grid::MbSplit<'_, SMB>,
 ) {
     let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let mut uiNeighborIntra: u32 = 0;
@@ -1082,7 +1082,7 @@ pub fn FillNeighborCacheIntra(
 
 pub fn FillNeighborCacheInterWithoutBGD(
     pMbCache: &mut SMbCache,
-    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &crate::safe::mb_grid::MbSplit<'_, SMB>,
     _pVaaBgMbFlag: &[i8],
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 ) {
@@ -1092,17 +1092,18 @@ pub fn FillNeighborCacheInterWithoutBGD(
     let pMvComp = &mut pMbCache.sMvComponents;
 
     if (uiNeighborAvail & LEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.left().uiMbType) {
-        pMvComp.sMotionVectorCache[6] = mbs.left().sMv[3];
-        pMvComp.sMotionVectorCache[12] = mbs.left().sMv[7];
-        pMvComp.sMotionVectorCache[18] = mbs.left().sMv[11];
-        pMvComp.sMotionVectorCache[24] = mbs.left().sMv[15];
-        pMvComp.iRefIndexCache[6] = mbs.left().iRefIndex[1];
-        pMvComp.iRefIndexCache[12] = mbs.left().iRefIndex[1];
-        pMvComp.iRefIndexCache[18] = mbs.left().iRefIndex[3];
-        pMvComp.iRefIndexCache[24] = mbs.left().iRefIndex[3];
-        pMbCache.iSadCost[3] = mbs.left().iSadCost;
+        let pLeftMb = mbs.left();
+        pMvComp.sMotionVectorCache[6] = pLeftMb.sMv[3];
+        pMvComp.sMotionVectorCache[12] = pLeftMb.sMv[7];
+        pMvComp.sMotionVectorCache[18] = pLeftMb.sMv[11];
+        pMvComp.sMotionVectorCache[24] = pLeftMb.sMv[15];
+        pMvComp.iRefIndexCache[6] = pLeftMb.iRefIndex[1];
+        pMvComp.iRefIndexCache[12] = pLeftMb.iRefIndex[1];
+        pMvComp.iRefIndexCache[18] = pLeftMb.iRefIndex[3];
+        pMvComp.iRefIndexCache[24] = pLeftMb.iRefIndex[3];
+        pMbCache.iSadCost[3] = pLeftMb.iSadCost;
 
-        if mbs.left().uiMbType == MB_TYPE_SKIP {
+        if pLeftMb.uiMbType == MB_TYPE_SKIP {
             pMbCache.bMbTypeSkip[3] = true;
             pMbCache.iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
         } else {
@@ -1125,16 +1126,17 @@ pub fn FillNeighborCacheInterWithoutBGD(
     }
 
     if (uiNeighborAvail & TOP_MB_POS) != 0 && IS_SVC_INTER(mbs.top().uiMbType) {
-        let pTopMv = &mbs.top().sMv;
+        let pTopMb = mbs.top();
+        let pTopMv = &pTopMb.sMv;
         pMvComp.sMotionVectorCache[1..3].copy_from_slice(&pTopMv[12..14]);
         pMvComp.sMotionVectorCache[3..5].copy_from_slice(&pTopMv[14..16]);
-        pMvComp.iRefIndexCache[1] = mbs.top().iRefIndex[2];
-        pMvComp.iRefIndexCache[2] = mbs.top().iRefIndex[2];
-        pMvComp.iRefIndexCache[3] = mbs.top().iRefIndex[3];
-        pMvComp.iRefIndexCache[4] = mbs.top().iRefIndex[3];
-        pMbCache.iSadCost[1] = mbs.top().iSadCost;
+        pMvComp.iRefIndexCache[1] = pTopMb.iRefIndex[2];
+        pMvComp.iRefIndexCache[2] = pTopMb.iRefIndex[2];
+        pMvComp.iRefIndexCache[3] = pTopMb.iRefIndex[3];
+        pMvComp.iRefIndexCache[4] = pTopMb.iRefIndex[3];
+        pMbCache.iSadCost[1] = pTopMb.iSadCost;
 
-        if mbs.top().uiMbType == MB_TYPE_SKIP {
+        if pTopMb.uiMbType == MB_TYPE_SKIP {
             pMbCache.bMbTypeSkip[1] = true;
             pMbCache.iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
         } else {
@@ -1157,11 +1159,12 @@ pub fn FillNeighborCacheInterWithoutBGD(
     }
 
     if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_left().uiMbType) {
-        pMvComp.sMotionVectorCache[0] = mbs.top_left().sMv[15];
-        pMvComp.iRefIndexCache[0] = mbs.top_left().iRefIndex[3];
-        pMbCache.iSadCost[0] = mbs.top_left().iSadCost;
+        let pTopLeftMb = mbs.top_left();
+        pMvComp.sMotionVectorCache[0] = pTopLeftMb.sMv[15];
+        pMvComp.iRefIndexCache[0] = pTopLeftMb.iRefIndex[3];
+        pMbCache.iSadCost[0] = pTopLeftMb.iSadCost;
 
-        if mbs.top_left().uiMbType == MB_TYPE_SKIP {
+        if pTopLeftMb.uiMbType == MB_TYPE_SKIP {
             pMbCache.bMbTypeSkip[0] = true;
             pMbCache.iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
         } else {
@@ -1177,11 +1180,12 @@ pub fn FillNeighborCacheInterWithoutBGD(
     }
 
     if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_right().uiMbType) {
-        pMvComp.sMotionVectorCache[5] = mbs.top_right().sMv[12];
-        pMvComp.iRefIndexCache[5] = mbs.top_right().iRefIndex[2];
-        pMbCache.iSadCost[2] = mbs.top_right().iSadCost;
+        let pTopRightMb = mbs.top_right();
+        pMvComp.sMotionVectorCache[5] = pTopRightMb.sMv[12];
+        pMvComp.iRefIndexCache[5] = pTopRightMb.iRefIndex[2];
+        pMbCache.iSadCost[2] = pTopRightMb.iSadCost;
 
-        if mbs.top_right().uiMbType == MB_TYPE_SKIP {
+        if pTopRightMb.uiMbType == MB_TYPE_SKIP {
             pMbCache.bMbTypeSkip[2] = true;
             pMbCache.iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
         } else {
@@ -1210,7 +1214,7 @@ pub fn FillNeighborCacheInterWithoutBGD(
 
 pub fn FillNeighborCacheInterWithBGD(
     pMbCache: &mut SMbCache,
-    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &crate::safe::mb_grid::MbSplit<'_, SMB>,
     pVaaBgMbFlag: &[i8],
     kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
 ) {
@@ -1220,17 +1224,18 @@ pub fn FillNeighborCacheInterWithBGD(
     let pMvComp = &mut pMbCache.sMvComponents;
 
     if (uiNeighborAvail & LEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.left().uiMbType) {
-        pMvComp.sMotionVectorCache[6] = mbs.left().sMv[3];
-        pMvComp.sMotionVectorCache[12] = mbs.left().sMv[7];
-        pMvComp.sMotionVectorCache[18] = mbs.left().sMv[11];
-        pMvComp.sMotionVectorCache[24] = mbs.left().sMv[15];
-        pMvComp.iRefIndexCache[6] = mbs.left().iRefIndex[1];
-        pMvComp.iRefIndexCache[12] = mbs.left().iRefIndex[1];
-        pMvComp.iRefIndexCache[18] = mbs.left().iRefIndex[3];
-        pMvComp.iRefIndexCache[24] = mbs.left().iRefIndex[3];
-        pMbCache.iSadCost[3] = mbs.left().iSadCost;
+        let pLeftMb = mbs.left();
+        pMvComp.sMotionVectorCache[6] = pLeftMb.sMv[3];
+        pMvComp.sMotionVectorCache[12] = pLeftMb.sMv[7];
+        pMvComp.sMotionVectorCache[18] = pLeftMb.sMv[11];
+        pMvComp.sMotionVectorCache[24] = pLeftMb.sMv[15];
+        pMvComp.iRefIndexCache[6] = pLeftMb.iRefIndex[1];
+        pMvComp.iRefIndexCache[12] = pLeftMb.iRefIndex[1];
+        pMvComp.iRefIndexCache[18] = pLeftMb.iRefIndex[3];
+        pMvComp.iRefIndexCache[24] = pLeftMb.iRefIndex[3];
+        pMbCache.iSadCost[3] = pLeftMb.iSadCost;
 
-        if mbs.left().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - 1) as usize] == 0 {
+        if pLeftMb.uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - 1) as usize] == 0 {
             pMbCache.bMbTypeSkip[3] = true;
             pMbCache.iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
         } else {
@@ -1253,16 +1258,17 @@ pub fn FillNeighborCacheInterWithBGD(
     }
 
     if (uiNeighborAvail & TOP_MB_POS) != 0 && IS_SVC_INTER(mbs.top().uiMbType) {
-        let pTopMv = &mbs.top().sMv;
+        let pTopMb = mbs.top();
+        let pTopMv = &pTopMb.sMv;
         pMvComp.sMotionVectorCache[1..3].copy_from_slice(&pTopMv[12..14]);
         pMvComp.sMotionVectorCache[3..5].copy_from_slice(&pTopMv[14..16]);
-        pMvComp.iRefIndexCache[1] = mbs.top().iRefIndex[2];
-        pMvComp.iRefIndexCache[2] = mbs.top().iRefIndex[2];
-        pMvComp.iRefIndexCache[3] = mbs.top().iRefIndex[3];
-        pMvComp.iRefIndexCache[4] = mbs.top().iRefIndex[3];
-        pMbCache.iSadCost[1] = mbs.top().iSadCost;
+        pMvComp.iRefIndexCache[1] = pTopMb.iRefIndex[2];
+        pMvComp.iRefIndexCache[2] = pTopMb.iRefIndex[2];
+        pMvComp.iRefIndexCache[3] = pTopMb.iRefIndex[3];
+        pMvComp.iRefIndexCache[4] = pTopMb.iRefIndex[3];
+        pMbCache.iSadCost[1] = pTopMb.iSadCost;
 
-        if mbs.top().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize) as usize] == 0 {
+        if pTopMb.uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize) as usize] == 0 {
             pMbCache.bMbTypeSkip[1] = true;
             pMbCache.iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
         } else {
@@ -1285,11 +1291,12 @@ pub fn FillNeighborCacheInterWithBGD(
     }
 
     if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_left().uiMbType) {
-        pMvComp.sMotionVectorCache[0] = mbs.top_left().sMv[15];
-        pMvComp.iRefIndexCache[0] = mbs.top_left().iRefIndex[3];
-        pMbCache.iSadCost[0] = mbs.top_left().iSadCost;
+        let pTopLeftMb = mbs.top_left();
+        pMvComp.sMotionVectorCache[0] = pTopLeftMb.sMv[15];
+        pMvComp.iRefIndexCache[0] = pTopLeftMb.iRefIndex[3];
+        pMbCache.iSadCost[0] = pTopLeftMb.iSadCost;
 
-        if mbs.top_left().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize - 1) as usize] == 0 {
+        if pTopLeftMb.uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize - 1) as usize] == 0 {
             pMbCache.bMbTypeSkip[0] = true;
             pMbCache.iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
         } else {
@@ -1305,11 +1312,12 @@ pub fn FillNeighborCacheInterWithBGD(
     }
 
     if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_right().uiMbType) {
-        pMvComp.sMotionVectorCache[5] = mbs.top_right().sMv[12];
-        pMvComp.iRefIndexCache[5] = mbs.top_right().iRefIndex[2];
-        pMbCache.iSadCost[2] = mbs.top_right().iSadCost;
+        let pTopRightMb = mbs.top_right();
+        pMvComp.sMotionVectorCache[5] = pTopRightMb.sMv[12];
+        pMvComp.iRefIndexCache[5] = pTopRightMb.iRefIndex[2];
+        pMbCache.iSadCost[2] = pTopRightMb.iSadCost;
 
-        if mbs.top_right().uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize + 1) as usize] == 0 {
+        if pTopRightMb.uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize + 1) as usize] == 0 {
             pMbCache.bMbTypeSkip[2] = true;
             pMbCache.iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
         } else {

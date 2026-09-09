@@ -992,7 +992,7 @@ pub fn WelsMdP16x16<'a>(
     pCurLayer: &'a SDqLayer,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
 ) -> i32 {
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let pMe16x16 = &mut pWelsMd.sMe.sMe16x16;
@@ -1249,7 +1249,7 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
     kuiRefMbType: Mb_Type,
 ) {
     let pCurDqLayer = current_layer_expect(pEncCtx);
@@ -1343,7 +1343,7 @@ pub fn WelsMdInterMbEnhancelayer<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
 ) {
     let kInterLayerRefMb = GetRefMb(pEncCtx, mbs.cur());
     let kuiInterLayerRefMbType = kInterLayerRefMb.uiMbType;
