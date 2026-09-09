@@ -216,7 +216,7 @@ pub use crate::decoder::nalu::EWelsNalUnitType::*;
 // Data Structures Matching C/C++ Layout
 
 pub use crate::decoder::decoder_context::SPosOffset;
-use crate::decoder::decoder_context::ec_active_idc;
+use crate::decoder::decoder_context::{IMinInt32, SPictInfo, SPictReoderingStatus, ec_active_idc, slice_split};
 
 
 pub use crate::decoder::decoder_context::ParseOnlyBsBuffers;
@@ -680,7 +680,7 @@ pub fn ComputeColocatedTemporalScaling(
     {
         if let Some(dq) = pCurDqLayer {
             let (pDec, pRefs, mut view, _nal) =
-                crate::decoder::decoder_context::slice_split(pCtx, None);
+                slice_split(pCtx, None);
             let pDec = pDec.map(|p| &*p);
             let _ = crate::decoder::decode_slice::ComputeColocatedTemporalScaling(
                 &mut view,
@@ -743,7 +743,7 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
         }
 
         if pCtx.pPicBuff.is_none() {
-            let Some(pool) = crate::decoder::pic_queue::CreatePicBuff(
+            let Some(pool) = CreatePicBuff(
                 crate::decoder::decoder_context::parse_only(&pCtx.pParam),
                 iPicBufSize,
                 iPicWidth,
@@ -780,7 +780,7 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
                     let Some(pool) = pCtx.pPicBuff.as_deref_mut() else {
                         return ERR_INFO_INVALID_PARAM;
                     };
-                    crate::decoder::pic_queue::IncreasePicBuff(
+                    IncreasePicBuff(
                         pool,
                         parse_only,
                         capacity,
@@ -789,7 +789,7 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
                         iPicBufSize,
                     )
                 } else {
-                    crate::decoder::pic_queue::DecreasePicBuff(
+                    DecreasePicBuff(
                         pCtx,
                         capacity,
                         iPicWidth,
@@ -867,7 +867,15 @@ use crate::decoder::fmo::{FmoNextMb, FmoParamUpdate};
 /// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
 /// site because the kernels share their names with the scalars in this module — which
 /// is the point of the naming, and the reason the module qualifier has to stay.
-use crate::simd::kernels;
+use crate::simd::{detect_cpu_features, kernels};
+use crate::common::cpu_core::WELS_CPU_SSE2;
+use crate::common::mc::InitMcFunc;
+use crate::decoder::decode_mb_aux::{idct_four_res_add_pred, idct_res_add_pred8x8};
+use crate::decoder::error_concealment::InitErrorCon;
+use crate::decoder::get_intra_predictor::{chroma_pred_dc, chroma_pred_dc_left, chroma_pred_dc_na, chroma_pred_dc_top, chroma_pred_h, chroma_pred_plane, chroma_pred_v, i16x16_luma_pred_dc, i16x16_luma_pred_dc_left, i16x16_luma_pred_dc_na, i16x16_luma_pred_dc_top, i16x16_luma_pred_h, i16x16_luma_pred_plane, i16x16_luma_pred_v, i4x4_luma_pred_dc, i4x4_luma_pred_dc_left, i4x4_luma_pred_dc_na, i4x4_luma_pred_dc_top, i4x4_luma_pred_ddl, i4x4_luma_pred_ddl_top, i4x4_luma_pred_ddr, i4x4_luma_pred_h, i4x4_luma_pred_hd, i4x4_luma_pred_hu, i4x4_luma_pred_v, i4x4_luma_pred_vl, i4x4_luma_pred_vl_top, i4x4_luma_pred_vr, i8x8_luma_pred_dc, i8x8_luma_pred_dc_left, i8x8_luma_pred_dc_na, i8x8_luma_pred_dc_top, i8x8_luma_pred_ddl, i8x8_luma_pred_ddl_top, i8x8_luma_pred_ddr, i8x8_luma_pred_h, i8x8_luma_pred_hd, i8x8_luma_pred_hu, i8x8_luma_pred_v, i8x8_luma_pred_vl, i8x8_luma_pred_vl_top, i8x8_luma_pred_vr};
+use crate::decoder::nalu::{CheckAccessUnitBoundaryExt, IS_PARAM_SETS_NALS, ParseNonVclNal, ResetFmoList};
+use crate::decoder::parse_mb_syn_cavlc::InitVlcTable;
+use crate::decoder::pic_queue::{CreatePicBuff, DecreasePicBuff, IncreasePicBuff};
 
 // Core Functions Implemented in `decoder_core.cpp`
 pub fn DecodeFrameConstruction(
@@ -1740,73 +1748,73 @@ pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
         let cpu_flag = pCtx.uiCpuFlag;
 
         // 2. Motion Compensation
-        crate::common::mc::InitMcFunc(&mut pCtx.sMcFunc, cpu_flag);
+        InitMcFunc(&mut pCtx.sMcFunc, cpu_flag);
 
         // 3. IDCT Inverse Transform
         pCtx.pIdctResAddPredFunc = Some(crate::decoder::decode_mb_aux::idct_res_add_pred);
-        pCtx.pIdctResAddPredFunc8x8 = Some(crate::decoder::decode_mb_aux::idct_res_add_pred8x8);
-        pCtx.pIdctFourResAddPredFunc = Some(crate::decoder::decode_mb_aux::idct_four_res_add_pred);
+        pCtx.pIdctResAddPredFunc8x8 = Some(idct_res_add_pred8x8);
+        pCtx.pIdctFourResAddPredFunc = Some(idct_four_res_add_pred);
 
-        if (cpu_flag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+        if (cpu_flag & WELS_CPU_SSE2) != 0 {
             pCtx.pIdctResAddPredFunc = Some(kernels::dct::idct_res_add_pred);
         }
 
         // 4. Intra Prediction
         pCtx.pGetI4x4LumaPredFunc = [
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_v),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_h),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddl),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddr),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vr),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_hd),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vl),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_hu),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_left),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_top),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_dc_na),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_ddl_top),
-            Some(crate::decoder::get_intra_predictor::i4x4_luma_pred_vl_top),
+            Some(i4x4_luma_pred_v),
+            Some(i4x4_luma_pred_h),
+            Some(i4x4_luma_pred_dc),
+            Some(i4x4_luma_pred_ddl),
+            Some(i4x4_luma_pred_ddr),
+            Some(i4x4_luma_pred_vr),
+            Some(i4x4_luma_pred_hd),
+            Some(i4x4_luma_pred_vl),
+            Some(i4x4_luma_pred_hu),
+            Some(i4x4_luma_pred_dc_left),
+            Some(i4x4_luma_pred_dc_top),
+            Some(i4x4_luma_pred_dc_na),
+            Some(i4x4_luma_pred_ddl_top),
+            Some(i4x4_luma_pred_vl_top),
         ];
 
         pCtx.pGetI16x16LumaPredFunc = [
-            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_v),
-            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_h),
-            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc),
-            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_plane),
-            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_left),
-            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_top),
-            Some(crate::decoder::get_intra_predictor::i16x16_luma_pred_dc_na),
+            Some(i16x16_luma_pred_v),
+            Some(i16x16_luma_pred_h),
+            Some(i16x16_luma_pred_dc),
+            Some(i16x16_luma_pred_plane),
+            Some(i16x16_luma_pred_dc_left),
+            Some(i16x16_luma_pred_dc_top),
+            Some(i16x16_luma_pred_dc_na),
         ];
 
         pCtx.pGetIChromaPredFunc = [
-            Some(crate::decoder::get_intra_predictor::chroma_pred_dc),
-            Some(crate::decoder::get_intra_predictor::chroma_pred_h),
-            Some(crate::decoder::get_intra_predictor::chroma_pred_v),
-            Some(crate::decoder::get_intra_predictor::chroma_pred_plane),
-            Some(crate::decoder::get_intra_predictor::chroma_pred_dc_left),
-            Some(crate::decoder::get_intra_predictor::chroma_pred_dc_top),
-            Some(crate::decoder::get_intra_predictor::chroma_pred_dc_na),
+            Some(chroma_pred_dc),
+            Some(chroma_pred_h),
+            Some(chroma_pred_v),
+            Some(chroma_pred_plane),
+            Some(chroma_pred_dc_left),
+            Some(chroma_pred_dc_top),
+            Some(chroma_pred_dc_na),
         ];
 
         pCtx.pGetI8x8LumaPredFunc = [
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_v),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_h),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddl),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddr),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vr),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_hd),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vl),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_hu),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_left),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_top),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_dc_na),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_ddl_top),
-            Some(crate::decoder::get_intra_predictor::i8x8_luma_pred_vl_top),
+            Some(i8x8_luma_pred_v),
+            Some(i8x8_luma_pred_h),
+            Some(i8x8_luma_pred_dc),
+            Some(i8x8_luma_pred_ddl),
+            Some(i8x8_luma_pred_ddr),
+            Some(i8x8_luma_pred_vr),
+            Some(i8x8_luma_pred_hd),
+            Some(i8x8_luma_pred_vl),
+            Some(i8x8_luma_pred_hu),
+            Some(i8x8_luma_pred_dc_left),
+            Some(i8x8_luma_pred_dc_top),
+            Some(i8x8_luma_pred_dc_na),
+            Some(i8x8_luma_pred_ddl_top),
+            Some(i8x8_luma_pred_vl_top),
         ];
 
-        if (cpu_flag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+        if (cpu_flag & WELS_CPU_SSE2) != 0 {
             use crate::decoder::decoder_context::{
                 C_PRED_DC, C_PRED_H, C_PRED_P, C_PRED_V,
                 I16_PRED_DC, I16_PRED_DC_128, I16_PRED_DC_T, I16_PRED_H, I16_PRED_P, I16_PRED_V,
@@ -1843,7 +1851,7 @@ pub fn GetCPUCount() -> i32 {
 /// Matches `uint32_t WelsCPUFeatureDetect (int32_t* pCPUFlag)` in `decoder.cpp`.
 pub fn WelsCPUFeatureDetect(pCpuCores: &mut i32) -> u32 {
     *pCpuCores = GetCPUCount();
-    crate::simd::detect_cpu_features()
+    detect_cpu_features()
 }
 
 /// Fill data fields in default for decoder context.
@@ -1929,8 +1937,8 @@ pub fn WelsDecoderLastDecPicInfoDefaults(sLastDecPicInfo: &mut crate::decoder::d
 /// `iLargestBufferedPicIndex + 1` is clamped to the array's length — the C++ trusts
 /// the field.
 pub fn ResetReorderingPictureBuffers(
-    pPictReoderingStatus: &mut crate::decoder::decoder_context::SPictReoderingStatus,
-    pPictInfo: &mut [crate::decoder::decoder_context::SPictInfo; 16],
+    pPictReoderingStatus: &mut SPictReoderingStatus,
+    pPictInfo: &mut [SPictInfo; 16],
     fullReset: bool,
 ) {
     let pictInfoListCount = if fullReset {
@@ -1939,12 +1947,12 @@ pub fn ResetReorderingPictureBuffers(
         ((pPictReoderingStatus.iLargestBufferedPicIndex + 1).max(0) as usize).min(pPictInfo.len())
     };
     pPictReoderingStatus.iPictInfoIndex = 0;
-    pPictReoderingStatus.iMinPOC = crate::decoder::decoder_context::IMinInt32;
+    pPictReoderingStatus.iMinPOC = IMinInt32;
     pPictReoderingStatus.iNumOfPicts = 0;
-    pPictReoderingStatus.iLastWrittenPOC = crate::decoder::decoder_context::IMinInt32;
+    pPictReoderingStatus.iLastWrittenPOC = IMinInt32;
     pPictReoderingStatus.iLargestBufferedPicIndex = 0;
     for info in pPictInfo.iter_mut().take(pictInfoListCount) {
-        info.iPOC = crate::decoder::decoder_context::IMinInt32;
+        info.iPOC = IMinInt32;
         info.iPicBuffIdx = -1;
     }
     pPictInfo[0].sBufferInfo.iBufferStatus = 0;
@@ -2014,7 +2022,7 @@ pub fn DecoderConfigParam(pCtx: &mut SWelsDecoderContext, kpParam: &SDecodingPar
     if pCtx.pParam.bParseOnly {
         pCtx.pParam.eEcActiveIdc = ERROR_CON_DISABLE;
     }
-    crate::decoder::error_concealment::InitErrorCon(pCtx);
+    InitErrorCon(pCtx);
     // `decoder.cpp:667–671`. The out-of-range `else` is `read_decoding_param`'s, for
     // the same reason the clamp is: `VIDEO_BITSTREAM_TYPE` has two variants and the
     // wire has 2^32 values.
@@ -2031,7 +2039,7 @@ pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext) -> i32 {
     pCtx.uiCpuFlag = WelsCPUFeatureDetect(&mut cpu_cores);
     { WelsInitDecoderFuncs(pCtx) };
     // `decoder.cpp:606` — the vlc tables, right after the function pointers.
-    crate::decoder::parse_mb_syn_cavlc::InitVlcTable(&mut pCtx.pVlcTable);
+    InitVlcTable(&mut pCtx.pVlcTable);
     pCtx.bParamSetsLostFlag = true;
     pCtx.bNewSeqBegin = true;
     pCtx.bPrintFrameErrorTraceFlag = true;
@@ -2047,7 +2055,7 @@ pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext) -> i32 {
 pub fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
 
     UninitialDqLayersContext(pCtx);
-    crate::decoder::nalu::ResetFmoList(pCtx);
+    ResetFmoList(pCtx);
     WelsResetRefPic(pCtx);
 
     if pCtx.pPicBuff.is_some() {
@@ -3542,8 +3550,8 @@ pub fn WelsDecodeBs(
 
             if let Some(nal_start) = p_payload {
                 let nal_type = nal_header.eNalUnitType;
-                if crate::decoder::nalu::IS_PARAM_SETS_NALS(nal_type) {
-                    crate::decoder::nalu::ParseNonVclNal(
+                if IS_PARAM_SETS_NALS(nal_type) {
+                    ParseNonVclNal(
                         pCtx,
                         nal_start,
                         (payload_len as i32) - consumed_bytes,
@@ -4215,7 +4223,7 @@ pub fn CheckAndFinishLastPic(
         let last = Some((pCtx.pLastDecPicInfo.sLastNalHdrExt, pCtx.pLastDecPicInfo.sLastSliceHeader));
         if let (Some(pCurNal), Some((last_hdr, last_sh))) = (cur_nal.as_ref(), last) {
             bAuBoundaryFlag = pCtx.iTotalNumMbRec != 0
-                && crate::decoder::nalu::CheckAccessUnitBoundaryExt(
+                && CheckAccessUnitBoundaryExt(
                     sps_of(&pCtx.sSpsPpsCtx, sps_ref),
                     &last_hdr,
                     &pCurNal.sNalHeaderExt,
@@ -4564,7 +4572,7 @@ mod tests {
                 let mut cpu_cores = 0;
                 assert_eq!(
                     WelsCPUFeatureDetect(&mut cpu_cores),
-                    crate::simd::detect_cpu_features()
+                    detect_cpu_features()
                 );
                 assert_eq!(cpu_cores, 1);
                 // `WelsOpenDecoder` on a real context is the success path

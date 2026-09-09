@@ -227,7 +227,7 @@ pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
 /// frame by `PreprocessSliceCoding`).
 pub type PDeblockingFilterSlice = extern "C" fn(
     view: &RecPicView,
-    pSliceCtx: &crate::encoder::slice_multi_threading::SSliceCtx,
+    pSliceCtx: &SSliceCtx,
     kiCsStride: &[i32; 3],
     pSlice: &mut SSlice,
     pMbs: &mut MbWindow<'_, SMB>,
@@ -605,7 +605,7 @@ pub fn inside_bs_mask(uiCurMbType: u32) -> u8 {
 
 /// C++: `WelsNonZeroCount_c` — the encoder's copy.
 pub fn WelsNonZeroCount_c(pNonZeroCount: &mut [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM]) {
-    crate::common::deblocking_common::nonzero_count(pNonZeroCount);
+    nonzero_count(pNonZeroCount);
 }
 
 
@@ -1140,7 +1140,7 @@ pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
         return;
     }
     let (kuiDisableDeblockingFilterIdc, kiSliceAlphaC0Offset, kiSliceBetaOffset) = {
-        let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, 0) else {
+        let Some(pSlice) = slice_in_layer_mut(pCurDq, 0) else {
             return;
         };
         let sh = &pSlice.sSliceHeaderExt.sSliceHeader;
@@ -1191,7 +1191,7 @@ pub use crate::encoder::svc_encode_slice::WelsGetNextMbOfSlice;
 /// The per-slice walker.
 pub extern "C" fn DeblockingFilterSliceAvcbase(
     view: &RecPicView,
-    pSliceCtx: &crate::encoder::slice_multi_threading::SSliceCtx,
+    pSliceCtx: &SSliceCtx,
     kiCsStride: &[i32; 3],
     pSlice: &mut SSlice,
     pMbs: &mut MbWindow<'_, SMB>,
@@ -1241,7 +1241,7 @@ pub extern "C" fn DeblockingFilterSliceAvcbase(
 
 pub extern "C" fn DeblockingFilterSliceAvcbaseNull(
     _view: &RecPicView,
-    _pSliceCtx: &crate::encoder::slice_multi_threading::SSliceCtx,
+    _pSliceCtx: &SSliceCtx,
     _kiCsStride: &[i32; 3],
     _pSlice: &mut SSlice,
     _pMbs: &mut MbWindow<'_, SMB>,
@@ -1249,7 +1249,7 @@ pub extern "C" fn DeblockingFilterSliceAvcbaseNull(
 }
 
 pub extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) {
-    let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pEnc);
+    let pCurDq = current_layer_expect_mut(pEnc);
 
     if pCurDq.iLoopFilterDisableIdc == 0 {
         DeblockingFilterFrameAvcbase(pCurDq);
@@ -1589,3 +1589,6 @@ mod tests {
 
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSSE3};
+use crate::common::deblocking_common::nonzero_count;
+use crate::encoder::slice_multi_threading::SSliceCtx;
+use crate::encoder::svc_encode_slice::{current_layer_expect_mut, slice_in_layer_mut};

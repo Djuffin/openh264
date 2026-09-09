@@ -80,7 +80,7 @@ pub use crate::safe::pool::{Pool, PoolRest};
 ///
 /// Identity is slot equality: two pictures are "the same reference" when they occupy
 /// the same pool slot, never when they merely share a POC.
-pub type PicId = crate::safe::pool::Id;
+pub type PicId = Id;
 
 /// The decoder's recycled picture pool — C++ `SPicBuff` (`pic_queue.h:45-49`).
 #[derive(Debug)]
@@ -439,6 +439,7 @@ pub const fn WELS_ALIGN(x: i32, n: i32) -> i32 {
 }
 
 pub use crate::decoder::decoder_core::GetThreadCount;
+use crate::safe::pool::Id;
 
 // ============================================================================
 // Picture Memory Lifecycle Functions

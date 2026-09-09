@@ -13,11 +13,10 @@
 
 
 use crate::encoder::rec_view::{copy_block_to_view, RecCursor};
-use crate::encoder::svc_encode_slice::layer_ref_pic;
+use crate::encoder::svc_encode_slice::{CLIP3_QP_0_51, WelsIMbChromaEncode, WelsPMbChromaEncode, ctx_pic_ref, g_kuiChromaQpTable, layer_ref_feature_storage, layer_ref_pic};
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
-use crate::encoder::svc_encode_mb::WelsEncInterY;
-use crate::encoder::svc_encode_slice::WelsPMbChromaEncode;
+use crate::encoder::svc_encode_mb::{WelsEncInterY, WelsEncRecI16x16Y};
 use crate::encoder::svc_set_mb_syn_cavlc::IS_INTRA16x16;
 use crate::encoder::vlc_encoder::BsSizeUE;
 pub use crate::encoder::encoder_context::SMVUnitXY;
@@ -183,6 +182,10 @@ pub use crate::encoder::md::PSampleSadSatdCostFunc;
 use crate::encoder::md::{MbCursors, MdSliceCtx};
 /// The kernel set the direct dispatch sites below name; see `simd::kernels`.
 use crate::simd::kernels;
+use crate::encoder::encoder_context::dq_layer_ref;
+use crate::encoder::md::{SSampleDealingFunc, SWelsMD_sMe};
+use crate::encoder::svc_base_layer_md::{WelsMdInterDoubleCheckPskip, WelsMdInterEncode, WelsMdInterMbRefinement, WelsMdIntraChroma, WelsMdPSkipEnc};
+use crate::safe::mb_grid::MbSplit;
 
 // ============================================================================
 // Macro / Inline Condition Helpers
@@ -232,7 +235,7 @@ pub fn WelsMdInterUpdatePskip(kiChromaQpIndexOffset: i32, pSlice: &mut SSlice, p
     // The offset is the slice context's, which `WelsMdInterMbLoop` already held in
     // `kuiChromaQpIndexOffset`; this used to resolve the layer's PPS per macroblock
     // for a value that cannot change inside a slice.
-    pCurMb.uiChromaQp = crate::encoder::svc_encode_slice::g_kuiChromaQpTable
+    pCurMb.uiChromaQp = g_kuiChromaQpTable
         [WELS_CLIP3(pCurMb.uiLumaQp as i32 + kiChromaQpIndexOffset, 0, 51) as usize];
     pMbCache.bCollocatedPredFlag = LD32_MV(&pCurMb.sMv[0]) == 0;
 }
@@ -266,7 +269,7 @@ pub extern "C" fn WelsMdInterJudgePskip(
             0,
             &mut pWelsMd.iSadPredSkip,
         );
-        bRet = crate::encoder::svc_base_layer_md::WelsMdPSkipEnc(pEncCtx, pWelsMd, pCurMb, &mut *pMbCache);
+        bRet = WelsMdPSkipEnc(pEncCtx, pWelsMd, pCurMb, &mut *pMbCache);
         return bRet;
     }
 
@@ -318,13 +321,13 @@ pub extern "C" fn WelsMdInterSecondaryModesEnc<'a>(
         )(pEncCtx, pWelsMd, &mut *pSlice, pCurMb, pWelsMd.iCostLuma);
 
         //refinement for inter type
-        crate::encoder::svc_base_layer_md::WelsMdInterMbRefinement(pEncCtx, pWelsMd, pCurMb, &mut pSlice.sMbCacheInfo);
+        WelsMdInterMbRefinement(pEncCtx, pWelsMd, pCurMb, &mut pSlice.sMbCacheInfo);
 
         //step 7: invoke encoding
-        crate::encoder::svc_base_layer_md::WelsMdInterEncode(pEncCtx, pSlice, pCurMb);
+        WelsMdInterEncode(pEncCtx, pSlice, pCurMb);
 
         //step 8: double check Pskip
-        crate::encoder::svc_base_layer_md::WelsMdInterDoubleCheckPskip(pCurMb, &mut pSlice.sMbCacheInfo);
+        WelsMdInterDoubleCheckPskip(pCurMb, &mut pSlice.sMbCacheInfo);
     }
 }
 
@@ -353,18 +356,18 @@ pub extern "C" fn WelsMdIntraSecondaryModesEnc(
     //add pEnc&rec to MD--2010.3.15
     if IS_INTRA16x16(pCurMb.uiMbType) {
         pCurMb.uiCbp = 0;
-        crate::encoder::svc_encode_mb::WelsEncRecI16x16Y(pEncCtx, pCurMb, pMbCache);
+        WelsEncRecI16x16Y(pEncCtx, pCurMb, pMbCache);
     }
 
     //chroma
-    pWelsMd.iCostChroma = crate::encoder::svc_base_layer_md::WelsMdIntraChroma(
+    pWelsMd.iCostChroma = WelsMdIntraChroma(
         &*pFunc,
         current_layer_expect(pEncCtx),
         pMbCache,
         pWelsMd.iLambda,
     );
     //add pEnc&rec to MD--2010.3.15
-    crate::encoder::svc_encode_slice::WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache);
+    WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache);
     pCurMb.uiChromPredMode = pMbCache.uiChmaI8x8Mode as u32;
     pCurMb.iSadCost = 0;
 }
@@ -512,8 +515,8 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
         (sc.func.pfUpdateMbMv)(&mut pCurMb.sMv, sMvp);
 
         pCurMb.uiLumaQp = pSlice.uiLastMbQp;
-        pCurMb.uiChromaQp = crate::encoder::svc_encode_slice::g_kuiChromaQpTable
-            [crate::encoder::svc_encode_slice::CLIP3_QP_0_51(
+        pCurMb.uiChromaQp = g_kuiChromaQpTable
+            [CLIP3_QP_0_51(
                 pCurMb.uiLumaQp as i32 + sc.chroma_qp_offset,
             )];
 
@@ -1018,7 +1021,7 @@ pub fn WelsMdP16x16<'a>(
     pCurLayer: &'a SDqLayer,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
+    mbs: &mut MbSplit<'_, SMB>,
 ) -> i32 {
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let pMe16x16 = &mut pWelsMd.sMe.sMe16x16;
@@ -1031,7 +1034,7 @@ pub fn WelsMdP16x16<'a>(
         pWelsMd.iMbPixY,
         pWelsMd.pMvdCost,
         BLOCK_16x16 as i32,
-        crate::encoder::svc_encode_slice::layer_ref_feature_storage(pEncCtx, &*pCurLayer),
+        layer_ref_feature_storage(pEncCtx, &*pCurLayer),
         pMe16x16,
     );
     //not putting the line below into InitMe to avoid judging mode in InitMe
@@ -1121,7 +1124,7 @@ pub extern "C" fn WelsMdP8x8<'a>(
             pWelsMd.iMbPixY,
             pWelsMd.pMvdCost,
             BLOCK_8x8 as i32,
-            crate::encoder::svc_encode_slice::layer_ref_feature_storage(pEncCtx, &*pCurDqLayer),
+            layer_ref_feature_storage(pEncCtx, &*pCurDqLayer),
             sMe8x8,
         );
         //not putting these three lines below into InitMe to avoid judging mode in InitMe
@@ -1209,7 +1212,7 @@ pub fn GetRefMb(pEncCtx: &sWelsEncCtx, pCurMb: &SMB) -> SMB {
     let kRefIdx = current_layer_expect(pEncCtx)
         .pRefLayer
         .expect("GetRefMb on a layer with no base layer: bBaseLayerAvailableFlag gates every caller");
-    let kpRefLayer = crate::encoder::encoder_context::dq_layer_ref(pEncCtx, kRefIdx.get())
+    let kpRefLayer = dq_layer_ref(pEncCtx, kRefIdx.get())
         .expect("the base layer is built before its enhancement layer encodes");
     let kiRefMbIdx =
         ((pCurMb.iMbY as i32 >> 1) * kpRefLayer.iMbWidth as i32) + (pCurMb.iMbX as i32 >> 1);
@@ -1275,7 +1278,7 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
+    mbs: &mut MbSplit<'_, SMB>,
     kuiRefMbType: Mb_Type,
 ) {
     let pCurDqLayer = current_layer_expect(pEncCtx);
@@ -1369,7 +1372,7 @@ pub fn WelsMdInterMbEnhancelayer<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
+    mbs: &mut MbSplit<'_, SMB>,
 ) {
     let kInterLayerRefMb = GetRefMb(pEncCtx, mbs.cur());
     let kuiInterLayerRefMbType = kInterLayerRefMb.uiMbType;
@@ -1550,7 +1553,7 @@ pub fn IsMbScrolledStatic(pBlockType: &[i32; 4]) -> bool {
 
 #[inline(always)]
 pub fn CalUVSadCost(
-    sdf: &crate::encoder::md::SSampleDealingFunc,
+    sdf: &SSampleDealingFunc,
     cEncOri: &RecCursor<'_>,
     cRefOri: &RecCursor<'_>,
 ) -> i32 {
@@ -1590,7 +1593,7 @@ pub extern "C" fn JudgeStaticSkip(
     if bTryStaticSkip {
         let sdf = &pEncCtx.func_list().sSampleDealingFuncs;
         let pRefOriPic = pCurDqLayer.pRefOri[0]
-            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r))
+            .and_then(|r| ctx_pic_ref(pEncCtx, r))
             .map(crate::encoder::rec_view::RoPicView::build);
         if let Some(pRefOriPic) = pRefOriPic {
             let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
@@ -1646,7 +1649,7 @@ pub extern "C" fn JudgeScrollSkip(
     if bTryScrollSkip {
         let sdf = &pEncCtx.func_list().sSampleDealingFuncs;
         let pRefOriPic = pCurDqLayer.pRefOri[0]
-            .and_then(|r| crate::encoder::svc_encode_slice::ctx_pic_ref(pEncCtx, r))
+            .and_then(|r| ctx_pic_ref(pEncCtx, r))
             .map(crate::encoder::rec_view::RoPicView::build);
         if let Some(pRefOriPic) = pRefOriPic {
             let iScrollMvX = pVaaExt.sScrollDetectInfo.iScrollMvX;
@@ -1983,7 +1986,7 @@ pub fn TryModeMerge(
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
 ) -> bool {
-    let crate::encoder::md::SWelsMD_sMe { sMe8x8, sMe16x8, sMe8x16, .. } = &mut pWelsMd.sMe;
+    let SWelsMD_sMe { sMe8x8, sMe16x8, sMe8x16, .. } = &mut pWelsMd.sMe;
 
     let bSameMv16x8_0 = IsSameMv(&sMe8x8[0].sMv, &sMe8x8[1].sMv);
     let bSameMv16x8_1 = IsSameMv(&sMe8x8[2].sMv, &sMe8x8[3].sMv);

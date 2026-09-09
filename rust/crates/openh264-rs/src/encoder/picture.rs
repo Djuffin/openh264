@@ -14,6 +14,7 @@
 use crate::encoder::encoder_context::{BLOCK_SIZE_ALL, SMVUnitXY};
 use crate::encoder::svc_motion_estimate::{LIST_SIZE_MSE_16x16, LIST_SIZE_SUM_16x16, LIST_SIZE_SUM_8x8};
 pub use crate::safe::plane::PaddedPlane;
+use crate::safe::pool::{Id, Pool};
 
 /// `PADDING_LENGTH` — `codec/encoder/core/inc/wels_const.h`. The luma border
 /// `AllocPicture` puts around every picture; chroma gets half of it.
@@ -538,17 +539,17 @@ macro_rules! pic_pool {
         /// See the module note on [`SrcPicId`]/[`RecPicId`]: the two handle types are
         /// deliberately unrelated, and there is no conversion in either direction.
         #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-        pub struct $id(crate::safe::pool::Id);
+        pub struct $id(Id);
 
         #[doc = concat!("The ", $what, " picture pool: the owner of its slots.")]
         #[derive(Debug)]
-        pub struct $pool(crate::safe::pool::Pool<Box<SPicture>>);
+        pub struct $pool(Pool<Box<SPicture>>);
 
         impl $pool {
             /// Takes ownership of `slots`. The pool never grows: both C++ picture
             /// sets are sized once at initialisation and recycled thereafter.
             pub fn new(slots: Vec<Box<SPicture>>) -> Self {
-                Self(crate::safe::pool::Pool::new(slots))
+                Self(Pool::new(slots))
             }
 
             /// A pool with no slots — what a host holds before `RequestMemorySvc`

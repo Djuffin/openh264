@@ -44,7 +44,7 @@
 
 #![deny(unsafe_code)]
 
-use crate::encoder::rec_view::RecCursor;
+use crate::encoder::rec_view::{RecCursor, RecPicView};
 use crate::encoder::decode_mb_aux::{
     idct_four_t4_rec_in_place_view, idct_four_t4_rec_to_view, idct_t4_rec_on_mb_in_place_view,
 };
@@ -634,7 +634,7 @@ pub fn ctx_pic_ref<'a>(pCtx: &'a sWelsEncCtx, r: PicRef) -> Option<&'a SPicture>
             if pCtx.pVpp.is_none() {
                 None
             } else {
-                Some(crate::encoder::encoder_context::ctx_vpp_ref(pCtx).src_id(id))
+                Some(ctx_vpp_ref(pCtx).src_id(id))
             }
         }
     }
@@ -694,7 +694,7 @@ pub fn layer_ref_pic_expect<'a>(
 pub fn layer_ref_feature_storage<'a>(
     pCtx: &'a sWelsEncCtx,
     pLayer: &SDqLayer,
-) -> Option<&'a crate::encoder::picture::SScreenBlockFeatureStorage> {
+) -> Option<&'a SScreenBlockFeatureStorage> {
     layer_ref_pic(pCtx, pLayer)?.pScreenBlockFeatureStorage.as_deref()
 }
 
@@ -708,7 +708,7 @@ pub fn layer_ref_feature_storage<'a>(
 #[inline]
 pub fn layer_rec_view<'a>(
     pLayer: &'a SDqLayer,
-) -> Option<&'a crate::encoder::rec_view::RecPicView> {
+) -> Option<&'a RecPicView> {
     pLayer.pRecView.as_ref()
 }
 
@@ -724,7 +724,7 @@ pub fn layer_rec_view<'a>(
 #[inline]
 pub fn layer_rec_view_expect<'a>(
     pLayer: &'a SDqLayer,
-) -> &'a crate::encoder::rec_view::RecPicView {
+) -> &'a RecPicView {
     layer_rec_view(pLayer).expect("the layer's reconstruction view is built for this frame")
 }
 
@@ -844,7 +844,7 @@ pub struct SDqLayer {
     /// release (`:973-977`). Written only outside the fork (`PreprocessSliceCoding`
     /// and the post-join FME switch); the workers read it.
     pub pFeatureSearchPreparation:
-        Option<Box<crate::encoder::svc_motion_estimate::SFeatureSearchPreparation>>,
+        Option<Box<SFeatureSearchPreparation>>,
     pub pRefPic: Option<RecPicId>,
     pub pDecPic: Option<RecPicId>,
     /// The **source** picture this frame encodes from, as a slot of the spatial
@@ -867,7 +867,7 @@ pub struct SDqLayer {
     /// under the fork, races on `SRefList` itself. `None` between frames is not
     /// decoration: `WelsInitCurrentLayer` rebuilds it every frame, and nothing
     /// may read a view built for a frame that has ended.
-    pub pRecView: Option<crate::encoder::rec_view::RecPicView>,
+    pub pRecView: Option<RecPicView>,
 
     /// The frame's **source** planes, as a read-only view — the counterpart to
     /// `pRecView` and the read half of the same seam.
@@ -1129,6 +1129,14 @@ pub fn slice_bs_writer_ref<'a>(
 pub use crate::encoder::vlc_encoder::{
     BsGetBitsPos, BsWriteBits, BsWriteOneBit, BsWriteSE, BsWriteUE,
 };
+use crate::encoder::encoder_context::ctx_vpp_ref;
+use crate::encoder::md::{MbCursors, MbSideInfo, MdSliceCtx};
+use crate::encoder::picture::SScreenBlockFeatureStorage;
+use crate::encoder::rc::GomRCInitForOneSlice;
+use crate::encoder::set_mb_syn_cabac::WelsCabacEncodePos;
+use crate::encoder::slice_multi_threading::fill_mb_map;
+use crate::encoder::svc_base_layer_md::{WelsMdInterInit, WelsMdIntraMb};
+use crate::encoder::svc_motion_estimate::SFeatureSearchPreparation;
 
 // ============================================================================
 // Macroblock Topology & Cache Operations
@@ -1284,7 +1292,7 @@ pub fn WelsSliceHeaderExtInit(pEncCtx: &sWelsEncCtx, pCurLayer: Option<&SDqLayer
 
     if let Some(id) = pEncCtx.pEncPic {
         pCurSliceHeader.iPicOrderCntLsb =
-            crate::encoder::encoder_context::ctx_vpp_ref(pEncCtx).src_id(id).iFramePoc;
+            ctx_vpp_ref(pEncCtx).src_id(id).iFramePoc;
     }
 
     if pEncCtx.eSliceType == EWelsSliceType::P_SLICE {
@@ -1781,7 +1789,7 @@ pub fn WelsISliceMdEnc(
         loop {
             let pMbCache = &mut pSlice.sMbCacheInfo;
             sMd.iLambda = g_kiQpCostTable[pMbs.cur().uiLumaQp as usize];
-            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pMbs.cur_mut(), &mut *pMbCache);
+            WelsMdIntraMb(pEncCtx, &mut sMd, pMbs.cur_mut(), &mut *pMbCache);
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
             let iEncReturn;
@@ -1901,7 +1909,7 @@ pub fn WelsISliceMdEncDynamic(
         loop {
             let pMbCache = &mut pSlice.sMbCacheInfo;
             sMd.iLambda = g_kiQpCostTable[pMbs.cur().uiLumaQp as usize];
-            crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pMbs.cur_mut(), &mut *pMbCache);
+            WelsMdIntraMb(pEncCtx, &mut sMd, pMbs.cur_mut(), &mut *pMbCache);
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
             let iEncReturn;
@@ -2099,12 +2107,12 @@ pub fn WelsMdInterMbLoop<'a>(
                     // **The reference picture's three entries for this macroblock**,
                     // which the judgement, the inter init and the two skip-cost
                     // tests each reached through an `Option` and a `Vec`.
-                    crate::encoder::md::MbSideInfo::at(sc, pMbs.cur().iMbXY),
+                    MbSideInfo::at(sc, pMbs.cur().iMbXY),
                 )
             };
             let cur = pMbs.cur();
             pMd.mbi = mbi;
-            pMd.mbc = Some(crate::encoder::md::MbCursors::from_views(
+            pMd.mbc = Some(MbCursors::from_views(
                 enc,
                 refv,
                 rec,
@@ -2130,7 +2138,7 @@ pub fn WelsMdInterMbLoop<'a>(
             let mut split = pMbs.split_cur();
             let pMbCache = &mut pSlice.sMbCacheInfo;
             crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut split, &mut *pMbCache);
-            crate::encoder::svc_base_layer_md::WelsMdInterInit(
+            WelsMdInterInit(
                 pMd.sc(),
                 &pMd.mbi,
                 pEncCtx.iMvRange,
@@ -2296,12 +2304,12 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
                     // **The reference picture's three entries for this macroblock**,
                     // which the judgement, the inter init and the two skip-cost
                     // tests each reached through an `Option` and a `Vec`.
-                    crate::encoder::md::MbSideInfo::at(sc, pMbs.cur().iMbXY),
+                    MbSideInfo::at(sc, pMbs.cur().iMbXY),
                 )
             };
             let cur = pMbs.cur();
             pMd.mbi = mbi;
-            pMd.mbc = Some(crate::encoder::md::MbCursors::from_views(
+            pMd.mbc = Some(MbCursors::from_views(
                 enc,
                 refv,
                 rec,
@@ -2332,7 +2340,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             let mut split = pMbs.split_cur();
             let pMbCache = &mut pSlice.sMbCacheInfo;
             crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut split, &mut *pMbCache);
-            crate::encoder::svc_base_layer_md::WelsMdInterInit(
+            WelsMdInterInit(
                 pMd.sc(),
                 &pMd.mbi,
                 pEncCtx.iMvRange,
@@ -2477,7 +2485,7 @@ pub fn WelsPSliceMdEnc(
     // for fields every path assigns before reading.
     let mut sMd = SWelsMD::default();
     sMd.sctx = current_layer_ref(pEncCtx)
-        .map(|l| crate::encoder::md::MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref()));
+        .map(|l| MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref()));
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
     // `svc_encode_slice.cpp:698`.
     sMd.bMdUsingSad = pEncCtx.param().iComplexityMode
@@ -2502,7 +2510,7 @@ pub fn WelsPSliceMdEncDynamic(
     let kpRefView = current_layer_ref(pEncCtx).and_then(|l| layer_ref_view(pEncCtx, l));
     let mut sMd = SWelsMD::default();
     sMd.sctx = current_layer_ref(pEncCtx)
-        .map(|l| crate::encoder::md::MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref()));
+        .map(|l| MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref()));
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
     // `svc_encode_slice.cpp:715`.
     sMd.bMdUsingSad = pEncCtx.param().iComplexityMode
@@ -2723,7 +2731,7 @@ pub fn WelsCodeOneSlice(
     if !pEncCtx.rc().is_empty() {
         let pWelsSvcRc = pEncCtx.rc_at(pEncCtx.uiDependencyId as usize);
         if pWelsSvcRc.bGomRC {
-            crate::encoder::rc::GomRCInitForOneSlice(&mut *pCurSlice, pWelsSvcRc.iBitsPerMb);
+            GomRCInitForOneSlice(&mut *pCurSlice, pWelsSvcRc.iBitsPerMb);
         }
     }
 
@@ -2781,7 +2789,7 @@ pub fn WelsWriteSliceEndSyn(
         crate::encoder::set_mb_syn_cabac::WelsCabacEncodeFlush(buf, &mut *pCabacCtx);
         // Both coders count in the same units over the same buffer, so handing
         // the position back is an assignment.
-        *pBs = BsWriter::at(crate::encoder::set_mb_syn_cabac::WelsCabacEncodePos(
+        *pBs = BsWriter::at(WelsCabacEncodePos(
             &mut *pCabacCtx,
         ));
     } else {
@@ -2828,7 +2836,7 @@ pub fn AddSliceBoundary(
         // partition.
         {
             let map: &[AtomicU16] = &pSliceCtx.pOverallMbMap;
-            crate::encoder::slice_multi_threading::fill_mb_map(
+            fill_mb_map(
                 map,
                 iFirstMbIdxOfNextSlice,
                 kiLastMbIdxInPartition - iFirstMbIdxOfNextSlice + 1,

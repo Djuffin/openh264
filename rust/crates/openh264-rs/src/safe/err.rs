@@ -10,8 +10,7 @@
 //!
 //! The codes themselves are **reused, never redefined**.
 
-use crate::decoder::bit_stream;
-use crate::decoder::dec_golomb;
+use crate::decoder::{bit_stream, dec_golomb};
 
 /// A decoder error code, exactly as the C++ returns it.
 ///

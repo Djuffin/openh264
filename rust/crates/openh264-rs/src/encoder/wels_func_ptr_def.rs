@@ -27,7 +27,7 @@ use crate::encoder::md::{
     PFillInterNeighborCacheFunc, PGetMbSignFromInterVaaFunc, PGetVarianceFromIntraVaaFunc,
     PUpdateMbMvFunc, SSampleDealingFunc, SWelsMD, SMB,
 };
-use crate::encoder::md::SMbCache;
+use crate::encoder::md::{AnalysisVaaInfoIntra_c, FillNeighborCacheInterWithoutBGD, MdInterAnalysisVaaInfo_c, SMbCache, UpdateMbMv_c};
 use crate::encoder::rc::SWelsRcFunc;
 use crate::encoder::svc_encode_mb::{PDeQuantization4x4Func, PDeQuantizationFunc};
 use crate::encoder::svc_encode_slice::{BsWriter, SDqLayer, SDynamicSlicingStack, SSlice};
@@ -36,6 +36,14 @@ use crate::encoder::svc_motion_estimate::{
     PUpdateFMESwitch,
 };
 use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
+use crate::encoder::decode_mb_aux::{dequant_4x4, dequant_four_4x4, dequant_ihadamard_4x4};
+use crate::encoder::encode_mb_aux::{WelsCopy16x16_c, WelsCopy16x8_c, WelsCopy4x4_c, WelsCopy4x8_c, WelsCopy8x16_c, WelsCopy8x4_c, WelsCopy8x8_c, WelsDctFourT4_c, WelsDctT4_c, calculate_single_ctr_4x4, get_none_zero_count, hadamard_quant_2x2, hadamard_quant_2x2_skip, hadamard_t4_dc, quant_4x4, quant_4x4_dc, quant_four_4x4, quant_four_4x4_max, scan_4x4_ac, scan_4x4_dc_ac};
+use crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj;
+use crate::encoder::set_mb_syn_cabac::SCabacCtx;
+use crate::encoder::svc_mode_decision::{WelsMdInterJudgeBGDPskipFalse, WelsMdInterJudgeSCDPskipFalse, WelsMdUpdateBGDInfoNULL};
+use crate::encoder::svc_set_mb_syn_cabac::WelsSpatialWriteMbSynCabac;
+use crate::encoder::svc_set_mb_syn_cavlc::{CavlcParamCal_c, GetBsPosCabac, GetBsPosCavlc, StashMBStatusCabac, StashMBStatusCavlc, StashPopMBStatusCabac, StashPopMBStatusCavlc};
+use crate::safe::mb_grid::{MbSplit, MbWindow};
 
 // ============================================================================
 // Function pointer typedefs
@@ -138,7 +146,7 @@ pub type PInterMdFunc = for<'a> fn(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     slice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
+    mbs: &mut MbSplit<'_, SMB>,
 );
 
 /// `wels_func_ptr_def.h:64`
@@ -215,7 +223,7 @@ impl EntropyCoder {
         self,
         pEncCtx: &sWelsEncCtx,
         pSlice: &mut SSlice,
-        mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+        mbs: &mut MbWindow<'_, SMB>,
         pSliceBsBuf: &mut [u8],
         pCtxOutBs: &mut Option<&mut BsWriter>,
     ) -> i32 {
@@ -223,7 +231,7 @@ impl EntropyCoder {
             EntropyCoder::Cavlc => {
                 crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn(pEncCtx, pSlice, mbs, pSliceBsBuf, pCtxOutBs)
             }
-            EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cabac::WelsSpatialWriteMbSynCabac(
+            EntropyCoder::Cabac => WelsSpatialWriteMbSynCabac(
                 pEncCtx, pSlice, mbs, pSliceBsBuf, pCtxOutBs,
             ),
         }
@@ -244,15 +252,15 @@ impl EntropyCoder {
         buf: &mut [u8],
         pBs: &mut BsWriter,
         pDss: &mut SDynamicSlicingStack<'_>,
-        pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
+        pCabacCtx: &mut SCabacCtx,
         kuiLastMbQp: u8,
         iMbSkipRun: i32,
     ) {
         match self {
-            EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCavlc(
+            EntropyCoder::Cavlc => StashMBStatusCavlc(
                 pBs, pDss, kuiLastMbQp, iMbSkipRun,
             ),
-            EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cavlc::StashMBStatusCabac(
+            EntropyCoder::Cabac => StashMBStatusCabac(
                 buf, pDss, pCabacCtx, kuiLastMbQp, iMbSkipRun,
             ),
         }
@@ -268,14 +276,14 @@ impl EntropyCoder {
         buf: &mut [u8],
         pBs: &mut BsWriter,
         pDss: &mut SDynamicSlicingStack<'_>,
-        pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
+        pCabacCtx: &mut SCabacCtx,
     ) -> i32 {
         match self {
             EntropyCoder::Cavlc => {
-                crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCavlc(pBs, pDss)
+                StashPopMBStatusCavlc(pBs, pDss)
             }
             EntropyCoder::Cabac => {
-                crate::encoder::svc_set_mb_syn_cavlc::StashPopMBStatusCabac(buf, pDss, pCabacCtx)
+                StashPopMBStatusCabac(buf, pDss, pCabacCtx)
             }
         }
     }
@@ -288,11 +296,11 @@ impl EntropyCoder {
     pub fn GetBsPosition(
         self,
         pBs: &BsWriter,
-        pCabacCtx: &crate::encoder::set_mb_syn_cabac::SCabacCtx,
+        pCabacCtx: &SCabacCtx,
     ) -> i32 {
         match self {
-            EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCavlc(pBs),
-            EntropyCoder::Cabac => crate::encoder::svc_set_mb_syn_cavlc::GetBsPosCabac(pCabacCtx),
+            EntropyCoder::Cavlc => GetBsPosCavlc(pBs),
+            EntropyCoder::Cabac => GetBsPosCabac(pCabacCtx),
         }
     }
 }
@@ -392,7 +400,7 @@ pub struct SWelsFuncPtrList {
     /// glue never runs — so `WelsUninitEncoderExt` `take()`s the field explicitly,
     /// at the same point `encoder_ext.cpp:1995` deletes it.
     pub pParametersetStrategy:
-        Option<Box<crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj>>,
+        Option<Box<CWelsParametersetIdStrategyObj>>,
 }
 
 pub type TagWelsFuncPointerList = SWelsFuncPtrList;
@@ -422,17 +430,17 @@ impl Default for SWelsFuncPtrList {
     /// `ENC_RETURN_MEMALLOCERR`.
     fn default() -> Self {
         Self {
-            pfFillInterNeighborCache: crate::encoder::md::FillNeighborCacheInterWithoutBGD,
-            pfGetVarianceFromIntraVaa: crate::encoder::md::AnalysisVaaInfoIntra_c,
-            pfGetMbSignFromInterVaa: crate::encoder::md::MdInterAnalysisVaaInfo_c,
-            pfUpdateMbMv: crate::encoder::md::UpdateMbMv_c,
+            pfFillInterNeighborCache: FillNeighborCacheInterWithoutBGD,
+            pfGetVarianceFromIntraVaa: AnalysisVaaInfoIntra_c,
+            pfGetMbSignFromInterVaa: MdInterAnalysisVaaInfo_c,
+            pfUpdateMbMv: UpdateMbMv_c,
             pfFirstIntraMode: None,
             pfIntraFineMd: None,
             pfInterFineMd: None,
             pfInterMd: None,
-            pfInterMdBackgroundDecision: crate::encoder::svc_mode_decision::WelsMdInterJudgeBGDPskipFalse,
-            pfMdBackgroundInfoUpdate: crate::encoder::svc_mode_decision::WelsMdUpdateBGDInfoNULL,
-            pfSCDPSkipDecision: crate::encoder::svc_mode_decision::WelsMdInterJudgeSCDPskipFalse,
+            pfInterMdBackgroundDecision: WelsMdInterJudgeBGDPskipFalse,
+            pfMdBackgroundInfoUpdate: WelsMdUpdateBGDInfoNULL,
+            pfSCDPSkipDecision: WelsMdInterJudgeSCDPskipFalse,
             pfSetScrollingMv: None,
             sMcFuncs: SMcFunc::default(),
             sSampleDealingFuncs: SSampleDealingFunc::default(),
@@ -445,33 +453,33 @@ impl Default for SWelsFuncPtrList {
             pfFillQpelLocationByFeatureValue: None,
             pfCalculateBlockFeatureOfFrame: [None; 2],
             pfUpdateFMESwitch: None,
-            pfCopy16x16Aligned: crate::encoder::encode_mb_aux::WelsCopy16x16_c,
-            pfCopy16x16NotAligned: crate::encoder::encode_mb_aux::WelsCopy16x16_c,
-            pfCopy8x8Aligned: crate::encoder::encode_mb_aux::WelsCopy8x8_c,
-            pfCopy16x8NotAligned: crate::encoder::encode_mb_aux::WelsCopy16x8_c,
-            pfCopy8x16Aligned: crate::encoder::encode_mb_aux::WelsCopy8x16_c,
-            pfCopy4x4: crate::encoder::encode_mb_aux::WelsCopy4x4_c,
-            pfCopy8x4: crate::encoder::encode_mb_aux::WelsCopy8x4_c,
-            pfCopy4x8: crate::encoder::encode_mb_aux::WelsCopy4x8_c,
-            pfDctT4: crate::encoder::encode_mb_aux::WelsDctT4_c,
-            pfDctFourT4: crate::encoder::encode_mb_aux::WelsDctFourT4_c,
-            pfCalculateSingleCtr4x4: crate::encoder::encode_mb_aux::calculate_single_ctr_4x4,
-            pfScan4x4: crate::encoder::encode_mb_aux::scan_4x4_dc_ac,
-            pfScan4x4Ac: crate::encoder::encode_mb_aux::scan_4x4_ac,
-            pfQuantization4x4: crate::encoder::encode_mb_aux::quant_4x4,
-            pfQuantizationFour4x4: crate::encoder::encode_mb_aux::quant_four_4x4,
-            pfQuantizationDc4x4: crate::encoder::encode_mb_aux::quant_4x4_dc,
-            pfQuantizationFour4x4Max: crate::encoder::encode_mb_aux::quant_four_4x4_max,
-            pfQuantizationHadamard2x2: crate::encoder::encode_mb_aux::hadamard_quant_2x2,
-            pfQuantizationHadamard2x2Skip: crate::encoder::encode_mb_aux::hadamard_quant_2x2_skip,
-            pfTransformHadamard4x4Dc: crate::encoder::encode_mb_aux::hadamard_t4_dc,
-            pfGetNoneZeroCount: crate::encoder::encode_mb_aux::get_none_zero_count,
-            pfDequantization4x4: crate::encoder::decode_mb_aux::dequant_4x4,
-            pfDequantizationFour4x4: crate::encoder::decode_mb_aux::dequant_four_4x4,
-            pfDequantizationIHadamard4x4: crate::encoder::decode_mb_aux::dequant_ihadamard_4x4,
+            pfCopy16x16Aligned: WelsCopy16x16_c,
+            pfCopy16x16NotAligned: WelsCopy16x16_c,
+            pfCopy8x8Aligned: WelsCopy8x8_c,
+            pfCopy16x8NotAligned: WelsCopy16x8_c,
+            pfCopy8x16Aligned: WelsCopy8x16_c,
+            pfCopy4x4: WelsCopy4x4_c,
+            pfCopy8x4: WelsCopy8x4_c,
+            pfCopy4x8: WelsCopy4x8_c,
+            pfDctT4: WelsDctT4_c,
+            pfDctFourT4: WelsDctFourT4_c,
+            pfCalculateSingleCtr4x4: calculate_single_ctr_4x4,
+            pfScan4x4: scan_4x4_dc_ac,
+            pfScan4x4Ac: scan_4x4_ac,
+            pfQuantization4x4: quant_4x4,
+            pfQuantizationFour4x4: quant_four_4x4,
+            pfQuantizationDc4x4: quant_4x4_dc,
+            pfQuantizationFour4x4Max: quant_four_4x4_max,
+            pfQuantizationHadamard2x2: hadamard_quant_2x2,
+            pfQuantizationHadamard2x2Skip: hadamard_quant_2x2_skip,
+            pfTransformHadamard4x4Dc: hadamard_t4_dc,
+            pfGetNoneZeroCount: get_none_zero_count,
+            pfDequantization4x4: dequant_4x4,
+            pfDequantizationFour4x4: dequant_four_4x4,
+            pfDequantizationIHadamard4x4: dequant_ihadamard_4x4,
             pfDeblocking: DeblockingFunc::default(),
             pfRc: SWelsRcFunc::default(),
-            pfCavlcParamCal: crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c,
+            pfCavlcParamCal: CavlcParamCal_c,
             eEntropyCoder: EntropyCoder::default(),
             pParametersetStrategy: None,
         }

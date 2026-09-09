@@ -48,6 +48,7 @@ use std::cell::Cell;
 
 use crate::encoder::encoder_context::SMVUnitXY;
 use crate::encoder::picture::SPicture;
+use crate::safe::plane::{RowBuf, SampleCursor};
 
 /// The one place a captured base/length pair becomes a cell slice.
 ///
@@ -489,9 +490,9 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
         dy0: isize,
         dx0: isize,
         h: usize,
-    ) -> impl Iterator<Item = crate::safe::plane::RowBuf> {
+    ) -> impl Iterator<Item = RowBuf> {
         RecCursor::row_windows::<N>(self, dy0, dx0, h).map(|r| {
-            let mut out = crate::safe::plane::RowBuf::new(N);
+            let mut out = RowBuf::new(N);
             for (o, c) in out.as_mut().iter_mut().zip(r.iter()) {
                 *o = c.get();
             }
@@ -511,7 +512,7 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
 
     /// The one implementor whose row is **owned** — cells cannot lend `&[u8]`.
     type Row<'a>
-        = crate::safe::plane::RowBuf
+        = RowBuf
     where
         Self: 'a;
 
@@ -521,8 +522,8 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
     }
 
     #[inline]
-    fn row_view(&self, dy: isize, dx0: isize, len: usize) -> crate::safe::plane::RowBuf {
-        let mut out = crate::safe::plane::RowBuf::new(len);
+    fn row_view(&self, dy: isize, dx0: isize, len: usize) -> RowBuf {
+        let mut out = RowBuf::new(len);
         let start = idx(self.center, dx0, dy, self.stride);
         let row = &self.cells[start..][..len];
         for (o, c) in out.as_mut().iter_mut().zip(row.iter()) {
@@ -681,7 +682,7 @@ impl RecPicView {
     }
 }
 
-impl crate::safe::plane::SampleCursor for RecCursor<'_> {
+impl SampleCursor for RecCursor<'_> {
     #[inline]
     fn at(&self, dx: isize, dy: isize) -> u8 {
         RecCursor::at(self, dx, dy)

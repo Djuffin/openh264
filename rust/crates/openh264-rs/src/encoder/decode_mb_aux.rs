@@ -38,6 +38,7 @@ use crate::encoder::rec_view::RecCursor;
 /// site because the kernels share their names with the scalars in this module — which
 /// is the point of the naming, and the reason the module qualifier has to stay.
 use crate::simd::kernels;
+use crate::common::cpu_core::WELS_CPU_SSE2;
 
 /// Inverse 4x4 Hadamard of the luma DC block, then scale by the
 /// dequantisation multiplier. The qp >= 12 path (the qp < 12 path is
@@ -500,7 +501,7 @@ pub fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: 
     fl.pfDequantizationFour4x4 = dequant_four_4x4;
     fl.pfDequantizationIHadamard4x4 = dequant_ihadamard_4x4;
 
-    if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+    if (uiCpuFlag & WELS_CPU_SSE2) != 0 {
         fl.pfDequantization4x4 = kernels::quant::dequant_4x4;
         fl.pfDequantizationFour4x4 = kernels::quant::dequant_four_4x4;
         fl.pfDequantizationIHadamard4x4 = kernels::quant::dequant_ihadamard_4x4;

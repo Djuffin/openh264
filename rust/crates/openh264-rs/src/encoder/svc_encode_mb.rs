@@ -44,8 +44,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::encoder::rec_view::RecCursor;
-use crate::encoder::rec_view::copy_block_to_view;
+use crate::encoder::rec_view::{RecCursor, copy_block_to_view};
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SPicData;
@@ -57,8 +56,7 @@ use crate::encoder::encode_mb_aux::{blk4x4, blk4x4_mut, blk_four4x4, blk_four4x4
 pub use crate::encoder::md::SMbCache;
 use crate::encoder::md::{best_pred_i4x4_blk4_off, mem_pred_luma_off};
 use crate::encoder::decode_mb_aux::{idct_four_t4_rec_to_view, idct_rec_i16x16_dc_to_view, idct_t4_rec_to_view};
-use crate::encoder::svc_encode_slice::layer_rec_view_expect;
-use crate::encoder::svc_encode_slice::current_layer_expect;
+use crate::encoder::svc_encode_slice::{current_layer_expect, layer_enc_view_expect, layer_pps_ref, layer_rec_view_expect};
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -287,6 +285,7 @@ pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
 // Function pointer signatures for SWelsFuncPtrList
 pub use crate::encoder::encode_mb_aux::PDctFunc;
+use crate::encoder::decode_mb_aux::{dequant_ihadamard_2x2_dc, dequant_luma_dc_4x4, ihadamard_4x4_dc};
 pub type PTransformHadamard4x4Func = unsafe extern "C" fn(*mut i16, *mut i16);
 pub type PQuantizationFunc = unsafe extern "C" fn(*mut i16, *const i16, *const i16);
 pub type PQuantizationDcFunc = unsafe extern "C" fn(*mut i16, i16, i16);
@@ -313,7 +312,7 @@ pub type PCopyAlignedFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32);
 /// debug panic where the C++ wraps; the in-contract DC levels stay far below it.
 #[inline]
 pub fn WelsIHadamard4x4Dc(pRes: &mut [i16; 16]) {
-    crate::encoder::decode_mb_aux::ihadamard_4x4_dc(pRes);
+    ihadamard_4x4_dc(pRes);
 }
 
 /// Dequantization of 4x4 Luma DC coefficients for QP < 12
@@ -323,13 +322,13 @@ pub fn WelsIHadamard4x4Dc(pRes: &mut [i16; 16]) {
 /// type, so it stays a prose contract.
 #[inline]
 pub fn WelsDequantLumaDc4x4(pRes: &mut [i16; 16], kiQp: i32) {
-    crate::encoder::decode_mb_aux::dequant_luma_dc_4x4(pRes, kiQp);
+    dequant_luma_dc_4x4(pRes, kiQp);
 }
 
 /// 2x2 Inverse Hadamard and dequantization for Chroma DC
 #[inline]
 pub fn WelsDequantIHadamard2x2Dc(pDct: &mut [i16; 4], kuiMF: u16) {
-    crate::encoder::decode_mb_aux::dequant_ihadamard_2x2_dc(pDct, kuiMF);
+    dequant_ihadamard_2x2_dc(pDct, kuiMF);
 }
 
 // ============================================================================
@@ -379,7 +378,7 @@ pub fn WelsEncRecI16x16Y(
     let pMF = &g_kiQuantMF[uiQp as usize];
     let pFF = get_quant_intra_ff(uiQp as usize);
 
-    let encView = crate::encoder::svc_encode_slice::layer_enc_view_expect(&*pCurDqLayer);
+    let encView = layer_enc_view_expect(&*pCurDqLayer);
     let pEncCur = pMbCache.SPicData.mb_cursor_ro(encView, 0);
     WelsDctMb(
         &mut pMbCache.sCoeffLevel,
@@ -500,7 +499,7 @@ pub fn WelsEncRecI4x4Y(
     let uiOffset = g_kuiMbCountScan4Idx[uiI4x4Idx as usize] as usize;
     // Source plane through the frame's read-only view, prediction scratch
     // through its own owned `[u8; 2*16]`. Stride 4 is the blk4 scratch's geometry.
-    let encView = crate::encoder::svc_encode_slice::layer_enc_view_expect(&*pCurDqLayer);
+    let encView = layer_enc_view_expect(&*pCurDqLayer);
     let pEncMb = pMbCache.SPicData.mb_cursor_ro(encView, 0);
     let pBestPred = RecCursor::over_owned(
         &mut pMbCache.sMemPredBlk4,
@@ -821,7 +820,7 @@ pub fn WelsTryPUVskip(
 ) -> bool {
     let kiResOff = if iUV == 1 { 256usize } else { 256 + 64 };
 
-    let chroma_qp_index_offset = if let Some(pps) = crate::encoder::svc_encode_slice::layer_pps_ref(
+    let chroma_qp_index_offset = if let Some(pps) = layer_pps_ref(
         pEncCtx,
         current_layer_expect(pEncCtx),
     ) {

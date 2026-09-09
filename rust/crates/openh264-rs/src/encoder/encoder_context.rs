@@ -189,7 +189,7 @@ impl SPicData {
     #[inline]
     pub fn mb_cursor_rec<'a>(
         &self,
-        view: &'a crate::encoder::rec_view::RecPicView,
+        view: &'a RecPicView,
         plane: usize,
     ) -> crate::encoder::rec_view::RecCursor<'a> {
         let (x, y) = if plane == 0 { self.luma_origin() } else { self.chroma_origin() };
@@ -1250,7 +1250,7 @@ pub struct sWelsEncCtx {
     /// nothing permutes it, so a position is a stable identity.
     ///
     /// **`None` is "no layer is current"**.
-    pub iCurDqLayer: Option<crate::encoder::svc_encode_slice::LayerIdx>,
+    pub iCurDqLayer: Option<LayerIdx>,
     /// One DQ layer per dependency layer. `None` before `InitDqLayers` fills the
     /// slot.
     pub ppDqLayerList: Vec<Option<Box<SDqLayer>>>,
@@ -1653,13 +1653,13 @@ pub fn InitFunctionPointers(
     crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(&mut *fl, _uiCpuFlag);
 
     /* ME func */
-    crate::encoder::svc_motion_estimate::WelsInitMeFunc(&mut *fl, _uiCpuFlag, bScreenContent);
+    WelsInitMeFunc(&mut *fl, _uiCpuFlag, bScreenContent);
 
     /* sad, satd, average */
-    crate::encoder::sample::WelsInitSampleSadFunc(&mut *fl, _uiCpuFlag);
+    WelsInitSampleSadFunc(&mut *fl, _uiCpuFlag);
 
     WelsInitBGDFunc(&mut *fl, kbEnableBackgroundDetection);
-    crate::encoder::svc_mode_decision::WelsInitSCDPskipFunc(
+    WelsInitSCDPskipFunc(
         &mut *fl,
         bScreenContent
             && kbEnableSceneChangeDetect
@@ -1668,27 +1668,27 @@ pub fn InitFunctionPointers(
     );
 
     // for pfGetVarianceFromIntraVaa function ptr adaptive by CPU features
-    crate::encoder::md::InitIntraAnalysisVaaInfo(&mut *fl, _uiCpuFlag);
+    InitIntraAnalysisVaaInfo(&mut *fl, _uiCpuFlag);
 
     /* Motion compensation */
-    crate::common::mc::InitMcFunc(&mut fl.sMcFuncs, _uiCpuFlag);
+    InitMcFunc(&mut fl.sMcFuncs, _uiCpuFlag);
     InitCoeffFunc(&mut *fl, _uiCpuFlag, kiEntropyCodingModeFlag);
 
-    crate::encoder::encode_mb_aux::WelsInitEncodingFuncs(&mut *fl, _uiCpuFlag);
-    crate::encoder::decode_mb_aux::WelsInitReconstructionFuncs(&mut *fl, _uiCpuFlag);
+    WelsInitEncodingFuncs(&mut *fl, _uiCpuFlag);
+    WelsInitReconstructionFuncs(&mut *fl, _uiCpuFlag);
 
     // C++ does NOT set pfInterMd here. It is assigned per-slice in
     // svc_encode_slice.cpp:733/736 to WelsMdInterMbEnhancelayer or WelsMdInterMb
     // depending on kbBaseAvail && kbHighestSpatial.
 
-    crate::encoder::deblocking::DeblockingInit(&mut fl.pfDeblocking, _uiCpuFlag as i32);
+    DeblockingInit(&mut fl.pfDeblocking, _uiCpuFlag as i32);
 
     crate::encoder::rc::WelsRcInitFuncPointers(
         &mut fl.pfRc,
         kiRCMode,
     );
 
-    crate::encoder::md::InitFillNeighborCacheInterFunc(
+    InitFillNeighborCacheInterFunc(
         &mut *fl,
         kbEnableBackgroundDetection as i32,
     );
@@ -1725,7 +1725,7 @@ fn InitCoeffFunc(
     _uiCpuFlag: u32,
     iEntropyCodingModeFlag: i32,
 ) {
-    pFuncList.pfCavlcParamCal = crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c;
+    pFuncList.pfCavlcParamCal = CavlcParamCal_c;
     pFuncList.eEntropyCoder = EntropyCoder::from_flag(iEntropyCodingModeFlag);
 }
 
@@ -1734,7 +1734,7 @@ pub fn UpdateFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
     if pEncCtx.param_opt().is_none() {
         return;
     }
-    let Some(kpSps) = crate::encoder::svc_encode_slice::ctx_sps_ref(pEncCtx) else {
+    let Some(kpSps) = ctx_sps_ref(pEncCtx) else {
         return;
     };
     let max_frame_num_minus1 = (1 << kpSps.uiLog2MaxFrameNum) - 1;
@@ -1763,7 +1763,7 @@ pub fn LoadBackFrameNum(pEncCtx: &mut sWelsEncCtx, kiDidx: i32) {
     if pEncCtx.param_opt().is_none() {
         return;
     }
-    let Some(kpSps) = crate::encoder::svc_encode_slice::ctx_sps_ref(pEncCtx) else {
+    let Some(kpSps) = ctx_sps_ref(pEncCtx) else {
         return;
     };
     let max_frame_num_minus1 = (1 << kpSps.uiLog2MaxFrameNum) - 1;
@@ -1795,7 +1795,7 @@ pub fn InitBitStream(pEncCtx: &mut sWelsEncCtx) {
     pOut.iNalIndex = 0;
     pOut.iLayerBsIndex = 0;
 
-    pOut.sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
+    pOut.sBsWrite = BsWriter::new();
     pEncCtx.iPosBsBuffer = 0;
 }
 
@@ -1808,7 +1808,7 @@ pub fn InitFrameCoding(
     if pEncCtx.param_opt().is_none() {
         return;
     }
-    let Some(kpSps) = crate::encoder::svc_encode_slice::ctx_sps_ref(pEncCtx) else {
+    let Some(kpSps) = ctx_sps_ref(pEncCtx) else {
         return;
     };
     let max_poc_boundary = (1 << kpSps.iLog2MaxPocLsb) - 2;
@@ -2393,7 +2393,7 @@ mod tests {
                 },
             ),
             ("iCurDqLayer", built.iCurDqLayer.is_none(), {
-                let v: Option<crate::encoder::svc_encode_slice::LayerIdx> =
+                let v: Option<LayerIdx> =
                     shell_field!(iCurDqLayer);
                 v.is_none()
             }),
@@ -2564,6 +2564,18 @@ mod tests {
 
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3};
+use crate::common::mc::InitMcFunc;
+use crate::encoder::deblocking::DeblockingInit;
+use crate::encoder::decode_mb_aux::WelsInitReconstructionFuncs;
+use crate::encoder::encode_mb_aux::WelsInitEncodingFuncs;
+use crate::encoder::md::{InitFillNeighborCacheInterFunc, InitIntraAnalysisVaaInfo};
+use crate::encoder::rec_view::RecPicView;
+use crate::encoder::sample::WelsInitSampleSadFunc;
+use crate::encoder::svc_encode_slice::{LayerIdx, ctx_sps_ref};
+use crate::encoder::svc_mode_decision::WelsInitSCDPskipFunc;
+use crate::encoder::svc_motion_estimate::WelsInitMeFunc;
+use crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c;
+use crate::encoder::vlc_encoder::BsWriter;
 
 
 

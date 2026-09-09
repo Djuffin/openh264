@@ -23,6 +23,7 @@ use crate::common::mc::{
     ver_shaped, McLeaves, WelsClip1,
 };
 use crate::safe::plane::{BlockRows, PlaneCursorMut, RefSamples};
+use crate::common::mc::mc_luma_with;
 
 // ============================================================================
 // Block shapes
@@ -642,7 +643,7 @@ pub fn mc_luma<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    crate::common::mc::mc_luma_with::<WideLeaves, S>(src, dst, mv_x, mv_y, width, height)
+    mc_luma_with::<WideLeaves, S>(src, dst, mv_x, mv_y, width, height)
 }
 
 #[cfg(test)]

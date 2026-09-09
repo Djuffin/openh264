@@ -386,6 +386,10 @@ pub use crate::decoder::decoder_core::{
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterPSubMbTypeInfo, g_ksInterBSubMbTypeInfo};
 pub use crate::decoder::dec_golomb::{g_kuiPrefix8BitsTable};
 pub use crate::decoder::decode_slice::{g_kuiCache30ScanIdx, g_kuiCache48CountScan4Idx, g_kuiDequantCoeff, g_kuiScan4, g_kuiScan8};
+use crate::decoder::dec_golomb::{BsGetOneBit, BsGetSe, BsGetTe0, BsGetUe};
+use crate::decoder::mv_pred::{FillSpatialDirect8x8Mv, FillTemporalDirect8x8Mv, MapColToList0, PredBDirectTemporal, PredInter16x8Mv, PredInter8x16Mv, PredMv, PredMvBDirectSpatial, SubMbType, Update8x8RefIdx, UpdateP16x16MotionInfo, UpdateP16x8MotionInfo, UpdateP8x16MotionInfo};
+use crate::decoder::parse_mb_syn_cabac::g_kuiDequantCoeff8x8;
+use crate::decoder::slice::EWelsSliceType;
 
 #[inline(always)]
 pub fn POP_BUFFER(pBitsCache: &mut SReadBitsCache<'_>, iCount: u32) {
@@ -724,7 +728,7 @@ pub fn WelsFillCacheInterCabac(
 
     let pSlice = &dq.sLayerInfo.sSliceInLayer;
     let pSliceHeader = &pSlice.sSliceHeaderExt.sSliceHeader;
-    let listCount = if pSliceHeader.eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE {
+    let listCount = if pSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
         2
     } else {
         1
@@ -885,7 +889,7 @@ pub fn WelsFillCacheInter(
 
     let pSlice = &dq.sLayerInfo.sSliceInLayer;
     let pSliceHeader = &pSlice.sSliceHeaderExt.sSliceHeader;
-    let listCount = if pSliceHeader.eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE {
+    let listCount = if pSliceHeader.eSliceType == EWelsSliceType::B_SLICE {
         2
     } else {
         1
@@ -1023,14 +1027,14 @@ pub fn ParseInterInfo(
         MB_TYPE_16x16 => {
             let mut iRefIdx: i32;
             if bAdaptiveMotionPredFlag {
-                let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
+                let ret = BsGetOneBit(buf, pBs, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
                 iMotionPredFlag[0] = uiCode;
             }
             if iMotionPredFlag[0] == 0 {
-                let ret = crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
+                let ret = BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
                 if ret != 0 {
                     return ret;
                 }
@@ -1052,25 +1056,25 @@ pub fn ParseInterInfo(
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
             }
             let mut iMv = [0i16; 2];
-            crate::decoder::mv_pred::PredMv(&*iMvArray, &*iRefIdxArray, 0, 0, 4, iRefIdx as i8, &mut iMv);
+            PredMv(&*iMvArray, &*iRefIdxArray, 0, 0, 4, iRefIdx as i8, &mut iMv);
 
-            let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+            let ret = BsGetSe(buf, pBs, &mut iCode);
             if ret != 0 {
                 return ret;
             }
             iMv[0] = iMv[0].wrapping_add(iCode as i16);
-            let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+            let ret = BsGetSe(buf, pBs, &mut iCode);
             if ret != 0 {
                 return ret;
             }
             iMv[1] = iMv[1].wrapping_add(iCode as i16);
-            crate::decoder::mv_pred::UpdateP16x16MotionInfo(&mut *pCurDqLayer, Some(&mut *pDec), 0, iRefIdx as i8, &iMv);
+            UpdateP16x16MotionInfo(&mut *pCurDqLayer, Some(&mut *pDec), 0, iRefIdx as i8, &iMv);
         }
         MB_TYPE_16x8 => {
             let mut iRefIdx = [0i32; 2];
             for i in 0..2 {
                 if bAdaptiveMotionPredFlag {
-                    let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
+                    let ret = BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
                         return ret as i32;
                     }
@@ -1081,7 +1085,7 @@ pub fn ParseInterInfo(
                 if iMotionPredFlag[i] != 0 {
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
                 }
-                let ret = crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
+                let ret = BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
                 if ret != 0 {
                     return ret;
                 }
@@ -1102,19 +1106,19 @@ pub fn ParseInterInfo(
             }
             for i in 0..2 {
                 let mut iMv = [0i16; 2];
-                crate::decoder::mv_pred::PredInter16x8Mv(&*iMvArray, &*iRefIdxArray, 0, i << 3, iRefIdx[i] as i8, &mut iMv);
+                PredInter16x8Mv(&*iMvArray, &*iRefIdxArray, 0, i << 3, iRefIdx[i] as i8, &mut iMv);
 
-                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                let ret = BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
                 iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                let ret = BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
-                crate::decoder::mv_pred::UpdateP16x8MotionInfo(
+                UpdateP16x8MotionInfo(
                     &mut *pCurDqLayer,
                     Some(&mut *pDec),
                     iMvArray,
@@ -1130,7 +1134,7 @@ pub fn ParseInterInfo(
             let mut iRefIdx = [0i32; 2];
             for i in 0..2 {
                 if bAdaptiveMotionPredFlag {
-                    let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
+                    let ret = BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
                         return ret as i32;
                     }
@@ -1139,7 +1143,7 @@ pub fn ParseInterInfo(
             }
             for i in 0..2 {
                 if iMotionPredFlag[i] == 0 {
-                    let ret = crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
+                    let ret = BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
                     if ret != 0 {
                         return ret;
                     }
@@ -1163,19 +1167,19 @@ pub fn ParseInterInfo(
             }
             for i in 0..2 {
                 let mut iMv = [0i16; 2];
-                crate::decoder::mv_pred::PredInter8x16Mv(&*iMvArray, &*iRefIdxArray, 0, i << 2, iRefIdx[i] as i8, &mut iMv);
+                PredInter8x16Mv(&*iMvArray, &*iRefIdxArray, 0, i << 2, iRefIdx[i] as i8, &mut iMv);
 
-                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                let ret = BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
                 iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                let ret = BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
                 iMv[1] = iMv[1].wrapping_add(iCode as i16);
-                crate::decoder::mv_pred::UpdateP8x16MotionInfo(
+                UpdateP8x16MotionInfo(
                     &mut *pCurDqLayer,
                     Some(&mut *pDec),
                     iMvArray,
@@ -1202,7 +1206,7 @@ pub fn ParseInterInfo(
                 pCurDqLayer.grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy);
 
             for i in 0..4 {
-                let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
+                let ret = BsGetUe(buf, pBs, &mut uiCode);
                 if ret != 0 {
                     return ret as i32;
                 }
@@ -1219,7 +1223,7 @@ pub fn ParseInterInfo(
 
             if bAdaptiveMotionPredFlag {
                 for i in 0..4 {
-                    let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
+                    let ret = BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
                         return ret as i32;
                     }
@@ -1236,7 +1240,7 @@ pub fn ParseInterInfo(
                     let uiScan4Idx = g_kuiScan4[iIndex8 as usize] as usize;
 
                     if iMotionPredFlag[i] == 0 {
-                        let ret = crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
+                        let ret = BsGetTe0(buf, pBs, iRefCount[0], &mut uiCode);
                         if ret != 0 {
                             return ret;
                         }
@@ -1283,14 +1287,14 @@ pub fn ParseInterInfo(
                     let uiScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
                     let uiCacheIdx = g_kuiCache30ScanIdx[iPartIdx as usize] as usize;
                     let mut iMv = [0i16; 2];
-                    crate::decoder::mv_pred::PredMv(&*iMvArray, &*iRefIdxArray, 0, iPartIdx as usize, iBlockWidth as usize, iRefIdx[i] as i8, &mut iMv);
+                    PredMv(&*iMvArray, &*iRefIdxArray, 0, iPartIdx as usize, iBlockWidth as usize, iRefIdx[i] as i8, &mut iMv);
 
-                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                    let ret = BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
                     iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                    let ret = BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
@@ -1404,10 +1408,10 @@ pub fn ParseInterBInfo(
     let mbType = *pDec.pMbType.get(iMbXy);
     if IS_DIRECT(mbType) {
         let mut pMvDirect = [[0i16; 2]; LIST_A];
-        let mut subMbType: crate::decoder::mv_pred::SubMbType = 0;
+        let mut subMbType: SubMbType = 0;
         if iDirectSpatialMvPredFlag != 0 {
             // predict direct spatial mv
-            let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
+            let ret = PredMvBDirectSpatial(
                 pCtx, &mut *pCurDqLayer,
                 pDec,
                 pRefs,
@@ -1420,7 +1424,7 @@ pub fn ParseInterBInfo(
             }
         } else {
             // temporal direct 16x16 mode
-            let ret = crate::decoder::mv_pred::PredBDirectTemporal(
+            let ret = PredBDirectTemporal(
                 pCtx, &mut *pCurDqLayer,
                 pDec,
                 pRefs,
@@ -1436,7 +1440,7 @@ pub fn ParseInterBInfo(
         if bAdaptiveMotionPredFlag {
             for listIdx in LIST_0..LIST_A {
                 if IS_DIR(mbType, 0, listIdx) {
-                    let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
+                    let ret = BsGetOneBit(buf, pBs, &mut uiCode);
                     if ret != 0 {
                         return ret as i32;
                     }
@@ -1447,7 +1451,7 @@ pub fn ParseInterBInfo(
         for listIdx in LIST_0..LIST_A {
             if IS_DIR(mbType, 0, listIdx) {
                 if iMotionPredFlag[listIdx][0] == 0 {
-                    let ret = crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[listIdx], &mut uiCode);
+                    let ret = BsGetTe0(buf, pBs, iRefCount[listIdx], &mut uiCode);
                     if ret != 0 {
                         return ret;
                     }
@@ -1462,7 +1466,7 @@ pub fn ParseInterBInfo(
         }
         for listIdx in LIST_0..LIST_A {
             if IS_DIR(mbType, 0, listIdx) {
-                crate::decoder::mv_pred::PredMv(
+                PredMv(
                     &*iMvArray,
                     &*iRefIdxArray,
                     listIdx,
@@ -1471,12 +1475,12 @@ pub fn ParseInterBInfo(
                     ref_idx_list[listIdx][0],
                     &mut iMv,
                 );
-                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                let ret = BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
                 iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                let ret = BsGetSe(buf, pBs, &mut iCode);
                 if ret != 0 {
                     return ret;
                 }
@@ -1485,7 +1489,7 @@ pub fn ParseInterBInfo(
                 iMv[0] = 0;
                 iMv[1] = 0;
             }
-            crate::decoder::mv_pred::UpdateP16x16MotionInfo(
+            UpdateP16x16MotionInfo(
                 &mut *pCurDqLayer,
                 Some(&mut *pDec),
                 listIdx,
@@ -1498,7 +1502,7 @@ pub fn ParseInterBInfo(
             for listIdx in LIST_0..LIST_A {
                 for i in 0..2usize {
                     if IS_DIR(mbType, i, listIdx) {
-                        let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
+                        let ret = BsGetOneBit(buf, pBs, &mut uiCode);
                         if ret != 0 {
                             return ret as i32;
                         }
@@ -1512,7 +1516,7 @@ pub fn ParseInterBInfo(
                 if IS_DIR(mbType, i, listIdx) {
                     if iMotionPredFlag[listIdx][i] == 0 {
                         let ret =
-                            crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[listIdx], &mut uiCode);
+                            BsGetTe0(buf, pBs, iRefCount[listIdx], &mut uiCode);
                         if ret != 0 {
                             return ret;
                         }
@@ -1532,7 +1536,7 @@ pub fn ParseInterBInfo(
                 let iPartIdx = (i << 3) as i32;
                 let iRefIdx = ref_idx_list[listIdx][i];
                 if IS_DIR(mbType, i, listIdx) {
-                    crate::decoder::mv_pred::PredInter16x8Mv(
+                    PredInter16x8Mv(
                         &*iMvArray,
                         &*iRefIdxArray,
                         listIdx,
@@ -1540,12 +1544,12 @@ pub fn ParseInterBInfo(
                         iRefIdx,
                         &mut iMv,
                     );
-                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                    let ret = BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
                     iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                    let ret = BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
@@ -1554,7 +1558,7 @@ pub fn ParseInterBInfo(
                     iMv[0] = 0;
                     iMv[1] = 0;
                 }
-                crate::decoder::mv_pred::UpdateP16x8MotionInfo(
+                UpdateP16x8MotionInfo(
                     &mut *pCurDqLayer,
                     Some(&mut *pDec),
                     iMvArray,
@@ -1571,7 +1575,7 @@ pub fn ParseInterBInfo(
             for listIdx in LIST_0..LIST_A {
                 for i in 0..2usize {
                     if IS_DIR(mbType, i, listIdx) {
-                        let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
+                        let ret = BsGetOneBit(buf, pBs, &mut uiCode);
                         if ret != 0 {
                             return ret as i32;
                         }
@@ -1585,7 +1589,7 @@ pub fn ParseInterBInfo(
                 if IS_DIR(mbType, i, listIdx) {
                     if iMotionPredFlag[listIdx][i] == 0 {
                         let ret =
-                            crate::decoder::dec_golomb::BsGetTe0(buf, pBs, iRefCount[listIdx], &mut uiCode);
+                            BsGetTe0(buf, pBs, iRefCount[listIdx], &mut uiCode);
                         if ret != 0 {
                             return ret;
                         }
@@ -1603,7 +1607,7 @@ pub fn ParseInterBInfo(
                 let iPartIdx = (i << 2) as i32;
                 let iRefIdx = ref_idx_list[listIdx][i];
                 if IS_DIR(mbType, i, listIdx) {
-                    crate::decoder::mv_pred::PredInter8x16Mv(
+                    PredInter8x16Mv(
                         &*iMvArray,
                         &*iRefIdxArray,
                         listIdx,
@@ -1611,12 +1615,12 @@ pub fn ParseInterBInfo(
                         iRefIdx,
                         &mut iMv,
                     );
-                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                    let ret = BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
                     iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                    let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                    let ret = BsGetSe(buf, pBs, &mut iCode);
                     if ret != 0 {
                         return ret;
                     }
@@ -1625,7 +1629,7 @@ pub fn ParseInterBInfo(
                     iMv[0] = 0;
                     iMv[1] = 0;
                 }
-                crate::decoder::mv_pred::UpdateP8x16MotionInfo(
+                UpdateP8x16MotionInfo(
                     &mut *pCurDqLayer,
                     Some(&mut *pDec),
                     iMvArray,
@@ -1654,11 +1658,11 @@ pub fn ParseInterBInfo(
             pCtx.sRefPic.uiRefCount[LIST_0] as i32,
         );
         let mut has_direct_called = false;
-        let mut directSubMbType: crate::decoder::mv_pred::SubMbType = 0;
+        let mut directSubMbType: SubMbType = 0;
 
         // uiSubMbType, partition
         for i in 0..4usize {
-            let ret = crate::decoder::dec_golomb::BsGetUe(buf, pBs, &mut uiCode);
+            let ret = BsGetUe(buf, pBs, &mut uiCode);
             if ret != 0 {
                 return ret as i32;
             }
@@ -1679,7 +1683,7 @@ pub fn ParseInterBInfo(
             if IS_DIRECT(g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType) {
                 if !has_direct_called {
                     if iDirectSpatialMvPredFlag != 0 {
-                        let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
+                        let ret = PredMvBDirectSpatial(
                             pCtx, &mut *pCurDqLayer,
                             pDec,
                             pRefs,
@@ -1692,7 +1696,7 @@ pub fn ParseInterBInfo(
                         }
                     } else {
                         // temporal direct mode
-                        let ret = crate::decoder::mv_pred::PredBDirectTemporal(
+                        let ret = PredBDirectTemporal(
                             pCtx, &mut *pCurDqLayer,
                             pDec,
                             pRefs,
@@ -1723,7 +1727,7 @@ pub fn ParseInterBInfo(
                 for i in 0..4usize {
                     let is_dir = IS_DIR(pSubMbType[i], 0, listIdx);
                     if is_dir {
-                        let ret = crate::decoder::dec_golomb::BsGetOneBit(buf, pBs, &mut uiCode);
+                        let ret = BsGetOneBit(buf, pBs, &mut uiCode);
                         if ret != 0 {
                             return ret as i32;
                         }
@@ -1737,7 +1741,7 @@ pub fn ParseInterBInfo(
             let iIdx8 = (i << 2) as i16;
             if IS_DIRECT(pSubMbType[i]) {
                 if iDirectSpatialMvPredFlag != 0 {
-                    crate::decoder::mv_pred::FillSpatialDirect8x8Mv(
+                    FillSpatialDirect8x8Mv(
                         &mut *pCurDqLayer,
                         Some(&mut *pDec),
                         iIdx8,
@@ -1760,7 +1764,7 @@ pub fn ParseInterBInfo(
                         iRef[LIST_0] = 0;
                         let colocRefIndexL0 = pCurDqLayer.iColocRefIndex[LIST_0][uiColoc4Idx];
                         if colocRefIndexL0 >= 0 {
-                            iRef[LIST_0] = crate::decoder::mv_pred::MapColToList0(
+                            iRef[LIST_0] = MapColToList0(
                                 pCtx,
                                 pRefs,
                                 Some(&*pDec),
@@ -1771,21 +1775,21 @@ pub fn ParseInterBInfo(
                             colocList = LIST_1;
                         }
                     }
-                    crate::decoder::mv_pred::Update8x8RefIdx(
+                    Update8x8RefIdx(
                         &mut *pCurDqLayer,
                         &mut *pDec,
                         iIdx8,
                         LIST_0,
                         iRef[LIST_0],
                     );
-                    crate::decoder::mv_pred::Update8x8RefIdx(
+                    Update8x8RefIdx(
                         &mut *pCurDqLayer,
                         &mut *pDec,
                         iIdx8,
                         LIST_1,
                         iRef[LIST_1],
                     );
-                    crate::decoder::mv_pred::FillTemporalDirect8x8Mv(
+                    FillTemporalDirect8x8Mv(
                         &mut *pCurDqLayer,
                         Some(&mut *pDec),
                         iIdx8,
@@ -1809,7 +1813,7 @@ pub fn ParseInterBInfo(
                 let mut iref: i8 = REF_NOT_IN_LIST;
                 if IS_DIRECT(subMbType) {
                     if iDirectSpatialMvPredFlag != 0 {
-                        crate::decoder::mv_pred::Update8x8RefIdx(
+                        Update8x8RefIdx(
                             &mut *pCurDqLayer,
                             &mut *pDec,
                             iIdx8,
@@ -1821,7 +1825,7 @@ pub fn ParseInterBInfo(
                 } else {
                     if IS_DIR(subMbType, 0, listIdx) {
                         if iMotionPredFlag[listIdx][i] == 0 {
-                            let ret = crate::decoder::dec_golomb::BsGetTe0(
+                            let ret = BsGetTe0(
                                 buf,
                                 pBs,
                                 iRefCount[listIdx],
@@ -1836,7 +1840,7 @@ pub fn ParseInterBInfo(
                             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
                         }
                     }
-                    crate::decoder::mv_pred::Update8x8RefIdx(
+                    Update8x8RefIdx(
                         &mut *pCurDqLayer,
                         &mut *pDec,
                         iIdx8,
@@ -1871,7 +1875,7 @@ pub fn ParseInterBInfo(
                     let uiScan4Idx = g_kuiScan4[iPartIdx] as usize;
                     let uiCacheIdx = g_kuiCache30ScanIdx[iPartIdx] as usize;
                     if is_dir {
-                        crate::decoder::mv_pred::PredMv(
+                        PredMv(
                             &*iMvArray,
                             &*iRefIdxArray,
                             listIdx,
@@ -1880,12 +1884,12 @@ pub fn ParseInterBInfo(
                             iref,
                             &mut iMv,
                         );
-                        let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                        let ret = BsGetSe(buf, pBs, &mut iCode);
                         if ret != 0 {
                             return ret;
                         }
                         iMv[0] = iMv[0].wrapping_add(iCode as i16);
-                        let ret = crate::decoder::dec_golomb::BsGetSe(buf, pBs, &mut iCode);
+                        let ret = BsGetSe(buf, pBs, &mut iCode);
                         if ret != 0 {
                             return ret;
                         }
@@ -2712,7 +2716,7 @@ pub fn WelsResidualBlockCavlc8x8(
     let kpDequantCoeff: &[u16] = if pCtx.bUseScalingList && pCtx.bDequantCoeff4x4Init {
         &pCtx.pDequant_coeff_buffer8x8[(iMbResProperty - 6) as usize][uiQp as usize][..]
     } else {
-        &crate::decoder::parse_mb_syn_cabac::g_kuiDequantCoeff8x8[uiQp as usize][..]
+        &g_kuiDequantCoeff8x8[uiQp as usize][..]
     };
 
     let mut uiTotalCoeff: u8 = 0;

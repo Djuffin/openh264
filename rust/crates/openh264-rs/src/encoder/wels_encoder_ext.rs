@@ -47,8 +47,7 @@ use crate::encoder::au_set::{
     WelsBitRateVerification, WelsCheckRefFrameLimitationLevelIdcFirst,
     WelsCheckRefFrameLimitationNumRefFirst,
 };
-use crate::encoder::param_svc::GetLogFactor;
-use crate::encoder::param_svc::SExistingParasetList;
+use crate::encoder::param_svc::{GetLogFactor, SExistingParasetList};
 use crate::encoder::svc_motion_estimate::CheckInRangeCloseOpen;
 use crate::encoder::encoder_context::{
     SParaSetOffsetVariable, MAX_DQ_LAYER_NUM,
@@ -332,15 +331,15 @@ pub use crate::encoder::rc::SWelsSvcRc;
 /// `WelsWriteOneSPS` — encoder_ext.cpp:2831.
 pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32) -> i32 {
     let iNal = pCtx.out().iNalIndex;
-    crate::encoder::nal_encap::WelsLoadNal(
+    WelsLoadNal(
         pCtx.out_mut(),
-        crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_SPS as i32,
+        EWelsNalUnitType::NAL_UNIT_SPS as i32,
         NRI_PRI_HIGHEST as i32,
     );
 
     let sSps = pCtx.sps_array()[kiSpsIdx as usize];
     {
-        let (strategy, pOut) = crate::encoder::paraset_strategy::ctx_strategy_and_out(pCtx);
+        let (strategy, pOut) = ctx_strategy_and_out(pCtx);
         let pSpsIdOffsetList = strategy.GetSpsIdOffsetList(PARA_SET_TYPE_AVCSPS as i32);
         WelsWriteSpsNal(
             &mut pOut.sBsBuffer[..],
@@ -349,13 +348,13 @@ pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32
             pSpsIdOffsetList,
         );
     }
-    crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
+    WelsUnloadNal(pCtx.out_mut());
 
     let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
     let kpOut = pOut.as_deref().expect("pOut lives");
     let kiPos = *iPosBsBuffer as usize;
     let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
-    let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
+    let iReturn = WelsEncodeNal(
         &kpOut.sNalList[iNal as usize],
         &kpOut.sBsBuffer[..],
         None,
@@ -374,15 +373,15 @@ pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32
 pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32) -> i32 {
     let iNal = pCtx.out().iNalIndex;
     /* generate picture parameter set */
-    crate::encoder::nal_encap::WelsLoadNal(
+    WelsLoadNal(
         pCtx.out_mut(),
-        crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_PPS as i32,
+        EWelsNalUnitType::NAL_UNIT_PPS as i32,
         NRI_PRI_HIGHEST as i32,
     );
 
     let sPps = pCtx.pps_array()[kiPpsIdx as usize];
     {
-        let (pStrategy, pOut) = crate::encoder::paraset_strategy::ctx_strategy_and_out(pCtx);
+        let (pStrategy, pOut) = ctx_strategy_and_out(pCtx);
         WelsWritePpsSyntax(
             &mut pOut.sBsBuffer[..],
             &sPps,
@@ -390,13 +389,13 @@ pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32
             pStrategy,
         );
     }
-    crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
+    WelsUnloadNal(pCtx.out_mut());
 
     let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
     let kpOut = pOut.as_deref().expect("pOut lives");
     let kiPos = *iPosBsBuffer as usize;
     let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
-    let iReturn = crate::encoder::nal_encap::WelsEncodeNal(
+    let iReturn = WelsEncodeNal(
         &kpOut.sNalList[iNal as usize],
         &kpOut.sBsBuffer[..],
         None,
@@ -462,15 +461,15 @@ pub fn WelsWriteParameterSets(
         iId = iIdx;
 
         /* generate Subset SPS */
-        crate::encoder::nal_encap::WelsLoadNal(
+        WelsLoadNal(
             pCtx.out_mut(),
-            crate::encoder::nal_encap::EWelsNalUnitType::NAL_UNIT_SUBSET_SPS as i32,
+            EWelsNalUnitType::NAL_UNIT_SUBSET_SPS as i32,
             NRI_PRI_HIGHEST as i32,
         );
 
         let sSubsetSps = pCtx.subset_array()[iId as usize];
         {
-            let (strategy, pOut) = crate::encoder::paraset_strategy::ctx_strategy_and_out(pCtx);
+            let (strategy, pOut) = ctx_strategy_and_out(pCtx);
             let pSpsIdOffsetList = strategy.GetSpsIdOffsetList(PARA_SET_TYPE_SUBSETSPS as i32);
             WelsWriteSubsetSpsSyntax(
                 &mut pOut.sBsBuffer[..],
@@ -479,13 +478,13 @@ pub fn WelsWriteParameterSets(
                 pSpsIdOffsetList,
             );
         }
-        crate::encoder::nal_encap::WelsUnloadNal(pCtx.out_mut());
+        WelsUnloadNal(pCtx.out_mut());
 
         let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
         let kpOut = pOut.as_deref().expect("pOut lives");
         let kiPos = *iPosBsBuffer as usize;
         let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
-        iReturn = crate::encoder::nal_encap::WelsEncodeNal(
+        iReturn = WelsEncodeNal(
             &kpOut.sNalList[iNal as usize],
             &kpOut.sBsBuffer[..],
             None,
@@ -506,7 +505,7 @@ pub fn WelsWriteParameterSets(
 
     {
         let (strategy, pps, pPpsNum) =
-            crate::encoder::paraset_strategy::ctx_strategy_and_pps(pCtx);
+            ctx_strategy_and_pps(pCtx);
         strategy.UpdatePpsList(pps, pPpsNum);
     }
 
@@ -543,7 +542,7 @@ pub fn WelsEncoderEncodeParameterSetsRust(
         pOut.iNalLenBase = 0;
         pLayerBsInfo.pNalLengthInByte = pOut.nal_len_ptr();
     }
-    pCtx.out_mut().sBsWrite = crate::encoder::vlc_encoder::BsWriter::new();
+    pCtx.out_mut().sBsWrite = BsWriter::new();
     pCtx.iPosBsBuffer = 0;
 
     let mut iCountNal = 0;
@@ -768,7 +767,7 @@ pub fn WelsEncoderParamAdjust(
 
         if iOldSpsPpsIdStrategy != CONSTANT_ID && pNewParam.eSpsPpsIdStrategy != CONSTANT_ID {
             let (strategy, pSpsArray, pSubsetArray, pPpsArray) =
-                crate::encoder::paraset_strategy::ctx_strategy_and_paraset_arrays(ctx);
+                ctx_strategy_and_paraset_arrays(ctx);
             strategy.OutputCurrentStructure(
                 &mut sTmpPsoVariable,
                 &mut iTmpPpsIdList,
@@ -1870,7 +1869,7 @@ impl CWelsH264SVCEncoder {
 
         let kiBeforeFrameUs = WelsTime();
         let kiEncoderReturn =
-            crate::encoder::encoder_ext::WelsEncoderEncodeExt(pCtx, pBsInfo, pSrcPic);
+            WelsEncoderEncodeExt(pCtx, pBsInfo, pSrcPic);
         let kiCurrentFrameMs = (WelsTime() - kiBeforeFrameUs) / 1000;
 
         if kiEncoderReturn == ENC_RETURN_MEMALLOCERR
@@ -2222,3 +2221,7 @@ impl Drop for CWelsH264SVCEncoder {
 }
 
 pub use crate::api::version::G_ST_CODEC_VERSION;
+use crate::encoder::encoder_ext::WelsEncoderEncodeExt;
+use crate::encoder::nal_encap::{EWelsNalUnitType, WelsEncodeNal, WelsLoadNal, WelsUnloadNal};
+use crate::encoder::paraset_strategy::{ctx_strategy_and_out, ctx_strategy_and_paraset_arrays, ctx_strategy_and_pps};
+use crate::encoder::vlc_encoder::BsWriter;

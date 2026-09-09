@@ -28,10 +28,9 @@ pub mod vaacalc;
 
 use adaptive_quantization::CAdaptiveQuantization;
 use background_detection::CBackgroundDetection;
-use complexity_analysis::CComplexityAnalysis;
+use complexity_analysis::{CComplexityAnalysis, CComplexityAnalysisScreen};
 use denoise::CDenoiser;
 use downsample::CDownsampling;
-use complexity_analysis::CComplexityAnalysisScreen;
 use scene_change_detection::{CSceneChangeDetection, CSceneChangeDetectionScreen};
 use scroll_detection::CScrollDetection;
 

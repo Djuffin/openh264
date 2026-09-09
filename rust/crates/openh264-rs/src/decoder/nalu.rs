@@ -32,7 +32,7 @@ use crate::decoder::parameter_sets::*;
 
 // Explicit imports to resolve glob ambiguities
 use crate::decoder::bit_stream::{BsReader, ERR_NONE, ERR_INVALID_PARAMETERS, ERR_INFO_OUT_OF_MEMORY};
-use crate::safe::bits::BsCursor;
+use crate::safe::bits::{BsCursor, BsWriter};
 
 use crate::decoder::dec_golomb::{BsGetOneBit, BsGetUe, BsGetSe, BsGetBits};
 use crate::decoder::decoder_context::{
@@ -116,6 +116,7 @@ pub const dsOutOfMemory: i32 = 0x4000;
 // (`decoder_context.h`: PPS = 1, SPS = 2, SUBSETSPS = 4).
 pub use crate::decoder::decoder_core::{OVERWRITE_NONE, OVERWRITE_PPS, OVERWRITE_SPS, OVERWRITE_SUBSETSPS};
 pub use crate::decoder::decode_slice::{g_kuiZigzagScan, g_kuiZigzagScan8x8};
+use crate::decoder::decoder_core::{WELS_LOG_ERROR, WELS_LOG_WARNING, WelsLog};
 
 pub const EXTENDED_SAR: u8 = 255;
 pub const NRI_PRI_LOWEST: u8 = 0;
@@ -555,7 +556,7 @@ fn parse_only_write_subset_sps(pSpsBs: &mut SSpsBsInfo, pSps: &SSps) -> bool {
     // four bytes are the writer's flush headroom, and it is a stack array here
     // because its lifetime is this function.
     let mut rbsp = [0u8; SPS_PPS_BS_SIZE + 4];
-    let mut bs = crate::safe::bits::BsWriter::new();
+    let mut bs = BsWriter::new();
     let buf = &mut rbsp[..];
 
     BsWriteBits(buf, &mut bs, 8, 77); // profile_idc, forced to Main
@@ -1849,9 +1850,9 @@ pub fn ParseSps(
     // ------------------------------------------------------------------
     if pCtx.pParam.bParseOnly {
         if kpSrcNal.len() >= SPS_PPS_BS_SIZE - 4 {
-            crate::decoder::decoder_core::WelsLog(
+            WelsLog(
                 pCtx.sLogCtx,
-                crate::decoder::decoder_core::WELS_LOG_WARNING,
+                WELS_LOG_WARNING,
                 &format!(
                     "sps payload size ({}) too large for parse only ({}), not supported!",
                     kpSrcNal.len(),
@@ -1872,9 +1873,9 @@ pub fn ParseSps(
                 None => true,
             };
             if !ok {
-                crate::decoder::decoder_core::WelsLog(
+                WelsLog(
                     pCtx.sLogCtx,
-                    crate::decoder::decoder_core::WELS_LOG_ERROR,
+                    WELS_LOG_ERROR,
                     "subset sps rewrite does not fit the parse-only buffer",
                 );
                 pCtx.iErrorCode |= dsOutOfMemory;
@@ -2107,9 +2108,9 @@ pub fn ParsePps(
     // the function as in the reference.
     if pCtx.pParam.bParseOnly {
         if kpSrcNal.len() >= SPS_PPS_BS_SIZE - 4 {
-            crate::decoder::decoder_core::WelsLog(
+            WelsLog(
                 pCtx.sLogCtx,
-                crate::decoder::decoder_core::WELS_LOG_WARNING,
+                WELS_LOG_WARNING,
                 &format!(
                     "pps payload size ({}) too large for parse only ({}), not supported!",
                     kpSrcNal.len(),

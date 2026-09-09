@@ -12,7 +12,7 @@ use crate::api::codec_api::SliceModeEnum::{
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::{RC_MODES, SSliceArgument};
 use crate::encoder::encoder_context::SLogContext;
-use crate::encoder::slice_multi_threading::DEFAULT_MAXPACKETSIZE_CONSTRAINT;
+use crate::encoder::slice_multi_threading::{DEFAULT_MAXPACKETSIZE_CONSTRAINT, fill_mb_map};
 use crate::encoder::svc_encode_slice::SDqLayer;
 use crate::encoder::rc::{
     WELS_DIV_ROUND, GOM_ROW_MODE0_180P, GOM_ROW_MODE0_360P, GOM_ROW_MODE0_720P, GOM_ROW_MODE0_90P,
@@ -22,6 +22,7 @@ use crate::encoder::slice_multi_threading::{DynamicDetectCpuCores, INT_MULTIPLY,
 use crate::encoder::wels_encoder_ext::{
     ENC_RETURN_SUCCESS, ENC_RETURN_UNSUPPORTED_PARA, MIN_NUM_MB_PER_SLICE,
 };
+use crate::decoder::decoder_core::WelsCPUFeatureDetect;
 
 /// `AVERSLICENUM_CONSTRAINT` — `svc_enc_slice_segment.h:63`; equal to
 /// `MAX_SLICES_NUM`. Used as the initial slice count in `SM_SIZELIMITED_SLICE`.
@@ -270,7 +271,7 @@ pub fn SliceArgumentValidationFixedSliceMode(
     pSliceArgument.uiSliceSizeConstraint = 0;
 
     if pSliceArgument.uiSliceNum == 0 {
-        crate::decoder::decoder_core::WelsCPUFeatureDetect(&mut iCpuCores);
+        WelsCPUFeatureDetect(&mut iCpuCores);
         if 0 == iCpuCores {
             // cpuid not supported, or doesn't expose the number of cores: use the
             // high-level system API to detect physical/logical processors
@@ -372,7 +373,7 @@ pub fn AssignMbMapMultipleSlices(
         while iSliceIdx < iSliceNum {
             let kiFirstMb = iSliceIdx * kiMbWidth;
             let map: &[AtomicU16] = &pSliceSeg.pOverallMbMap;
-            crate::encoder::slice_multi_threading::fill_mb_map(
+            fill_mb_map(
                 map,
                 kiFirstMb,
                 kiMbWidth,

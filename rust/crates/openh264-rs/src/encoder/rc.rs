@@ -47,9 +47,7 @@ use std::sync::atomic::Ordering;
 
 use crate::{RCMode, EUsageType};
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
-use crate::encoder::svc_encode_slice::layer_pps_ref;
-use crate::encoder::svc_encode_slice::ctx_pps_ref;
-use crate::encoder::svc_encode_slice::current_layer_expect;
+use crate::encoder::svc_encode_slice::{ctx_pps_ref, current_layer_expect, layer_pps_ref, slice_bs_writer_ref, slice_in_layer_mut};
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::SSpatialPicIndex;
 pub use crate::encoder::wels_preprocess::SAdaptiveQuantizationParam;
@@ -66,6 +64,8 @@ pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
+use crate::common::wels_trace::{WELS_LOG_DEBUG, WelsLog};
+use crate::encoder::vlc_encoder::BsWriter;
 
 // ============================================================================
 // Constants and Macros
@@ -502,7 +502,7 @@ impl SWelsRcFunc {
         pCtx: &sWelsEncCtx,
         pCurMb: &mut SMB,
         pSlice: &mut SSlice,
-        pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
+        pCtxOutBs: Option<&BsWriter>,
     ) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
@@ -523,7 +523,7 @@ impl SWelsRcFunc {
         pCurMb: &mut SMB,
         iCostLuma: i32,
         pSlice: &mut SSlice,
-        pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
+        pCtxOutBs: Option<&BsWriter>,
     ) {
         match self.eInstalledMode {
             RCMode::RC_OFF_MODE | RCMode::RC_BUFFERBASED_MODE => {
@@ -1161,7 +1161,7 @@ pub fn RcInitSliceInformation(pEncCtx: &mut sWelsEncCtx) {
     pWelsSvcRc.bGomRC = !(rc_mode == RCMode::RC_OFF_MODE || rc_mode == RCMode::RC_BUFFERBASED_MODE);
 
     for i in 0..kiSliceNum as usize {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, i as i32)
+        let pSlice = slice_in_layer_mut(pCurDq, i as i32)
             .expect("the layer's slice bank maps this slice index");
         let pSOverRc = &mut pSlice.sSlicingOverRc;
         pSOverRc.iTotalQpSlice = 0;
@@ -1296,7 +1296,7 @@ pub fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
 
     pWelsSvcRc.iAverageFrameQp = 0;
     for i in 0..kiSliceNum as usize {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, i as i32)
+        let pSlice = slice_in_layer_mut(pCurDq, i as i32)
             .expect("the layer's slice bank maps this slice index");
         let pSOverRc = &mut pSlice.sSlicingOverRc;
         pSOverRc.iComplexityIndexSlice = 0;
@@ -1801,7 +1801,7 @@ pub fn RcUpdatePictureQpBits(pEncCtx: &mut sWelsEncCtx, iCodedBits: i32) {
 
     if eSliceType as i32 == P_SLICE {
         for i in 0..iSliceNumInFrame as usize {
-            let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, i as i32)
+            let pSlice = slice_in_layer_mut(pCurDq, i as i32)
                 .expect("the layer's slice bank maps this slice index");
             let pSOverRc = &pSlice.sSlicingOverRc;
             iTotalQp += pSOverRc.iTotalQpSlice;
@@ -1904,17 +1904,17 @@ pub fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
     );
     let kiQStepRc = pEncCtx.rc_at(did).iQStep;
     let kLogCtx = pEncCtx.sLogCtx;
-    crate::common::wels_trace::WelsLog(
+    WelsLog(
         kLogCtx,
-        crate::common::wels_trace::WELS_LOG_DEBUG,
+        WELS_LOG_DEBUG,
         &format!(
             "RcUpdateFrameComplexity iFrameDqBits = {},iQStep= {},pWelsSvcRc->iQStep= {},pTOverRc->iLinearCmplx = {}",
             kiFrameDqBitsLog, iQStep, kiQStepRc, kiLinearCmplx
         ),
     );
-    crate::common::wels_trace::WelsLog(
+    WelsLog(
         kLogCtx,
-        crate::common::wels_trace::WELS_LOG_DEBUG,
+        WELS_LOG_DEBUG,
         &format!(
             "iFrameCmplxMean = {},iFrameComplexity = {}",
             kiFrameCmplxMean, iFrameComplexity
@@ -2072,7 +2072,7 @@ pub extern "C" fn WelsRcMbInitGom(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     pSlice: &mut SSlice,
-    pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
+    pCtxOutBs: Option<&BsWriter>,
 ) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = pEncCtx.rc_at(did);
@@ -2083,7 +2083,7 @@ pub extern "C" fn WelsRcMbInitGom(
         .uiChromaQpIndexOffset;
 
     pSOverRc.iBsPosSlice = pEncCtx.func_list().eEntropyCoder.GetBsPosition(
-        crate::encoder::svc_encode_slice::slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs),
+        slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs),
         &pSlice.sCabacCtx,
     );
 
@@ -2127,12 +2127,12 @@ pub extern "C" fn WelsRcMbInfoUpdateGom(
     pCurMb: &mut SMB,
     _iCostLuma: i32,
     pSlice: &mut SSlice,
-    pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
+    pCtxOutBs: Option<&BsWriter>,
 ) {
     let pSOverRc = &mut pSlice.sSlicingOverRc;
 
     let cur_bs = pEncCtx.func_list().eEntropyCoder.GetBsPosition(
-        crate::encoder::svc_encode_slice::slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs),
+        slice_bs_writer_ref(&pSlice.sSliceBs, pCtxOutBs),
         &pSlice.sCabacCtx,
     );
     let iCurMbBits = cur_bs - pSOverRc.iBsPosSlice;
@@ -2180,7 +2180,7 @@ pub extern "C" fn WelsRcMbInitDisable(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     _pSlice: &mut SSlice,
-    _pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
+    _pCtxOutBs: Option<&BsWriter>,
 ) {
     let mut iLumaQp = pEncCtx.iGlobalQp;
     let did = pEncCtx.uiDependencyId as usize;
@@ -2215,7 +2215,7 @@ pub extern "C" fn WelsRcMbInfoUpdateDisable(
     _pCurMb: &mut SMB,
     _iCostLuma: i32,
     _pSlice: &mut SSlice,
-    _pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
+    _pCtxOutBs: Option<&BsWriter>,
 ) {}
 
 pub extern "C" fn WelRcPictureInitBufferBasedQp(

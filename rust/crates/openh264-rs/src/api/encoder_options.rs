@@ -42,6 +42,7 @@ use crate::encoder::wels_encoder_ext::{
     WelsEncoderParamAdjust, MAX_BIT_RATE, MAX_DEPENDENCY_LAYER, MAX_FRAME_RATE, MIN_BIT_RATE,
     MIN_FRAME_RATE,
 };
+use crate::api::codec_api::TraceUserCtx;
 
 impl CWelsH264SVCEncoder {
     #[allow(unsafe_code)]
@@ -488,7 +489,7 @@ impl CWelsH264SVCEncoder {
                     // is replaced and handed back to the callback untouched. Never
                     // dereferenced by this crate.
                     let ctx = pOption.cast::<*mut c_void>().read();
-                    self.m_pWelsTrace.SetTraceCallbackContext(crate::api::codec_api::TraceUserCtx::from_abi(ctx));
+                    self.m_pWelsTrace.SetTraceCallbackContext(TraceUserCtx::from_abi(ctx));
                     self.sync_log_ctx();
                 }
                 // C++ ends with `default: return cmInitParaError`. There is no

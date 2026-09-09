@@ -14,7 +14,11 @@
 
 use std::ffi::{c_char, c_long, c_void};
 use std::ptr;
-use crate::decoder::decoder_context::slice_header_of;
+use crate::decoder::decoder_context::{parser_bs, pic_pool_ptr, prev_dpb_id, prev_dpb_pic_mut, slice_header_of};
+use crate::decoder::decoder_core::{ERR_NONE, OutputStatisticsLog, ResetDecStatNums, WelsDecoderLastDecPicInfoDefaults, WelsDecoderSpsPpsDefaults, WelsInitStaticMemory};
+use crate::decoder::nalu::{EWelsNalUnitType, IS_PARAM_SETS_NALS};
+use crate::decoder::pic_queue::SPicBuff;
+use crate::decoder::slice::EWelsSliceType;
 
 pub const MAX_TEMPORAL_LAYER_NUM: usize = 4;
 pub const MAX_SPATIAL_LAYER_NUM: usize = 4;
@@ -2139,7 +2143,7 @@ impl Decoder {
         // before it calls `InitDecoderCtx` (`welsDecoderExt.cpp:386`); the field
         // is the context's, so its defaults are set where the context is built.
         // They are **not** zeros — `iPrevFrameNum` starts at -1.
-        crate::decoder::decoder_core::WelsDecoderLastDecPicInfoDefaults(
+        WelsDecoderLastDecPicInfoDefaults(
             &mut ctx_box.pLastDecPicInfo,
         );
         // `ResetReorderingPictureBuffers (&m_sReoderingStatus, m_sPictInfoList,
@@ -2159,8 +2163,8 @@ impl Decoder {
         // &m_pWelsTrace->m_sLogCtx)`.
         let log_ctx = self.trace.log_context();
         crate::decoder::decoder_core::WelsDecoderDefaults(&mut ctx_box, Some(&log_ctx));
-        crate::decoder::decoder_core::WelsDecoderSpsPpsDefaults(&mut ctx_box.sSpsPpsCtx);
-        if crate::decoder::decoder_core::WelsInitStaticMemory(&mut ctx_box) != 0 {
+        WelsDecoderSpsPpsDefaults(&mut ctx_box.sSpsPpsCtx);
+        if WelsInitStaticMemory(&mut ctx_box) != 0 {
             // The failure path is the `Box` going out of scope.
             return CM_INIT_PARA_ERROR as c_long;
         }
@@ -2575,8 +2579,8 @@ impl Decoder {
             // `bParamSetsLostFlag` — the same `#ifdef` side as
             // `DecodeFrameConstruction`'s clear, and the flag
             // `UpdateAccessUnit`'s mosaic-avoidance block reads.
-            if crate::decoder::nalu::IS_PARAM_SETS_NALS(eNalType)
-                || eNalType == crate::decoder::nalu::EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
+            if IS_PARAM_SETS_NALS(eNalType)
+                || eNalType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
                 || (*p_ctx).eVideoType == VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_AVC
             {
                 if (*p_ctx).pParam.eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE {
@@ -2626,7 +2630,7 @@ impl Decoder {
                 stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
                 if stat.uiDecodedFrameCount == 0 {
                     // exceeded the max value of uint32_t
-                    crate::decoder::decoder_core::ResetDecStatNums(stat);
+                    ResetDecStatNums(stat);
                     stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
                 }
                 // The reference's arithmetic exactly, including its mixing of
@@ -2662,7 +2666,7 @@ impl Decoder {
                 };
             }
             (*p_ctx).dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
-            crate::decoder::decoder_core::OutputStatisticsLog(&mut *p_ctx);
+            OutputStatisticsLog(&mut *p_ctx);
             // `:885–890`, `GetThreadCount` 0 in this port.
             ReorderPicturesInDisplay(&mut *p_ctx, ppDst, pDstInfo);
             // `welsDecoderExt.cpp:892` — the accumulator, whole.
@@ -2676,10 +2680,10 @@ impl Decoder {
             let stat = &mut (*p_ctx).pDecoderStatistics;
             stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
             if stat.uiDecodedFrameCount == 0 {
-                crate::decoder::decoder_core::ResetDecStatNums(stat);
+                ResetDecStatNums(stat);
                 stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
             }
-            crate::decoder::decoder_core::OutputStatisticsLog(&mut *p_ctx);
+            OutputStatisticsLog(&mut *p_ctx);
         }
         (*p_ctx).dDecTime += dec_started.elapsed().as_secs_f64() * 1e3;
         // `ReorderPicturesInDisplay` at the tail of DecodeFrame2WithCtx.
@@ -2747,7 +2751,7 @@ impl Decoder {
             // unobservable in either tree: every slot is written by
             // `pNalLenInByte[iNalNum++] = …` before anything reads it, and the one
             // reader sums `0..iNalNum`. Cleared whole here.
-            if let Some(p) = crate::decoder::decoder_context::parser_bs(
+            if let Some(p) = parser_bs(
                 &mut (*p_ctx).pParserBsInfo,
             ) {
                 p.iNalNum = 0;
@@ -2796,7 +2800,7 @@ impl Decoder {
         // minted from the `Vec`s that own the bytes.
         let bFrameDone = !(*p_ctx).bFramePending;
         if bFrameDone {
-            let filled = match crate::decoder::decoder_context::parser_bs(
+            let filled = match parser_bs(
                 &mut (*p_ctx).pParserBsInfo,
             ) {
                 Some(p) if p.iNalNum != 0 => {
@@ -2816,11 +2820,11 @@ impl Decoder {
                 }
                 _ => false,
             };
-            if filled && (*p_ctx).iErrorCode == crate::decoder::decoder_core::ERR_NONE {
+            if filled && (*p_ctx).iErrorCode == ERR_NONE {
                 let stat = &mut (*p_ctx).pDecoderStatistics;
                 stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
                 if stat.uiDecodedFrameCount == 0 {
-                    crate::decoder::decoder_core::ResetDecStatNums(stat);
+                    ResetDecStatNums(stat);
                     stat.uiDecodedFrameCount = stat.uiDecodedFrameCount.wrapping_add(1);
                 }
             }
@@ -3086,11 +3090,11 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
 fn pool_for(
     pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
     bUsePool: bool,
-) -> Option<&mut crate::decoder::pic_queue::SPicBuff> {
+) -> Option<&mut SPicBuff> {
     if !bUsePool {
         return None;
     }
-    crate::decoder::decoder_context::pic_pool_ptr(&mut pCtx.pPicBuff)
+    pic_pool_ptr(&mut pCtx.pPicBuff)
 }
 
 fn BufferingReadyPicture(
@@ -3108,7 +3112,7 @@ fn BufferingReadyPicture(
     }
     if !pCtx.bIsBaseline {
         if slice_header_of(&*pCtx)
-            .is_some_and(|sh| sh.eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE)
+            .is_some_and(|sh| sh.eSliceType == EWelsSliceType::B_SLICE)
         {
             pCtx.pPictReoderingStatus.bHasBSlice = true;
         }
@@ -3125,9 +3129,9 @@ fn BufferingReadyPicture(
             // before the pool borrow opens: the picture is `pPicBuff`'s and
             // `GetThreadCount` takes the context.
             let bSingleThreaded = crate::decoder::decoder_core::GetThreadCount(&mut *pCtx) <= 1;
-            let prev_id = crate::decoder::decoder_context::prev_dpb_id(&pCtx.pLastDecPicInfo);
+            let prev_id = prev_dpb_id(&pCtx.pLastDecPicInfo);
             if let Some(prev) =
-                crate::decoder::decoder_context::prev_dpb_pic_mut(&mut pCtx.pPicBuff, prev_id)
+                prev_dpb_pic_mut(&mut pCtx.pPicBuff, prev_id)
             {
                 let iPicBuffIdx = prev.iPicBuffIdx;
                 if bSingleThreaded {
@@ -3345,7 +3349,7 @@ fn ReorderPicturesInDisplay(
         return;
     }
     let sh_poc = slice_header_of(&*pCtx)
-        .filter(|sh| sh.eSliceType == crate::decoder::slice::EWelsSliceType::B_SLICE)
+        .filter(|sh| sh.eSliceType == EWelsSliceType::B_SLICE)
         .map(|sh| sh.iPicOrderCntLsb);
     if let Some(sh_poc) = sh_poc {
         let st = pCtx.pPictReoderingStatus;
