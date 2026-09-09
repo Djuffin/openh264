@@ -131,8 +131,9 @@ static std::string res_root() {
 // Part 1 — decoder conformance through the dylib.
 //
 // The decode flow is `tests/decoder_conformance_test.rs`'s, statement for
-// statement: annex-B split, ERROR_CON_SLICE_COPY, one NAL per DecodeFrame2, the
-// end-of-stream drain, then FlushFrame for whatever GetOption reports remaining.
+// statement: annex-B split, ERROR_CON_SLICE_COPY, one NAL per DecodeFrame2 each
+// followed by a null DecodeFrame2 (as h264dec does), the end-of-stream drain,
+// then FlushFrame for whatever GetOption reports remaining.
 // `hash_concealed` selects the same two rules that file's two macros select.
 // ---------------------------------------------------------------------------
 static bool decode_asset (const std::string& path, bool hash_concealed,
@@ -166,6 +167,26 @@ static bool decode_asset (const std::string& path, bool hash_concealed,
       hash_plane (sha, dst[0], s.iWidth, s.iHeight, s.iStride[0]);
       hash_plane (sha, dst[1], s.iWidth / 2, s.iHeight / 2, s.iStride[1]);
       hash_plane (sha, dst[2], s.iWidth / 2, s.iHeight / 2, s.iStride[1]);
+      ++frames;
+    }
+
+    // The null DecodeFrame2 that h264dec follows every NAL with, and that
+    // `decoder_conformance_test.rs` follows every NAL with since the harnesses
+    // were brought into step with it. It constructs the access unit the NAL
+    // completed instead of leaving it pending, which is observable on
+    // CACQP3_Sony_D.jsv: a same-id PPS arriving next is parked in the spare slot
+    // rather than overwriting sPpsBuffer[id] in place under a pending picture.
+    // Without it this driver decoded a different frame set from the goldens it
+    // checks against.
+    uint8_t* ndst[3] = {NULL, NULL, NULL};
+    SBufferInfo ninfo;
+    memset (&ninfo, 0, sizeof (ninfo));
+    DECODING_STATE nst = dec->DecodeFrame2 (NULL, 0, ndst, &ninfo);
+    if ((hash_concealed || nst == dsErrorFree) && ninfo.iBufferStatus == 1) {
+      SSysMEMBuffer& s = ninfo.UsrData.sSystemBuffer;
+      hash_plane (sha, ndst[0], s.iWidth, s.iHeight, s.iStride[0]);
+      hash_plane (sha, ndst[1], s.iWidth / 2, s.iHeight / 2, s.iStride[1]);
+      hash_plane (sha, ndst[2], s.iWidth / 2, s.iHeight / 2, s.iStride[1]);
       ++frames;
     }
   }

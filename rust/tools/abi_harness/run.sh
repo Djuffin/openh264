@@ -52,11 +52,19 @@ fi
 # --- the goldens, from the test file itself ---------------------------------
 # `asset_test!(name, "file", "hash");` -> `file hash 0`
 # `asset_test_concealed!(...)`         -> `file hash 1`
+#
+# The invocation is read across lines: rustfmt breaks these macro calls over five
+# lines each, and a one-line matcher silently extracted **nothing** and left part 1
+# vacuous. The `NGOLD` floor below is what caught it; the accumulator is what fixes
+# it. Both shapes parse — everything from the `asset_test` line to the `);` is one
+# record, and the first two quoted strings in it are the asset and its hash.
 awk '
-/^asset_test!\(/           { c = 0 }
-/^asset_test_concealed!\(/ { c = 1 }
-/^asset_test(_concealed)?!\(/ {
-  n = split($0, a, "\"")
+/^asset_test!\(/           { rec = ""; c = 0; inv = 1 }
+/^asset_test_concealed!\(/ { rec = ""; c = 1; inv = 1 }
+inv { rec = rec $0 }
+inv && /\);[[:space:]]*$/ {
+  inv = 0
+  n = split(rec, a, "\"")
   if (n >= 5) printf "%s %s %d\n", a[2], a[4], c
 }' "$CRATE/tests/decoder_conformance_test.rs" > "$OUT/goldens.txt"
 NGOLD=$(grep -c . "$OUT/goldens.txt")
