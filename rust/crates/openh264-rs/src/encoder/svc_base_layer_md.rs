@@ -23,14 +23,13 @@
 #![allow(non_snake_case, non_upper_case_globals, non_camel_case_types)]
 
 #![forbid(unsafe_code)]
-use crate::encoder::rec_view::RecCursor;
-use crate::encoder::rec_view::copy_block_to_view;
-use crate::encoder::svc_encode_slice::current_layer_ref;
+use crate::encoder::rec_view::{RecCursor, RecPicView, copy_block_to_view};
+use crate::encoder::svc_encode_slice::{WelsIMbChromaEncode, WelsPMbChromaEncode, current_layer_ref, layer_enc_view_expect, layer_ref_feature_storage};
 use crate::common::mc::{mc_chroma, mc_luma};
 use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_8x16, copy_8x8};
 use crate::safe::plane::PlaneCursorMut;
 use crate::encoder::encoder_context::{sWelsEncCtx, SMVUnitXY};
-use crate::encoder::md::MdSliceCtx;
+use crate::encoder::md::{MB_BLOCK8x8_NUM, MbSideInfo, MdSliceCtx, g_kiMapModeIntraChroma};
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
 use crate::encoder::md::{
     FillNeighborCacheIntra, InitMeRefinePointer, MdIntraAnalysisVaaInfo, MeRefineFracPixel, SMB,
@@ -54,8 +53,10 @@ use crate::encoder::svc_set_mb_syn_cavlc::{g_kuiCache48CountScan4Idx, IS_INTRA16
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 use crate::encoder::md::{LEFT_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS, TOP_MB_POS};
 use crate::encoder::svc_encode_slice::{current_layer_expect, layer_rec_view_expect, layer_ref_view_expect};
-use crate::encoder::svc_encode_slice::layer_enc_view_expect;
 use crate::simd::kernels;
+use crate::encoder::svc_encode_mb::WelsEncRecI16x16Y;
+use crate::encoder::svc_mode_decision::{WelsInterMbEncode, WelsMdI16x16FromLayer, WelsMdP8x8};
+use crate::safe::mb_grid::MbSplit;
 
 // ============================================================================
 // Intra prediction mode ids — `wels_common_defs.h:329-370`
@@ -282,7 +283,7 @@ pub fn PredIntra4x4Mode(pIntraPredMode: &[i8; 48], iIdx4: i32) -> i32 {
 /// `svc_base_layer_md.cpp:259`. Re-points the cached per-macroblock plane pointers and
 /// reloads the intra neighbour cache. Called once per macroblock by `WelsISliceMdEnc`
 /// *before* the re-encoding loop, so it must not depend on the QP.
-pub fn WelsMdIntraInit(mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>, pMbCache: &mut SMbCache) {
+pub fn WelsMdIntraInit(mbs: &mut MbSplit<'_, SMB>, pMbCache: &mut SMbCache) {
     // One `cur()` for the two coordinates, and no layer: this resolved the frame's
     // current layer and then read nothing off it.
     let cur = mbs.cur();
@@ -699,7 +700,7 @@ pub extern "C" fn WelsMdIntraChroma(
         iCurCost += pfMdCost8x8(
             &RecCursor::over_owned(&mut pMbCache.sMemPredMb[kiDstOff + 64..][..64], 0, 8),
             &pEncPicture.plane(2).cursor(kiChrOrgX, kiChrOrgY),
-        ) + iLambda * BsSizeUE(crate::encoder::md::g_kiMapModeIntraChroma[iCurMode as usize] as u32) as i32;
+        ) + iLambda * BsSizeUE(g_kiMapModeIntraChroma[iCurMode as usize] as u32) as i32;
         if iCurCost < iBestCost {
             iBestMode = iCurMode;
             iBestCost = iCurCost;
@@ -764,7 +765,7 @@ pub fn WelsMdIntraMb(
     pMbCache: &mut SMbCache,
 ) {
     //initial prediction memory for I_16x16
-    pWelsMd.iCostLuma = crate::encoder::svc_mode_decision::WelsMdI16x16FromLayer(
+    pWelsMd.iCostLuma = WelsMdI16x16FromLayer(
         pEncCtx.func_list(),
         current_layer_ref(pEncCtx),
         pMbCache,
@@ -800,10 +801,10 @@ pub const g_kiPixStrideIdx8x8: [i32; 4] = [
 /// reference-plane pointers, and the integer MV clamp for this macroblock position.
 pub fn WelsMdInterInit(
     sc: &MdSliceCtx<'_>,
-    mbi: &crate::encoder::md::MbSideInfo,
+    mbi: &MbSideInfo,
     iMvRange: i32,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
+    mbs: &mut MbSplit<'_, SMB>,
 ) {
     // Everything this used to resolve — the layer, the function list, the VAA block,
     // the reconstruction view twice and the reference picture — is the slice's, and
@@ -866,7 +867,7 @@ pub extern "C" fn WelsMdP16x8<'a>(
             pWelsMd.iMbPixY,
             pWelsMd.pMvdCost,
             BLOCK_16x8 as i32,
-            crate::encoder::svc_encode_slice::layer_ref_feature_storage(pEncCtx, &*pCurDqLayer),
+            layer_ref_feature_storage(pEncCtx, &*pCurDqLayer),
             sMe16x8,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -919,7 +920,7 @@ pub extern "C" fn WelsMdP8x16<'a>(
             pWelsMd.iMbPixY,
             pWelsMd.pMvdCost,
             BLOCK_8x16 as i32,
-            crate::encoder::svc_encode_slice::layer_ref_feature_storage(pEncCtx, &*pCurLayer),
+            layer_ref_feature_storage(pEncCtx, &*pCurLayer),
             sMe8x16,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -963,7 +964,7 @@ pub fn WelsMdInterFinePartition<'a>(
     iBestCost: i32,
 ) {
     let pCurDqLayer = current_layer_expect(pEncCtx);
-    let mut iCost = crate::encoder::svc_mode_decision::WelsMdP8x8(
+    let mut iCost = WelsMdP8x8(
         pEncCtx,
         pEncCtx.func_list(),
         &*pCurDqLayer,
@@ -1041,7 +1042,7 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
             }
         }
         6 | 9 => {
-            let iCostP8x8 = crate::encoder::svc_mode_decision::WelsMdP8x8(
+            let iCostP8x8 = WelsMdP8x8(
         pEncCtx,
         pEncCtx.func_list(),
                 &*pCurDqLayer,
@@ -1055,7 +1056,7 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
             }
         }
         _ => {
-            let iCostP8x8 = crate::encoder::svc_mode_decision::WelsMdP8x8(
+            let iCostP8x8 = WelsMdP8x8(
         pEncCtx,
         pEncCtx.func_list(),
                 &*pCurDqLayer,
@@ -1251,7 +1252,7 @@ fn AcceptPskip(
     let cEncLuma = pWelsMd.mbc().enc_y;
 
     // ST32 (pCurMb->pRefIndex, 0)
-    pCurMb.iRefIndex = [0; crate::encoder::md::MB_BLOCK8x8_NUM];
+    pCurMb.iRefIndex = [0; MB_BLOCK8x8_NUM];
     (sc.func.pfUpdateMbMv)(&mut pCurMb.sMv, *sMvp);
 
     if pWelsMd.bMdUsingSad {
@@ -1571,12 +1572,12 @@ pub fn WelsMdFirstIntraMode(
         //add pEnc&rec to MD--2010.3.15
         if IS_INTRA16x16(pCurMb.uiMbType) {
             pCurMb.uiCbp = 0;
-            crate::encoder::svc_encode_mb::WelsEncRecI16x16Y(pEncCtx, pCurMb, pMbCache);
+            WelsEncRecI16x16Y(pEncCtx, pCurMb, pMbCache);
         }
 
         //chroma
         pWelsMd.iCostChroma = WelsMdIntraChroma(pFunc, sc.layer, pMbCache, pWelsMd.iLambda);
-        crate::encoder::svc_encode_slice::WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache); //add pEnc&rec to MD--2010.3.15
+        WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache); //add pEnc&rec to MD--2010.3.15
         pCurMb.uiChromPredMode = pMbCache.uiChmaI8x8Mode as u32;
         pCurMb.iSadCost = 0;
         return true; //intra_mb_type is best
@@ -1591,7 +1592,7 @@ pub fn WelsMdInterMb<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
+    mbs: &mut MbSplit<'_, SMB>,
 ) {
     let sc = *pWelsMd.sc();
     let pCurDqLayer = sc.layer;
@@ -1692,8 +1693,8 @@ pub fn WelsMdInterEncode(
 
     //add pEnc&rec to MD--2010.3.15
     pCurMb.uiCbp = 0;
-    crate::encoder::svc_mode_decision::WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
-    crate::encoder::svc_encode_slice::WelsPMbChromaEncode(pEncCtx, pSlice, pCurMb);
+    WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
+    WelsPMbChromaEncode(pEncCtx, pSlice, pCurMb);
 
     let view = layer_rec_view_expect(&*pCurDqLayer);
     let pMbCache = &mut pSlice.sMbCacheInfo;
@@ -1715,7 +1716,7 @@ pub fn WelsMdInterEncode(
 ///
 /// Both arrays must have room for `pCurMb->iMbXY`.
 pub fn WelsMdInterSaveSadAndRefMbType(
-    pRecView: &crate::encoder::rec_view::RecPicView,
+    pRecView: &RecPicView,
     pCurMb: &SMB,
     pMd: &SWelsMD<'_>,
 ) {

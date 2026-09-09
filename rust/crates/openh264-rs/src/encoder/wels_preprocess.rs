@@ -458,8 +458,8 @@ pub struct SVAAFrameInfo {
     /// `(pDst, .., pSrc, ..)`, so `pCur*` is the **destination**). It happens
     /// in-fork, per macroblock, into the picture the encoder is simultaneously
     /// reading.
-    pub pRefView: Option<crate::encoder::rec_view::RoPicView>,
-    pub pCurView: Option<crate::encoder::rec_view::RoPicView>,
+    pub pRefView: Option<RoPicView>,
+    pub pCurView: Option<RoPicView>,
 
     /// One byte per macroblock.
     pub pVaaBackgroundMbFlag: Vec<i8>,
@@ -725,6 +725,15 @@ pub struct SPosOffset {
 // (`encoder_context.h:198`).
 pub use crate::encoder::encoder_context::{sWelsEncCtx, SSpatialPicIndex};
 pub use crate::common::wels_common_defs::EWelsSliceType;
+use crate::common::wels_trace::{WELS_LOG_DEBUG, WELS_LOG_ERROR, WelsLog};
+use crate::encoder::picture::SScreenBlockFeatureStorage;
+use crate::encoder::rec_view::RoPicView;
+use crate::processing::SWelsVpContext;
+use crate::processing::background_detection::BgdPlanes;
+use crate::processing::denoise::DenoisePlanes;
+use crate::processing::downsample::{Downsample, DownsampleDst, DownsampleSrc};
+use crate::processing::scene_change_detection::ScdPlanes;
+use crate::processing::vaacalc::{RET_INVALIDPARAM, VaaCalcPlanes};
 
 // ============================================================================
 // Helper Memory & Padding Functions
@@ -892,7 +901,7 @@ pub fn AllocPicture(
         // `LIST_SIZE_SUM_8x8` entries.
         let bIsBlock8x8 = kiMe8x8FME == crate::encoder::svc_motion_estimate::ME_FME as i32;
         pic.pScreenBlockFeatureStorage = Some(Box::new(
-            crate::encoder::picture::SScreenBlockFeatureStorage::for_frame(
+            SScreenBlockFeatureStorage::for_frame(
                 kiWidth,
                 kiHeight,
                 bIsBlock8x8,
@@ -947,7 +956,7 @@ pub fn FreeScaledPic(pScaledPicture: &mut Scaled_Picture) {
 
 pub struct CWelsPreProcess {
     /// The video-processing plugins, owned.
-    pub m_vp: Box<crate::processing::SWelsVpContext>,
+    pub m_vp: Box<SWelsVpContext>,
     pub m_uiSpatialLayersInTemporal: [u8; MAX_DEPENDENCY_LAYER],
     pub m_sScaledPicture: Scaled_Picture,
     pub m_pLastSpatialPicture: [[Option<SrcPicId>; 2]; MAX_DEPENDENCY_LAYER],
@@ -969,7 +978,7 @@ impl Default for CWelsPreProcess {
     /// null pictures, no layers, not initialised.
     fn default() -> Self {
         Self {
-            m_vp: Box::new(crate::processing::SWelsVpContext::default()),
+            m_vp: Box::new(SWelsVpContext::default()),
             m_uiSpatialLayersInTemporal: [0; MAX_DEPENDENCY_LAYER],
             m_sScaledPicture: Scaled_Picture::default(),
             m_pLastSpatialPicture: [[None; 2]; MAX_DEPENDENCY_LAYER],
@@ -1645,7 +1654,7 @@ impl CWelsPreProcess {
         let [py, pu, pv] = pic.planes_mut3();
         let stride = [py.stride(), pu.stride(), pv.stride()];
         let (oy, ou, ov) = (py.origin(), pu.origin(), pv.origin());
-        let mut planes = crate::processing::denoise::DenoisePlanes {
+        let mut planes = DenoisePlanes {
             y: &mut py.as_mut_slice()[oy..],
             u: &mut pu.as_mut_slice()[ou..],
             v: &mut pv.as_mut_slice()[ov..],
@@ -1707,7 +1716,7 @@ impl CWelsPreProcess {
                     let [sy, su, sv] = srcPic.planes_mut3();
                     let srcStride = [sy.stride(), su.stride(), sv.stride()];
                     let (soy, sou, sov) = (sy.origin(), su.origin(), sv.origin());
-                    let src = crate::processing::downsample::DownsampleSrc {
+                    let src = DownsampleSrc {
                         planes: [
                             &sy.as_slice()[soy..],
                             &su.as_slice()[sou..],
@@ -1720,7 +1729,7 @@ impl CWelsPreProcess {
                     let [dy, du, dv] = dstPic.planes_mut3();
                     let dstStride = [dy.stride(), du.stride(), dv.stride()];
                     let (doy, dou, dov) = (dy.origin(), du.origin(), dv.origin());
-                    let mut dst = crate::processing::downsample::DownsampleDst {
+                    let mut dst = DownsampleDst {
                         planes: [
                             &mut dy.as_mut_slice()[doy..],
                             &mut du.as_mut_slice()[dou..],
@@ -1730,7 +1739,7 @@ impl CWelsPreProcess {
                         width: iShrinkWidth,
                         height: iShrinkHeight,
                     };
-                    iRet = crate::processing::downsample::Downsample(
+                    iRet = Downsample(
                         &mut scratch,
                         &src,
                         &mut dst,
@@ -1813,7 +1822,7 @@ impl CWelsPreProcess {
         m_vp.sVaaCalc.Process(
             &sCurPixMap,
             &sRefPixMap,
-            crate::processing::vaacalc::VaaCalcPlanes { cur: kpCurY, refp: kpRefY },
+            VaaCalcPlanes { cur: kpCurY, refp: kpRefY },
             &mut pVaaInfo.sVaaCalcInfo,
         );
     }
@@ -1840,9 +1849,9 @@ impl CWelsPreProcess {
             // Rebuilt every frame, as the layer's views are: the pool may hand the
             // next frame a different slot.
             pVaaInfo.pCurView =
-                Some(crate::encoder::rec_view::RoPicView::build(kpCur));
+                Some(RoPicView::build(kpCur));
             pVaaInfo.pRefView =
-                Some(crate::encoder::rec_view::RoPicView::build(kpRef));
+                Some(RoPicView::build(kpRef));
 
             let mut sSrcPixMap = SPixMap::default();
             let mut sRefPixMap = SPixMap::default();
@@ -1872,7 +1881,7 @@ impl CWelsPreProcess {
             m_vp.sBackgroundDetection.Process(
                 &sSrcPixMap,
                 &sRefPixMap,
-                &crate::processing::background_detection::BgdPlanes {
+                &BgdPlanes {
                     cur: [kpCur.plane_tail(0), kpCur.plane_tail(1), kpCur.plane_tail(2)],
                     refp: [kpRef.plane_tail(0), kpRef.plane_tail(1), kpRef.plane_tail(2)],
                 },
@@ -1925,7 +1934,7 @@ impl CWelsPreProcess {
         let iRet = m_vp.sAdaptiveQuant.Process(
             &pSrc,
             &pRef,
-            crate::processing::vaacalc::VaaCalcPlanes {
+            VaaCalcPlanes {
                 cur: kpCur.plane_tail(0),
                 refp: kpRef.plane_tail(0),
             },
@@ -2235,7 +2244,7 @@ impl CWelsPreProcess {
         sSrcPixMap.sRect.iRectHeight = cur_h;
         sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
-        let planes = crate::processing::scene_change_detection::ScdPlanes {
+        let planes = ScdPlanes {
             cur: &cur_y.as_slice()[cur_y.origin()..],
             cur_stride: cur_y.stride(),
             refp: &ref_y.as_slice()[ref_y.origin()..],
@@ -2379,7 +2388,7 @@ impl CWelsPreProcess {
                 };
                 let cur_y = cur_pic.plane(0);
                 let ref_y = m_pSpatialPicPool.get(idRefPic).plane(0);
-                let planes = crate::processing::scene_change_detection::ScdPlanes {
+                let planes = ScdPlanes {
                     cur: &cur_y.as_slice()[cur_y.origin()..],
                     cur_stride: cur_y.stride(),
                     refp: &ref_y.as_slice()[ref_y.origin()..],
@@ -2435,7 +2444,7 @@ impl CWelsPreProcess {
                     .pVaaBlockStaticIdc
                     .row_mut(pCurBlockStaticPointer, kiBlocksInFrame)
                 {
-                    None => crate::processing::vaacalc::RET_INVALIDPARAM,
+                    None => RET_INVALIDPARAM,
                     Some(row) => {
                         m_vp.sSceneChangeDetectionScreen.Set(&sSceneChangeResult);
                         let ret = m_vp
@@ -2495,9 +2504,9 @@ impl CWelsPreProcess {
         // `wels_preprocess.cpp:1247-1248`. Text, level and argument order are fixed
         // by the C++, not chosen here.
         let kiCodingIndex = pCtx.param().sDependencyLayers[0].iCodingIndex;
-        crate::common::wels_trace::WelsLog(
+        WelsLog(
             pCtx.sLogCtx,
-            crate::common::wels_trace::WELS_LOG_DEBUG,
+            WELS_LOG_DEBUG,
             &format!(
                 "iVaaFrameSceneChangeIdc = {},codingIdx = {}",
                 iVaaFrameSceneChangeIdc as i32, kiCodingIndex
@@ -2860,7 +2869,7 @@ impl CWelsPreProcess {
                 (Some(id), Some(list)) => Some(list.pic(id).plane(0)),
                 _ => None,
             };
-            let planes = crate::processing::scene_change_detection::ScdPlanes {
+            let planes = ScdPlanes {
                 cur: &cur_y.as_slice()[cur_y.origin()..],
                 cur_stride: cur_y.stride(),
                 refp: ref_y.map_or(&[][..], |p| &p.as_slice()[p.origin()..]),
@@ -2880,9 +2889,9 @@ impl CWelsPreProcess {
             let kiGomsWritten =
                 ((sCur.iHeightInPixel >> 4) as usize).div_ceil(GOM_H_SCC.max(1) as usize);
             if pWelsSvcRc.pCurrentFrameGomSad.len() < kiGomsWritten {
-                crate::common::wels_trace::WelsLog(
+                WelsLog(
                     kLogCtx,
-                    crate::common::wels_trace::WELS_LOG_ERROR,
+                    WELS_LOG_ERROR,
                     &format!(
                         "AnalyzePictureComplexity(): pCurrentFrameGomSad holds {} entries, the screen complexity analysis writes {}",
                         pWelsSvcRc.pCurrentFrameGomSad.len(),
@@ -3086,7 +3095,7 @@ impl CWelsPreProcess {
         sSceneChangeResult.pStaticBlockIdc = pStaticBlockIdcSel;
         sSceneChangeResult.sScrollResult.bScrollDetectFlag = false;
 
-        let planes = crate::processing::scene_change_detection::ScdPlanes {
+        let planes = ScdPlanes {
             cur: &src_y.as_slice()[src_y.origin()..],
             cur_stride: src_y.stride(),
             refp,

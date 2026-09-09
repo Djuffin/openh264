@@ -44,8 +44,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::encoder::rec_view::SharedPlane;
-use crate::encoder::rec_view::RecCursor;
+use crate::encoder::rec_view::{RecCursor, SharedPlane};
 use crate::safe::mvd_cost::MvdCostCursor;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::picture::SPicture;
@@ -1576,7 +1575,7 @@ fn CountFMECostDown(pCurLayer: &mut SDqLayer) -> u32 {
     if kiSliceCount >= 1 {
         for iSliceIndex in 0..kiSliceCount {
             if let Some(pSlice) =
-                crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurLayer, iSliceIndex)
+                slice_in_layer_mut(pCurLayer, iSliceIndex)
             {
                 // `uint32_t +=`: the C++ wraps, so this does. `uiSliceFMECostDown`
                 // is itself a wrapping `+=`/`-=` pair in
@@ -1987,3 +1986,4 @@ static ME_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSE41};
+use crate::encoder::svc_encode_slice::slice_in_layer_mut;

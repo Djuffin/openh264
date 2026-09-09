@@ -149,7 +149,7 @@ pub const g_kuiChromaQpTable: [u8; 52] = [
 
 
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
-use crate::encoder::svc_encode_slice::current_layer_expect;
+use crate::encoder::svc_encode_slice::{current_layer_expect, layer_pps_ref, slice_bs_writer};
 pub use crate::encoder::svc_encode_slice::SSliceHeaderExt;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::vlc_encoder::ECtxBlockCat;
@@ -175,6 +175,9 @@ pub use crate::encoder::set_mb_syn_cabac::{
 
 // `BsAlign` — svc_enc_golomb.h:112.
 pub use crate::encoder::vlc_encoder::BsAlign;
+use crate::encoder::encoder_context::sWelsEncCtx;
+use crate::encoder::set_mb_syn_cabac::WelsCabacContextInit;
+use crate::safe::mb_grid::MbWindow;
 
 // ============================================================================
 // Macroblock Header & Mode Serialization
@@ -183,7 +186,7 @@ pub use crate::encoder::vlc_encoder::BsAlign;
 pub fn WelsCabacMbType(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
-    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &MbWindow<'_, SMB>,
     pMbCache: &mut SMbCache,
     eSliceType: EWelsSliceType,
 ) {
@@ -292,7 +295,7 @@ pub fn WelsCabacMbIntra4x4PredMode(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pM
 pub fn WelsCabacMbIntraChromaPredMode(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
-    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &MbWindow<'_, SMB>,
     pMbCache: &mut SMbCache,
 ) {
     {
@@ -328,7 +331,7 @@ pub fn WelsCabacMbIntraChromaPredMode(
     }
 }
 
-pub fn WelsCabacMbCbp(buf: &mut [u8], mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>, pCabacCtx: &mut SCabacCtx) {
+pub fn WelsCabacMbCbp(buf: &mut [u8], mbs: &MbWindow<'_, SMB>, pCabacCtx: &mut SCabacCtx) {
     {
         let cbp = mbs.cur().uiCbp as i32;
         let iCbpBlockLuma: [u32; 4] = [
@@ -410,7 +413,7 @@ pub fn WelsCabacMbCbp(buf: &mut [u8], mbs: &crate::safe::mb_grid::MbWindow<'_, S
 
 pub fn WelsCabacMbDeltaQp(
     buf: &mut [u8],
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut MbWindow<'_, SMB>,
     pCabacCtx: &mut SCabacCtx,
     bFirstMbInSlice: bool,
 ) {
@@ -466,7 +469,7 @@ pub fn WelsCabacMbDeltaQp(
 pub fn WelsMbSkipCabac(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut MbWindow<'_, SMB>,
     eSliceType: EWelsSliceType,
     bSkipFlag: i16,
 ) {
@@ -578,7 +581,7 @@ pub fn WelsCabacMbMvdLx(
 pub fn WelsCabacMbMvd(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
-    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &MbWindow<'_, SMB>,
     sCurMv: SMVUnitXY,
     sPredMv: SMVUnitXY,
     i4x4ScanIdx: i16,
@@ -639,7 +642,7 @@ pub fn WelsCabacSubMbType(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pCurMb: &SM
 pub fn WelsCabacSubMbMvd(
     buf: &mut [u8],
     pCabacCtx: &mut SCabacCtx,
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut MbWindow<'_, SMB>,
     pMbCache: &mut SMbCache,
 ) {
     {
@@ -671,7 +674,7 @@ pub fn WelsCabacSubMbMvd(
 
 pub fn WelsGetMbCtxCabac(
     kpNonZeroCoeffCount: &[i8; 48],
-    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &MbWindow<'_, SMB>,
     eCtxBlockCat: ECtxBlockCat,
     iIdx: i16,
 ) -> i16 {
@@ -710,7 +713,7 @@ pub fn WelsGetMbCtxCabac(
 pub fn WelsWriteBlockResidualCabac(
     buf: &mut [u8],
     kpNonZeroCoeffCount: &[i8; 48],
-    mbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &MbWindow<'_, SMB>,
     pCabacCtx: &mut SCabacCtx,
     eCtxBlockCat: ECtxBlockCat,
     iIdx: i16,
@@ -815,7 +818,7 @@ pub fn WelsWriteMbResidualCabac(
     buf: &mut [u8],
     pFuncList: &SWelsFuncPtrList,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut MbWindow<'_, SMB>,
     uiChromaQpIndexOffset: u32,
 ) -> i32 {
     {
@@ -990,31 +993,31 @@ pub fn WelsWriteMbResidualCabac(
 // ============================================================================
 
 pub fn WelsInitSliceCabac(
-    pEncCtx: &crate::encoder::encoder_context::sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut crate::encoder::vlc_encoder::BsWriter>,
 ) {
     /* alignment needed */
     let buf = pSliceBsBuf;
-    BsAlign(buf, crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs));
+    BsAlign(buf, slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs));
 
     /* init cabac */
     let iCabacInitIdc = pSlice.iCabacInitIdc;
-    crate::encoder::set_mb_syn_cabac::WelsCabacContextInit(
+    WelsCabacContextInit(
         &*pEncCtx,
         &mut pSlice.sCabacCtx,
         iCabacInitIdc,
     );
     let end = buf.len();
-    let kiBsPos = crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs).pos();
+    let kiBsPos = slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs).pos();
     WelsCabacEncodeInit(&mut pSlice.sCabacCtx, kiBsPos, end);
 }
 
 pub fn WelsSpatialWriteMbSynCabac(
-    pEncCtx: &crate::encoder::encoder_context::sWelsEncCtx,
+    pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut MbWindow<'_, SMB>,
     pSliceBsBuf: &mut [u8],
     _pCtxOutBs: &mut Option<&mut crate::encoder::vlc_encoder::BsWriter>,
 ) -> i32 {
@@ -1030,7 +1033,7 @@ pub fn WelsSpatialWriteMbSynCabac(
     let iSliceFirstMbXY = pSliceHeadExt.sSliceHeader.iFirstMbInSlice;
     let pCurDqLayer = current_layer_expect(pEncCtx);
 
-    let uiChromaQpIndexOffset = crate::encoder::svc_encode_slice::layer_pps_ref(pEncCtx, &*pCurDqLayer)
+    let uiChromaQpIndexOffset = layer_pps_ref(pEncCtx, &*pCurDqLayer)
         .expect("the layer's PPS is stamped")
         .uiChromaQpIndexOffset;
     let mut sMvd = SMVUnitXY::default();
@@ -1203,7 +1206,7 @@ mod tests {
         let end = buffer.len();
         WelsCabacEncodeInit(&mut cabac_ctx, 0, end);
 
-        let mut mbs = crate::safe::mb_grid::MbWindow::whole(&mut grid, 0);
+        let mut mbs = MbWindow::whole(&mut grid, 0);
         WelsMbSkipCabac(
             &mut buffer,
             &mut cabac_ctx,

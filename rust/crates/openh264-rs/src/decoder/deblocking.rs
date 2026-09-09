@@ -2085,7 +2085,7 @@ pub fn WelsDeblockingFilterSlice(
 
             if pCtx.pps_of(pps_id).is_some_and(|pps| pps.uiNumSliceGroups > 1) {
                 // Flexible Macroblock Ordering slice group transition
-                iNextMbXyIndex = crate::decoder::fmo::FmoNextMb(
+                iNextMbXyIndex = FmoNextMb(
                     active_fmo(pCtx.sFmoList, fmo_id),
                     iNextMbXyIndex,
                 );
@@ -2227,3 +2227,4 @@ mod tests {
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSSE3};
 pub use crate::decoder::decode_slice::{g_kuiMbCountScan4Idx};
+use crate::decoder::fmo::FmoNextMb;

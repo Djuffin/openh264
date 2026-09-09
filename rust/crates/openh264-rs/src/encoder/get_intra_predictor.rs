@@ -48,6 +48,7 @@ use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 /// site because the kernels share their names with the scalars in this module — which
 /// is the point of the naming, and the reason the module qualifier has to stay.
 use crate::simd::kernels;
+use crate::common::cpu_core::WELS_CPU_SSE2;
 
 #[inline(always)]
 fn WelsClip1(iX: i32) -> u8 {
@@ -1206,7 +1207,7 @@ pub fn WelsInitIntraPredFuncs(pFuncList: &mut SWelsFuncPtrList, kuiCpuFlag: u32)
     fl.pfGetChromaPred[C_PRED_DC_T as usize] = Some(WelsIChromaPredDcTop_c);
     fl.pfGetChromaPred[C_PRED_DC_128 as usize] = Some(WelsIChromaPredDcNA_c);
 
-    if (kuiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+    if (kuiCpuFlag & WELS_CPU_SSE2) != 0 {
         use kernels::intra_pred::*;
         fl.pfGetLumaI16x16Pred[I16_PRED_V as usize] = Some(enc_i16x16_luma_pred_v);
         fl.pfGetLumaI16x16Pred[I16_PRED_H as usize] = Some(enc_i16x16_luma_pred_h);

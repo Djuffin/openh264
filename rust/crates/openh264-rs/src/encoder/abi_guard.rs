@@ -41,6 +41,8 @@ use crate::encoder::wels_preprocess::{
 };
 use crate::encoder::ref_list_mgr_svc::{SRefPicListReorderSyntax, SRefPicMarking};
 use crate::encoder::svc_encode_slice::{SSliceHeader, SSliceHeaderExt};
+use crate::encoder::encoder_context::SParaSetOffset;
+use crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics;
 
 macro_rules! assert_size {
     ($t:ty, $n:expr) => {
@@ -342,8 +344,8 @@ assert_size!(SWelsFuncPtrList, 944);
 // expected size here is 98008 - 64 + 8; alignment is 8 either way, so no padding
 // changes. Everything else -- including sWelsCabacContexts[4][52][460] at 95,680
 // bytes -- is a faithful match, which is what makes this assertion worth having.
-assert_size!(crate::encoder::encoder_context::SParaSetOffset, 1180);
-assert_size!(crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics, 88);
+assert_size!(SParaSetOffset, 1180);
+assert_size!(TagVideoEncoderStatistics, 88);
 // `SLogContext` is `common/utils.h:53`'s three `void*`s in the reference, and this
 // port's is four members: the callback, the caller's context, the instance *address*
 // and the trace level. The last two are what the reference reaches through `pfLog`'s

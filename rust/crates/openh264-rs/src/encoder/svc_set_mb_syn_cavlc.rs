@@ -149,6 +149,10 @@ pub use crate::encoder::vlc_encoder::g_kuiEncNcMapTable;
 pub use crate::encoder::vlc_encoder::{
     BsWriteBits, BsWriteOneBit, BsWriteSE, BsWriteTE, BsWriteUE,
 };
+use crate::encoder::md::MB_BLOCK4x4_NUM;
+use crate::encoder::svc_encode_slice::{SDynamicSlicingStack, current_layer_expect, layer_pps_ref};
+use crate::encoder::vlc_encoder::{BsGetBitsPos, g_kuiVlcCoeffToken, g_kuiVlcRunBefore, g_kuiVlcTotalZeros, g_kuiVlcTotalZerosChromaDc};
+use crate::safe::mb_grid::MbWindow;
 
 // ============================================================================
 // Core C-compatible Data Structures
@@ -261,7 +265,7 @@ pub fn WriteBlockResidualCavlc(
     let trailing_ones_idx = (iTrailingOnes as usize).min(3);
 
     // Coeff token
-    let upCoeffToken = crate::encoder::vlc_encoder::g_kuiVlcCoeffToken[nc_idx][total_coeffs_idx][trailing_ones_idx];
+    let upCoeffToken = g_kuiVlcCoeffToken[nc_idx][total_coeffs_idx][trailing_ones_idx];
     let mut iValue = upCoeffToken[0] as u32;
     let mut n = upCoeffToken[1] as i32;
 
@@ -327,12 +331,12 @@ pub fn WriteBlockResidualCavlc(
     // Total zeros
     if iTotalCoeffs < iEndIdx + 1 {
         if CHROMA_DC != iResidualProperty {
-            let upTotalZeros = crate::encoder::vlc_encoder::g_kuiVlcTotalZeros[(iTotalCoeffs as usize).min(15)][(iTotalZeros as usize).min(15)];
+            let upTotalZeros = g_kuiVlcTotalZeros[(iTotalCoeffs as usize).min(15)][(iTotalZeros as usize).min(15)];
             n = upTotalZeros[1] as i32;
             iValue = upTotalZeros[0] as u32;
             BsWriteBits(buf, &mut *pBs, n, iValue);
         } else {
-            let upTotalZeros = crate::encoder::vlc_encoder::g_kuiVlcTotalZerosChromaDc[(iTotalCoeffs as usize).min(3)][(iTotalZeros as usize).min(3)];
+            let upTotalZeros = g_kuiVlcTotalZerosChromaDc[(iTotalCoeffs as usize).min(3)][(iTotalZeros as usize).min(3)];
             n = upTotalZeros[1] as i32;
             iValue = upTotalZeros[0] as u32;
             BsWriteBits(buf, &mut *pBs, n, iValue);
@@ -347,7 +351,7 @@ pub fn WriteBlockResidualCavlc(
         // `set_mb_syn_cavlc.cpp:223` — `g_kuiZeroLeftMap[iZerosLeft]`, i.e.
         // saturate at 7.
         let iZeroLeft = crate::encoder::vlc_encoder::g_kuiZeroLeftMap[(iZerosLeft as usize).min(15)] as usize;
-        let upRunBefore = crate::encoder::vlc_encoder::g_kuiVlcRunBefore[iZeroLeft][uirun.min(14)];
+        let upRunBefore = g_kuiVlcRunBefore[iZeroLeft][uirun.min(14)];
         n = upRunBefore[1] as i32;
         iValue = upRunBefore[0] as u32;
         BsWriteBits(buf, &mut *pBs, n, iValue);
@@ -395,7 +399,7 @@ pub fn WelsSpatialWriteMbPred(
         MB_TYPE_INTRA4x4 => {
             BsWriteUE(buf, &mut *pBs, (iMbOffset + 0) as u32);
 
-            for iMode in 0..crate::encoder::md::MB_BLOCK4x4_NUM {
+            for iMode in 0..MB_BLOCK4x4_NUM {
                 let flag = pMbCache.bPrevIntra4x4PredModeFlag[iMode];
                 BsWriteOneBit(buf, &mut *pBs, if flag { 1 } else { 0 });
                 if !flag {
@@ -616,13 +620,13 @@ pub fn CheckBitstreamBuffer(
 pub fn WelsSpatialWriteMbSyn(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut MbWindow<'_, SMB>,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
 ) -> i32 {
-    let kuiChromaQpIndexOffset = crate::encoder::svc_encode_slice::layer_pps_ref(
+    let kuiChromaQpIndexOffset = layer_pps_ref(
         pEncCtx,
-        crate::encoder::svc_encode_slice::current_layer_expect(pEncCtx),
+        current_layer_expect(pEncCtx),
     )
     .expect("the layer's PPS is stamped")
     .uiChromaQpIndexOffset;
@@ -917,7 +921,7 @@ pub fn WelsWriteMbResidual(
 /// snapshot is `*pBs`.
 pub fn StashMBStatusCavlc(
     pBs: &mut BsWriter,
-    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+    pDss: &mut SDynamicSlicingStack,
     kuiLastMbQp: u8,
     iMbSkipRun: i32,
 ) {
@@ -929,7 +933,7 @@ pub fn StashMBStatusCavlc(
 /// See [`StashMBStatusCavlc`] for why this takes no buffer.
 pub fn StashPopMBStatusCavlc(
     pBs: &mut BsWriter,
-    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack,
+    pDss: &mut SDynamicSlicingStack,
 ) -> i32 {
     *pBs = pDss.sBsStack;
     pDss.iMbSkipRunStack
@@ -944,7 +948,7 @@ pub fn StashPopMBStatusCavlc(
 /// `PropagateCarry`.
 pub fn StashMBStatusCabac(
     buf: &mut [u8],
-    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack<'_>,
+    pDss: &mut SDynamicSlicingStack<'_>,
     pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
     kuiLastMbQp: u8,
     iMbSkipRun: i32,
@@ -975,7 +979,7 @@ pub fn StashMBStatusCabac(
 /// `GetBsPosCabac` is called after `sStoredCabac` has been copied back.
 pub fn StashPopMBStatusCabac(
     buf: &mut [u8],
-    pDss: &mut crate::encoder::svc_encode_slice::SDynamicSlicingStack<'_>,
+    pDss: &mut SDynamicSlicingStack<'_>,
     pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
 ) -> i32 {
     let pCtx = pCabacCtx;
@@ -1015,7 +1019,7 @@ pub fn GetBsPosCabac(pCabacCtx: &crate::encoder::set_mb_syn_cabac::SCabacCtx) ->
 /// Takes the slice's writer (`slice_bs_writer`) rather than the slice: the writer is
 /// all this reads.
 pub fn GetBsPosCavlc(pBs: &BsWriter) -> i32 {
-    crate::encoder::vlc_encoder::BsGetBitsPos(pBs)
+    BsGetBitsPos(pBs)
 }
 
 #[cfg(test)]

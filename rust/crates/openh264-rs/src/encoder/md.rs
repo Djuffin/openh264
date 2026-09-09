@@ -203,7 +203,7 @@ pub struct MdSliceCtx<'a> {
     /// `layer_enc_view_expect` — the frame's source planes.
     pub enc: &'a crate::encoder::rec_view::RoPicView,
     /// `layer_rec_view_expect` — the reconstruction seam.
-    pub rec: &'a crate::encoder::rec_view::RecPicView,
+    pub rec: &'a RecPicView,
     /// `layer_ref_view_expect`, **built once for the slice** and borrowed from the
     /// caller that owns it. `None` where no reference picture is bound, which on a P
     /// slice does not happen and on the shared helpers may.
@@ -307,7 +307,7 @@ impl MbSideInfo {
         Self {
             ref_qp: rp.pRefMbQp[xy],
             ref_is_p: rp.iPictureType
-                == crate::common::wels_common_defs::EWelsSliceType::P_SLICE as i32,
+                == EWelsSliceType::P_SLICE as i32,
             ref_mb_type: rp.uiRefMbType[xy],
             ref_skip_sad: rp.pMbSkipSad[xy],
         }
@@ -393,7 +393,7 @@ impl<'a> MbCursors<'a> {
     pub fn from_views(
         enc: &'a crate::encoder::rec_view::RoPicView,
         refv: &'a crate::encoder::rec_view::RoPicView,
-        rec: &'a crate::encoder::rec_view::RecPicView,
+        rec: &'a RecPicView,
         mb_x: i32,
         mb_y: i32,
     ) -> Self {
@@ -837,9 +837,9 @@ pub const fn best_pred_i4x4_blk4_off(uiBestPredI4x4Blk4Half: u8) -> usize {
 /// It lives on the one `SVAAFrameInfo` every worker shares.
 pub type PFillInterNeighborCacheFunc = fn(
     pMbCache: &mut SMbCache,
-    mbs: &crate::safe::mb_grid::MbSplit<'_, SMB>,
+    mbs: &MbSplit<'_, SMB>,
     pVaaBgMbFlag: &[i8],
-    kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
+    kpMbSkipSad: &SharedMbArray<i32>,
 );
 pub type PGetVarianceFromIntraVaaFunc = extern "C" fn(cEnc: &RecCursor<'_>) -> i32;
 // The four SADs arrive as the `[i32; 4]` they are stored as
@@ -858,7 +858,7 @@ pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;
 pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
-use crate::encoder::rec_view::RecCursor;
+use crate::encoder::rec_view::{RecCursor, RecPicView, SharedMbArray};
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 use crate::encoder::svc_encode_slice::{current_layer_expect, layer_enc_view_expect, layer_ref_view_expect};
 pub use crate::encoder::svc_encode_slice::SDqLayer;
@@ -1006,7 +1006,7 @@ pub fn IS_SVC_INTER(uiMbType: u32) -> bool {
 // Function Implementations
 pub fn FillNeighborCacheIntra(
     pMbCache: &mut SMbCache,
-    mbs: &crate::safe::mb_grid::MbSplit<'_, SMB>,
+    mbs: &MbSplit<'_, SMB>,
 ) {
     let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let mut uiNeighborIntra: u32 = 0;
@@ -1096,9 +1096,9 @@ pub fn FillNeighborCacheIntra(
 
 pub fn FillNeighborCacheInterWithoutBGD(
     pMbCache: &mut SMbCache,
-    mbs: &crate::safe::mb_grid::MbSplit<'_, SMB>,
+    mbs: &MbSplit<'_, SMB>,
     _pVaaBgMbFlag: &[i8],
-    kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
+    kpMbSkipSad: &SharedMbArray<i32>,
 ) {
     let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let kiMbXY = mbs.cur().iMbXY as isize;
@@ -1228,9 +1228,9 @@ pub fn FillNeighborCacheInterWithoutBGD(
 
 pub fn FillNeighborCacheInterWithBGD(
     pMbCache: &mut SMbCache,
-    mbs: &crate::safe::mb_grid::MbSplit<'_, SMB>,
+    mbs: &MbSplit<'_, SMB>,
     pVaaBgMbFlag: &[i8],
-    kpMbSkipSad: &crate::encoder::rec_view::SharedMbArray<i32>,
+    kpMbSkipSad: &SharedMbArray<i32>,
 ) {
     let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let kiMbXY = mbs.cur().iMbXY as isize;
@@ -2060,3 +2060,5 @@ pub fn PredictSadSkip(
 
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_SSE2, WELS_CPU_SSE41, WELS_CPU_SSSE3};
+use crate::common::wels_common_defs::EWelsSliceType;
+use crate::safe::mb_grid::MbSplit;

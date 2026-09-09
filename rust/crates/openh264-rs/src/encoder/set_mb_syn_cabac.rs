@@ -53,6 +53,7 @@
 // ============================================================================
 
 #![forbid(unsafe_code)]
+use crate::encoder::encoder_context::sWelsEncCtx;
 
 /// Maximum Quantization Parameter (QP) defined in H.264 standard.
 pub const WELS_QP_MAX: i32 = 51;
@@ -737,7 +738,7 @@ pub fn WelsCabacInitContexts(
 }
 
 /// `WelsCabacInit` — set_mb_syn_cabac.cpp:64. Fills `sWelsCabacContexts[4][52][460]`.
-pub extern "C" fn WelsCabacInit(pEncCtx: &mut crate::encoder::encoder_context::sWelsEncCtx) {
+pub extern "C" fn WelsCabacInit(pEncCtx: &mut sWelsEncCtx) {
     WelsCabacInitContexts(&mut pEncCtx.sWelsCabacContexts);
 }
 
@@ -763,7 +764,7 @@ pub fn WelsCabacContextInitFromContexts(
 /// `WelsCabacContextInit` — set_mb_syn_cabac.cpp:86. Copies the model row for
 /// this slice type and QP into the slice's own 460 context states.
 pub extern "C" fn WelsCabacContextInit(
-    pCtx: &crate::encoder::encoder_context::sWelsEncCtx,
+    pCtx: &sWelsEncCtx,
     pCbCtx: &mut SCabacCtx,
     iModel: i32,
 ) {

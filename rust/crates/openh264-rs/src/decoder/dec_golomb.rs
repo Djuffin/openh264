@@ -12,7 +12,7 @@
 //! - `codec/decoder/core/inc/dec_golomb.h`
 //! - Associated documentation in `rust/docs/dec_golomb.h.md`
 
-use crate::safe::bits::BsCursor;
+use crate::safe::bits::{BsCursor, trailing_bits};
 
 // Error and status return codes matching OpenH264 error_code.h
 pub const ERR_NONE: i32 = 0;
@@ -250,7 +250,7 @@ pub fn BsGetTe0(buf: &[u8], pBs: &mut BsCursor, iRange: i32, pCode: &mut u32) ->
 /// [`crate::safe::bits::trailing_bits`].
 #[inline(always)]
 pub fn BsGetTrailingBits(pBuf: &u8) -> i32 {
-    crate::safe::bits::trailing_bits(*pBuf)
+    trailing_bits(*pBuf)
 }
 
 /// Checks whether additional RBSP syntax elements remain before `rbsp_trailing_bits()`.

@@ -27,6 +27,7 @@
 use crate::encoder::wels_preprocess::{SAdaptiveQuantizationParam, SMotionTextureUnit, SPixMap, SVAACalcResult};
 
 use super::vaacalc::RET_SUCCESS;
+use crate::processing::vaacalc::VaaCalcPlanes;
 
 /// `util.h:61-64`.
 const AQ_INT_MULTIPLY: i64 = 10000000;
@@ -152,7 +153,7 @@ impl CAdaptiveQuantization {
         _pRefPixMap: &SPixMap,
         // The two luma planes as borrows (`ScdPlanes`' shape); the pixel maps
         // carry geometry only.
-        planes: crate::processing::vaacalc::VaaCalcPlanes<'_>,
+        planes: VaaCalcPlanes<'_>,
         calc: &SVAACalcResult,
         pMotionTexture: &mut [SMotionTextureUnit],
         pMotionTextureIndexToDeltaQp: &mut [i8],

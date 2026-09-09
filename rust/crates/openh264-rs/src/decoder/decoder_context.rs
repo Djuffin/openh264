@@ -18,7 +18,7 @@ use crate::decoder::fmo::{SFmo};
 use crate::decoder::slice::EWelsSliceType;
 use crate::decoder::decode_slice::IntraPredConstraint;
 use crate::decoder::parse_mb_syn_cavlc::SVlcTable;
-use crate::decoder::error_concealment::ERROR_CON_IDC;
+use crate::decoder::error_concealment::{ERROR_CON_IDC, SMcFunc};
 use std::ffi::c_void;
 
 
@@ -1276,7 +1276,7 @@ pub struct SWelsDecoderContext {
     pub pGetIChromaPredFunc: [PGetIntraPredFunc; 7],
     pub pIdctResAddPredFunc: PIdctResAddPredFunc,
     pub pIdctFourResAddPredFunc: PIdctFourResAddPredFunc,
-    pub sMcFunc: crate::decoder::error_concealment::SMcFunc,
+    pub sMcFunc: SMcFunc,
     pub pGetI8x8LumaPredFunc: [PGetIntraPred8x8Func; 14],
     pub pIdctResAddPredFunc8x8: PIdctResAddPred8x8Func,
     pub sCopyFunc: SCopyFunc,
@@ -1434,7 +1434,7 @@ impl Default for SWelsDecoderContext {
             pGetIChromaPredFunc: [None; 7],
             pIdctResAddPredFunc: None,
             pIdctFourResAddPredFunc: None,
-            sMcFunc: crate::decoder::error_concealment::SMcFunc::default(),
+            sMcFunc: SMcFunc::default(),
             pGetI8x8LumaPredFunc: [None; 14],
             pIdctResAddPredFunc8x8: None,
             sCopyFunc: SCopyFunc::memset_zero(),

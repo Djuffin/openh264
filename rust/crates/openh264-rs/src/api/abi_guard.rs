@@ -33,6 +33,8 @@
 
 use crate::api::codec_api::*;
 use core::mem::{align_of, size_of};
+use crate::encoder::ref_list_mgr_svc::{SLTRMarkingFeedback, SLTRRecoverRequest};
+use crate::encoder::wels_encoder_ext::{SDeliveryStatus, SDumpLayer, SLTRConfig, SLevelInfo, SProfileInfo};
 
 macro_rules! assert_size {
     ($t:ty, $n:expr) => {
@@ -153,14 +155,14 @@ assert_offset!(OpenH264Version, uMinor, 4);
 assert_offset!(OpenH264Version, uRevision, 8);
 assert_offset!(OpenH264Version, uReserved, 12);
 
-assert_size!(crate::encoder::ref_list_mgr_svc::SLTRRecoverRequest, 20);
-assert_align!(crate::encoder::ref_list_mgr_svc::SLTRRecoverRequest, 4);
+assert_size!(SLTRRecoverRequest, 20);
+assert_align!(SLTRRecoverRequest, 4);
 
-assert_size!(crate::encoder::ref_list_mgr_svc::SLTRMarkingFeedback, 16);
-assert_align!(crate::encoder::ref_list_mgr_svc::SLTRMarkingFeedback, 4);
+assert_size!(SLTRMarkingFeedback, 16);
+assert_align!(SLTRMarkingFeedback, 4);
 
-assert_size!(crate::encoder::wels_encoder_ext::SLTRConfig, 8);
-assert_align!(crate::encoder::wels_encoder_ext::SLTRConfig, 4);
+assert_size!(SLTRConfig, 8);
+assert_align!(SLTRConfig, 4);
 
 assert_size!(SliceModeEnum, 4);
 assert_align!(SliceModeEnum, 4);
@@ -238,17 +240,17 @@ assert_align!(SBitrateInfo, 4);
 assert_offset!(SBitrateInfo, iLayer, 0);
 assert_offset!(SBitrateInfo, iBitrate, 4);
 
-assert_size!(crate::encoder::wels_encoder_ext::SDumpLayer, 16);
-assert_align!(crate::encoder::wels_encoder_ext::SDumpLayer, 8);
+assert_size!(SDumpLayer, 16);
+assert_align!(SDumpLayer, 8);
 
-assert_size!(crate::encoder::wels_encoder_ext::SProfileInfo, 8);
-assert_align!(crate::encoder::wels_encoder_ext::SProfileInfo, 4);
+assert_size!(SProfileInfo, 8);
+assert_align!(SProfileInfo, 4);
 
-assert_size!(crate::encoder::wels_encoder_ext::SLevelInfo, 8);
-assert_align!(crate::encoder::wels_encoder_ext::SLevelInfo, 4);
+assert_size!(SLevelInfo, 8);
+assert_align!(SLevelInfo, 4);
 
-assert_size!(crate::encoder::wels_encoder_ext::SDeliveryStatus, 12);
-assert_align!(crate::encoder::wels_encoder_ext::SDeliveryStatus, 4);
+assert_size!(SDeliveryStatus, 12);
+assert_align!(SDeliveryStatus, 4);
 
 /// **The one place in these headers where the C data model shows through.**
 /// `SEncoderStatistics` ends in three `unsigned long`s (`codec_app_def.h:767`),

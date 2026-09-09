@@ -114,6 +114,7 @@ use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 /// names with the scalars in this module — which is the point of the naming, and the
 /// reason the module qualifier has to stay.
 use crate::simd::kernels;
+use crate::common::cpu_core::{WELS_CPU_AVX2, WELS_CPU_SSE2};
 
 
 /// `sample.cpp:336`. Installs the scalar SAD/SATD/4-SAD tables and clears the five
@@ -155,7 +156,7 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
     sdf.pfSample4Sad[BLOCK_8x4] = Some(|a, b, sad| sample_sad_four::<8, 4, _>(a, b, sad));
     sdf.pfSample4Sad[BLOCK_4x8] = Some(|a, b, sad| sample_sad_four::<4, 8, _>(a, b, sad));
 
-    if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+    if (uiCpuFlag & WELS_CPU_SSE2) != 0 {
         sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| kernels::sad::sample_sad_16x16(a, b));
         sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| kernels::sad::sample_sad_16x8(a, b));
         sdf.pfSampleSad[BLOCK_8x16] = Some(|a, b| kernels::sad::sample_sad_8x16(a, b));
@@ -202,7 +203,7 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
     //
     // This is the altitude the test belongs at. It is asked once, here, when the table
     // is built — not on every candidate the mode-decision loop scores.
-    if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_AVX2) != 0 && crate::simd::has_avx2() {
+    if (uiCpuFlag & WELS_CPU_AVX2) != 0 && crate::simd::has_avx2() {
         sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| kernels::sad::sample_sad_16x16_avx2(a, b));
         sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| kernels::sad::sample_sad_16x8_avx2(a, b));
     }
@@ -274,8 +275,8 @@ mod tests {
     fn init_fills_sad_and_satd_and_clears_combined3() {
         for flags in [
             0,
-            crate::common::cpu_core::WELS_CPU_SSE2,
-            crate::common::cpu_core::WELS_CPU_SSE2 | crate::common::cpu_core::WELS_CPU_AVX2,
+            WELS_CPU_SSE2,
+            WELS_CPU_SSE2 | WELS_CPU_AVX2,
         ] {
             let mut fl = SWelsFuncPtrList::default();
             WelsInitSampleSadFunc(&mut fl, flags);

@@ -46,6 +46,8 @@ use crate::encoder::encoder_context::{
 use crate::encoder::param_svc::{
     SExistingParasetList, SSubsetSps, SWelsPPS, SWelsSPS, SWelsSvcCodingParam, MAX_SPS_COUNT,
 };
+use crate::common::wels_trace::{WELS_LOG_WARNING, WelsLog};
+use crate::encoder::encoder_context::SWelsEncoderOutput;
 
 /// `PARA_SET_TYPE_AVCSPS` / `_SUBSETSPS` / `_PPS` — `wels_const.h`.
 pub const PARA_SET_TYPE_AVCSPS: usize = 0;
@@ -515,9 +517,9 @@ impl CWelsParametersetIdStrategyObj {
             return true;
         }
         if pCodingParam.iSpatialLayerNum > 1 && !pCodingParam.bSimulcastAVC {
-            crate::common::wels_trace::WelsLog(
+            WelsLog(
                 pLogCtx,
-                crate::common::wels_trace::WELS_LOG_WARNING,
+                WELS_LOG_WARNING,
                 &format!(
                     "ParamValidationExt(), eSpsPpsIdStrategy setting ({:?}) with multiple svc SpatialLayers ({}) not supported! eSpsPpsIdStrategy adjusted to CONSTANT_ID",
                     pCodingParam.eSpsPpsIdStrategy,
@@ -948,7 +950,7 @@ pub fn ctx_strategy_and_param_arrays(
 #[inline]
 pub fn ctx_strategy_and_out(
     pCtx: &mut sWelsEncCtx,
-) -> (&mut CWelsParametersetIdStrategyObj, &mut crate::encoder::encoder_context::SWelsEncoderOutput) {
+) -> (&mut CWelsParametersetIdStrategyObj, &mut SWelsEncoderOutput) {
     let sWelsEncCtx { pFuncList, pOut, .. } = pCtx;
     (
         pFuncList

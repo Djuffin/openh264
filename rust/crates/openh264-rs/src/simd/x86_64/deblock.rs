@@ -10,6 +10,7 @@ use core::arch::x86_64::*;
 
 use crate::safe::plane::{BlockRows, PlaneSamples};
 use crate::encoder::encoder_context::SMVUnitXY;
+use crate::common::deblocking_common::{deblock_chroma_eq4_scalar, deblock_chroma_lt4_scalar, deblock_luma_eq4_scalar, deblock_luma_lt4_scalar};
 
 // ============================================================================
 // Core SSE2 Vectorized Edge Filters
@@ -591,7 +592,7 @@ pub fn deblock_luma_lt4(
             std::array::from_fn(|i| rows[i][2..6].try_into().expect("p1..q1"));
         pix.set_block::<4, 16>(0, -2, &out);
     } else {
-        crate::common::deblocking_common::deblock_luma_lt4_scalar(pix, step_x, step_y, alpha, beta, tc);
+        deblock_luma_lt4_scalar(pix, step_x, step_y, alpha, beta, tc);
     }
 }
 
@@ -678,7 +679,7 @@ pub fn deblock_luma_eq4(
             std::array::from_fn(|i| rows[i][1..7].try_into().expect("p2..q2"));
         pix.set_block::<6, 16>(0, -3, &out);
     } else {
-        crate::common::deblocking_common::deblock_luma_eq4_scalar(pix, step_x, step_y, alpha, beta);
+        deblock_luma_eq4_scalar(pix, step_x, step_y, alpha, beta);
     }
 }
 
@@ -791,7 +792,7 @@ pub fn deblock_chroma_lt4(
         cb.set_block::<2, 8>(0, -1, &out_cb);
         cr.set_block::<2, 8>(0, -1, &out_cr);
     } else {
-        crate::common::deblocking_common::deblock_chroma_lt4_scalar(
+        deblock_chroma_lt4_scalar(
             cb, cr, step_x, step_y, alpha, beta, tc,
         );
     }
@@ -905,7 +906,7 @@ pub fn deblock_chroma_eq4(
         cb.set_block::<2, 8>(0, -1, &out_cb);
         cr.set_block::<2, 8>(0, -1, &out_cr);
     } else {
-        crate::common::deblocking_common::deblock_chroma_eq4_scalar(cb, cr, step_x, step_y, alpha, beta);
+        deblock_chroma_eq4_scalar(cb, cr, step_x, step_y, alpha, beta);
     }
 }
 
@@ -963,7 +964,7 @@ mod tests {
             let beta = 12;
             let tc = [2i8, 3, 1, 4];
 
-            crate::common::deblocking_common::deblock_luma_lt4_scalar(
+            deblock_luma_lt4_scalar(
                 &mut plane_scalar.cursor_mut(8, 8),
                 step_x,
                 step_y,
@@ -1004,7 +1005,7 @@ mod tests {
             let alpha = 24;
             let beta = 15;
 
-            crate::common::deblocking_common::deblock_luma_eq4_scalar(
+            deblock_luma_eq4_scalar(
                 &mut plane_scalar.cursor_mut(8, 8),
                 step_x,
                 step_y,
@@ -1046,7 +1047,7 @@ mod tests {
             let beta = 10;
             let tc = [1i8, 2, 0, 3];
 
-            crate::common::deblocking_common::deblock_chroma_lt4_scalar(
+            deblock_chroma_lt4_scalar(
                 &mut cb_scalar.cursor_mut(4, 4),
                 &mut cr_scalar.cursor_mut(4, 4),
                 step_x,
@@ -1096,7 +1097,7 @@ mod tests {
             let alpha = 22;
             let beta = 14;
 
-            crate::common::deblocking_common::deblock_chroma_eq4_scalar(
+            deblock_chroma_eq4_scalar(
                 &mut cb_scalar.cursor_mut(4, 4),
                 &mut cr_scalar.cursor_mut(4, 4),
                 step_x,

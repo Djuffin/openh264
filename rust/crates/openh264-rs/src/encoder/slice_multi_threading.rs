@@ -68,7 +68,7 @@ pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
-use crate::encoder::svc_encode_slice::current_layer_expect;
+use crate::encoder::svc_encode_slice::{ReallocateSliceInThread, SSliceBufferInfo, UpdateMbNeighbor, current_layer_expect, current_layer_expect_mut, layer_rec_view, slice_in_layer_mut};
 
 // ============================================================================
 // Constants and Thresholds
@@ -83,6 +83,11 @@ pub const SEM_NAME_MAX: usize = 32;
 pub const MAX_THREADS_NUM: usize = 4;
 /// One definition, in `wels_encoder_ext` — `svc_enc_slice_segment.h:62`.
 pub use crate::encoder::wels_encoder_ext::MAX_SLICES_NUM;
+use crate::encoder::encoder_context::{dq_layer_mut, dq_layer_ref};
+use crate::encoder::nal_encap::SWelsEncoderOutput;
+use crate::encoder::param_svc::SWelsSvcCodingParam;
+use crate::encoder::worker_pool::WorkerPool;
+use crate::safe::mb_grid::MbArray;
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
 pub const ENC_RETURN_SUCCESS: i32 = 0;
@@ -134,7 +139,7 @@ pub struct SSliceThreading {
     /// context does, at `WelsUninitEncoderExt`, and none outlives the encoder.
     /// `Default` is a pool of no threads, on which every job runs on the calling
     /// thread.
-    pub pool: crate::encoder::worker_pool::WorkerPool,
+    pub pool: WorkerPool,
 }
 
 impl Default for SSliceThreading {
@@ -143,7 +148,7 @@ impl Default for SSliceThreading {
             mutexSliceNumUpdate: std::sync::Mutex::new(()),
             pThreadBsBuffer: std::array::from_fn(|_| Vec::new()),
             uiThreadBsBufferNum: 0,
-            pool: crate::encoder::worker_pool::WorkerPool::new(0),
+            pool: WorkerPool::new(0),
         }
     }
 }
@@ -273,7 +278,7 @@ pub fn UpdateMbListNeighborParallel(
     let kiEndMbInSlice = kiFirst + kiCount - 1;
     let mut iIdx = kiFirst;
     while iIdx <= kiEndMbInSlice {
-        crate::encoder::svc_encode_slice::UpdateMbNeighbor(
+        UpdateMbNeighbor(
             Some(pSliceCtx),
             mbs.at_mut(iIdx as usize),
             kiMbWidth,
@@ -300,7 +305,7 @@ pub fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
         return;
     }
     while iSliceIdx < kiSliceCount {
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx);
+        let pSlice = slice_in_layer_mut(pCurDq, iSliceIdx);
         if let Some(pSlice) = pSlice {
             let consume_time = pSlice.uiSliceConsumeTime as i32;
             let mb_num = pSlice.iCountMbNumInSlice;
@@ -312,7 +317,7 @@ pub fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
 
     while iSliceIdx > 0 {
         iSliceIdx -= 1;
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx);
+        let pSlice = slice_in_layer_mut(pCurDq, iSliceIdx);
         if let Some(pSlice) = pSlice {
             pSlice.iSliceComplexRatio =
                 WelsDivRound(INT_MULTIPLY * iAvI[iSliceIdx as usize], iSumAv);
@@ -332,7 +337,7 @@ pub fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
     let mut iNeedAdj: i32 = 0;
 
     while iSliceIdx < iSliceNum {
-        let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx)
+        let Some(pSlice) = slice_in_layer_mut(pCurDq, iSliceIdx)
         else {
             return 0;
         };
@@ -352,7 +357,7 @@ pub fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
     loop {
         // Absence was never a handled state, and the loop above has already
         // walked the same range.
-        let pSlice = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx)
+        let pSlice = slice_in_layer_mut(pCurDq, iSliceIdx)
             .expect("the layer's slice bank maps this slice index");
         let fRatio = pSlice.uiSliceConsumeTime as f32 / (uiTotalConsume as f32);
         let fDiffRatio = fRatio - kfMeanRatio;
@@ -383,7 +388,7 @@ pub fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
 
 /// Dynamically recalculates macroblock run-lengths assigned to each slice in a spatial layer.
 pub fn DynamicAdjustSlicing(
-    pSvcParam: &crate::encoder::param_svc::SWelsSvcCodingParam,
+    pSvcParam: &SWelsSvcCodingParam,
     kpRc: &[SWelsSvcRc],
     pCurDqLayer: &mut SDqLayer,
     iCurDid: i32,
@@ -427,7 +432,7 @@ pub fn DynamicAdjustSlicing(
     iMaximalMbNum = kiCountNumMb - (kiCountSliceNum - 1) * iMinimalMbNum;
     iSliceIdx = 0;
     while iSliceIdx + 1 < kiCountSliceNum {
-        let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDqLayer, iSliceIdx) else {
+        let Some(pSlice) = slice_in_layer_mut(pCurDqLayer, iSliceIdx) else {
             return;
         };
         let mut iNumMbAssigning = WelsDivRound(
@@ -541,7 +546,7 @@ pub fn RequestMtResource(
     // are created here, on the application's thread, and joined when the
     // context drops. A thread the OS refuses is the same failure as a buffer it
     // refuses.
-    pSmt.pool = match crate::encoder::worker_pool::WorkerPool::try_new(iThreadBufferNum) {
+    pSmt.pool = match WorkerPool::try_new(iThreadBufferNum) {
         Ok(pool) => pool,
         Err(_) => return 1,
     };
@@ -577,7 +582,7 @@ pub fn AppendSliceToFrameBs(
     } = &mut *pCtx;
     // The NAL lengths this walk distributes are entries of `pOut.sNalLen`, and
     // the C-ABI pointer on the record is the reslice of it the application reads.
-    let crate::encoder::nal_encap::SWelsEncoderOutput { sNalLen, iNalLenBase, .. } =
+    let SWelsEncoderOutput { sNalLen, iNalLenBase, .. } =
         &mut **pOut.as_mut().expect("pOut lives");
     let Some(pCurDq) = iCurDqLayer
         .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
@@ -591,7 +596,7 @@ pub fn AppendSliceToFrameBs(
 
     let mut iSliceIdx = 0i32;
     while iSliceIdx < kiSliceCount {
-        let Some(pSlice) = crate::encoder::svc_encode_slice::slice_in_layer_mut(pCurDq, iSliceIdx) else {
+        let Some(pSlice) = slice_in_layer_mut(pCurDq, iSliceIdx) else {
             iSliceIdx += 1;
             continue;
         };
@@ -722,13 +727,13 @@ pub fn DynamicDetectCpuCores() -> i32 {
 
 /// Evaluates load balance and dynamically adjusts slicing for the base spatial dependency layer.
 pub fn AdjustBaseLayer(pCtx: &mut sWelsEncCtx) -> i32 {
-    if crate::encoder::encoder_context::dq_layer_mut(pCtx, 0).is_none() {
+    if dq_layer_mut(pCtx, 0).is_none() {
         return 0;
     }
 
     set_current_layer(pCtx, Some(LayerIdx(0)));
 
-    let pCurDq = crate::encoder::encoder_context::dq_layer_mut(pCtx, 0).expect("checked above");
+    let pCurDq = dq_layer_mut(pCtx, 0).expect("checked above");
     let kiSliceNumInFrame = pCurDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
     let iNeedAdj = NeedDynamicAdjust(pCurDq, kiSliceNumInFrame);
 
@@ -748,7 +753,7 @@ pub fn AdjustBaseLayer(pCtx: &mut sWelsEncCtx) -> i32 {
 
 /// Evaluates load balance and dynamically adjusts slicing for spatial enhancement layers.
 pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
-    if crate::encoder::encoder_context::dq_layer_ref(pCtx, 0).is_none() || current_layer_ref(pCtx).is_none() {
+    if dq_layer_ref(pCtx, 0).is_none() || current_layer_ref(pCtx).is_none() {
         return 0;
     }
 
@@ -778,7 +783,7 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
         // is the base), so the load is hoisted above the exclusive borrow.
         let kiSliceNumInFrame =
             current_layer_expect(pCtx).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
-        let Some(pBaseLayer) = crate::encoder::encoder_context::dq_layer_mut(pCtx, iCurDid as usize - 1) else {
+        let Some(pBaseLayer) = dq_layer_mut(pCtx, iCurDid as usize - 1) else {
             return 0;
         };
         iNeedAdj = NeedDynamicAdjust(pBaseLayer, kiSliceNumInFrame);
@@ -798,7 +803,7 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
     } else {
         let kiSliceNumInFrame =
             current_layer_expect(pCtx).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
-        let pCurLayer = crate::encoder::encoder_context::dq_layer_mut(pCtx, iCurDid as usize)
+        let pCurLayer = dq_layer_mut(pCtx, iCurDid as usize)
             .expect("the dependency layer is built");
         iNeedAdj = NeedDynamicAdjust(pCurLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
@@ -847,7 +852,7 @@ mod tests {
             pSmt.pThreadBsBuffer[k] = vec![0u8; LEN];
         }
         pSmt.uiThreadBsBufferNum = WORKERS;
-        pSmt.pool = crate::encoder::worker_pool::WorkerPool::new(WORKERS);
+        pSmt.pool = WorkerPool::new(WORKERS);
 
         // The take — the fork entries' partition.
         let mut vTakenBsBufs: Vec<Vec<u8>> = (0..WORKERS)
@@ -1035,7 +1040,7 @@ pub struct SliceJobHandle<'a> {
     /// the spawn; the size-limited job grows it and resolves every slice by
     /// index. `None` for the fixed modes, whose slices arrive already carved
     /// (`pSlices`).
-    pBank: Option<&'a mut crate::encoder::svc_encode_slice::SSliceBufferInfo>,
+    pBank: Option<&'a mut SSliceBufferInfo>,
     /// This worker's bs scratch slot index — still carried because the slice's
     /// `uiBufferIdx` must agree with the buffer above (asserted in the job).
     iBsSlot: i32,
@@ -1058,7 +1063,7 @@ impl<'a> SliceJobHandle<'a> {
         pSlices: Vec<&'a mut SSlice>,
         pMbs: Vec<crate::safe::mb_grid::MbWindow<'a, SMB>>,
         pDynBsBuf: Option<&'a mut [u8]>,
-        pBank: Option<&'a mut crate::encoder::svc_encode_slice::SSliceBufferInfo>,
+        pBank: Option<&'a mut SSliceBufferInfo>,
         iBsSlot: i32,
         iFirstSlice: i32,
         iSliceStep: i32,
@@ -1205,7 +1210,7 @@ fn EncodeOneSliceInJob(
             // validation rewrites idc 0 → 2, `encoder_ext.rs:1506`) confines
             // walk and neighbour reads to it.
             let pCurDq = current_layer_expect(pCtx);
-            if let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(pCurDq) {
+            if let Some(view) = layer_rec_view(pCurDq) {
                 pfDeblockingFilterSlice(
                     view,
                     &pCurDq.sSliceEncCtx,
@@ -1285,7 +1290,7 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
     // `i % iWidth == k`. Every slice reaches exactly one worker because
     // `iter_mut().enumerate()` yields each element once.
     let mut vTakenBank: Vec<SSlice> = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
+        let pCurDq = current_layer_expect_mut(pCtx);
         std::mem::take(&mut pCurDq.sSliceBufferInfo[0].pSliceBuffer)
     };
 
@@ -1304,8 +1309,8 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
         (r, pCurDq.sMbDataP.dims().mb_width())
     };
     let mut sTakenMbData = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
-        std::mem::replace(&mut pCurDq.sMbDataP, crate::safe::mb_grid::MbArray::empty())
+        let pCurDq = current_layer_expect_mut(pCtx);
+        std::mem::replace(&mut pCurDq.sMbDataP, MbArray::empty())
     };
 
     let mut iErr = ENC_RETURN_SUCCESS;
@@ -1413,7 +1418,7 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
     {
         // The bank goes back with them, and so does the grid — a pointer move
         // each way, contents carried.
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
+        let pCurDq = current_layer_expect_mut(pCtx);
         pCurDq.sSliceBufferInfo[0].pSliceBuffer = vTakenBank;
         pCurDq.sMbDataP = sTakenMbData;
     }
@@ -1559,7 +1564,7 @@ fn EncodeOnePartitionSizeLimited(
     // like the grid and the scratch), the growth is an ordinary `Vec` resize on
     // an exclusive borrow, and every resolve is an index. Restored after the
     // join.
-    pBank: &mut crate::encoder::svc_encode_slice::SSliceBufferInfo,
+    pBank: &mut SSliceBufferInfo,
 ) -> SliceJobResult {
     // ---- InitTask (base), minus the slot claim
     let eNalType = pCtx.eNalType;
@@ -1612,7 +1617,7 @@ fn EncodeOnePartitionSizeLimited(
         while iAnyMbLeftInPartition > 0 {
             let bNeedReallocate = pBank.iCodedSliceNum >= pBank.iMaxSliceNum - 1;
             if bNeedReallocate {
-                let iRet = crate::encoder::svc_encode_slice::ReallocateSliceInThread(
+                let iRet = ReallocateSliceInThread(
                     pCtx,
                     pCtx.uiDependencyId as i32,
                     pBank,
@@ -1670,7 +1675,7 @@ fn EncodeOnePartitionSizeLimited(
             // The walker reuses the partition run the coding chain just wrote
             // through, carved before the fork. `uiFilterIdc == 1` keeps the walk
             // and the neighbour reads inside the slice, hence inside the run.
-            if let Some(view) = crate::encoder::svc_encode_slice::layer_rec_view(pCurDq) {
+            if let Some(view) = layer_rec_view(pCurDq) {
                 pfDeblockingFilterSlice(
                     view,
                     &pCurDq.sSliceEncCtx,
@@ -1770,8 +1775,8 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
         (r, pCurDq.sMbDataP.dims().mb_width())
     };
     let mut sTakenMbData = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
-        std::mem::replace(&mut pCurDq.sMbDataP, crate::safe::mb_grid::MbArray::empty())
+        let pCurDq = current_layer_expect_mut(pCtx);
+        std::mem::replace(&mut pCurDq.sMbDataP, MbArray::empty())
     };
 
     // The CABAC restore scratch joins the pre-fork takes: one buffer per
@@ -1784,8 +1789,8 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
     // The slice banks join the takes: worker `k` owns bank `k` for the frame,
     // growth is an owned `Vec` resize, and they are restored after the join with
     // grown size and coded slices carried.
-    let mut vTakenBanks: Vec<crate::encoder::svc_encode_slice::SSliceBufferInfo> = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
+    let mut vTakenBanks: Vec<SSliceBufferInfo> = {
+        let pCurDq = current_layer_expect_mut(pCtx);
         (0..iWidth as usize)
             .map(|k| std::mem::take(&mut pCurDq.sSliceBufferInfo[k]))
             .collect()
@@ -1880,7 +1885,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
     }
     {
         // The grid goes back with them, and so does the scratch.
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
+        let pCurDq = current_layer_expect_mut(pCtx);
         pCurDq.sMbDataP = sTakenMbData;
     }
     for (k, buf) in vTakenDynBufs.into_iter().enumerate() {
@@ -1889,7 +1894,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
     {
         // The banks go back — grown size and coded slices carried, which is what
         // `ReOrderSliceInLayer` and the NAL assembly read after this.
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect_mut(pCtx);
+        let pCurDq = current_layer_expect_mut(pCtx);
         for (k, bank) in vTakenBanks.into_iter().enumerate() {
             pCurDq.sSliceBufferInfo[k] = bank;
         }

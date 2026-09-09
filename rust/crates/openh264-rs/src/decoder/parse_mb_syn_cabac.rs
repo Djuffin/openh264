@@ -103,7 +103,7 @@ pub const ERR_CABAC_NO_BS_TO_READ: i32 = 201;
 
 pub const dsRefLost: i32 = 0x02;
 pub const dsBitstreamError: i32 = 0x04;
-pub const ERROR_CON_DISABLE: crate::decoder::error_concealment::ERROR_CON_IDC = crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE;
+pub const ERROR_CON_DISABLE: ERROR_CON_IDC = ERROR_CON_IDC::ERROR_CON_DISABLE;
 
 #[inline(always)]
 pub const fn GENERATE_ERROR_NO(iErrLevel: i32, iErrInfo: i32) -> i32 {
@@ -611,6 +611,8 @@ pub use crate::decoder::mv_pred::{
 pub use crate::decoder::decode_slice::WELS_MIN;
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterPSubMbTypeInfo, g_ksInterBSubMbTypeInfo};
 pub use crate::decoder::decode_slice::{g_kCacheNzcScanIdx, g_kuiCache30ScanIdx, g_kuiDequantCoeff, g_kuiScan4};
+use crate::decoder::error_concealment::ERROR_CON_IDC;
+use crate::decoder::mv_pred::{MapColToList0, PredBDirectTemporal, PredMvBDirectSpatial};
 
 #[inline(always)]
 pub fn GetMbResProperty(pMBproperty: &mut i32, pResidualProperty: &mut i32, bCavlc: bool) {
@@ -2006,7 +2008,7 @@ pub fn ParseInterBMotionInfoCabac(
         let mut subMbType: SubMbType = 0;
         if iDirectSpatialMvPredFlag != 0 {
             // predict direct spatial mv
-            let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
+            let ret = PredMvBDirectSpatial(
                 pCtx, &mut *pCurDqLayer,
                 pDec,
                 pRefs,
@@ -2019,7 +2021,7 @@ pub fn ParseInterBMotionInfoCabac(
             }
         } else {
             // temporal direct 16x16 mode
-            let ret = crate::decoder::mv_pred::PredBDirectTemporal(
+            let ret = PredBDirectTemporal(
                 pCtx, &mut *pCurDqLayer,
                 pDec,
                 pRefs,
@@ -2219,7 +2221,7 @@ pub fn ParseInterBMotionInfoCabac(
             if IS_DIRECT(g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iType) {
                 if !has_direct_called {
                     if iDirectSpatialMvPredFlag != 0 {
-                        let ret = crate::decoder::mv_pred::PredMvBDirectSpatial(
+                        let ret = PredMvBDirectSpatial(
                             pCtx, &mut *pCurDqLayer,
                             pDec,
                             pRefs,
@@ -2232,7 +2234,7 @@ pub fn ParseInterBMotionInfoCabac(
                         }
                     } else {
                         // temporal direct mode
-                        let ret = crate::decoder::mv_pred::PredBDirectTemporal(
+                        let ret = PredBDirectTemporal(
                             pCtx, &mut *pCurDqLayer,
                             pDec,
                             pRefs,
@@ -2286,7 +2288,7 @@ pub fn ParseInterBMotionInfoCabac(
                         iRef[LIST_0] = 0;
                         let colocRefIndexL0 = pCurDqLayer.iColocRefIndex[LIST_0][uiColoc4Idx];
                         if colocRefIndexL0 >= 0 {
-                            iRef[LIST_0] = crate::decoder::mv_pred::MapColToList0(
+                            iRef[LIST_0] = MapColToList0(
                                 pCtx,
                                 pRefs,
                                 Some(&*pDec),
