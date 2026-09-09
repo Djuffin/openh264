@@ -9,6 +9,8 @@
 //! **Release only** (`cfg(not(debug_assertions))`), deliberately: it is one pass over
 //! ~250 whole-stream decodes and the debug suite already carries the conformance 60.
 #![cfg(not(debug_assertions))]
+// `c_long` is i64 here and i32 on Windows; the widening is not dead there.
+#![allow(clippy::useless_conversion)]
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;

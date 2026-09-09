@@ -41,13 +41,13 @@ unsafe fn ld16(r: &[u8; 16]) -> __m128i {
 /// been.
 #[target_feature(enable = "sse2")]
 unsafe fn ld8(r: &[u8; 8]) -> __m128i {
-    unsafe { _mm_cvtsi64_si128(i64::from_le_bytes(*r)) }
+    _mm_cvtsi64_si128(i64::from_le_bytes(*r))
 }
 
 /// Four bytes of a span row in the low quarter of a vector; see [`ld8`].
 #[target_feature(enable = "sse2")]
 unsafe fn ld4(r: &[u8; 4]) -> __m128i {
-    unsafe { _mm_cvtsi32_si128(i32::from_le_bytes(*r)) }
+    _mm_cvtsi32_si128(i32::from_le_bytes(*r))
 }
 
 /// Sixteen bytes of `v` to the start of `out`.
@@ -59,13 +59,13 @@ unsafe fn st16(out: &mut [u8], v: __m128i) {
 /// The low eight bytes of `v` to the start of `out`; see [`ld8`].
 #[target_feature(enable = "sse2")]
 unsafe fn st8(out: &mut [u8], v: __m128i) {
-    unsafe { out[..8].copy_from_slice(&_mm_cvtsi128_si64(v).to_le_bytes()) }
+    out[..8].copy_from_slice(&_mm_cvtsi128_si64(v).to_le_bytes())
 }
 
 /// The low four bytes of `v` to the start of `out`; see [`ld8`].
 #[target_feature(enable = "sse2")]
 unsafe fn st4(out: &mut [u8], v: __m128i) {
-    unsafe { out[..4].copy_from_slice(&_mm_cvtsi128_si32(v).to_le_bytes()) }
+    out[..4].copy_from_slice(&_mm_cvtsi128_si32(v).to_le_bytes())
 }
 
 /// Eight bytes of a window row widened to eight words.

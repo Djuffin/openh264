@@ -17,7 +17,9 @@
     unused_assignments,
     unused_mut,
     unreachable_patterns,
-    unused_parens
+    unused_parens,
+    unsafe_op_in_unsafe_fn,
+    unused_unsafe
 )]
 
 

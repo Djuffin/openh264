@@ -138,53 +138,55 @@ pub unsafe fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize
     sample2: &S,
     sad: &mut [i32; 4],
 ) {
-    const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
-    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
-    let mut acc0 = _mm_setzero_si128();
-    let mut acc1 = _mm_setzero_si128();
-    let mut acc2 = _mm_setzero_si128();
-    let mut acc3 = _mm_setzero_si128();
+    unsafe {
+        const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
+        const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+        let mut acc0 = _mm_setzero_si128();
+        let mut acc1 = _mm_setzero_si128();
+        let mut acc2 = _mm_setzero_si128();
+        let mut acc3 = _mm_setzero_si128();
 
-    let s1 = sample1.span::<16, H>(0, 0);
-    let s2 = sample2.span::<18, HW>(-1, -1);
-    let mut y = 0usize;
-    while y < H {
-        let s1 = s1.window::<16>(y, G);
-        let s2 = s2.window::<18>(y, G + 2);
-        for j in 0..G {
-            let r1 = s1.row::<16>(j, 0);
-            let v1 = _mm_loadu_si128(r1.as_ptr() as *const __m128i);
+        let s1 = sample1.span::<16, H>(0, 0);
+        let s2 = sample2.span::<18, HW>(-1, -1);
+        let mut y = 0usize;
+        while y < H {
+            let s1 = s1.window::<16>(y, G);
+            let s2 = s2.window::<18>(y, G + 2);
+            for j in 0..G {
+                let r1 = s1.row::<16>(j, 0);
+                let v1 = _mm_loadu_si128(r1.as_ptr() as *const __m128i);
 
-            let r2_up = s2.row::<16>(j, 1);
-            let r2_dn = s2.row::<16>(j + 2, 1);
-            let r2_lt = s2.row::<16>(j + 1, 0);
-            let r2_rt = s2.row::<16>(j + 1, 2);
+                let r2_up = s2.row::<16>(j, 1);
+                let r2_dn = s2.row::<16>(j + 2, 1);
+                let r2_lt = s2.row::<16>(j + 1, 0);
+                let r2_rt = s2.row::<16>(j + 1, 2);
 
-            let v2_up = _mm_loadu_si128(r2_up.as_ptr() as *const __m128i);
-            let v2_dn = _mm_loadu_si128(r2_dn.as_ptr() as *const __m128i);
-            let v2_lt = _mm_loadu_si128(r2_lt.as_ptr() as *const __m128i);
-            let v2_rt = _mm_loadu_si128(r2_rt.as_ptr() as *const __m128i);
+                let v2_up = _mm_loadu_si128(r2_up.as_ptr() as *const __m128i);
+                let v2_dn = _mm_loadu_si128(r2_dn.as_ptr() as *const __m128i);
+                let v2_lt = _mm_loadu_si128(r2_lt.as_ptr() as *const __m128i);
+                let v2_rt = _mm_loadu_si128(r2_rt.as_ptr() as *const __m128i);
 
-            acc0 = _mm_add_epi64(acc0, _mm_sad_epu8(v1, v2_up));
-            acc1 = _mm_add_epi64(acc1, _mm_sad_epu8(v1, v2_dn));
-            acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
-            acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
+                acc0 = _mm_add_epi64(acc0, _mm_sad_epu8(v1, v2_up));
+                acc1 = _mm_add_epi64(acc1, _mm_sad_epu8(v1, v2_dn));
+                acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
+                acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
+            }
+            y += G;
         }
-        y += G;
-    }
-    #[inline(always)]
-    unsafe fn reduce16(acc: __m128i) -> i32 {
-        unsafe {
-            let hi = _mm_srli_si128(acc, 8);
-            let sum = _mm_add_epi32(acc, hi);
-            _mm_cvtsi128_si32(sum)
+        #[inline(always)]
+        unsafe fn reduce16(acc: __m128i) -> i32 {
+            unsafe {
+                let hi = _mm_srli_si128(acc, 8);
+                let sum = _mm_add_epi32(acc, hi);
+                _mm_cvtsi128_si32(sum)
+            }
         }
-    }
 
-    sad[0] = reduce16(acc0);
-    sad[1] = reduce16(acc1);
-    sad[2] = reduce16(acc2);
-    sad[3] = reduce16(acc3);
+        sad[0] = reduce16(acc0);
+        sad[1] = reduce16(acc1);
+        sad[2] = reduce16(acc2);
+        sad[3] = reduce16(acc3);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -194,44 +196,46 @@ pub unsafe fn sample_sad_four_8x<S: RefSamples, const H: usize, const HW: usize,
     sample2: &S,
     sad: &mut [i32; 4],
 ) {
-    const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
-    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
-    let mut acc0 = _mm_setzero_si128();
-    let mut acc1 = _mm_setzero_si128();
-    let mut acc2 = _mm_setzero_si128();
-    let mut acc3 = _mm_setzero_si128();
+    unsafe {
+        const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
+        const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+        let mut acc0 = _mm_setzero_si128();
+        let mut acc1 = _mm_setzero_si128();
+        let mut acc2 = _mm_setzero_si128();
+        let mut acc3 = _mm_setzero_si128();
 
-    let s1 = sample1.span::<8, H>(0, 0);
-    let s2 = sample2.span::<10, HW>(-1, -1);
-    let mut y = 0usize;
-    while y < H {
-        let s1 = s1.window::<8>(y, G);
-        let s2 = s2.window::<10>(y, G + 2);
-        for j in 0..G {
-            let r1 = s1.row::<8>(j, 0);
-            let v1 = _mm_loadl_epi64(r1.as_ptr() as *const __m128i);
+        let s1 = sample1.span::<8, H>(0, 0);
+        let s2 = sample2.span::<10, HW>(-1, -1);
+        let mut y = 0usize;
+        while y < H {
+            let s1 = s1.window::<8>(y, G);
+            let s2 = s2.window::<10>(y, G + 2);
+            for j in 0..G {
+                let r1 = s1.row::<8>(j, 0);
+                let v1 = _mm_loadl_epi64(r1.as_ptr() as *const __m128i);
 
-            let r2_up = s2.row::<8>(j, 1);
-            let r2_dn = s2.row::<8>(j + 2, 1);
-            let r2_lt = s2.row::<8>(j + 1, 0);
-            let r2_rt = s2.row::<8>(j + 1, 2);
+                let r2_up = s2.row::<8>(j, 1);
+                let r2_dn = s2.row::<8>(j + 2, 1);
+                let r2_lt = s2.row::<8>(j + 1, 0);
+                let r2_rt = s2.row::<8>(j + 1, 2);
 
-            let v2_up = _mm_loadl_epi64(r2_up.as_ptr() as *const __m128i);
-            let v2_dn = _mm_loadl_epi64(r2_dn.as_ptr() as *const __m128i);
-            let v2_lt = _mm_loadl_epi64(r2_lt.as_ptr() as *const __m128i);
-            let v2_rt = _mm_loadl_epi64(r2_rt.as_ptr() as *const __m128i);
+                let v2_up = _mm_loadl_epi64(r2_up.as_ptr() as *const __m128i);
+                let v2_dn = _mm_loadl_epi64(r2_dn.as_ptr() as *const __m128i);
+                let v2_lt = _mm_loadl_epi64(r2_lt.as_ptr() as *const __m128i);
+                let v2_rt = _mm_loadl_epi64(r2_rt.as_ptr() as *const __m128i);
 
-            acc0 = _mm_add_epi64(acc0, _mm_sad_epu8(v1, v2_up));
-            acc1 = _mm_add_epi64(acc1, _mm_sad_epu8(v1, v2_dn));
-            acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
-            acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
+                acc0 = _mm_add_epi64(acc0, _mm_sad_epu8(v1, v2_up));
+                acc1 = _mm_add_epi64(acc1, _mm_sad_epu8(v1, v2_dn));
+                acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
+                acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
+            }
+            y += G;
         }
-        y += G;
+        sad[0] = _mm_cvtsi128_si32(acc0);
+        sad[1] = _mm_cvtsi128_si32(acc1);
+        sad[2] = _mm_cvtsi128_si32(acc2);
+        sad[3] = _mm_cvtsi128_si32(acc3);
     }
-    sad[0] = _mm_cvtsi128_si32(acc0);
-    sad[1] = _mm_cvtsi128_si32(acc1);
-    sad[2] = _mm_cvtsi128_si32(acc2);
-    sad[3] = _mm_cvtsi128_si32(acc3);
 }
 
 #[cfg(target_arch = "x86_64")]
