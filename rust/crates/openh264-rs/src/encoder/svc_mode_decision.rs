@@ -910,11 +910,38 @@ pub fn WelsMdI16x16FromLayer(
     let cEncLuma = crate::encoder::svc_encode_slice::layer_enc_view_expect(pCurDqLayer)
         .plane(0)
         .cursor(kiMbOrgX, kiMbOrgY);
-    WelsMdI16x16(pFunc, &cRecLuma, &cEncLuma, pMbCache, iLambda)
+    let pfMdCost16x16 = pFunc
+        .sSampleDealingFuncs
+        .md_cost(BLOCK_16x16)
+        .expect("pfMdCost selects an installed 16x16 slot");
+    WelsMdI16x16(pfMdCost16x16, &cRecLuma, &cEncLuma, pMbCache, iLambda)
+}
+
+/// The 16x16 luma predictor for `mode`, reached without `pfGetLumaI16x16Pred`.
+///
+/// **The arms are what the table holds, mode by mode**, which is not one family:
+/// `WelsInitIntraPredFuncs` installs the four scalar bodies and then overwrites
+/// only `V`, `H`, `DC` and `P` under the SIMD bit — the three remaining DC
+/// variants have no kernel and are always the `_c` body. Under `--features scalar`
+/// the four kernel names are the scalar set's own, which are those same bodies'
+/// generics. So each arm below is the function the slot actually held.
+#[inline(always)]
+fn I16x16LumaPred(iMode: i32, pPred: &mut [u8; 256], cRec: &RecCursor<'_>) {
+    use crate::encoder::get_intra_predictor as gip;
+    match iMode as i8 {
+        I16_PRED_V => kernels::intra_pred::enc_i16x16_luma_pred_v(pPred, cRec),
+        I16_PRED_H => kernels::intra_pred::enc_i16x16_luma_pred_h(pPred, cRec),
+        I16_PRED_DC => kernels::intra_pred::enc_i16x16_luma_pred_dc(pPred, cRec),
+        I16_PRED_P => kernels::intra_pred::enc_i16x16_luma_pred_plane(pPred, cRec),
+        I16_PRED_DC_L => gip::WelsI16x16LumaPredDcLeft_c(pPred, cRec),
+        I16_PRED_DC_T => gip::WelsI16x16LumaPredDcTop_c(pPred, cRec),
+        I16_PRED_DC_128 => gip::WelsI16x16LumaPredDcNA_c(pPred, cRec),
+        _ => panic!("I16x16 prediction mode {iMode} is not one of the seven"),
+    }
 }
 
 pub fn WelsMdI16x16(
-    pFunc: &SWelsFuncPtrList,
+    pfMdCost16x16: crate::encoder::md::PSampleSadSatdCostFunc,
     cRecLuma: &RecCursor<'_>,
     cEncLuma: &RecCursor<'_>,
     pMbCache: &mut SMbCache,
@@ -934,8 +961,9 @@ pub fn WelsMdI16x16(
     let kpAvailMode = &g_kiIntra16AvaliMode[iOffset];
 
     // `svc_base_layer_md.cpp:402` costs with pfMdCost, which SetFastCodingFunc points
-    // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd.
-    let pfMdCost16x16 = pFunc.sSampleDealingFuncs.md_cost(BLOCK_16x16).unwrap();
+    // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd. The selection is made
+    // per slice, so the slot arrives resolved rather than being looked up and
+    // unwrapped here for every macroblock.
 
     iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount {
@@ -943,7 +971,8 @@ pub fn WelsMdI16x16(
         debug_assert!((0..7).contains(&iCurMode));
 
         let kiDstOff = iIdx * 256;
-        pFunc.pfGetLumaI16x16Pred[iCurMode as usize].unwrap()(
+        I16x16LumaPred(
+            iCurMode,
             (&mut pMbCache.sMemPredMb[kiDstOff..kiDstOff + 256])
                 .try_into()
                 .expect("a packed 16x16 prediction block is 256 bytes"),
@@ -1321,7 +1350,7 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
             (mbc.rec_y, mbc.enc_y)
         };
         let kiCostI16x16 = WelsMdI16x16(
-            pWelsMd.sc().func,
+            pWelsMd.sc().md_cost16,
             &cRecLuma,
             &cEncLuma,
             &mut *pMbCache,
