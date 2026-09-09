@@ -522,9 +522,11 @@ pub trait RefSamples {
     /// A run-time-length row, **borrowed where the cursor can lend one and owned
     /// only where it cannot**.
     ///
-    /// [`row_blocks`](Self::row_blocks) covers the fixed-size block walks; the
-    /// motion-compensation filters in `common/mc.rs` read rows whose length is a
-    /// run-time `width`, so they need this.
+    /// [`row_blocks`](Self::row_blocks) covers the fixed-size block walks and
+    /// [`span`](Self::span) the shaped ones; this is for a caller whose row length is
+    /// a run-time value and who therefore has neither. The motion-compensation
+    /// filters were that caller until they were given const shapes, and what is left
+    /// is the two 4-sample prediction rows the `wide` and SSE2 DCT kernels read.
     ///
     /// **This is an associated type because a copy here is measurable.**
     /// `Row<'a> = &'a [u8]` for the plane cursors, and only
@@ -546,8 +548,9 @@ pub trait RefSamples {
 
 /// Longest run-time row [`RefSamples::row_view`] will carry by value.
 ///
-/// `common/mc.rs`'s widest read is `width + 5` with `width <= 17`, so 22 is the
-/// real bound; 32 is headroom.
+/// The remaining callers read four samples; the bound was 22 when the
+/// motion-compensation filters read `width + 5` this way, and 32 is headroom over
+/// either.
 pub const ROW_BUF_MAX: usize = 32;
 
 /// An owned row — [`RefSamples::Row`] for the cursors that cannot lend one.
@@ -837,6 +840,26 @@ impl<'a> PlaneSpanMut<'a> {
     #[inline]
     pub fn row_mut<const W: usize>(&mut self, y: usize, x: usize) -> &mut [u8; W] {
         (&mut self.buf[y * self.stride as usize + x..][..W]).try_into().unwrap()
+    }
+
+    /// The `h`-row, `W`-wide window starting at row `y` — [`BlockRows::window`]'s
+    /// write side, and for the same reason it exists.
+    ///
+    /// [`row_mut`](Self::row_mut) is free only where `y` is a *constant*: a row loop
+    /// the compiler declines to unroll leaves `y * stride` symbolic, which no span
+    /// length can be shown to contain, so the two per-row checks stay. The motion
+    /// compensation kernels are those loops — a six-tap filter body is far past the
+    /// unroller's threshold at sixteen rows — and they walk the block a group of rows
+    /// at a time instead: one window cut per group, and constant row offsets inside
+    /// it that fold. See [`RefSamples::span`].
+    ///
+    /// # Panics
+    /// If the window leaves the span.
+    #[inline]
+    pub fn window_mut<const W: usize>(&mut self, y: usize, h: usize) -> PlaneSpanMut<'_> {
+        let stride = self.stride as usize;
+        let len = if h == 0 { 0 } else { (h - 1) * stride + W };
+        PlaneSpanMut { buf: &mut self.buf[y * stride..][..len], stride: self.stride }
     }
 }
 

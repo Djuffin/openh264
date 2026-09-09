@@ -164,6 +164,68 @@ pub fn probe_isa_hor_ver02_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut
     isa::mc::mc_hor_ver02(src, dst, 16, 16)
 }
 
+/// The four motion-compensation kernels over **both** operand storages: the plain
+/// plane cursor the decoder hands them and the shared cell view the encoder does.
+/// What the assembly should show is the tap loads, the filter and the stores with
+/// **no per-row bounds branch** — one span per operand per block, and the row
+/// offsets inside it constant. The horizontal probe is at width 17 because that is
+/// `MeRefineFracPixel`'s `kiW + 1`, the shape with the overlapping last chunk.
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_pixel_avg_16x16_cells(dst: &mut PlaneCursorMut<'_>, a: &PlaneCursor<'_>, b: &RecCursor<'_>) {
+    isa::mc::pixel_avg(dst, a, b, 16, 16)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_hor_ver02_16x16_cells(src: &RecCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    isa::mc::mc_hor_ver02(src, dst, 16, 16)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_hor_ver20_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    isa::mc::mc_hor_ver20(src, dst, 16, 16)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_hor_ver20_16x16_cells(src: &RecCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    isa::mc::mc_hor_ver20(src, dst, 16, 16)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_hor_ver20_17x16_cells(src: &RecCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    isa::mc::mc_hor_ver20(src, dst, 17, 16)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_hor_ver22_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    isa::mc::mc_hor_ver22(src, dst, 16, 16)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_hor_ver22_16x16_cells(src: &RecCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    isa::mc::mc_hor_ver22(src, dst, 16, 16)
+}
+
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn probe_isa_mc_chroma_frac_8x8_cells(src: &RecCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
+    isa::mc::mc_chroma(src, dst, 3, 5, 8, 8)
+}
+
 /// The deblocking edge filters over the **shared cell view**, which is the operand
 /// type every encoder call hands them, one probe per branch: `step_y == 1` is the
 /// horizontal edge (taps step by the stride) and `step_x == 1` the vertical one (taps
@@ -300,12 +362,20 @@ fn main() {
         probe_isa_dct_4x4(&mut d, &ca, &cb);
         probe_isa_pixel_avg_16x16(&mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64), &ca, &cb);
         probe_isa_hor_ver02_16x16(&ca, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+        probe_isa_hor_ver22_16x16(&ca, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+        probe_isa_hor_ver20_16x16(&ca, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
         probe_isa_mc_luma_zero_16x16(&ca, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
         {
             let mut ra = vec![7u8; 64 * 64];
             let ka = RecCursor::over_owned(&mut ra, 20 * 64 + 19, 64);
             probe_isa_mc_luma_zero_16x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
             probe_isa_mc_chroma_zero_8x8_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+            probe_isa_pixel_avg_16x16_cells(&mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64), &ca, &ka);
+            probe_isa_hor_ver02_16x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+            probe_isa_hor_ver20_17x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+            probe_isa_hor_ver20_16x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+            probe_isa_hor_ver22_16x16_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
+            probe_isa_mc_chroma_frac_8x8_cells(&ka, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
         }
         {
             let mut ra = vec![7u8; 64 * 64];

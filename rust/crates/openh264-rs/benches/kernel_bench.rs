@@ -421,6 +421,31 @@ fn mc_rows(rows: &mut Vec<Row>) {
         |c| { let a = RecCursor::over_owned(black_box(&mut s0.a), ANCHOR, STRIDE); mc::mc_luma_c(&a, &mut cur_mut(&mut s0.out), black_box(0), black_box(0), 16, 16); out_sum(&s0.out, c) },
         |c| { let a = RecCursor::over_owned(black_box(&mut s1.a), ANCHOR, STRIDE); isa::mc::mc_luma(&a, &mut cur_mut(&mut s1.out), black_box(0), black_box(0), 16, 16); out_sum(&s1.out, c) },
         |c| { let a = RecCursor::over_owned(black_box(&mut s2.a), ANCHOR, STRIDE); wd::mc::mc_luma(&a, &mut cur_mut(&mut s2.out), black_box(0), black_box(0), 16, 16); out_sum(&s2.out, c) });
+    // The **refinement shapes**, over the shared cell view: `MeRefineFracPixel` runs
+    // the two half-pel filters at `kiW + 1` by `kiH` and `kiW` by `kiH + 1` out of the
+    // reference picture, and averages the quarter-pel candidates against a block of
+    // it. These are the shapes and the operand the encoder actually spends its motion
+    // compensation in; the plain-plane rows above are the decoder's.
+    row!(*rows, "mc hor_ver20 17x16 cells",
+        |c| { let a = RecCursor::over_owned(black_box(&mut s0.a), ANCHOR, STRIDE); mc::mc_hor_ver20_c(&a, &mut cur_mut(&mut s0.out), 17, 16); out_sum(&s0.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s1.a), ANCHOR, STRIDE); isa::mc::mc_hor_ver20(&a, &mut cur_mut(&mut s1.out), 17, 16); out_sum(&s1.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s2.a), ANCHOR, STRIDE); wd::mc::mc_hor_ver20(&a, &mut cur_mut(&mut s2.out), 17, 16); out_sum(&s2.out, c) });
+    row!(*rows, "mc hor_ver02 16x17 cells",
+        |c| { let a = RecCursor::over_owned(black_box(&mut s0.a), ANCHOR, STRIDE); mc::mc_hor_ver02_c(&a, &mut cur_mut(&mut s0.out), 16, 17); out_sum(&s0.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s1.a), ANCHOR, STRIDE); isa::mc::mc_hor_ver02(&a, &mut cur_mut(&mut s1.out), 16, 17); out_sum(&s1.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s2.a), ANCHOR, STRIDE); wd::mc::mc_hor_ver02(&a, &mut cur_mut(&mut s2.out), 16, 17); out_sum(&s2.out, c) });
+    row!(*rows, "mc hor_ver22 17x17 cells",
+        |c| { let a = RecCursor::over_owned(black_box(&mut s0.a), ANCHOR, STRIDE); mc::mc_hor_ver22_c(&a, &mut cur_mut(&mut s0.out), 17, 17); out_sum(&s0.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s1.a), ANCHOR, STRIDE); isa::mc::mc_hor_ver22(&a, &mut cur_mut(&mut s1.out), 17, 17); out_sum(&s1.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s2.a), ANCHOR, STRIDE); wd::mc::mc_hor_ver22(&a, &mut cur_mut(&mut s2.out), 17, 17); out_sum(&s2.out, c) });
+    row!(*rows, "mc pixel_avg 16x16 cells",
+        |c| { let (a, b) = (cur(black_box(&s0.b)), RecCursor::over_owned(black_box(&mut s0.a), ANCHOR, STRIDE)); mc::pixel_avg_c(&mut cur_mut(&mut s0.out), &a, &b, 16, 16); out_sum(&s0.out, c) },
+        |c| { let (a, b) = (cur(black_box(&s1.b)), RecCursor::over_owned(black_box(&mut s1.a), ANCHOR, STRIDE)); isa::mc::pixel_avg(&mut cur_mut(&mut s1.out), &a, &b, 16, 16); out_sum(&s1.out, c) },
+        |c| { let (a, b) = (cur(black_box(&s2.b)), RecCursor::over_owned(black_box(&mut s2.a), ANCHOR, STRIDE)); wd::mc::pixel_avg(&mut cur_mut(&mut s2.out), &a, &b, 16, 16); out_sum(&s2.out, c) });
+    row!(*rows, "mc chroma (3,5) 8x8 cells",
+        |c| { let a = RecCursor::over_owned(black_box(&mut s0.a), ANCHOR, STRIDE); mc::mc_chroma_c(&a, &mut cur_mut(&mut s0.out), black_box(3), black_box(5), 8, 8); out_sum(&s0.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s1.a), ANCHOR, STRIDE); isa::mc::mc_chroma(&a, &mut cur_mut(&mut s1.out), black_box(3), black_box(5), 8, 8); out_sum(&s1.out, c) },
+        |c| { let a = RecCursor::over_owned(black_box(&mut s2.a), ANCHOR, STRIDE); wd::mc::mc_chroma(&a, &mut cur_mut(&mut s2.out), black_box(3), black_box(5), 8, 8); out_sum(&s2.out, c) });
     row!(*rows, "mc chroma (0,0) 8x8 cells",
         |c| { let a = RecCursor::over_owned(black_box(&mut s0.a), ANCHOR, STRIDE); mc::mc_chroma_c(&a, &mut cur_mut(&mut s0.out), black_box(0), black_box(0), 8, 8); out_sum(&s0.out, c) },
         |c| { let a = RecCursor::over_owned(black_box(&mut s1.a), ANCHOR, STRIDE); isa::mc::mc_chroma(&a, &mut cur_mut(&mut s1.out), black_box(0), black_box(0), 8, 8); out_sum(&s1.out, c) },
