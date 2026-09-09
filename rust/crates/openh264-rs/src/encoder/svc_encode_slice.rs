@@ -1044,7 +1044,7 @@ pub use crate::encoder::md::SMB;
 // where that arm is main-thread-only. The slice-owned writer arm needs no
 // parameter: every body that needs it holds `&mut SSlice` and resolves
 // `sSliceBs.sBsWrite` field-precisely at the use (`slice_bs_writer`).
-pub type PWelsCodingSliceFunc = extern "C" fn(
+pub type PWelsCodingSliceFunc = fn(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
@@ -1065,7 +1065,7 @@ pub type PWelsCodingSliceFunc = extern "C" fn(
     // fires) and where the next slot does not exist.
     pNextSlice: Option<&mut SSlice>,
 ) -> i32;
-pub type PWelsSliceHeaderWriteFunc = extern "C" fn(
+pub type PWelsSliceHeaderWriteFunc = fn(
     pCtx: &sWelsEncCtx,
     pCurLayer: &SDqLayer,
     pSlice: &mut SSlice,
@@ -2563,7 +2563,7 @@ pub fn WelsCodePOverDynamicSlice(
     WelsPSliceMdEncDynamic(pEncCtx, pSlice, kbHighestSpatial, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
-pub extern "C" fn WelsCodePSlice_c(
+pub fn WelsCodePSlice_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
@@ -2575,7 +2575,7 @@ pub extern "C" fn WelsCodePSlice_c(
     WelsCodePSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
-pub extern "C" fn WelsCodePOverDynamicSlice_c(
+pub fn WelsCodePOverDynamicSlice_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
@@ -2587,7 +2587,7 @@ pub extern "C" fn WelsCodePOverDynamicSlice_c(
     WelsCodePOverDynamicSlice(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
-pub extern "C" fn WelsISliceMdEnc_c(
+pub fn WelsISliceMdEnc_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
@@ -2599,7 +2599,7 @@ pub extern "C" fn WelsISliceMdEnc_c(
     WelsISliceMdEnc(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
-pub extern "C" fn WelsISliceMdEncDynamic_c(
+pub fn WelsISliceMdEncDynamic_c(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pSliceBsBuf: &mut [u8],
@@ -2611,7 +2611,7 @@ pub extern "C" fn WelsISliceMdEncDynamic_c(
     WelsISliceMdEncDynamic(pCtx, pSlice, pSliceBsBuf, pCtxOutBs, pMbs, pRestoreBuf, pNextSlice)
 }
 
-pub extern "C" fn WelsSliceHeaderWrite_c(
+pub fn WelsSliceHeaderWrite_c(
     pCtx: &sWelsEncCtx,
     pCurLayer: &SDqLayer,
     pSlice: &mut SSlice,
@@ -2622,7 +2622,7 @@ pub extern "C" fn WelsSliceHeaderWrite_c(
     WelsSliceHeaderWrite(pCtx, pCurLayer, pSlice, pParametersetStrategy, pSliceBsBuf, pCtxOutBs);
 }
 
-pub extern "C" fn WelsSliceHeaderExtWrite_c(
+pub fn WelsSliceHeaderExtWrite_c(
     pCtx: &sWelsEncCtx,
     pCurLayer: &SDqLayer,
     pSlice: &mut SSlice,
