@@ -294,7 +294,7 @@ pub fn PredIntra4x4Mode(pIntraPredMode: &[i8; 48], iIdx4: i32) -> i32 {
 /// `svc_base_layer_md.cpp:259`. Re-points the cached per-macroblock plane pointers and
 /// reloads the intra neighbour cache. Called once per macroblock by `WelsISliceMdEnc`
 /// *before* the re-encoding loop, so it must not depend on the QP.
-pub fn WelsMdIntraInit(mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>, pMbCache: &mut SMbCache) {
+pub fn WelsMdIntraInit(mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>, pMbCache: &mut SMbCache) {
     // One `cur()` for the two coordinates, and no layer: this resolved the frame's
     // current layer and then read nothing off it.
     let cur = mbs.cur();
@@ -790,7 +790,7 @@ pub fn WelsMdInterInit(
     mbi: &crate::encoder::md::MbSideInfo,
     iMvRange: i32,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
 ) {
     // Everything this used to resolve — the layer, the function list, the VAA block,
     // the reconstruction view twice and the reference picture — is the slice's, and
@@ -1578,7 +1578,7 @@ pub fn WelsMdInterMb<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
 ) {
     let sc = *pWelsMd.sc();
     let pCurDqLayer = sc.layer;

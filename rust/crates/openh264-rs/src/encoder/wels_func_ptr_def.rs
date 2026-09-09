@@ -141,7 +141,7 @@ pub type PInterMdFunc = for<'a> fn(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
     slice: &mut SSlice,
-    mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
+    mbs: &mut crate::safe::mb_grid::MbSplit<'_, SMB>,
 );
 
 /// `wels_func_ptr_def.h:64`
