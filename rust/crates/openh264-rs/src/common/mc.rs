@@ -8,7 +8,7 @@
 
 // CPU feature flags from cpu_core.h
 
-use crate::safe::plane::{BlockRows, PlaneCursor, PlaneCursorMut, PlaneSpanMut, RefSamples};
+use crate::safe::plane::{BlockRows, PlaneCursor, PlaneCursorMut, RefSamples};
 
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
@@ -1776,7 +1776,7 @@ pub fn mc_chroma_same(
 /// context layout. Closing the gap means routing MC back through the table.
 pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, uiCpuFlag: u32) {
     *pMcFuncs = SMcFunc::default();
-    if (uiCpuFlag & crate::common::cpu_core::WELS_CPU_SSE2) != 0 {
+    if (uiCpuFlag & WELS_CPU_SSE2) != 0 {
         pMcFuncs.pfLumaHalfpelHor = |s, d, w, h| kernels::mc::mc_hor_ver20(s, d, w, h);
         pMcFuncs.pfLumaHalfpelVer = |s, d, w, h| kernels::mc::mc_hor_ver02(s, d, w, h);
         pMcFuncs.pfLumaHalfpelCen = |s, d, w, h| kernels::mc::mc_hor_ver22(s, d, w, h);

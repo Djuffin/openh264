@@ -64,7 +64,7 @@ pub const WELS_CONTEXT_COUNT: usize = 460;
 pub type cabac_low_t = u64;
 
 /// Total bit-width of the `cabac_low_t` arithmetic interval register (64 bits).
-pub const CABAC_LOW_WIDTH: usize = std::mem::size_of::<cabac_low_t>() * 8;
+pub const CABAC_LOW_WIDTH: usize = size_of::<cabac_low_t>() * 8;
 
 const CTX_NA: i8 = 0;
 

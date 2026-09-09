@@ -768,7 +768,7 @@ impl Default for SSourcePicture {
         Self {
             iColorFormat: EVideoFormatType::videoFormatI420 as i32,
             iStride: [0; 4],
-            pData: [std::ptr::null_mut(); 4],
+            pData: [ptr::null_mut(); 4],
             iPicWidth: 0,
             iPicHeight: 0,
             uiTimeStamp: 0,
@@ -805,8 +805,8 @@ impl Default for SLayerBSInfo {
             uiLayerType: 0,
             iSubSeqId: 0,
             iNalCount: 0,
-            pNalLengthInByte: std::ptr::null_mut(),
-            pBsBuf: std::ptr::null_mut(),
+            pNalLengthInByte: ptr::null_mut(),
+            pBsBuf: ptr::null_mut(),
             rPsnr: [0.0; 3],
         }
     }
@@ -862,7 +862,7 @@ pub struct SDecodingParam {
 impl Default for SDecodingParam {
     fn default() -> Self {
         Self {
-            pFileNameRestructed: std::ptr::null_mut(),
+            pFileNameRestructed: ptr::null_mut(),
             uiCpuLoad: 0,
             uiTargetDqLayer: 0,
             eEcActiveIdc: ERROR_CON_IDC::ERROR_CON_DISABLE,
@@ -940,7 +940,7 @@ impl Default for SBufferInfo {
             UsrData: SBufferInfoUsrData {
                 sSystemBuffer: SSysMEMBuffer::default(),
             },
-            pDst: [std::ptr::null_mut(); 3],
+            pDst: [ptr::null_mut(); 3],
         }
     }
 }
@@ -962,8 +962,8 @@ impl Default for SParserBsInfo {
     fn default() -> Self {
         Self {
             iNalNum: 0,
-            pNalLenInByte: std::ptr::null_mut(),
-            pDstBuff: std::ptr::null_mut(),
+            pNalLenInByte: ptr::null_mut(),
+            pDstBuff: ptr::null_mut(),
             iSpsWidthInPixel: 0,
             iSpsHeightInPixel: 0,
             uiInBsTimeStamp: 0,
@@ -1135,7 +1135,7 @@ impl TraceUserCtx {
         level: i32,
         line: &std::ffi::CStr,
     ) {
-        let ctx: *mut c_void = std::ptr::with_exposed_provenance_mut(self.0);
+        let ctx: *mut c_void = ptr::with_exposed_provenance_mut(self.0);
         unsafe { pfLog(ctx, level, line.as_ptr()) };
     }
 }
@@ -1610,7 +1610,7 @@ impl Encoder {
     /// replaced or this encoder is dropped, so it must stay valid for that long.
     /// It is the caller's, and this crate never dereferences it.
     pub unsafe fn set_trace_callback_context(&mut self, ctx: *mut c_void) {
-        self.0.m_pWelsTrace.SetTraceCallbackContext(crate::api::codec_api::TraceUserCtx::from_abi(ctx));
+        self.0.m_pWelsTrace.SetTraceCallbackContext(TraceUserCtx::from_abi(ctx));
         self.0.sync_log_ctx();
     }
 
@@ -2403,7 +2403,7 @@ impl Decoder {
     /// replaced or this decoder is dropped, so it must stay valid for that long.
     /// It is the caller's, and this crate never dereferences it.
     pub unsafe fn set_trace_callback_context(&mut self, ctx: *mut c_void) {
-        self.trace.SetTraceCallbackContext(crate::api::codec_api::TraceUserCtx::from_abi(ctx));
+        self.trace.SetTraceCallbackContext(TraceUserCtx::from_abi(ctx));
         self.sync_log_ctx();
     }
 
@@ -2939,7 +2939,7 @@ unsafe extern "C" fn decoder_init_c(this: *mut ISVCDecoder, pParam: *const SDeco
                 ptr::copy_nonoverlapping(
                     pParam.cast::<u8>(),
                     buf.as_mut_ptr().cast::<u8>(),
-                    std::mem::size_of::<SDecodingParam>(),
+                    size_of::<SDecodingParam>(),
                 );
                 let ec = ptr::addr_of_mut!((*buf.as_mut_ptr()).eEcActiveIdc).cast::<i32>();
                 ec.write(ec_idc_from_raw(ec.read()) as i32);
@@ -3923,7 +3923,7 @@ pub(crate) mod abi_test_driver {
         // makes.
         unsafe {
             {
-                let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
+                let mut p_decoder: *mut ISVCDecoder = ptr::null_mut();
                 assert_eq!(
                     i64::from(WelsCreateDecoder(&mut p_decoder)),
                     CM_RESULT_SUCCESS as i64
@@ -3944,7 +3944,7 @@ pub(crate) mod abi_test_driver {
                 let mut dims = None;
                 let mut states = 0i32;
                 for unit in crate::split_annexb_units(stream) {
-                    let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                    let mut p_dst: [*mut u8; 3] = [ptr::null_mut(); 3];
                     let mut buf_info = SBufferInfo::default();
                     let ret = ((*vtbl).DecodeFrame2)(
                         p_decoder,
@@ -3970,13 +3970,13 @@ pub(crate) mod abi_test_driver {
                 ((*vtbl).SetOption)(
                     p_decoder,
                     DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
-                    &mut eos_flag as *mut i32 as *mut std::ffi::c_void,
+                    &mut eos_flag as *mut i32 as *mut c_void,
                 );
-                let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                let mut p_dst: [*mut u8; 3] = [ptr::null_mut(); 3];
                 let mut buf_info = SBufferInfo::default();
                 let ret = ((*vtbl).DecodeFrame2)(
                     p_decoder,
-                    std::ptr::null(),
+                    ptr::null(),
                     0,
                     p_dst.as_mut_ptr(),
                     &mut buf_info,
@@ -3994,10 +3994,10 @@ pub(crate) mod abi_test_driver {
                 ((*vtbl).GetOption)(
                     p_decoder,
                     DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
-                    &mut remaining as *mut i32 as *mut std::ffi::c_void,
+                    &mut remaining as *mut i32 as *mut c_void,
                 );
                 for _ in 0..remaining.clamp(0, 24) {
-                    let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                    let mut p_dst: [*mut u8; 3] = [ptr::null_mut(); 3];
                     let mut buf_info = SBufferInfo::default();
                     let ret = ((*vtbl).FlushFrame)(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
                     states |= ret.0;
@@ -4224,7 +4224,7 @@ pub(crate) mod abi_test_driver {
         // implementation object, and every call below is the sequence a C caller
         // makes.
         unsafe {
-            let mut p_encoder: *mut ISVCEncoder = std::ptr::null_mut();
+            let mut p_encoder: *mut ISVCEncoder = ptr::null_mut();
             assert_eq!(WelsCreateSVCEncoder(&mut p_encoder), CM_RESULT_SUCCESS);
             assert!(!p_encoder.is_null());
             let vtbl = (*p_encoder).lpVtbl;
@@ -4291,7 +4291,7 @@ pub(crate) mod abi_test_driver {
                 ((*vtbl).GetOption)(
                     p_encoder,
                     ENCODER_OPTION::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
-                    &mut effective as *mut SEncParamExt as *mut std::ffi::c_void,
+                    &mut effective as *mut SEncParamExt as *mut c_void,
                 ),
                 CM_RESULT_SUCCESS
             );

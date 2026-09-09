@@ -45,10 +45,8 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::{RCMode, SSliceArgument, SSpatialLayerConfig, EUsageType};
+use crate::{RCMode, EUsageType};
 pub use crate::encoder::svc_encode_slice::SSliceHeader;
-use crate::encoder::svc_encode_slice::ctx_pps;
-use crate::encoder::svc_encode_slice::current_layer_ref;
 use crate::encoder::svc_encode_slice::layer_pps_ref;
 use crate::encoder::svc_encode_slice::ctx_pps_ref;
 use crate::encoder::svc_encode_slice::current_layer_expect;
@@ -1309,7 +1307,7 @@ pub fn RcInitGomParameters(pEncCtx: &mut sWelsEncCtx) {
 /// Assigns final macroblock luma and chroma QPs.
 pub fn RcCalculateMbQp(
     pEncCtx: &sWelsEncCtx,
-    pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
+    pSOverRc: &mut SRCSlicing,
     pCurMb: &mut SMB,
 ) {
     let did = pEncCtx.uiDependencyId as usize;
@@ -1366,7 +1364,7 @@ pub fn RcJudgeBaseUsability<'a>(pEncCtx: &'a sWelsEncCtx) -> Option<&'a SWelsSvc
 /// Distributes slice bit budget to the upcoming GOM unit.
 pub fn RcGomTargetBits(
     pEncCtx: &sWelsEncCtx,
-    pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
+    pSOverRc: &mut SRCSlicing,
 ) {
     let did = pEncCtx.uiDependencyId as usize;
     let pWelsSvcRc = pEncCtx.rc_at(did);
@@ -1407,7 +1405,7 @@ pub fn RcGomTargetBits(
 /// Dynamically adjusts slice QP at GOM boundaries.
 pub fn RcCalculateGomQp(
     pEncCtx: &sWelsEncCtx,
-    pSOverRc: &mut crate::encoder::svc_encode_slice::SRCSlicing,
+    pSOverRc: &mut SRCSlicing,
     _pCurMb: &mut SMB,
 ) {
     let did = pEncCtx.uiDependencyId as usize;
@@ -2526,7 +2524,7 @@ mod tests {
         WelsRcPostFrameSkippedUpdate(&mut ctx, 0);
         WelsRcPictureInfoUpdateDisable(&mut ctx, 0);
         let mut sMb = SMB::default();
-        let mut sSlice = crate::encoder::svc_encode_slice::SSlice::new();
+        let mut sSlice = SSlice::new();
         WelsRcMbInfoUpdateDisable(&ctx, &mut sMb, 0, &mut sSlice, None);
     }
 }

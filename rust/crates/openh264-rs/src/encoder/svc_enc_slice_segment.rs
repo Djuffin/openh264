@@ -4,7 +4,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::ffi::c_char;
 use std::sync::atomic::{AtomicU16, Ordering};
 
 use crate::api::codec_api::SliceModeEnum::{
@@ -13,9 +12,7 @@ use crate::api::codec_api::SliceModeEnum::{
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::{RC_MODES, SSliceArgument};
 use crate::encoder::encoder_context::SLogContext;
-use crate::encoder::slice_multi_threading::{
-    SSliceCtx, DEFAULT_MAXPACKETSIZE_CONSTRAINT,
-};
+use crate::encoder::slice_multi_threading::DEFAULT_MAXPACKETSIZE_CONSTRAINT;
 use crate::encoder::svc_encode_slice::SDqLayer;
 use crate::encoder::rc::{
     WELS_DIV_ROUND, GOM_ROW_MODE0_180P, GOM_ROW_MODE0_360P, GOM_ROW_MODE0_720P, GOM_ROW_MODE0_90P,
@@ -656,7 +653,7 @@ mod tests {
     fn fixed_slice_mode_falls_back_to_single_slice_at_min_mb_count() {
         let mut a = arg(2);
         let ret = SliceArgumentValidationFixedSliceMode(
-            crate::common::wels_trace::SLogContext::default(),
+            SLogContext::default(),
             &mut a,
             RC_OFF_MODE,
             128,
@@ -673,7 +670,7 @@ mod tests {
     fn fixed_slice_mode_clamps_slice_num_to_max() {
         let mut a = arg(MAX_SLICES_NUM as u32 + 10);
         let ret = SliceArgumentValidationFixedSliceMode(
-            crate::common::wels_trace::SLogContext::default(),
+            SLogContext::default(),
             &mut a,
             RC_OFF_MODE,
             1280,

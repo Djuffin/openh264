@@ -53,7 +53,6 @@ pub fn calculate_single_ctr_4x4(dct: &[i16; 16]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::encoder::encode_mb_aux::calculate_single_ctr_4x4;
 
     /// `calculate_single_ctr_4x4` reads its input only through `== 0`, so its

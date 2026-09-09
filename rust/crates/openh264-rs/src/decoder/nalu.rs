@@ -23,26 +23,12 @@
 //!    and frequency scaling matrices ([`ParseScalingList`], [`SetScalingListValue`]).
 //! 6. Access-unit NAL node storage ([`TagAccessUnits::with_nodes`], [`MemGetNextNal`]).
 
-use std::ffi::c_void;
 
 use crate::decoder::bit_stream::*;
-use crate::decoder::cabac_decoder::*;
 use crate::decoder::dec_golomb::*;
-use crate::decoder::decode_mb_aux::*;
-use crate::decoder::decode_slice::*;
 use crate::decoder::decoder_context::*;
-use crate::decoder::decoder_core::*;
 use crate::decoder::error_concealment::*;
-use crate::decoder::fmo::*;
-use crate::decoder::get_intra_predictor::*;
-use crate::decoder::manage_dec_ref::*;
-use crate::decoder::mv_pred::*;
 use crate::decoder::parameter_sets::*;
-use crate::decoder::parse_mb_syn_cabac::*;
-use crate::decoder::parse_mb_syn_cavlc::*;
-use crate::decoder::pic_queue::*;
-use crate::decoder::picture::*;
-use crate::decoder::slice::*;
 
 // Explicit imports to resolve glob ambiguities
 use crate::decoder::bit_stream::{BsReader, ERR_NONE, ERR_INVALID_PARAMETERS, ERR_INFO_OUT_OF_MEMORY};
@@ -50,8 +36,7 @@ use crate::safe::bits::BsCursor;
 
 use crate::decoder::dec_golomb::{BsGetOneBit, BsGetUe, BsGetSe, BsGetBits};
 use crate::decoder::decoder_context::{
-    SWelsDecoderContext, MAX_LAYER_NUM, SPosOffset, active_pps, active_sps,
-    pps_of, sps_of, subset_sps_of, SpsRef,
+    SWelsDecoderContext, MAX_LAYER_NUM, SPosOffset, active_pps, active_sps, sps_of, SpsRef,
 };
 use crate::decoder::parameter_sets::{SSps, SPps, SSubsetSps, SLevelLimits, MAX_SPS_COUNT, MAX_PPS_COUNT, MAX_MB_SIZE, MAX_SLICEGROUP_IDS};
 use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SRefBasePicMarking, MMCO_END, MMCO_SHORT2UNUSED, MMCO_LONG2UNUSED, MAX_MMCO_COUNT, MAX_REF_PIC_COUNT};
@@ -617,7 +602,7 @@ fn parse_only_write_subset_sps(pSpsBs: &mut SSpsBsInfo, pSps: &SSps) -> bool {
 
     let iRbspSize = bs.pos();
     let dst = &mut pSpsBs.pSpsBsBuf[5..];
-    let written = crate::decoder::bit_stream::rbsp_to_ebsp(&rbsp[..iRbspSize], dst);
+    let written = rbsp_to_ebsp(&rbsp[..iRbspSize], dst);
     // `rbsp_to_ebsp` stops at the end of its destination, so a full destination is
     // indistinguishable from a truncated one and both are refused. The reference has
     // no check here at all.
@@ -681,7 +666,7 @@ fn actual_len_without_trailing_zeros(src: &[u8]) -> usize {
 /// the de-escaped copy this NAL will be decoded from — so the only thing the C's
 /// version changes is the application's buffer.
 fn parse_only_capture_vcl(
-    saved: &mut crate::decoder::bit_stream::RawDataBuffer,
+    saved: &mut RawDataBuffer,
     kpSrcNal: &[u8],
     bExtensionFlag: bool,
     bIdrFlag: bool,
@@ -1033,7 +1018,7 @@ pub fn ParseNalHeader(
             let iErr = match cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(last)) {
                 Some(nal) => {
                     let pBs = &mut nal.sNalData.sVclNal.sSliceBitsRead;
-                    crate::decoder::bit_stream::DecInitBits(pBs, &pCtx.sRawData, iNal, iBitSize)
+                    DecInitBits(pBs, &pCtx.sRawData, iNal, iBitSize)
                 }
                 None => return None,
             };
@@ -1320,7 +1305,7 @@ pub fn ParseNonVclNal(
             if iBitSize > 0 {
                 iErr = DecInitBits(pBs, &pCtx.sRawData, kiRbspStart, iBitSize);
                 if iErr != ERR_NONE {
-                    if pCtx.pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                    if pCtx.pParam.eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE
                     {
                         pCtx.iErrorCode |= dsNoParamSets;
                     } else {
@@ -1335,7 +1320,7 @@ pub fn ParseNonVclNal(
             }
             pCtx.sBs.cursor = cursor;
             if iErr != ERR_NONE {
-                if pCtx.pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                if pCtx.pParam.eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE
                 {
                     pCtx.iErrorCode |= dsNoParamSets;
                 } else {
@@ -1350,7 +1335,7 @@ pub fn ParseNonVclNal(
             if iBitSize > 0 {
                 iErr = DecInitBits(pBs, &pCtx.sRawData, kiRbspStart, iBitSize);
                 if iErr != ERR_NONE {
-                    if pCtx.pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                    if pCtx.pParam.eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE
                     {
                         pCtx.iErrorCode |= dsNoParamSets;
                     } else {
@@ -1365,7 +1350,7 @@ pub fn ParseNonVclNal(
             }
             pCtx.sBs.cursor = cursor;
             if iErr != ERR_NONE {
-                if pCtx.pParam.eEcActiveIdc == crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE
+                if pCtx.pParam.eEcActiveIdc == ERROR_CON_IDC::ERROR_CON_DISABLE
                 {
                     pCtx.iErrorCode |= dsNoParamSets;
                 } else {
@@ -1791,13 +1776,13 @@ pub fn ParseSps(
 
     if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSubsetSps.sSps.iMbWidth = (PIC_WIDTH_IN_MBS_OFFSET + uiCode as i32) as u32;
-    if pSubsetSps.sSps.iMbWidth > MAX_MB_SIZE as u32 || pSubsetSps.sSps.iMbWidth == 0 {
+    if pSubsetSps.sSps.iMbWidth > MAX_MB_SIZE || pSubsetSps.sSps.iMbWidth == 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_MAX_MB_SIZE);
     }
 
     if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 { return ERR_INVALID_PARAMETERS; }
     pSubsetSps.sSps.iMbHeight = (PIC_HEIGHT_IN_MAP_UNITS_OFFSET + uiCode as i32) as u32;
-    if pSubsetSps.sSps.iMbHeight > MAX_MB_SIZE as u32 || pSubsetSps.sSps.iMbHeight == 0 {
+    if pSubsetSps.sSps.iMbHeight > MAX_MB_SIZE || pSubsetSps.sSps.iMbHeight == 0 {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_MAX_MB_SIZE);
     }
 
@@ -2576,7 +2561,7 @@ mod au_list_tests {
         // Dirty the slot first, so the assertion is about the reset and not about
         // what `with_nodes` happened to leave there.
         au.nal(0).sNalData.sVclNal.sSliceHeaderExt.sSliceHeader.sps_ref =
-            Some(crate::decoder::decoder_context::SpsRef { id: 3, subset: true });
+            Some(SpsRef { id: 3, subset: true });
         let idx = MemGetNextNal(&mut au).expect("a node");
         assert_eq!(idx, 0);
         assert!(
@@ -2667,10 +2652,10 @@ mod au_list_tests {
             assert_eq!(pCtx.iActiveFmoNum, 0);
 
             // A cleared entry can be re-activated, so the counter climbs again.
-            let mut sps = crate::decoder::parameter_sets::SSps::default();
+            let mut sps = SSps::default();
             sps.iMbWidth = 4;
             sps.iMbHeight = 4;
-            let mut pps = crate::decoder::parameter_sets::SPps::default();
+            let mut pps = SPps::default();
             pps.uiNumSliceGroups = 1;
             let ret = crate::decoder::fmo::FmoParamUpdate(
                 Some(&mut pCtx.sFmoList[0]),
@@ -2731,7 +2716,7 @@ mod au_list_tests {
 
         let verify = |sps: &SSps, want_escapes: usize| {
             let mut row = SSpsBsInfo::default();
-            assert!(super::parse_only_write_subset_sps(&mut row, sps), "the rewrite fits");
+            assert!(parse_only_write_subset_sps(&mut row, sps), "the rewrite fits");
             let len = row.uiSpsBsLen as usize;
             assert_eq!(&row.pSpsBsBuf[..5], &[0x00, 0x00, 0x00, 0x01, 0x67]);
             // De-escape the payload the length names: every inserted byte is a

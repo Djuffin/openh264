@@ -31,7 +31,7 @@
 #![forbid(unsafe_code)]
 
 use crate::common::intra_pred_common::{i16x16_luma_pred_h, i16x16_luma_pred_v};
-use crate::safe::plane::{PlaneCursor, RefSamples};
+use crate::safe::plane::RefSamples;
 use crate::encoder::rec_view::RecCursor;
 use crate::encoder::svc_base_layer_md::{
     C_PRED_DC, C_PRED_DC_128, C_PRED_DC_L, C_PRED_DC_T, C_PRED_H, C_PRED_P, C_PRED_V, I4_PRED_DC,

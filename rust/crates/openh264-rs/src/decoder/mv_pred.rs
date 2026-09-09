@@ -44,7 +44,6 @@
 )]
 #![forbid(unsafe_code)]
 
-use std::ffi::c_void;
 use crate::safe::mb_grid::MbArray;
 
 // ============================================================================
@@ -180,7 +179,7 @@ pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState};
 
 
 pub use crate::decoder::decoder_context::{SRefPic};
-use crate::decoder::decoder_context::{SliceCtx, active_pps, active_sps, pps_of, sps_of};
+use crate::decoder::decoder_context::SliceCtx;
 pub use crate::decoder::decoder_context::{
     SWelsDecoderContext, PicRefs, ref_id,
 };
@@ -831,7 +830,7 @@ pub fn PredMvBDirectSpatial(
         }
         UpdateP16x16DirectCabac(pCurDqLayer);
         for listIdx in 0..2 {
-            UpdateP16x16MotionInfo(pCurDqLayer, Some(&mut *pDec), listIdx, ref_idx[listIdx as usize], &iMvp[listIdx as usize]);
+            UpdateP16x16MotionInfo(pCurDqLayer, Some(&mut *pDec), listIdx, ref_idx[listIdx], &iMvp[listIdx]);
             UpdateP16x16MvdCabac(pCurDqLayer, &pMvd, listIdx as i32);
         }
     } else {

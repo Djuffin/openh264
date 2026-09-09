@@ -23,7 +23,6 @@
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
-use crate::encoder::rec_view::RecCursor;
 use crate::safe::plane::RefSamples;
 #[cfg(test)]
 use crate::safe::plane::PlaneCursor;

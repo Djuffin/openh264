@@ -1165,7 +1165,7 @@ pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
 
     pFilter.iSliceAlphaC0Offset = kiSliceAlphaC0Offset;
     pFilter.iSliceBetaOffset = kiSliceBetaOffset;
-    pFilter.iMbStride = kiMbWidth as i16;
+    pFilter.iMbStride = kiMbWidth;
 
     let map: &[AtomicU16] = &pCurDq.sSliceEncCtx.pOverallMbMap;
 
@@ -1173,7 +1173,7 @@ pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
     // filter, the one deblocking path where the guards' `[0]` mode legitimately
     // reads a neighbour record across a slice boundary — so its window is the
     // grid.
-    let mut mbs = crate::safe::mb_grid::MbWindow::whole(&mut pCurDq.sMbDataP, 0);
+    let mut mbs = MbWindow::whole(&mut pCurDq.sMbDataP, 0);
     for iMbY in 0..kiMbHeight as usize {
         for iMbX in 0..kiMbWidth as usize {
             mbs.set_cur(iMbY * kiMbWidth as usize + iMbX);
@@ -1400,7 +1400,7 @@ mod tests {
         if cur.uiMbType != MB_TYPE_SKIP {
             WelsNonZeroCount_c(&mut cur.iNonZeroCount);
         }
-        crate::simd::kernels::deblock::bs_calc(
+        kernels::deblock::bs_calc(
             &cur.iNonZeroCount,
             &cur.sMv,
             left.map(|m| (&m.iNonZeroCount, &m.sMv)),
@@ -1542,7 +1542,7 @@ mod tests {
                 let l = r.mb(MB_TYPE_8x8, true, false);
                 let (mut masked, mut unmasked) = ([[[0u8; 4]; 4]; 2], [[[0u8; 4]; 4]; 2]);
                 for (mask, out) in [(inside_bs_mask(kind), &mut masked), (0xFF, &mut unmasked)] {
-                    crate::simd::kernels::deblock::bs_calc(
+                    kernels::deblock::bs_calc(
                         &cur.iNonZeroCount,
                         &cur.sMv,
                         Some((&l.iNonZeroCount, &l.sMv)),
@@ -1562,7 +1562,7 @@ mod tests {
         cur.sMv[5] = SMVUnitXY { iMvX: 64, iMvY: 0 };
         let (mut masked, mut unmasked) = ([[[0u8; 4]; 4]; 2], [[[0u8; 4]; 4]; 2]);
         for (mask, out) in [(inside_bs_mask(MB_TYPE_16x16), &mut masked), (0xFF, &mut unmasked)] {
-            crate::simd::kernels::deblock::bs_calc(
+            kernels::deblock::bs_calc(
                 &cur.iNonZeroCount, &cur.sMv, None, None, mask, out,
             );
         }

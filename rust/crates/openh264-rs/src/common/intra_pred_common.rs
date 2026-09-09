@@ -58,7 +58,7 @@
 // left. A shared `(cursor)` parameter would make each kernel's contract claim the
 // other's reach.
 
-use crate::safe::plane::{PlaneCursor, RefSamples};
+use crate::safe::plane::RefSamples;
 
 /// C++: `WelsI16x16LumaPredV_c`, `codec/common/src/intra_pred_common.cpp`.
 ///

@@ -13,8 +13,7 @@
 
 
 use crate::encoder::rec_view::{copy_block_to_view, RecCursor};
-use crate::encoder::svc_encode_slice::{layer_enc_view, layer_rec_view, layer_ref_pic, layer_ref_view, layer_pps_ref, current_layer_ref};
-use crate::encoder::picture::{RecPicId, SrcPicId};
+use crate::encoder::svc_encode_slice::layer_ref_pic;
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
 use crate::encoder::svc_encode_mb::WelsEncInterY;
@@ -30,7 +29,7 @@ pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::wels_preprocess::EStaticBlockIdc;
 pub use crate::encoder::md::SMcFunc;
 use crate::common::mc::{mc_chroma, mc_luma};
-use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
+use crate::safe::plane::PlaneCursorMut;
 pub use crate::encoder::wels_preprocess::SVAACalcResult;
 pub use crate::encoder::wels_preprocess::SScrollDetectionParam;
 pub use crate::encoder::svc_motion_estimate::SWelsME;
@@ -905,7 +904,7 @@ pub fn WelsMdI16x16FromLayer(
     };
     let (kiMbOrgX, kiMbOrgY) = pMbCache.SPicData.luma_origin();
     let cRecLuma = layer_rec_view_expect(pCurDqLayer).plane(0).cursor(kiMbOrgX, kiMbOrgY);
-    let cEncLuma = crate::encoder::svc_encode_slice::layer_enc_view_expect(pCurDqLayer)
+    let cEncLuma = layer_enc_view_expect(pCurDqLayer)
         .plane(0)
         .cursor(kiMbOrgX, kiMbOrgY);
     let pfMdCost16x16 = pFunc
@@ -939,7 +938,7 @@ fn I16x16LumaPred(iMode: i32, pPred: &mut [u8; 256], cRec: &RecCursor<'_>) {
 }
 
 pub fn WelsMdI16x16(
-    pfMdCost16x16: crate::encoder::md::PSampleSadSatdCostFunc,
+    pfMdCost16x16: PSampleSadSatdCostFunc,
     cRecLuma: &RecCursor<'_>,
     cEncLuma: &RecCursor<'_>,
     pMbCache: &mut SMbCache,
@@ -1177,7 +1176,7 @@ pub extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, 
 
     // `WelsDctMb`'s body inlined. The prediction scratch is stride 16, so its
     // `+8 / +128 / +136` are `(8,0) / (0,8) / (8,8)`.
-    let encView = crate::encoder::svc_encode_slice::layer_enc_view_expect(&*pCurDqLayer);
+    let encView = layer_enc_view_expect(&*pCurDqLayer);
     let pEncMb = pMbCache.SPicData.mb_cursor_ro(encView, 0);
     let pMemPredLuma = RecCursor::over_owned(
         &mut pMbCache.sMemPredMb,
@@ -1552,8 +1551,8 @@ pub fn IsMbScrolledStatic(pBlockType: &[i32; 4]) -> bool {
 #[inline(always)]
 pub fn CalUVSadCost(
     sdf: &crate::encoder::md::SSampleDealingFunc,
-    cEncOri: &crate::encoder::rec_view::RecCursor<'_>,
-    cRefOri: &crate::encoder::rec_view::RecCursor<'_>,
+    cEncOri: &RecCursor<'_>,
+    cRefOri: &RecCursor<'_>,
 ) -> i32 {
     if let Some(sad_func) = sdf.pfSampleSad[BLOCK_8x8] {
         sad_func(cEncOri, cRefOri)
@@ -2382,7 +2381,7 @@ mod tests {
             // The fixture needs a real border, because the V/H/DC predictors read
             // `(x, -1)` and `(-1, y)`.
             const STRIDE: usize = 48;
-            let mut rec_pic = crate::encoder::picture::SPicture::new(160, 160, false);
+            let mut rec_pic = SPicture::new(160, 160, false);
             {
                 let plane = rec_pic.plane_mut(0);
                 let (w, h) = (plane.width() as isize, plane.height() as isize);
@@ -2395,7 +2394,7 @@ mod tests {
             // above the neighbours, which is what makes the SAD a known number.
             const MB_X: i32 = 1;
             const MB_Y: i32 = 1;
-            let mut src_pic = crate::encoder::picture::SPicture::new(160, 160, false);
+            let mut src_pic = SPicture::new(160, 160, false);
             {
                 let plane = src_pic.plane_mut(0);
                 let (w, h) = (plane.width() as isize, plane.height() as isize);

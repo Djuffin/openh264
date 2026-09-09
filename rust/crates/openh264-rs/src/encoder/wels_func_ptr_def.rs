@@ -15,7 +15,7 @@ use crate::encoder::rec_view::RecCursor;
 use crate::common::mc::SMcFunc;
 use crate::encoder::deblocking::DeblockingFunc;
 use crate::encoder::encoder_context::{
-    sWelsEncCtx, BLOCK_STATIC_IDC_ALL, BLOCK_SIZE_ALL, C_PRED_A, I16_PRED_DC_A, I4_PRED_A,
+    sWelsEncCtx, BLOCK_STATIC_IDC_ALL, C_PRED_A, I16_PRED_DC_A, I4_PRED_A,
 };
 use crate::encoder::encode_mb_aux::{
     PCalculateSingleCtrFunc, PCopyFunc, PDctFunc, PGetNoneZeroCountFunc, PQuantizationDcFunc,
@@ -32,9 +32,7 @@ use crate::encoder::rc::SWelsRcFunc;
 use crate::encoder::svc_encode_mb::{PDeQuantization4x4Func, PDeQuantizationFunc};
 use crate::encoder::svc_encode_slice::{BsWriter, SDqLayer, SDynamicSlicingStack, SSlice};
 use crate::encoder::svc_motion_estimate::{
-    PCalculateBlockFeatureOfFrame, PCalculateSatdFunc, PCalculateSingleBlockFeature,
-    PCheckDirectionalMv, PFillQpelLocationByFeatureValueFunc, PInitializeHashforFeatureFunc,
-    PLineFullSearchFunc, PMotionSearchFunc, PSearchMethodFunc, SMeFuncs,
+    PCalculateBlockFeatureOfFrame, PFillQpelLocationByFeatureValueFunc, PInitializeHashforFeatureFunc, PMotionSearchFunc, SMeFuncs,
     PUpdateFMESwitch,
 };
 use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
@@ -219,7 +217,7 @@ impl EntropyCoder {
         pSlice: &mut SSlice,
         mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
         pSliceBsBuf: &mut [u8],
-        pCtxOutBs: &mut Option<&mut crate::encoder::vlc_encoder::BsWriter>,
+        pCtxOutBs: &mut Option<&mut BsWriter>,
     ) -> i32 {
         match self {
             EntropyCoder::Cavlc => {

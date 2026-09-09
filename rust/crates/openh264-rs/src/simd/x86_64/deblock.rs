@@ -8,7 +8,7 @@
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-use crate::safe::plane::{BlockRows, PlaneSamples, RefSamples};
+use crate::safe::plane::{BlockRows, PlaneSamples};
 use crate::encoder::encoder_context::SMVUnitXY;
 
 // ============================================================================

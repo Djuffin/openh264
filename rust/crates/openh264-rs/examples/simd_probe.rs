@@ -17,7 +17,7 @@
 // A build with neither probe set — off x86_64 and aarch64, without `--features wide`
 // — emits no probes at all, so main's fixtures go unread. That is the honest outcome
 // for a codegen instrument on a target with no kernels to read the codegen of.
-#![allow(non_snake_case, unused_imports)]
+#![allow(non_snake_case)]
 
 use openh264_rs::encoder::rec_view::RecCursor;
 use openh264_rs::safe::plane::{PlaneCursor, PlaneCursorMut};

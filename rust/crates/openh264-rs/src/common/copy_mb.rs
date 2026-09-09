@@ -36,7 +36,7 @@
 #![deny(unsafe_code)]
 
 use crate::common::mc::copy_rows;
-use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples};
+use crate::safe::plane::{PlaneCursorMut, RefSamples};
 
 /// C++: `WelsCopy4x4_c`.
 #[inline(always)]

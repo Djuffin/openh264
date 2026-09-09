@@ -125,7 +125,6 @@ pub fn satd_16x16<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) ->
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::encoder::sample::{
         satd_16x16, satd_16x8, satd_4x4, satd_4x8, satd_8x16, satd_8x4, satd_8x8,
     };

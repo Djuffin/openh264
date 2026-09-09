@@ -433,7 +433,6 @@ pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::encoder::encode_mb_aux::{
         get_none_zero_count, quant_4x4, quant_4x4_dc, quant_four_4x4, quant_four_4x4_max,
         g_kiQuantMF, G_KI_QUANT_INTER_FF,

@@ -40,7 +40,7 @@
 
 #![deny(unsafe_code)]
 
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 
 // Constants
 pub const MIN_ACCESS_UNIT_CAPACITY: usize = 262144;
@@ -195,12 +195,12 @@ pub fn WELS_ABS(x: i32) -> i32 {
 pub fn IS_VCL_NAL(eNalType: EWelsNalUnitType, _unused: i32) -> bool {
     matches!(
         eNalType,
-        EWelsNalUnitType::NAL_UNIT_CODED_SLICE
-            | EWelsNalUnitType::NAL_UNIT_CODED_SLICE_DPA
-            | EWelsNalUnitType::NAL_UNIT_CODED_SLICE_DPB
-            | EWelsNalUnitType::NAL_UNIT_CODED_SLICE_DPC
-            | EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
-            | EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT
+        NAL_UNIT_CODED_SLICE
+            | NAL_UNIT_CODED_SLICE_DPA
+            | NAL_UNIT_CODED_SLICE_DPB
+            | NAL_UNIT_CODED_SLICE_DPC
+            | NAL_UNIT_CODED_SLICE_IDR
+            | NAL_UNIT_CODED_SLICE_EXT
     )
 }
 
@@ -283,8 +283,8 @@ pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt, SSlice};
 
 pub use crate::decoder::nalu::SAccessUnit;
 use crate::decoder::decoder_context::{
-    active_fmo, active_pps, active_sps, au_has_nals, cur_au, cur_and_refs, cur_dq_layer, dec_pic,
-    fmo_of_mut, parser_bs, pic_pool_mut, pic_refs, pool_pic, pps_of, ref_id, ref_pic, sps_of,
+    active_fmo, active_pps, active_sps, au_has_nals, cur_au, cur_and_refs, dec_pic,
+    fmo_of_mut, parser_bs, pic_pool_mut, pps_of, ref_id, ref_pic, sps_of,
     sps_ref_of, subset_sps_of, SpsRef,
 };
 
@@ -957,7 +957,7 @@ pub fn DecodeFrameConstruction(
                 Some(nal) => (
                     nal.sNalHeaderExt.bIdrFlag,
                     nal.sNalHeaderExt.sNalUnitHeader.eNalUnitType
-                        == crate::decoder::nalu::EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT,
+                        == NAL_UNIT_CODED_SLICE_EXT,
                 ),
                 None => (false, false),
             };
@@ -1597,7 +1597,7 @@ pub fn ParseDecRefPicMarking(
                         kpRefMarking.sMmcoRef[iIdx].iDiffOfPicNum = 1 + (uiCode as i32);
                         kpRefMarking.sMmcoRef[iIdx].iShortFrameNum = (pSh.iFrameNum
                             - kpRefMarking.sMmcoRef[iIdx].iDiffOfPicNum)
-                            & (((1 << uiLog2MaxFrameNum) - 1) as i32);
+                            & ((1 << uiLog2MaxFrameNum) - 1);
                     } else if kuiMmco == MMCO_LONG2UNUSED {
                         bAllowMmco5 = false;
                         if BsGetUe(buf, pBs, &mut uiCode) != ERR_NONE {
@@ -1859,7 +1859,7 @@ pub fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, pLogCtx: Option<&SLog
     pCtx.uiCpuFlag = 0;
     pCtx.bAuReadyFlag = false;
     pCtx.bCabacInited = false;
-    pCtx.uiCpuFlag = WelsCPUFeatureDetect(&mut iCpuCores) as u32;
+    pCtx.uiCpuFlag = WelsCPUFeatureDetect(&mut iCpuCores);
     pCtx.iImgWidthInPixel = 0;
     pCtx.iImgHeightInPixel = 0;
     pCtx.iLastImgWidthInPixel = 0;
@@ -2028,7 +2028,7 @@ pub fn DecoderConfigParam(pCtx: &mut SWelsDecoderContext, kpParam: &SDecodingPar
 
 pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext) -> i32 {
     let mut cpu_cores = 0i32;
-    pCtx.uiCpuFlag = { WelsCPUFeatureDetect(&mut cpu_cores) } as u32;
+    pCtx.uiCpuFlag = WelsCPUFeatureDetect(&mut cpu_cores);
     { WelsInitDecoderFuncs(pCtx) };
     // `decoder.cpp:606` — the vlc tables, right after the function pointers.
     crate::decoder::parse_mb_syn_cavlc::InitVlcTable(&mut pCtx.pVlcTable);
@@ -2809,7 +2809,7 @@ pub fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
                     break;
                 };
                 let hdr = &nal.sNalHeaderExt;
-                if hdr.sNalUnitHeader.eNalUnitType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR
+                if hdr.sNalUnitHeader.eNalUnitType == NAL_UNIT_CODED_SLICE_IDR
                     || hdr.bIdrFlag
                 {
                     break;
@@ -3401,7 +3401,7 @@ pub fn AllocPicBuffOnNewSeqBegin(pCtx: &mut SWelsDecoderContext) -> i32 {
         if GetThreadCount(pCtx) <= 1 {
             WelsResetRefPic(pCtx);
         }
-        let iErr = SyncPictureResolutionExt(pCtx, iMbWidth as u32, iMbHeight as u32);
+        let iErr = SyncPictureResolutionExt(pCtx, iMbWidth, iMbHeight);
         iErr
     }
 }
@@ -3530,7 +3530,7 @@ pub fn WelsDecodeBs(
             pCtx.sRawData.zero_reserved(payload_start + payload_len);
 
             let mut consumed_bytes = 0i32;
-            let mut nal_header = crate::decoder::nalu::SNalUnitHeader::default();
+            let mut nal_header = SNalUnitHeader::default();
             let p_payload = crate::decoder::nalu::ParseNalHeader(
                 pCtx,
                 &mut nal_header,
@@ -3798,7 +3798,7 @@ pub fn DecodeCurrentAccessUnit(
         let uiTimeStamp = pNalCur
             .and_then(|i| pCtx.access_unit.as_deref().and_then(|au| au.node(i)))
             .map(|nal| nal.uiTimeStamp);
-        let uiDecodingTimeStamp = pCtx.uiDecodingTimeStamp as u32;
+        let uiDecodingTimeStamp = pCtx.uiDecodingTimeStamp;
         if let Some(pDec) = dec_pic(&mut pCtx.pPicBuff, pCtx.pDec) {
             if let Some(uiTimeStamp) = uiTimeStamp {
                 pDec.uiTimeStamp = uiTimeStamp;
@@ -3957,7 +3957,7 @@ pub fn DecodeCurrentAccessUnit(
                     (dq_sps, dq_layer_info)
                 {
                     let kbIdrFlag = bIdrFlag
-                        || eNalUnitType == EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR;
+                        || eNalUnitType == NAL_UNIT_CODED_SLICE_IDR;
                     // `pLastThreadCtx` is the multi-threaded arm's `GetPrevFrameNum`
                     // detour; `GetThreadCount` is identically 0 here, so the C++'s
                     // single-threaded read is the whole of it.
@@ -4674,18 +4674,18 @@ mod tests {
     #[test]
     fn the_au_rotation_carries_the_two_node_indices_with_it() {
         use crate::decoder::decoder_context::slice_header_of;
-        use crate::decoder::slice::EWelsSliceType;
+        
 
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.access_unit = Some(SAccessUnit::with_nodes(4));
         {
             let au = cur_au(&mut ctx.access_unit).unwrap();
             let decoded = &mut au.node_mut(0).unwrap().sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
-            decoded.eSliceType = EWelsSliceType::B_SLICE;
+            decoded.eSliceType = B_SLICE;
             decoded.iPicOrderCntLsb = 41;
             let successor =
                 &mut au.node_mut(1).unwrap().sNalData.sVclNal.sSliceHeaderExt.sSliceHeader;
-            successor.eSliceType = EWelsSliceType::P_SLICE;
+            successor.eSliceType = P_SLICE;
             successor.iPicOrderCntLsb = 99;
             au.uiActualUnitsNum = 1;
             au.uiAvailUnitsNum = 2;
@@ -4697,7 +4697,7 @@ mod tests {
 
         assert_eq!(
             slice_header_of(&ctx).map(|sh| (sh.eSliceType, sh.iPicOrderCntLsb)),
-            Some((EWelsSliceType::B_SLICE, 41)),
+            Some((B_SLICE, 41)),
             "the decoded slice's header, not the successor AU's"
         );
         assert_eq!(ctx.slice_hdr_nal, Some(1), "the index followed its node");
@@ -4786,7 +4786,7 @@ mod tests {
         {
             {
                 // No access unit in flight, so no NAL to read a header out of.
-                let mut cursor = crate::safe::bits::BsCursor::default();
+                let mut cursor = BsCursor::default();
                 let mut ctx = SWelsDecoderContext::new_boxed();
                 let res = ParseSliceHeaderSyntaxs(&mut ctx, 0, &mut cursor, false);
                 assert_eq!(res, ERR_INFO_INVALID_PTR);

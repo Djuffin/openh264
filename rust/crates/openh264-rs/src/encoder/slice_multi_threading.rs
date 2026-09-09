@@ -46,11 +46,11 @@
 use std::sync::atomic::{AtomicI32, AtomicU16, Ordering};
 
 use crate::encoder::nal_encap::{
-    WelsEncodeNal, WelsLoadNalForSlice, WelsUnloadNalForSlice, WelsWriteSVCPrefixNal, SWelsNalRaw,
+    WelsEncodeNal, WelsLoadNalForSlice, WelsUnloadNalForSlice, WelsWriteSVCPrefixNal,
 };
 use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType};
 use crate::encoder::svc_encode_slice::{
-    current_layer_mut, current_layer_ref, InitOneSliceInThread, ReallocateSliceInThread,
+    current_layer_ref, InitOneSliceInThread,
     SetSliceBoundaryInfo,
     WelsCodeOneSlice,
 };
@@ -59,7 +59,7 @@ use crate::encoder::wels_encoder_ext::WelsTime;
 pub const ENC_RETURN_UNEXPECTED: i32 = 0x04;
 use crate::encoder::svc_encode_slice::{set_current_layer, LayerIdx};
 use crate::{
-    RCMode, SEncParamExt, SFrameBSInfo, SLayerBSInfo, SliceMode, MAX_SPATIAL_LAYER_NUM,
+    RCMode, SLayerBSInfo, SliceMode, MAX_SPATIAL_LAYER_NUM,
 };
 pub use crate::encoder::nal_encap::SWelsSliceBs;
 pub use crate::encoder::rc::SWelsSvcRc;
@@ -68,9 +68,6 @@ pub use crate::encoder::md::SMB;
 pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
-use crate::encoder::encoder_context::{
-    
-};
 use crate::encoder::svc_encode_slice::current_layer_expect;
 
 // ============================================================================
@@ -267,7 +264,7 @@ pub fn with_wels_mutex<R>(pMutex: Option<&std::sync::Mutex<()>>, f: impl FnOnce(
 /// caller's — carved out of the grid before the fork by [`UpdateMbMapForked`].
 pub fn UpdateMbListNeighborParallel(
     mbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
-    pSliceCtx: &crate::encoder::svc_encode_slice::SSliceCtx,
+    pSliceCtx: &SSliceCtx,
     kiMbWidth: i32,
     kiSliceIdc: i32,
     kiFirst: i32,
@@ -387,7 +384,7 @@ pub fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
 /// Dynamically recalculates macroblock run-lengths assigned to each slice in a spatial layer.
 pub fn DynamicAdjustSlicing(
     pSvcParam: &crate::encoder::param_svc::SWelsSvcCodingParam,
-    kpRc: &[crate::encoder::rc::SWelsSvcRc],
+    kpRc: &[SWelsSvcRc],
     pCurDqLayer: &mut SDqLayer,
     iCurDid: i32,
 ) {
@@ -630,7 +627,7 @@ pub fn AppendSliceToFrameBs(
                     let kiSlot = *iNalLenBase + (iNalIdxBase + iNalIdx).max(0) as usize;
                     if kiSlot < sNalLen.len() {
                         sNalLen[kiSlot]
-                            .store(pSliceBs.iNalLen[iNalIdx as usize], std::sync::atomic::Ordering::Relaxed);
+                            .store(pSliceBs.iNalLen[iNalIdx as usize], Ordering::Relaxed);
                     }
                     iNalIdx += 1;
                 }
@@ -1300,7 +1297,7 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
     // reordering, because the job pairs windows with slices by `kiLocal`
     // arithmetic.
     let (vSliceRanges, kiGridWidth) = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect(pCtx);
+        let pCurDq = current_layer_expect(pCtx);
         let r: Vec<(i32, i32)> = (0..kiSliceCount as usize)
             .map(|i| (pCurDq.pFirstMbIdxOfSlice[i], pCurDq.pCountMbNumInSlice[i]))
             .collect();
@@ -1500,7 +1497,7 @@ pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
         cursor = first + count;
     }
 
-    let pSliceCtx: &crate::encoder::svc_encode_slice::SSliceCtx = sSliceEncCtx;
+    let pSliceCtx: &SSliceCtx = sSliceEncCtx;
     pool.scope(|s| {
         for group in per_worker {
             s.spawn(move || {
@@ -1576,7 +1573,7 @@ fn EncodeOnePartitionSizeLimited(
         let Some(pSlice) = pBank.pSliceBuffer.get_mut(kiCur) else {
             return SliceJobResult { iResult: ENC_RETURN_UNEXPECTED, bInitFailed: true };
         };
-        crate::encoder::svc_encode_slice::InitOneSliceInThread(pCtx, pSlice, iBsSlot, iPartitionIdx);
+        InitOneSliceInThread(pCtx, pSlice, iBsSlot, iPartitionIdx);
         let iReturn = SetSliceBoundaryInfo(current_layer_ref(pCtx), pSlice, iPartitionIdx);
         if iReturn != ENC_RETURN_SUCCESS {
             return SliceJobResult { iResult: iReturn, bInitFailed: true };
@@ -1636,7 +1633,7 @@ fn EncodeOnePartitionSizeLimited(
             let (kpHead, kpTail) = pBank.pSliceBuffer.split_at_mut(kiCurSlot + 1);
             let pSlice = &mut kpHead[kiCurSlot];
             let pNextSlice = kpTail.first_mut();
-            crate::encoder::svc_encode_slice::InitOneSliceInThread(pCtx, pSlice, iBsSlot, iLocalSliceIdx);
+            InitOneSliceInThread(pCtx, pSlice, iBsSlot, iLocalSliceIdx);
             kiLastCodedSlot = Some(kiCurSlot);
             pSlice.sSliceBs.sBsWrite = BsWriter::new();
 
@@ -1753,7 +1750,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
     // inside its run, which is what lets the coding chain, the boundary
     // walker and the deblocking all write through the same window.
     let (vPartRanges, kiGridWidth) = {
-        let pCurDq = crate::encoder::svc_encode_slice::current_layer_expect(pCtx);
+        let pCurDq = current_layer_expect(pCtx);
         let r: Vec<(i32, i32)> = (0..iWidth as usize)
             .map(|p| {
                 let first = pCurDq.FirstMbIdxOfPartition[p];

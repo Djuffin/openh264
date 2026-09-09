@@ -1372,7 +1372,7 @@ pub fn ParseInterBInfo(
     macro_rules! note_ref_concealed {
         ($listIdx:expr, $iref:expr) => {{
             let p = pRefs
-                .resolve(pCtx.ref_id($listIdx as usize, $iref as usize), Some(&*pDec))
+                .resolve(pCtx.ref_id($listIdx, $iref as usize), Some(&*pDec))
                 .map(|p| p.bIsComplete);
             *pCtx.bMbRefConcealed = pCtx.bRPLRError
                 || *pCtx.bMbRefConcealed
@@ -1383,9 +1383,9 @@ pub fn ParseInterBInfo(
     /// Shared `ref_idx` validation: `RETURN_ERR_IF_NULL` on the concealed path.
     macro_rules! check_ref_idx {
         ($listIdx:expr, $iref:expr) => {{
-            let list = $listIdx as usize;
+            let list = $listIdx;
             let ppRefPic = &pCtx.sRefPic.pRefList[list];
-            if $iref < 0 || $iref as i32 >= iRefCount[list] || ppRefPic[$iref as usize].is_none() {
+            if $iref < 0 || i32::from($iref) >= iRefCount[list] || ppRefPic[$iref as usize].is_none() {
                 *pCtx.bMbRefConcealed = true;
                 if ec_active {
                     $iref = 0;
@@ -1875,7 +1875,7 @@ pub fn ParseInterBInfo(
                             &*iMvArray,
                             &*iRefIdxArray,
                             listIdx,
-                            iPartIdx as usize,
+                            iPartIdx,
                             iBlockW as usize,
                             iref,
                             &mut iMv,
@@ -2903,7 +2903,7 @@ mod tests {
         InitVlcTable(&mut vlc_table);
 
         {
-            let mut ctx = crate::decoder::decoder_context::SWelsDecoderContext::new_boxed();
+            let mut ctx = SWelsDecoderContext::new_boxed();
             let mut view = crate::decoder::decoder_context::test_slice_ctx(&mut ctx, &mut vlc_table);
             let res = WelsParseMbCavlcResidual(
                 view.pVlcTable,
