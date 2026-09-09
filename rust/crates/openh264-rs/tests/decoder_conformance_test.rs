@@ -456,12 +456,12 @@ asset_test!(
 asset_test!(
     test_asset_cisco_men_whisper_640x320_cabac_bframe_9,
     "Cisco_Men_whisper_640x320_CABAC_Bframe_9.264",
-    "931ba1caf075e7b47445c1f4410ade77a46048f6"
+    "2b349c1bc806b6e0412008747b2463d77b576476"
 );
 asset_test!(
     test_asset_cisco_men_whisper_640x320_cavlc_bframe_9,
     "Cisco_Men_whisper_640x320_CAVLC_Bframe_9.264",
-    "9819c0345abdd4faedbaf8f8c4dadb7749515e4d"
+    "e5b76ff7e2f44e9b33906f8a4039d0d2bdb1580b"
 );
 asset_test!(
     test_asset_cisco_adobe_pdf_sample_a_1024x768_cavlc_bframe_9,
@@ -471,32 +471,32 @@ asset_test!(
 asset_test!(
     test_asset_vid_1280x544_cabac_temporal_direct,
     "VID_1280x544_cabac_temporal_direct.264",
-    "b7f04399f38a90c866f0b518d1dd93c823d5d91f"
+    "02299df3b9d83300d244b36601699859c57fe905"
 );
 asset_test!(
     test_asset_vid_1280x720_cabac_temporal_direct,
     "VID_1280x720_cabac_temporal_direct.264",
-    "dabc1d0d44921a5c72ed2d4fde1d602465249c97"
+    "0ef0818cb23445d209b8a7632c13f1c7e820cc27"
 );
 asset_test!(
     test_asset_vid_1920x1080_cabac_temporal_direct,
     "VID_1920x1080_cabac_temporal_direct.264",
-    "6e719adb650cee4ca99a45242685d261257c04cc"
+    "ad2b1d1456919693e38a1e3e8cd9c21699688cec"
 );
 asset_test!(
     test_asset_vid_1280x544_cavlc_temporal_direct,
     "VID_1280x544_cavlc_temporal_direct.264",
-    "33bfa44b4a3c87fe28354cace1d4b99a03d2967d"
+    "71a12ff2b548b765a34c11f39eef1faa19b38d59"
 );
 asset_test!(
     test_asset_vid_1280x720_cavlc_temporal_direct,
     "VID_1280x720_cavlc_temporal_direct.264",
-    "4face6b5d73a378b6e564a831b49311c230158e4"
+    "f39cecb32ba20ca4f3b3a385db9ef46ba340e41f"
 );
 asset_test!(
     test_asset_vid_1920x1080_cavlc_temporal_direct,
     "VID_1920x1080_cavlc_temporal_direct.264",
-    "b35dc99604ea2a1fda5b84d1b9098cb7565dec8f"
+    "6aae2d569a1ebbe5ae20e2dfc5e709cc05ab1a21"
 );
 
 // ---------------------------------------------------------------------------
@@ -648,5 +648,5 @@ asset_test!(
 asset_test!(
     test_asset_cacqp3_sony_d,
     "CACQP3_Sony_D.jsv",
-    "b5773233f1c57587a3744d1752a0d563f0f6bd76"
+    "1db1699df71da52b57582e4dee57303157a74b92"
 );

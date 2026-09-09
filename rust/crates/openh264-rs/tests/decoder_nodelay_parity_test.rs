@@ -66,7 +66,7 @@ const ROWS: &[Row] = &[
         asset: "Cisco_Men_whisper_640x320_CABAC_Bframe_9.264",
         frames: 9,
         dims: (640, 320),
-        sha1: "931ba1caf075e7b47445c1f4410ade77a46048f6",
+        sha1: "2b349c1bc806b6e0412008747b2463d77b576476",
         codes: &[0; 13],
         bufs: &[0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1],
     },
