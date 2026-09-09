@@ -698,11 +698,11 @@ pub fn RcInitSequenceParameter(pEncCtx: &mut sWelsEncCtx) {
 
         pWelsSvcRc.iFrameDeltaQpUpper = LAST_FRAME_QP_RANGE_UPPER_MODE1
             - ((LAST_FRAME_QP_RANGE_UPPER_MODE1 - LAST_FRAME_QP_RANGE_UPPER_MODE0)
-                * (*pWelsSvcRc).iRcVaryRatio
+                * pWelsSvcRc.iRcVaryRatio
                 / MAX_BITS_VARY_PERCENTAGE);
         pWelsSvcRc.iFrameDeltaQpLower = LAST_FRAME_QP_RANGE_LOWER_MODE1
             - ((LAST_FRAME_QP_RANGE_LOWER_MODE1 - LAST_FRAME_QP_RANGE_LOWER_MODE0)
-                * (*pWelsSvcRc).iRcVaryRatio
+                * pWelsSvcRc.iRcVaryRatio
                 / MAX_BITS_VARY_PERCENTAGE);
 
         pWelsSvcRc.iSkipFrameNum = 0;
@@ -1018,7 +1018,7 @@ pub fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
             && pWelsSvcRc.iIntraMbCount != 0
         {
             pWelsSvcRc.iIntraComplexity = pWelsSvcRc.iIntraComplexity
-                * (*pWelsSvcRc).iNumberMbFrame as i64
+                * pWelsSvcRc.iNumberMbFrame as i64
                 / pWelsSvcRc.iIntraMbCount as i64;
         }
 
@@ -1336,7 +1336,7 @@ pub fn RcCalculateMbQp(
 }
 
 /// Evaluates if base layer GOM statistics can be reused for inter-layer prediction.
-pub fn RcJudgeBaseUsability<'a>(pEncCtx: &'a sWelsEncCtx) -> Option<&'a SWelsSvcRc> {
+pub fn RcJudgeBaseUsability(pEncCtx: &sWelsEncCtx) -> Option<&SWelsSvcRc> {
     let did = pEncCtx.uiDependencyId as usize;
     if did == 0 {
         return None;
@@ -1375,7 +1375,6 @@ pub fn RcGomTargetBits(
 
     if iLeftBits <= 0 {
         pSOverRc.iGomTargetBits = 0;
-        return;
     } else if kiComplexityIndex >= iLastGomIndex {
         pSOverRc.iGomTargetBits = iLeftBits;
     } else {
@@ -1582,7 +1581,7 @@ pub fn WelsRcCheckFrameStatus(
         pEncCtx.func_list()
             .pfRc
             .WelsRcPicDelayJudge(pEncCtx, uiTimeStamp, iDidIdx);
-        if (*pEncCtx.rc_at_mut(iDidIdx as usize)).bSkipFlag {
+        if pEncCtx.rc_at_mut(iDidIdx as usize).bSkipFlag {
             bSkipMustFlag = true;
         }
 
@@ -1593,7 +1592,7 @@ pub fn WelsRcCheckFrameStatus(
             pEncCtx.func_list()
                 .pfRc
                 .WelsCheckSkipBasedMaxbr(pEncCtx, uiTimeStamp, iDidIdx);
-            if (*pEncCtx.rc_at_mut(iDidIdx as usize)).bSkipFlag {
+            if pEncCtx.rc_at_mut(iDidIdx as usize).bSkipFlag {
                 bSkipMustFlag = true;
             }
         }
@@ -1611,7 +1610,7 @@ pub fn WelsRcCheckFrameStatus(
             pEncCtx.func_list()
                 .pfRc
                 .WelsRcPicDelayJudge(pEncCtx, uiTimeStamp, iDidIdx);
-            if (*pEncCtx.rc_at_mut(iDidIdx as usize)).bSkipFlag {
+            if pEncCtx.rc_at_mut(iDidIdx as usize).bSkipFlag {
                 bSkipMustFlag = true;
             }
 
@@ -1622,7 +1621,7 @@ pub fn WelsRcCheckFrameStatus(
                 pEncCtx.func_list()
                     .pfRc
                     .WelsCheckSkipBasedMaxbr(pEncCtx, uiTimeStamp, iDidIdx);
-                if (*pEncCtx.rc_at_mut(iDidIdx as usize)).bSkipFlag {
+                if pEncCtx.rc_at_mut(iDidIdx as usize).bSkipFlag {
                     bSkipMustFlag = true;
                 }
             }
@@ -1702,13 +1701,7 @@ pub extern "C" fn UpdateMaxBrCheckWindowStatus(
         for i in 0..iSpatialNum as usize {
             let iCurDid = pEncCtx.sSpatialIndexMap[i].iDid as usize;
             let pRc = pEncCtx.rc_at_mut(iCurDid);
-            if pRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] > 0
-                && pRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] != pRc.iBufferMaxBRFullness[0]
-            {
-                pRc.bNeedShiftWindowCheck[EVEN_TIME_WINDOW] = true;
-            } else {
-                pRc.bNeedShiftWindowCheck[EVEN_TIME_WINDOW] = false;
-            }
+            pRc.bNeedShiftWindowCheck[EVEN_TIME_WINDOW] = pRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] > 0 && pRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] != pRc.iBufferMaxBRFullness[0];
             pRc.iBufferMaxBRFullness[ODD_TIME_WINDOW] = 0;
         }
     }
@@ -1728,11 +1721,7 @@ pub extern "C" fn UpdateMaxBrCheckWindowStatus(
         for i in 0..iSpatialNum as usize {
             let iCurDid = pEncCtx.sSpatialIndexMap[i].iDid as usize;
             let pRc = pEncCtx.rc_at_mut(iCurDid);
-            if pRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW] > 0 {
-                pRc.bNeedShiftWindowCheck[ODD_TIME_WINDOW] = true;
-            } else {
-                pRc.bNeedShiftWindowCheck[ODD_TIME_WINDOW] = false;
-            }
+            pRc.bNeedShiftWindowCheck[ODD_TIME_WINDOW] = pRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW] > 0;
             pRc.iBufferMaxBRFullness[EVEN_TIME_WINDOW] = 0;
         }
     }
@@ -1779,7 +1768,7 @@ pub fn RcTraceFrameBits(pEncCtx: &mut sWelsEncCtx, _uiTimeStamp: i64, _iFrameSiz
     let pWelsSvcRc = pEncCtx.rc_at_mut(did);
     if pWelsSvcRc.iPredFrameBit != 0 {
         pWelsSvcRc.iPredFrameBit = (LAST_FRAME_PREDICT_WEIGHT
-            * (*pWelsSvcRc).iFrameDqBits as f64
+            * pWelsSvcRc.iFrameDqBits as f64
             + (1.0 - LAST_FRAME_PREDICT_WEIGHT) * pWelsSvcRc.iPredFrameBit as f64)
             as i32;
     } else {

@@ -376,7 +376,7 @@ pub fn Downsample(
             // last step: straight into the caller's destination
             let [dy, du, dv] = &mut pDst.planes;
             let (sy, su, sv) = match src_at {
-                None => (&*pSrc.planes[0], &*pSrc.planes[1], &*pSrc.planes[2]),
+                None => (pSrc.planes[0], pSrc.planes[1], pSrc.planes[2]),
                 Some(0) => (&buf0[0][..], &buf0[1][..], &buf0[2][..]),
                 _ => (&buf1[0][..], &buf1[1][..], &buf1[2][..]),
             };
@@ -421,7 +421,7 @@ pub fn Downsample(
             // one more halving would undershoot: resample to the target directly
             let [dy, du, dv] = &mut pDst.planes;
             let (sy, su, sv) = match src_at {
-                None => (&*pSrc.planes[0], &*pSrc.planes[1], &*pSrc.planes[2]),
+                None => (pSrc.planes[0], pSrc.planes[1], pSrc.planes[2]),
                 Some(0) => (&buf0[0][..], &buf0[1][..], &buf0[2][..]),
                 _ => (&buf1[0][..], &buf1[1][..], &buf1[2][..]),
             };

@@ -150,11 +150,7 @@ pub fn WELS_CLIP3<T: Ord + Copy>(x: T, min_val: T, max_val: T) -> T {
 
 #[inline]
 pub fn JUMPPACKETSIZE_CONSTRAINT(max_byte: u32) -> u32 {
-    if max_byte >= AVER_MARGIN_BYTES {
-        max_byte - AVER_MARGIN_BYTES
-    } else {
-        0
-    }
+    max_byte.saturating_sub(AVER_MARGIN_BYTES)
 }
 
 #[inline]
@@ -614,7 +610,7 @@ pub fn ctx_pps(pCtx: &sWelsEncCtx) -> *mut SWelsPPS {
 /// The context's current reference picture, resolved through the current dependency
 /// layer's reference list.
 #[inline]
-pub fn ctx_ref_pic<'a>(pCtx: &'a sWelsEncCtx) -> Option<&'a SPicture> {
+pub fn ctx_ref_pic(pCtx: &sWelsEncCtx) -> Option<&SPicture> {
     let id = pCtx.pRefPic?;
     let pRefList = pCtx.ref_list(pCtx.uiDependencyId as usize)?;
     Some(pRefList.pic(id))
@@ -625,7 +621,7 @@ pub fn ctx_ref_pic<'a>(pCtx: &'a sWelsEncCtx) -> Option<&'a SPicture> {
 /// preprocessor. `SDqLayer::pRefOri` is the one field that holds either; see
 /// [`PicRef`].
 #[inline]
-pub fn ctx_pic_ref<'a>(pCtx: &'a sWelsEncCtx, r: PicRef) -> Option<&'a SPicture> {
+pub fn ctx_pic_ref(pCtx: &sWelsEncCtx, r: PicRef) -> Option<&SPicture> {
     match r {
         PicRef::Rec(id) => pCtx
             .ref_list(pCtx.uiDependencyId as usize)
@@ -706,9 +702,9 @@ pub fn layer_ref_feature_storage<'a>(
 /// one `WelsInitCurrentLayer` stamped, so it is the current frame's only while the
 /// frame it stamped is still the frame in progress.
 #[inline]
-pub fn layer_rec_view<'a>(
-    pLayer: &'a SDqLayer,
-) -> Option<&'a RecPicView> {
+pub fn layer_rec_view(
+    pLayer: &SDqLayer,
+) -> Option<&RecPicView> {
     pLayer.pRecView.as_ref()
 }
 
@@ -722,9 +718,9 @@ pub fn layer_rec_view<'a>(
 /// If no frame has started, or the picture is unbound. The callers that *do* ask
 /// keep [`layer_rec_view`].
 #[inline]
-pub fn layer_rec_view_expect<'a>(
-    pLayer: &'a SDqLayer,
-) -> &'a RecPicView {
+pub fn layer_rec_view_expect(
+    pLayer: &SDqLayer,
+) -> &RecPicView {
     layer_rec_view(pLayer).expect("the layer's reconstruction view is built for this frame")
 }
 
@@ -776,9 +772,9 @@ pub fn layer_ref_view_expect(
 ///
 /// `None` on a layer whose frame has not been bound yet.
 #[inline]
-pub fn layer_enc_view<'a>(
-    pLayer: &'a SDqLayer,
-) -> Option<&'a crate::encoder::rec_view::RoPicView> {
+pub fn layer_enc_view(
+    pLayer: &SDqLayer,
+) -> Option<&crate::encoder::rec_view::RoPicView> {
     pLayer.pEncView.as_ref()
 }
 
@@ -790,9 +786,9 @@ pub fn layer_enc_view<'a>(
 /// # Panics
 /// If the layer's frame has not been bound yet.
 #[inline]
-pub fn layer_enc_view_expect<'a>(
-    pLayer: &'a SDqLayer,
-) -> &'a crate::encoder::rec_view::RoPicView {
+pub fn layer_enc_view_expect(
+    pLayer: &SDqLayer,
+) -> &crate::encoder::rec_view::RoPicView {
     layer_enc_view(pLayer).expect("the layer's source view is built for this frame")
 }
 
@@ -1561,10 +1557,10 @@ pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &m
     let pCurLayer = current_layer_expect(pEncCtx);
     let kiBestPredOff =
         best_pred_intra_chroma_off(pMbCache.uiMemPredLumaHalf, pMbCache.uiBestPredIntraChromaHalf);
-    let view_chroma = layer_rec_view_expect(&*pCurLayer);
+    let view_chroma = layer_rec_view_expect(pCurLayer);
     let (kiChrOrgX, kiChrOrgY) = pMbCache.SPicData.chroma_origin();
 
-    let encView = layer_enc_view_expect(&*pCurLayer);
+    let encView = layer_enc_view_expect(pCurLayer);
     let pFunc = pEncCtx.func_list();
     let pfDctFourT4 = pFunc.pfDctFourT4;
 
@@ -1574,7 +1570,7 @@ pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &m
         &pMbCache.SPicData.mb_cursor_ro(encView, 1),
         &RecCursor::over_owned(&mut pMbCache.sMemPredMb, kiBestPredOff, 8),
     );
-    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 0, 1);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, 0, 1);
     // The prediction is `sMemPredMb`'s intra-chroma half at stride 8, an owned
     // arena. Slot bypassed: `pfIDctFourT4` is constant after init.
     idct_four_t4_rec_to_view(
@@ -1590,7 +1586,7 @@ pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &m
         &pMbCache.SPicData.mb_cursor_ro(encView, 2),
         &RecCursor::over_owned(&mut pMbCache.sMemPredMb, kiBestPredOff + 64, 8),
     );
-    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, pMbCache, 64, 2);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, pMbCache, 64, 2);
     idct_four_t4_rec_to_view(
         &view_chroma.plane(2).cursor(kiChrOrgX, kiChrOrgY),
         &pMbCache.sMemPredMb[kiBestPredOff + 64..],
@@ -1608,7 +1604,7 @@ pub fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &
     // `iUV`.
     let kiBestPredOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
 
-    let encView = layer_enc_view_expect(&*pCurLayer);
+    let encView = layer_enc_view_expect(pCurLayer);
     let pFunc = pEncCtx.func_list();
     let dct = pFunc.pfDctFourT4;
     dct(
@@ -1623,8 +1619,8 @@ pub fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &
     );
 
     // `svc_encode_slice.cpp:WelsPMbChromaEncode` quantises both chroma planes here.
-    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, &mut *pMbCache, 256, 1);
-    crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, &mut *pMbCache, 320, 2);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, &mut *pMbCache, 256, 1);
+    crate::encoder::svc_encode_mb::WelsEncRecUV(pFunc, pCurMb, &mut *pMbCache, 320, 2);
 }
 
 pub fn OutputPMbWithoutConstructCsRsNoCopy(_pCtx: &sWelsEncCtx, pDq: Option<&SDqLayer>, pSlice: &mut SSlice, pMb: &SMB) {
@@ -1747,7 +1743,7 @@ pub fn WelsISliceMdEnc(
     let mut iNumMbCoded = 0;
     let kiSliceIdx = pSlice.iSliceIdx;
     let kuiChromaQpIndexOffset =
-        layer_pps_ref(pEncCtx, &*pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
+        layer_pps_ref(pEncCtx, pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
     // The function list, once for the slice: the table is written only before the
     // fork, and this loop re-fetched it at each of its five call sites.
     let func_list = pEncCtx.func_list();
@@ -1822,7 +1818,7 @@ pub fn WelsISliceMdEnc(
         {
             (func_list.pfMdBackgroundInfoUpdate)(
                 pEncCtx,
-                &*pCurLayer,
+                pCurLayer,
                 pMbs.cur_mut(),
                 pMbCache.bCollocatedPredFlag,
                 I_SLICE,
@@ -2052,7 +2048,7 @@ pub fn WelsMdInterMbLoop<'a>(
     );
     let kiSliceIdx = pSlice.iSliceIdx;
     let kuiChromaQpIndexOffset =
-        layer_pps_ref(pEncCtx, &*pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
+        layer_pps_ref(pEncCtx, pCurLayer).map_or(0, |p| p.uiChromaQpIndexOffset);
     // The context's reference picture type, resolved once: nothing may write the
     // context while a slice is being coded, every worker holding it shared.
     let kiCtxRefPicType = ctx_ref_pic(pEncCtx).map_or(0, |p| p.iPictureType);
@@ -2062,7 +2058,7 @@ pub fn WelsMdInterMbLoop<'a>(
     let func_list = pEncCtx.func_list();
     // The reconstruction view, once: `WelsMdInterSaveSadAndRefMbType` took it per
     // macroblock.
-    let kpRecView = layer_rec_view_expect(&*pCurLayer);
+    let kpRecView = layer_rec_view_expect(pCurLayer);
 
     let mut sDss = SDynamicSlicingStack::default();
 
@@ -2163,7 +2159,7 @@ pub fn WelsMdInterMbLoop<'a>(
                 crate::encoder::svc_base_layer_md::WelsMdInterSaveSadAndRefMbType(kpRecView, pCurMb, pMd);
                 (func_list.pfMdBackgroundInfoUpdate)(
                     pEncCtx,
-                    &*pCurLayer,
+                    pCurLayer,
                     pCurMb,
                     bCollocatedPredFlag,
                     kiCtxRefPicType,
@@ -2790,7 +2786,7 @@ pub fn WelsWriteSliceEndSyn(
         // Both coders count in the same units over the same buffer, so handing
         // the position back is an assignment.
         *pBs = BsWriter::at(WelsCabacEncodePos(
-            &mut *pCabacCtx,
+            &*pCabacCtx,
         ));
     } else {
         crate::encoder::vlc_encoder::BsRbspTrailingBits(buf, &mut *pBs);

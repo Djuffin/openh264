@@ -71,7 +71,7 @@ pub fn quant_4x4_dc(dct: &mut [i16; 16], ff: i16, mf: i16) {
 #[inline]
 pub fn quant_four_4x4(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
     let (vff, vmf): (u16x8, u16x8) = (cast(*ff), cast(*mf));
-    for chunk in dct.chunks_exact_mut(8) {
+    for chunk in dct.as_chunks_mut::<8>().0 {
         let q = quant_8(load_i16(chunk), vff, vmf);
         store_i16(chunk, q);
     }
@@ -81,7 +81,7 @@ pub fn quant_four_4x4(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
 #[inline]
 pub fn quant_four_4x4_max(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8], max: &mut [i16; 4]) {
     let (vff, vmf): (u16x8, u16x8) = (cast(*ff), cast(*mf));
-    for (k, block) in dct.chunks_exact_mut(16).enumerate() {
+    for (k, block) in dct.as_chunks_mut::<16>().0.iter_mut().enumerate() {
         let (q0, mag0) = quant_8_with_mag(load_i16(&block[..8]), vff, vmf);
         let (q1, mag1) = quant_8_with_mag(load_i16(&block[8..]), vff, vmf);
         store_i16(&mut block[..8], q0);
@@ -109,7 +109,7 @@ pub fn dequant_4x4(res: &mut [i16; 16], mf: &[u16; 8]) {
 #[inline]
 pub fn dequant_four_4x4(res: &mut [i16; 64], mf: &[u16; 8]) {
     let vmf: i16x8 = cast(*mf);
-    for chunk in res.chunks_exact_mut(8) {
+    for chunk in res.as_chunks_mut::<8>().0 {
         let r = load_i16(chunk) * vmf;
         store_i16(chunk, r);
     }

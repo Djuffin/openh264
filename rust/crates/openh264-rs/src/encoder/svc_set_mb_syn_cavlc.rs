@@ -80,13 +80,7 @@ pub fn IS_Inter_8x8(mb_type: u32) -> bool {
 
 #[inline(always)]
 pub fn CLIP3_QP_0_51(x: i32) -> i32 {
-    if x < 0 {
-        0
-    } else if x > 51 {
-        51
-    } else {
-        x
-    }
+    x.clamp(0, 51)
 }
 
 #[inline(always)]
@@ -693,7 +687,7 @@ pub fn WelsSpatialWriteMbSyn(
         CheckBitstreamBuffer(
             pSlice.iSliceIdx as u32,
             pEncCtx,
-            &mut *pSliceBsBuf,
+            &*pSliceBsBuf,
             &*pBs,
         )
     }

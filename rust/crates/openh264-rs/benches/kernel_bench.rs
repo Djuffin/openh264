@@ -118,13 +118,13 @@ where
     let c_wide = wide.as_mut().map(|w| w(true));
     // The scalar is the reference, so an absent column is vacuously consistent with
     // it — never "equal to zero", which is what comparing the `Option`s would say.
-    let consistent = c_isa.map_or(true, |c| c == c_scalar) && c_wide.map_or(true, |c| c == c_scalar);
+    let consistent = c_isa.is_none_or(|c| c == c_scalar) && c_wide.is_none_or(|c| c == c_scalar);
     if !consistent {
         eprintln!(" MISMATCH {name}: scalar {c_scalar:#x} intrinsics {c_isa:x?} wide {c_wide:x?}");
     }
     let ns_s = time_one(&mut scalar);
-    let ns_i = intrinsics.as_mut().map(|i| time_one(i));
-    let ns_w = wide.as_mut().map(|w| time_one(w));
+    let ns_i = intrinsics.as_mut().map(time_one);
+    let ns_w = wide.as_mut().map(time_one);
     rows.push(Row { name, ns: [Some(ns_s), ns_i, ns_w], consistent });
     eprint!(".");
 }
@@ -660,8 +660,8 @@ fn main() {
     }
     println!("=========================================================================================================");
     println!(
-        " {:<38} {:>9} {:>9} {:>9}   {:>9} {:>9} {:>9}  {}",
-        "kernel", "scalar", "intrin", "wide", "intrin/sc", "wide/sc", "wide/intr", "agree"
+        " {:<38} {:>9} {:>9} {:>9}   {:>9} {:>9} {:>9}  agree",
+        "kernel", "scalar", "intrin", "wide", "intrin/sc", "wide/sc", "wide/intr"
     );
     println!("---------------------------------------------------------------------------------------------------------");
     let fmt = |v: Option<f64>| v.map_or("-".to_string(), |x| format!("{x:.1}"));

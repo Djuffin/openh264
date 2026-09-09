@@ -508,7 +508,7 @@ pub fn GetNeighborAvailMbType(
         return;
     };
     {
-        let dq = &*pCurDqLayer;
+        let dq = pCurDqLayer;
         let na = &mut *pNeighAvail;
 
         let iCurXy = dq.iMbXyIndex;
@@ -593,8 +593,8 @@ pub fn WelsFillCacheNonZeroCount(
         return;
     };
     {
-        let na = &*pNeighAvail;
-        let dq = &*pCurDqLayer;
+        let na = pNeighAvail;
+        let dq = pCurDqLayer;
         let iCurXy = dq.iMbXyIndex;
         let iTopXy: i32;
         let iLeftXy: i32;
@@ -660,8 +660,8 @@ pub fn WelsFillCacheConstrain1IntraNxN(
     {
         WelsFillCacheNonZeroCount(pNeighAvail, pNonZeroCount, Some(pCurDqLayer));
 
-        let na = &*pNeighAvail;
-        let dq = &*pCurDqLayer;
+        let na = pNeighAvail;
+        let dq = pCurDqLayer;
         let iCurXy = dq.iMbXyIndex;
         let mut iTopXy = 0;
         let mut iLeftXy = 0;
@@ -718,8 +718,8 @@ pub fn WelsFillCacheInterCabac(
     pCurDqLayer: &DqLayerState,
     pDec: &SPicture,
 ) {
-    let na = &*pNeighAvail;
-    let dq = &*pCurDqLayer;
+    let na = pNeighAvail;
+    let dq = pCurDqLayer;
     let iCurXy = dq.iMbXyIndex as usize;
     let mut iTopXy = 0usize;
     let mut iLeftXy = 0usize;
@@ -879,8 +879,8 @@ pub fn WelsFillCacheInter(
     pCurDqLayer: &DqLayerState,
     pDec: &SPicture,
 ) {
-    let na = &*pNeighAvail;
-    let dq = &*pCurDqLayer;
+    let na = pNeighAvail;
+    let dq = pCurDqLayer;
     let iCurXy = dq.iMbXyIndex as usize;
     let mut iTopXy = 0usize;
     let mut iLeftXy = 0usize;
@@ -1051,7 +1051,7 @@ pub fn ParseInterInfo(
                 let pRefPic = pRefs.resolve(ppRefPic[iRefIdx as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
-                    || !pRefPic.map_or(false, |c| c || bIsPending);
+                    || !pRefPic.is_some_and(|c| c || bIsPending);
             } else {
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
             }
@@ -1102,7 +1102,7 @@ pub fn ParseInterInfo(
                 let pRefPic = pRefs.resolve(ppRefPic[iRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                 *pCtx.bMbRefConcealed = pCtx.bRPLRError
                     || *pCtx.bMbRefConcealed
-                    || !pRefPic.map_or(false, |c| c || bIsPending);
+                    || !pRefPic.is_some_and(|c| c || bIsPending);
             }
             for i in 0..2 {
                 let mut iMv = [0i16; 2];
@@ -1160,7 +1160,7 @@ pub fn ParseInterInfo(
                     let pRefPic = pRefs.resolve(ppRefPic[iRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                     *pCtx.bMbRefConcealed = pCtx.bRPLRError
                         || *pCtx.bMbRefConcealed
-                        || !pRefPic.map_or(false, |c| c || bIsPending);
+                        || !pRefPic.is_some_and(|c| c || bIsPending);
                 } else {
                     return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
                 }
@@ -1257,7 +1257,7 @@ pub fn ParseInterInfo(
                         let pRefPic = pRefs.resolve(ppRefPic[iRefIdx[i] as usize], Some(&*pDec)).map(|p| p.bIsComplete);
                         *pCtx.bMbRefConcealed = pCtx.bRPLRError
                             || *pCtx.bMbRefConcealed
-                            || !pRefPic.map_or(false, |c| c || bIsPending);
+                            || !pRefPic.is_some_and(|c| c || bIsPending);
 
                         let ref_idx_mb = pDec.pRefIndex[0].get_mut(iMbXy);
                         ref_idx_mb[uiScan4Idx] = iRefIdx[i] as i8;
@@ -1937,8 +1937,8 @@ pub fn WelsFillDirectCacheCabac(
     iDirect: &mut [i8; 30],
     pCurDqLayer: &DqLayerState,
 ) {
-    let na = &*pNeighAvail;
-    let dq = &*pCurDqLayer;
+    let na = pNeighAvail;
+    let dq = pCurDqLayer;
     let iCurXy = dq.iMbXyIndex as usize;
     let mut iTopXy = 0usize;
     let mut iLeftXy = 0usize;
@@ -1992,8 +1992,8 @@ pub fn WelsFillCacheConstrain0IntraNxN(
     {
         WelsFillCacheNonZeroCount(pNeighAvail, pNonZeroCount, Some(pCurDqLayer));
 
-        let na = &*pNeighAvail;
-        let dq = &*pCurDqLayer;
+        let na = pNeighAvail;
+        let dq = pCurDqLayer;
         let iCurXy = dq.iMbXyIndex;
         let mut iTopXy = 0;
         let mut iLeftXy = 0;
@@ -2908,7 +2908,7 @@ mod tests {
 
         {
             let mut ctx = SWelsDecoderContext::new_boxed();
-            let mut view = crate::decoder::decoder_context::test_slice_ctx(&mut ctx, &mut vlc_table);
+            let mut view = crate::decoder::decoder_context::test_slice_ctx(&mut ctx, &vlc_table);
             let res = WelsParseMbCavlcResidual(
                 view.pVlcTable,
                 &mut non_zero_cache,

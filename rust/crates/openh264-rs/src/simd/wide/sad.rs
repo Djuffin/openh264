@@ -95,7 +95,7 @@ fn sad_8x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, dy
     for y in 0..H {
         let a = load8(&s1.row::<8>(y, 0));
         let b = load8(&s2.row::<8>(y, 0));
-        acc = acc + widen_lo(abs_diff(a, b));
+        acc += widen_lo(abs_diff(a, b));
     }
     hsum_i16(acc)
 }
@@ -107,7 +107,7 @@ fn sad_4x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, dy
     for y in 0..H {
         let a = load4(&s1.row::<4>(y, 0));
         let b = load4(&s2.row::<4>(y, 0));
-        acc = acc + widen_lo(abs_diff(a, b));
+        acc += widen_lo(abs_diff(a, b));
     }
     hsum_i16(acc)
 }
@@ -173,7 +173,7 @@ fn sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
                 load8(&s2.row::<8>(j + 1, 2)),
             ];
             for k in 0..4 {
-                acc[k] = acc[k] + widen_lo(abs_diff(a, probes[k]));
+                acc[k] += widen_lo(abs_diff(a, probes[k]));
             }
         }
         y += G;
@@ -207,7 +207,7 @@ fn sad_four_4x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
                 load4(&s2.row::<4>(j + 1, 2)),
             ];
             for k in 0..4 {
-                acc[k] = acc[k] + widen_lo(abs_diff(a, probes[k]));
+                acc[k] += widen_lo(abs_diff(a, probes[k]));
             }
         }
         y += G;

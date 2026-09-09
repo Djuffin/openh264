@@ -179,35 +179,35 @@ fn test_decoder_trace_callback_and_the_error_throttle() {
         let mut sink = Collected::default();
         let mut dec: *mut ISVCDecoder = std::ptr::null_mut();
         assert_eq!(
-            i64::from(WelsCreateDecoder(&mut dec)),
+            WelsCreateDecoder(&mut dec),
             CM_RESULT_SUCCESS as i64
         );
 
         let mut cb: WelsTraceCallback = Some(collect);
         assert_eq!(
-            i64::from(ISVCDecoder::SetOption(
+            ISVCDecoder::SetOption(
                 dec,
                 DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK,
                 std::ptr::from_mut(&mut cb).cast::<c_void>(),
-            )),
+            ),
             CM_RESULT_SUCCESS as i64
         );
         let mut ctx = std::ptr::from_mut(&mut sink).cast::<c_void>();
         assert_eq!(
-            i64::from(ISVCDecoder::SetOption(
+            ISVCDecoder::SetOption(
                 dec,
                 DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK_CONTEXT,
                 std::ptr::from_mut(&mut ctx).cast::<c_void>(),
-            )),
+            ),
             CM_RESULT_SUCCESS as i64
         );
         let mut level = WELS_LOG_INFO as u32;
         assert_eq!(
-            i64::from(ISVCDecoder::SetOption(
+            ISVCDecoder::SetOption(
                 dec,
                 DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
                 std::ptr::from_mut(&mut level).cast::<c_void>(),
-            )),
+            ),
             CM_RESULT_SUCCESS as i64
         );
 
@@ -216,7 +216,7 @@ fn test_decoder_trace_callback_and_the_error_throttle() {
         param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
         param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
         assert_eq!(
-            i64::from(ISVCDecoder::Initialize(dec, &param)),
+            ISVCDecoder::Initialize(dec, &param),
             CM_RESULT_SUCCESS as i64
         );
 

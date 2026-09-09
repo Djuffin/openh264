@@ -361,7 +361,7 @@ pub extern "C" fn WelsMdIntraSecondaryModesEnc(
 
     //chroma
     pWelsMd.iCostChroma = WelsMdIntraChroma(
-        &*pFunc,
+        pFunc,
         current_layer_expect(pEncCtx),
         pMbCache,
         pWelsMd.iLambda,
@@ -1034,7 +1034,7 @@ pub fn WelsMdP16x16<'a>(
         pWelsMd.iMbPixY,
         pWelsMd.pMvdCost,
         BLOCK_16x16 as i32,
-        layer_ref_feature_storage(pEncCtx, &*pCurLayer),
+        layer_ref_feature_storage(pEncCtx, pCurLayer),
         pMe16x16,
     );
     //not putting the line below into InitMe to avoid judging mode in InitMe
@@ -1053,16 +1053,16 @@ pub fn WelsMdP16x16<'a>(
         pSlice.uiMvcNum += 1;
     }
 
-    if layer_ref_pic(pEncCtx, &*pCurLayer).map_or(false, |p| p.iPictureType == P_SLICE) {
+    if layer_ref_pic(pEncCtx, pCurLayer).is_some_and(|p| p.iPictureType == P_SLICE) {
         if (mbs.cur().iMbX as i32) < kiMbWidth - 1 {
             let sTempMv =
-                layer_ref_pic_expect(pEncCtx, &*pCurLayer).sMvList[(mbs.cur().iMbXY + 1) as usize];
+                layer_ref_pic_expect(pEncCtx, pCurLayer).sMvList[(mbs.cur().iMbXY + 1) as usize];
             pSlice.sMvc[pSlice.uiMvcNum as usize].iMvX = sTempMv.iMvX >> pSlice.sScaleShift;
             pSlice.sMvc[pSlice.uiMvcNum as usize].iMvY = sTempMv.iMvY >> pSlice.sScaleShift;
             pSlice.uiMvcNum += 1;
         }
         if (mbs.cur().iMbY as i32) < kiMbHeight - 1 {
-            let sTempMv = layer_ref_pic_expect(pEncCtx, &*pCurLayer).sMvList
+            let sTempMv = layer_ref_pic_expect(pEncCtx, pCurLayer).sMvList
                 [(mbs.cur().iMbXY + kiMbWidth) as usize];
             pSlice.sMvc[pSlice.uiMvcNum as usize].iMvX = sTempMv.iMvX >> pSlice.sScaleShift;
             pSlice.sMvc[pSlice.uiMvcNum as usize].iMvY = sTempMv.iMvY >> pSlice.sScaleShift;
@@ -1080,7 +1080,7 @@ pub fn WelsMdP16x16<'a>(
 
     if let Some(search_fn) = pFunc.pfMotionSearch[0] {
         let pEncPicture = layer_enc_view_expect(pCurLayer);
-        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurLayer);
+        let pRefPicture = layer_ref_view_expect(pEncCtx, pCurLayer);
         search_fn(
             &pFunc.sMeFuncs,
             &pFunc.sSampleDealingFuncs,
@@ -1124,7 +1124,7 @@ pub extern "C" fn WelsMdP8x8<'a>(
             pWelsMd.iMbPixY,
             pWelsMd.pMvdCost,
             BLOCK_8x8 as i32,
-            layer_ref_feature_storage(pEncCtx, &*pCurDqLayer),
+            layer_ref_feature_storage(pEncCtx, pCurDqLayer),
             sMe8x8,
         );
         //not putting these three lines below into InitMe to avoid judging mode in InitMe
@@ -1149,7 +1149,7 @@ pub extern "C" fn WelsMdP8x8<'a>(
             // static/scrolled skip tests, and P8x8 reads them only after those
             // tests have failed.
             let pEncPicture = layer_enc_view_expect(pCurDqLayer);
-            let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
+            let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
             pFunc.pfMotionSearch[pWelsMd.iBlock8x8StaticIdc[i as usize] as usize]
                 .expect("pfMotionSearch unset")(
                 &pFunc.sMeFuncs,
@@ -1179,7 +1179,7 @@ pub extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, 
 
     // `WelsDctMb`'s body inlined. The prediction scratch is stride 16, so its
     // `+8 / +128 / +136` are `(8,0) / (0,8) / (8,8)`.
-    let encView = layer_enc_view_expect(&*pCurDqLayer);
+    let encView = layer_enc_view_expect(pCurDqLayer);
     let pEncMb = pMbCache.SPicData.mb_cursor_ro(encView, 0);
     let pMemPredLuma = RecCursor::over_owned(
         &mut pMbCache.sMemPredMb,
@@ -1196,7 +1196,7 @@ pub extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, 
         );
     }
 
-    WelsEncInterY(&*pFuncList, pCurMb, &mut *pMbCache);
+    WelsEncInterY(pFuncList, pCurMb, &mut *pMbCache);
 }
 
 // ============================================================================
@@ -1335,7 +1335,7 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
 
             // Step 2: P_16x16
             pWelsMd.iCostLuma =
-                WelsMdP16x16(pEncCtx, pEncCtx.func_list(), &*pCurDqLayer, pWelsMd, pSlice, mbs);
+                WelsMdP16x16(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice, mbs);
             mbs.cur_mut().uiMbType = MB_TYPE_16x16;
         }
 
@@ -1512,7 +1512,7 @@ pub extern "C" fn WelsMdUpdateBGDInfo(
     let uiQp = if pCurMb.uiCbp != 0 || iRefPictureType == I_SLICE || !bCollocatedPredFlag {
         pCurMb.uiLumaQp
     } else {
-        (&layer_ref_pic_expect(pEncCtx, &*pCurLayer).pRefMbQp)[kiMbXY]
+        (&layer_ref_pic_expect(pEncCtx, pCurLayer).pRefMbQp)[kiMbXY]
     };
     layer_rec_view_expect(pCurLayer).ref_mb_qp().set(kiMbXY, uiQp);
 
@@ -1528,7 +1528,7 @@ pub extern "C" fn WelsMdUpdateBGDInfoNULL(
     bCollocatedPredFlag: bool,
     iRefPictureType: i32,
 ) {
-    WelsMdUpdateBGDInfo(pEncCtx, &*pCurLayer, pCurMb, bCollocatedPredFlag, iRefPictureType);
+    WelsMdUpdateBGDInfo(pEncCtx, pCurLayer, pCurMb, bCollocatedPredFlag, iRefPictureType);
 }
 
 // ============================================================================
@@ -1596,7 +1596,7 @@ pub extern "C" fn JudgeStaticSkip(
             .and_then(|r| ctx_pic_ref(pEncCtx, r))
             .map(crate::encoder::rec_view::RoPicView::build);
         if let Some(pRefOriPic) = pRefOriPic {
-            let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
+            let pEncPicture = layer_enc_view_expect(pCurDqLayer);
             let kiCx = (kiMbX as isize) << 3;
             let kiCy = (kiMbY as isize) << 3;
 
@@ -1657,7 +1657,7 @@ pub extern "C" fn JudgeScrollSkip(
             if CheckBorder(kiMbX, kiMbY, iScrollMvX, iScrollMvY, kiMbWidth, kiMbHeight) {
                 bTryScrollSkip = false;
             } else {
-                let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
+                let pEncPicture = layer_enc_view_expect(pCurDqLayer);
                 let kiCx = (kiMbX as isize) << 3;
                 let kiCy = (kiMbY as isize) << 3;
                 let kiRx = kiCx + (iScrollMvX >> 1) as isize;
@@ -1707,7 +1707,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
 
     // Note the third line: **plane 2 takes stride index 1**, which is what
     // `WelsMdInterInit`'s single `kiCurStrideUV` applied to both chroma planes.
-    let pRefPic = layer_ref_pic_expect(pEncCtx, &*pCurDqLayer);
+    let pRefPic = layer_ref_pic_expect(pEncCtx, pCurDqLayer);
     let pd = &pMbCache.SPicData;
 
     // The anchors: `mb_offset(stride, 0)` is `(iMbX << 4) + (iMbY << 4) * stride`,
@@ -1754,8 +1754,8 @@ pub extern "C" fn SvcMdSCDMbEnc(
     let kiMbXLuma = (pMbCache.SPicData.iMbX as isize) << 4;
     let kiMbYLuma = (pMbCache.SPicData.iMbY as isize) << 4;
     let sad_cost = {
-        let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
-        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
+        let pEncPicture = layer_enc_view_expect(pCurDqLayer);
+        let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
         sad_16x16(
             &pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
             &pRefPicture.plane(0).cursor(
@@ -1768,7 +1768,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
     pWelsMd.iCostSkipMb = sad_cost;
 
     pCurMb.sP16x16Mv = sCandidateMv;
-    layer_rec_view_expect(&*pCurDqLayer)
+    layer_rec_view_expect(pCurDqLayer)
         .mv_list()
         .set(pCurMb.iMbXY as usize, sCandidateMv);
 
@@ -1799,8 +1799,8 @@ pub extern "C" fn SvcMdSCDMbEnc(
     if pWelsMd.bMdUsingSad {
         pWelsMd.iCostLuma = pCurMb.iSadCost;
     } else {
-        let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
-        let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
+        let pEncPicture = layer_enc_view_expect(pCurDqLayer);
+        let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
         pWelsMd.iCostLuma = sad_16x16(
             &pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
             &pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
@@ -1816,7 +1816,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
 
     let pMbCache = &mut pSlice.sMbCacheInfo;
     // The chroma cursors both resolve at stride index 1 — `mb_offset`'s rule.
-    let recView = layer_rec_view_expect(&*pCurDqLayer);
+    let recView = layer_rec_view_expect(pCurDqLayer);
     let luma_off = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
     let chroma_off = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
     (pFunc.pfCopy16x16Aligned)(
@@ -1849,7 +1849,7 @@ pub extern "C" fn MdInterSCDPskipProcess(
     };
     let pCurDqLayer = current_layer_expect(pEncCtx);
 
-    let kiRefMbQp = (&layer_ref_pic_expect(pEncCtx, &*pCurDqLayer).pRefMbQp)[pCurMb.iMbXY as usize] as i32;
+    let kiRefMbQp = (&layer_ref_pic_expect(pEncCtx, pCurDqLayer).pRefMbQp)[pCurMb.iMbXY as usize] as i32;
     let kiCurMbQp = pCurMb.uiLumaQp as i32;
 
     let pJudgeSkip: [pJudgeSkipFun; 2] = [JudgeStaticSkip, JudgeScrollSkip];
@@ -1933,7 +1933,7 @@ pub fn WelsMdInterJudgeSCDPskip(
     let Some(pVaaExt) = pEncCtx.vaa_ext_ref() else {
         return false;
     };
-    SetBlockStaticIdcToMd(pVaaExt, pWelsMd, pCurMb, &*pCurDqLayer);
+    SetBlockStaticIdcToMd(pVaaExt, pWelsMd, pCurMb, pCurDqLayer);
 
     if MdInterSCDPskipProcess(pEncCtx, pWelsMd, slice, pCurMb, ESkipModes::STATIC) {
         return true;
@@ -2046,7 +2046,7 @@ pub fn WelsMdInterFinePartitionVaaOnScreen<'a>(
         return;
     }
 
-    let iCostP8x8 = WelsMdP8x8(pEncCtx, pEncCtx.func_list(), &*pCurDqLayer, pWelsMd, pSlice);
+    let iCostP8x8 = WelsMdP8x8(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice);
     if iCostP8x8 < iBestCost {
         iBestCost = iCostP8x8;
         pCurMb.uiMbType = MB_TYPE_8x8;

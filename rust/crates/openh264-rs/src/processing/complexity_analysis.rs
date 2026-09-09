@@ -398,12 +398,13 @@ impl CComplexityAnalysisScreen {
 
         // The C++'s three-way `if` at `:327-334`, in its order. The `pRef` of the two
         // inter arms is `Some` because the intra arm above took every `None`.
-        if iIdrFlag != 0 || pRef.is_none() {
-            self.GomComplexityAnalysisIntra(pSrc, planes, pGomComplexity);
-        } else {
-            let pRef = pRef.expect("the intra arm took every None");
+        if iIdrFlag == 0
+            && let Some(pRef) = pRef
+        {
             let bScroll = !(!bScrollFlag || (iScrollMvX == 0 && iScrollMvY == 0));
             self.GomComplexityAnalysisInter(pSrc, pRef, planes, bScroll, pGomComplexity);
+        } else {
+            self.GomComplexityAnalysisIntra(pSrc, planes, pGomComplexity);
         }
 
         RET_SUCCESS

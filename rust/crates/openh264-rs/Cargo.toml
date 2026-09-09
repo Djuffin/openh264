@@ -119,3 +119,34 @@ harness = false
 opt-level = 3
 debug-assertions = true
 overflow-checks = true
+
+# Clippy lints that argue with a line-by-line port of C++: index loops, wide
+# signatures, C-shaped conditionals and declaration-before-assignment.
+[lints.clippy]
+needless_range_loop = "allow"
+collapsible_if = "allow"
+too_many_arguments = "allow"
+manual_range_contains = "allow"
+derivable_impls = "allow"
+field_reassign_with_default = "allow"
+identity_op = "allow"
+missing_safety_doc = "allow"
+needless_late_init = "allow"
+manual_is_multiple_of = "allow"
+int_plus_one = "allow"
+explicit_counter_loop = "allow"
+neg_multiply = "allow"
+if_same_then_else = "allow"
+manual_memcpy = "allow"
+type_complexity = "allow"
+# `drop()` here ends a borrow so the next statement can reborrow; the type not
+# being Drop is the point, not a mistake.
+drop_non_drop = "allow"
+# The explicit zero-guard mirrors the C++; `Result<_, ()>` is right when the only
+# failure is an allocation; boxing the big variant adds a per-frame allocation;
+# renaming `as_mut` ripples; the literal groupings mark bitstream field edges.
+manual_checked_ops = "allow"
+result_unit_err = "allow"
+large_enum_variant = "allow"
+should_implement_trait = "allow"
+unusual_byte_groupings = "allow"

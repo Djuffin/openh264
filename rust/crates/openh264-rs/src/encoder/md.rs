@@ -1634,9 +1634,9 @@ pub extern "C" fn MeRefineFracPixel(
     // left `pRefMb` at its whole-sample part, so `>> 2` is the displacement.
     let kiBlockX = pMe.iCurMeBlockPixX as isize;
     let kiBlockY = pMe.iCurMeBlockPixY as isize;
-    let pEncPicture = layer_enc_view_expect(&*pCurDqLayer);
+    let pEncPicture = layer_enc_view_expect(pCurDqLayer);
     let cEnc = pEncPicture.plane(0).cursor(kiBlockX, kiBlockY);
-    let pRefPicture = layer_ref_view_expect(pEncCtx, &*pCurDqLayer);
+    let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
     let cRef = pRefPicture.plane(0).cursor(
         kiBlockX + ((iMvx as isize) >> 2),
         kiBlockY + ((iMvy as isize) >> 2),
@@ -1890,7 +1890,7 @@ pub extern "C" fn MeRefineFracPixel(
     }
 
     MeRefineQuarPixel(
-        &*pFunc, pMe, pMeRefine, pMbCache, &cEnc, &cRef, iWidth, iHeight, &mut sParams,
+        pFunc, pMe, pMeRefine, pMbCache, &cEnc, &cRef, iWidth, iHeight, &mut sParams,
     );
 
     if iBestCost > sParams.iBestCost {

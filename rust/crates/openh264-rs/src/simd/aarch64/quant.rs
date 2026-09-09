@@ -91,7 +91,7 @@ fn quant_4x4_dc_neon(dct: &mut [i16; 16], ff: i16, mf: i16) {
 #[target_feature(enable = "neon")]
 fn quant_four_4x4_neon(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
     let (vff, vmf) = (ld8_u16(ff), ld8_u16(mf));
-    for chunk in dct.chunks_exact_mut(8) {
+    for chunk in dct.as_chunks_mut::<8>().0 {
         let q = quant_8(ld8_i16(chunk), vff, vmf);
         st8_i16(chunk, q);
     }
@@ -103,7 +103,7 @@ fn quant_four_4x4_neon(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
 #[target_feature(enable = "neon")]
 fn quant_four_4x4_max_neon(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8], max: &mut [i16; 4]) {
     let (vff, vmf) = (ld8_u16(ff), ld8_u16(mf));
-    for (k, block) in dct.chunks_exact_mut(16).enumerate() {
+    for (k, block) in dct.as_chunks_mut::<16>().0.iter_mut().enumerate() {
         let (q0, mag0) = quant_8_with_mag(ld8_i16(&block[..8]), vff, vmf);
         let (q1, mag1) = quant_8_with_mag(ld8_i16(&block[8..]), vff, vmf);
         st8_i16(&mut block[..8], q0);
@@ -164,7 +164,7 @@ fn dequant_4x4_neon(res: &mut [i16; 16], mf: &[u16; 8]) {
 #[target_feature(enable = "neon")]
 fn dequant_four_4x4_neon(res: &mut [i16; 64], mf: &[u16; 8]) {
     let vmf = ld8_mf(mf);
-    for chunk in res.chunks_exact_mut(8) {
+    for chunk in res.as_chunks_mut::<8>().0 {
         let r = vmulq_s16(ld8_i16(chunk), vmf);
         st8_i16(chunk, r);
     }

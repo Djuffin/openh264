@@ -396,8 +396,8 @@ pub fn SetMvWithinIntegerMvRange(
     pMvMax: &mut SMVUnitXY,
 ) {
     {
-        pMvMin.iMvX = ((-1 * ((kiMbX + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN)).max(-1 * kiMaxMvRange) as i16;
-        pMvMin.iMvY = ((-1 * ((kiMbY + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN)).max(-1 * kiMaxMvRange) as i16;
+        pMvMin.iMvX = (-1 * ((kiMbX + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN).max(-1 * kiMaxMvRange) as i16;
+        pMvMin.iMvY = (-1 * ((kiMbY + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN).max(-1 * kiMaxMvRange) as i16;
         pMvMax.iMvX = (((kiMbWidth - kiMbX) * (1 << 4)) - INTPEL_NEEDED_MARGIN).min(kiMaxMvRange) as i16;
         pMvMax.iMvY = (((kiMbHeight - kiMbY) * (1 << 4)) - INTPEL_NEEDED_MARGIN).min(kiMaxMvRange) as i16;
     }
@@ -1681,6 +1681,14 @@ impl SFeatureSearchPreparation {
 // Unit Tests
 // ============================================================================
 
+
+/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+static ME_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
+pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSE41};
+use crate::encoder::svc_encode_slice::slice_in_layer_mut;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1980,10 +1988,3 @@ mod tests {
         );
     }
 }
-
-/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
-static ME_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_NEON, WELS_CPU_SSE2, WELS_CPU_SSE41};
-use crate::encoder::svc_encode_slice::slice_in_layer_mut;

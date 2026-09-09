@@ -631,7 +631,7 @@ mod tests {
         let pool = WorkerPool::new(3);
         for round in 0..if cfg!(miri) { 4 } else { 200 } {
             let input: Vec<u32> = (0..16).map(|i| i + round).collect();
-            let mut output = vec![0u32; 16];
+            let mut output = [0u32; 16];
             let hits = AtomicU32::new(0);
             pool.scope(|s| {
                 let mut handles = Vec::new();

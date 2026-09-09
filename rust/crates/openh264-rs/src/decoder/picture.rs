@@ -535,7 +535,7 @@ mod tests {
     fn test_picture_initialization() {
         let mut pic = SPicture::new();
         assert!(pic.is_free());
-        assert_eq!(pic.bUsedAsRef, false);
+        assert!(!pic.bUsedAsRef);
         assert_eq!(pic.iRefCount, 0);
         assert_eq!(pic.eSliceType, EWelsSliceType::UNKNOWN_SLICE);
         // The all-null, all-zero plane state.

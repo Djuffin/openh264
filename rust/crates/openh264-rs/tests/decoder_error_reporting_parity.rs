@@ -43,7 +43,7 @@ impl Dec {
         unsafe {
             let mut p: *mut ISVCDecoder = std::ptr::null_mut();
             assert_eq!(
-                i64::from(WelsCreateDecoder(&mut p)),
+                WelsCreateDecoder(&mut p),
                 CM_RESULT_SUCCESS as i64
             );
             assert!(!p.is_null());
@@ -60,7 +60,7 @@ impl Dec {
                     .write(raw);
             }
             assert_eq!(
-                i64::from(ISVCDecoder::Initialize(p, buf.as_ptr())),
+                ISVCDecoder::Initialize(p, buf.as_ptr()),
                 CM_RESULT_SUCCESS as i64
             );
             Self(p)
@@ -71,11 +71,11 @@ impl Dec {
         unsafe {
             let mut v = -1i32;
             assert_eq!(
-                i64::from(ISVCDecoder::GetOption(
+                ISVCDecoder::GetOption(
                     self.0,
                     DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC,
                     std::ptr::from_mut(&mut v).cast::<c_void>(),
-                )),
+                ),
                 CM_RESULT_SUCCESS as i64
             );
             v
@@ -85,11 +85,11 @@ impl Dec {
     unsafe fn set_ec_idc(&self, v: i32) -> i64 {
         unsafe {
             let mut v = v;
-            i64::from(ISVCDecoder::SetOption(
+            ISVCDecoder::SetOption(
                 self.0,
                 DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC,
                 std::ptr::from_mut(&mut v).cast::<c_void>(),
-            ))
+            )
         }
     }
 }
@@ -252,7 +252,7 @@ fn test_second_initialize_rebuilds_the_context() {
             std::mem::size_of::<SDecodingParam>(),
         );
         assert_eq!(
-            i64::from(ISVCDecoder::Initialize(dec.0, buf.as_ptr())),
+            ISVCDecoder::Initialize(dec.0, buf.as_ptr()),
             CM_RESULT_SUCCESS as i64
         );
 
@@ -417,11 +417,11 @@ unsafe fn statistics(dec: &Dec) -> SDecoderStatistics {
     unsafe {
         let mut s = SDecoderStatistics::default();
         assert_eq!(
-            i64::from(ISVCDecoder::GetOption(
+            ISVCDecoder::GetOption(
                 dec.0,
                 DECODER_OPTION::DECODER_OPTION_GET_STATISTICS,
                 std::ptr::from_mut(&mut s).cast::<c_void>(),
-            )),
+            ),
             CM_RESULT_SUCCESS as i64
         );
         s

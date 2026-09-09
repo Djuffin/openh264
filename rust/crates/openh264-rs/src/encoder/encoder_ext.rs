@@ -1189,6 +1189,7 @@ pub fn InitSliceSettings(
                     iMaxSliceCount = pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16;
                 }
             }
+            #[allow(clippy::collapsible_match)] // the guard would borrow what the arm mutates
             SM_SINGLE_SLICE | SliceModeEnum::SM_RASTER_SLICE => {
                 if pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16 > iMaxSliceCount {
                     iMaxSliceCount = pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16;
@@ -1321,7 +1322,7 @@ pub fn WelsInitEncoderExt(
     }
 
     if pCodingParam.iEntropyCodingModeFlag != 0 {
-        WelsCabacInit(&mut *ctxBox);
+        WelsCabacInit(&mut ctxBox);
     }
     let iRCMode = ctxBox.param().iRCMode;
     WelsRcInitModule(&mut ctxBox, iRCMode);
@@ -1375,168 +1376,6 @@ pub fn FreeDqLayer(p: &mut SDqLayer) {
     p.iMaxSliceNum = 0;
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::encoder::encoder_context::dq_layer_ref;
-    use crate::encoder::svc_encode_slice::{ctx_pps, ctx_sps};
-    use crate::api::codec_api::EProfileIdc;
-    use crate::encoder::encoder_context::InitFunctionPointers;
-    use crate::encoder::param_svc::NewCodingParam;
-    
-
-    /// Builds the context up to and including `RequestMemorySvc`, which is everything
-    /// `WelsInitEncoderExt` does before the preprocessor.
-    fn build_gate_context() -> *mut sWelsEncCtx {
-        // Drive the same path the public API does: build an SEncParamExt and let
-        // ParamTranscode fill sDependencyLayers, which ParamValidationExt then checks.
-        // Setting SWelsSvcCodingParam's fields directly leaves the internal
-        // dependency-layer frame rates at their FillDefault values and is rejected.
-        let mut ext = crate::api::codec_api::SEncParamExt::default();
-        ext.iUsageType = CAMERA_VIDEO_REAL_TIME;
-        ext.iPicWidth = 160;
-        ext.iPicHeight = 96;
-        ext.fMaxFrameRate = 6.0;
-        ext.iTargetBitrate = 500_000;
-        ext.iRCMode = RC_OFF_MODE;
-        ext.iTemporalLayerNum = 1;
-        ext.iSpatialLayerNum = 1;
-        ext.uiIntraPeriod = 0;
-        ext.iMultipleThreadIdc = 1;
-        ext.iEntropyCodingModeFlag = 0;
-        ext.iLoopFilterDisableIdc = 0;
-        ext.bEnableDenoise = false;
-        ext.bEnableLongTermReference = false;
-        ext.eSpsPpsIdStrategy = EParameterSetStrategy::CONSTANT_ID;
-        ext.sSpatialLayers[0].iVideoWidth = 160;
-        ext.sSpatialLayers[0].iVideoHeight = 96;
-        ext.sSpatialLayers[0].fFrameRate = 6.0;
-        ext.sSpatialLayers[0].iSpatialBitrate = 500_000;
-        ext.sSpatialLayers[0].uiProfileIdc = EProfileIdc::PRO_BASELINE;
-        ext.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
-        ext.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
-
-        let mut param = SWelsSvcCodingParam::default();
-        param.FillDefault();
-        assert_eq!(param.ParamTranscode(&ext), ENC_RETURN_SUCCESS);
-
-        let mut iSliceNum: i16 = 1;
-        let mut iCacheLineSize: i32 = 16;
-        let mut uiCpuFeatureFlags: u32 = 0;
-        assert_eq!(
-            crate::encoder::wels_encoder_ext::ParamValidationExt(SLogContext::default(), &mut param),
-            ENC_RETURN_SUCCESS
-        );
-        assert_eq!(param.DetermineTemporalSettings(), ENC_RETURN_SUCCESS);
-        assert_eq!(
-            GetMultipleThreadIdc(
-                SLogContext::default(),
-                &mut param,
-                &mut iSliceNum,
-                &mut iCacheLineSize,
-                &mut uiCpuFeatureFlags
-            ),
-            0
-        );
-
-        let mut ctxBox = Box::new(sWelsEncCtx::default());
-        ctxBox.pSvcParam = Some(NewCodingParam());
-        *ctxBox.param_mut() = param;
-        assert_eq!(
-            InitFunctionPointers(&mut ctxBox, uiCpuFeatureFlags),
-            ENC_RETURN_SUCCESS
-        );
-        ctxBox.iActiveThreadsNum = param.iMultipleThreadIdc as i16;
-        ctxBox.iMaxSliceCount = iSliceNum as i32;
-
-        assert_eq!(RequestMemorySvc(&mut ctxBox, None), 0, "RequestMemorySvc");
-        Box::into_raw(ctxBox)
-    }
-
-    /// The parameter-set arrays are allocated and populated.
-    #[test]
-    #[allow(unsafe_code)]
-    fn request_memory_svc_builds_the_parameter_sets() {
-        unsafe {
-            let pCtx = build_gate_context();
-
-            assert!(!(*pCtx).pSpsArray.is_empty(), "pSpsArray still unallocated");
-            assert!(!(*pCtx).pPPSArray.is_empty(), "pPPSArray still unallocated");
-            // The configuration needs no subset SPS, and the C++ allocated nothing
-            // at all for it.
-            assert!((*pCtx).pSubsetArray.is_empty(), "pSubsetArray was not needed");
-            assert!((*pCtx).subset_array().is_empty());
-            assert_eq!((*pCtx).iSpsNum, 1);
-            assert_eq!((*pCtx).iPpsNum, 1);
-            assert_eq!((*pCtx).iSubsetSpsNum, 0);
-            assert_eq!(ctx_sps(&mut *pCtx), (*pCtx).sps_array().as_ptr().cast_mut());
-            assert_eq!(ctx_pps(&mut *pCtx), (*pCtx).pps_array().as_ptr().cast_mut());
-
-            let sps = &(*pCtx).sps_array()[0];
-            assert_eq!(sps.iMbWidth, 10);
-            assert_eq!(sps.iMbHeight, 6);
-            assert_eq!(sps.uiLog2MaxFrameNum, 15);
-            assert_eq!(sps.uiPocType, 2);
-            assert_eq!(sps.iLevelIdc, 13);
-
-            let pps = &(*pCtx).pps_array()[0];
-            assert_eq!(pps.iPicInitQp, 26);
-            assert!(pps.bDeblockingFilterControlPresentFlag);
-
-            WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
-        }
-    }
-
-    /// The DQ layers, reference lists and macroblock list
-    /// exist, which is what `pCurDqLayer` is selected from.
-    #[test]
-    #[allow(unsafe_code)]
-    fn request_memory_svc_builds_the_dq_layers() {
-        unsafe {
-            let pCtx = build_gate_context();
-
-            let pDq = dq_layer_ref(&*pCtx, 0).expect("RequestMemorySvc built layer 0");
-            assert_eq!(pDq.iMbWidth, 10);
-            assert_eq!(pDq.iMbHeight, 6);
-            assert_eq!(pDq.sSliceEncCtx.iMbNumInFrame, 60);
-            assert_eq!(pDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed), 1);
-            assert_eq!(pDq.sSliceEncCtx.pOverallMbMap.len(), 60);
-            assert_eq!(pDq.sMbDataP.dims().count(), 60);
-
-            // InitMbInfo wired every macroblock to its slot in the context arrays.
-            let pMb = pDq.sMbDataP.get(0);
-            assert_eq!(pMb.iMbXY, 0);
-            assert_eq!(pMb.iMbX, 0);
-            assert_eq!(pMb.iMbY, 0);
-            // MB 0 has no left/top neighbour.
-            assert_eq!(pMb.uiNeighborAvail, 0);
-            let pMb11 = pDq.sMbDataP.get(11); // row 1, column 1: all four neighbours present
-            assert_eq!(pMb11.iMbX, 1);
-            assert_eq!(pMb11.iMbY, 1);
-            assert_eq!(
-                pMb11.uiNeighborAvail,
-                LEFT_MB_POS | TOP_MB_POS | TOPLEFT_MB_POS | TOPRIGHT_MB_POS
-            );
-
-            assert!((*pCtx).ref_list(0).is_some());
-            assert!(!(*pCtx).ref_list(0).expect("just checked").pRef.is_empty());
-            assert_eq!(
-                (*pCtx).pDecPic,
-                Some((*pCtx).ref_list(0).expect("just checked").pRef.at(0))
-            );
-
-            assert!((*pCtx).pStrideTab.is_some());
-            assert!(!(*pCtx).mvd_cost_table().is_empty());
-            assert_eq!(
-                (*pCtx).eRefStrategy,
-                RefStrategyKind::TemporalLayer,
-                "the gate configuration is camera content without LTR"
-            );
-
-            WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
-        }
-    }
-}
 
 /// `WelsUninitEncoderExt` — encoder_ext.cpp:2246, with `FreeMemorySvc`
 /// (encoder_ext.cpp:1804) folded in.
@@ -1575,7 +1414,7 @@ pub fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
 
         // DQ layers list.
         for ilayer in 0..ctxBox.ppDqLayerList.len() {
-            if let Some(pLayer) = dq_layer_mut(&mut *ctxBox, ilayer) {
+            if let Some(pLayer) = dq_layer_mut(&mut ctxBox, ilayer) {
                 FreeDqLayer(pLayer);
             }
         }
@@ -1963,7 +1802,7 @@ pub fn WritePadding(pCtx: &mut sWelsEncCtx, iLen: i32, iSize: &mut i32) -> i32 {
     }
 
     WelsLoadNal(
-        &mut *pOut,
+        &mut pOut,
         EWelsNalUnitType::NAL_UNIT_FILLER_DATA as i32,
         EWelsNalRefIdc::NRI_PRI_LOWEST as i32,
     );
@@ -1979,7 +1818,7 @@ pub fn WritePadding(pCtx: &mut sWelsEncCtx, iLen: i32, iSize: &mut i32) -> i32 {
         BsRbspTrailingBits(buf, pBs);
     }
 
-    WelsUnloadNal(&mut *pOut);
+    WelsUnloadNal(&mut pOut);
 
     let iReturn = WelsEncodeNal(
         &pOut.sNalList[iNal as usize],
@@ -3773,8 +3612,9 @@ pub fn WelsEncoderEncodeExt(
         // is rather than inside the kernel.
         if let Some(idDecPic) = fsnr {
             let pRefListPsnr = pCtx.ref_list(iCurDid as usize);
-            if pRefListPsnr.is_some() && pCtx.pVpp.is_some() {
-                let recon = pRefListPsnr.expect("checked just above");
+            if let Some(recon) = pRefListPsnr
+                && pCtx.pVpp.is_some()
+            {
                 let vpp = ctx_vpp_ref(pCtx);
                 let plane_psnr = |i: usize, w: i32, h: i32| -> f32 {
                     let tar = recon.pic(idDecPic).plane(i);
@@ -3972,4 +3812,167 @@ pub fn WelsEncoderEncodeExt(
     }
 
     ENC_RETURN_SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::encoder::encoder_context::dq_layer_ref;
+    use crate::encoder::svc_encode_slice::{ctx_pps, ctx_sps};
+    use crate::api::codec_api::EProfileIdc;
+    use crate::encoder::encoder_context::InitFunctionPointers;
+    use crate::encoder::param_svc::NewCodingParam;
+    
+
+    /// Builds the context up to and including `RequestMemorySvc`, which is everything
+    /// `WelsInitEncoderExt` does before the preprocessor.
+    fn build_gate_context() -> *mut sWelsEncCtx {
+        // Drive the same path the public API does: build an SEncParamExt and let
+        // ParamTranscode fill sDependencyLayers, which ParamValidationExt then checks.
+        // Setting SWelsSvcCodingParam's fields directly leaves the internal
+        // dependency-layer frame rates at their FillDefault values and is rejected.
+        let mut ext = crate::api::codec_api::SEncParamExt::default();
+        ext.iUsageType = CAMERA_VIDEO_REAL_TIME;
+        ext.iPicWidth = 160;
+        ext.iPicHeight = 96;
+        ext.fMaxFrameRate = 6.0;
+        ext.iTargetBitrate = 500_000;
+        ext.iRCMode = RC_OFF_MODE;
+        ext.iTemporalLayerNum = 1;
+        ext.iSpatialLayerNum = 1;
+        ext.uiIntraPeriod = 0;
+        ext.iMultipleThreadIdc = 1;
+        ext.iEntropyCodingModeFlag = 0;
+        ext.iLoopFilterDisableIdc = 0;
+        ext.bEnableDenoise = false;
+        ext.bEnableLongTermReference = false;
+        ext.eSpsPpsIdStrategy = EParameterSetStrategy::CONSTANT_ID;
+        ext.sSpatialLayers[0].iVideoWidth = 160;
+        ext.sSpatialLayers[0].iVideoHeight = 96;
+        ext.sSpatialLayers[0].fFrameRate = 6.0;
+        ext.sSpatialLayers[0].iSpatialBitrate = 500_000;
+        ext.sSpatialLayers[0].uiProfileIdc = EProfileIdc::PRO_BASELINE;
+        ext.sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
+        ext.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+
+        let mut param = SWelsSvcCodingParam::default();
+        param.FillDefault();
+        assert_eq!(param.ParamTranscode(&ext), ENC_RETURN_SUCCESS);
+
+        let mut iSliceNum: i16 = 1;
+        let mut iCacheLineSize: i32 = 16;
+        let mut uiCpuFeatureFlags: u32 = 0;
+        assert_eq!(
+            crate::encoder::wels_encoder_ext::ParamValidationExt(SLogContext::default(), &mut param),
+            ENC_RETURN_SUCCESS
+        );
+        assert_eq!(param.DetermineTemporalSettings(), ENC_RETURN_SUCCESS);
+        assert_eq!(
+            GetMultipleThreadIdc(
+                SLogContext::default(),
+                &mut param,
+                &mut iSliceNum,
+                &mut iCacheLineSize,
+                &mut uiCpuFeatureFlags
+            ),
+            0
+        );
+
+        let mut ctxBox = Box::new(sWelsEncCtx::default());
+        ctxBox.pSvcParam = Some(NewCodingParam());
+        *ctxBox.param_mut() = param;
+        assert_eq!(
+            InitFunctionPointers(&mut ctxBox, uiCpuFeatureFlags),
+            ENC_RETURN_SUCCESS
+        );
+        ctxBox.iActiveThreadsNum = param.iMultipleThreadIdc as i16;
+        ctxBox.iMaxSliceCount = iSliceNum as i32;
+
+        assert_eq!(RequestMemorySvc(&mut ctxBox, None), 0, "RequestMemorySvc");
+        Box::into_raw(ctxBox)
+    }
+
+    /// The parameter-set arrays are allocated and populated.
+    #[test]
+    #[allow(unsafe_code)]
+    fn request_memory_svc_builds_the_parameter_sets() {
+        unsafe {
+            let pCtx = build_gate_context();
+
+            assert!(!(*pCtx).pSpsArray.is_empty(), "pSpsArray still unallocated");
+            assert!(!(*pCtx).pPPSArray.is_empty(), "pPPSArray still unallocated");
+            // The configuration needs no subset SPS, and the C++ allocated nothing
+            // at all for it.
+            assert!((*pCtx).pSubsetArray.is_empty(), "pSubsetArray was not needed");
+            assert!((*pCtx).subset_array().is_empty());
+            assert_eq!((*pCtx).iSpsNum, 1);
+            assert_eq!((*pCtx).iPpsNum, 1);
+            assert_eq!((*pCtx).iSubsetSpsNum, 0);
+            assert_eq!(ctx_sps(&*pCtx), (*pCtx).sps_array().as_ptr().cast_mut());
+            assert_eq!(ctx_pps(&*pCtx), (*pCtx).pps_array().as_ptr().cast_mut());
+
+            let sps = &(*pCtx).sps_array()[0];
+            assert_eq!(sps.iMbWidth, 10);
+            assert_eq!(sps.iMbHeight, 6);
+            assert_eq!(sps.uiLog2MaxFrameNum, 15);
+            assert_eq!(sps.uiPocType, 2);
+            assert_eq!(sps.iLevelIdc, 13);
+
+            let pps = &(*pCtx).pps_array()[0];
+            assert_eq!(pps.iPicInitQp, 26);
+            assert!(pps.bDeblockingFilterControlPresentFlag);
+
+            WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
+        }
+    }
+
+    /// The DQ layers, reference lists and macroblock list
+    /// exist, which is what `pCurDqLayer` is selected from.
+    #[test]
+    #[allow(unsafe_code)]
+    fn request_memory_svc_builds_the_dq_layers() {
+        unsafe {
+            let pCtx = build_gate_context();
+
+            let pDq = dq_layer_ref(&*pCtx, 0).expect("RequestMemorySvc built layer 0");
+            assert_eq!(pDq.iMbWidth, 10);
+            assert_eq!(pDq.iMbHeight, 6);
+            assert_eq!(pDq.sSliceEncCtx.iMbNumInFrame, 60);
+            assert_eq!(pDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed), 1);
+            assert_eq!(pDq.sSliceEncCtx.pOverallMbMap.len(), 60);
+            assert_eq!(pDq.sMbDataP.dims().count(), 60);
+
+            // InitMbInfo wired every macroblock to its slot in the context arrays.
+            let pMb = pDq.sMbDataP.get(0);
+            assert_eq!(pMb.iMbXY, 0);
+            assert_eq!(pMb.iMbX, 0);
+            assert_eq!(pMb.iMbY, 0);
+            // MB 0 has no left/top neighbour.
+            assert_eq!(pMb.uiNeighborAvail, 0);
+            let pMb11 = pDq.sMbDataP.get(11); // row 1, column 1: all four neighbours present
+            assert_eq!(pMb11.iMbX, 1);
+            assert_eq!(pMb11.iMbY, 1);
+            assert_eq!(
+                pMb11.uiNeighborAvail,
+                LEFT_MB_POS | TOP_MB_POS | TOPLEFT_MB_POS | TOPRIGHT_MB_POS
+            );
+
+            assert!((*pCtx).ref_list(0).is_some());
+            assert!(!(*pCtx).ref_list(0).expect("just checked").pRef.is_empty());
+            assert_eq!(
+                (*pCtx).pDecPic,
+                Some((*pCtx).ref_list(0).expect("just checked").pRef.at(0))
+            );
+
+            assert!((*pCtx).pStrideTab.is_some());
+            assert!(!(*pCtx).mvd_cost_table().is_empty());
+            assert_eq!(
+                (*pCtx).eRefStrategy,
+                RefStrategyKind::TemporalLayer,
+                "the gate configuration is camera content without LTR"
+            );
+
+            WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
+        }
+    }
 }

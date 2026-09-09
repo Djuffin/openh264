@@ -1005,7 +1005,7 @@ pub fn WelsInitSliceCabac(
     /* init cabac */
     let iCabacInitIdc = pSlice.iCabacInitIdc;
     WelsCabacContextInit(
-        &*pEncCtx,
+        pEncCtx,
         &mut pSlice.sCabacCtx,
         iCabacInitIdc,
     );
@@ -1033,7 +1033,7 @@ pub fn WelsSpatialWriteMbSynCabac(
     let iSliceFirstMbXY = pSliceHeadExt.sSliceHeader.iFirstMbInSlice;
     let pCurDqLayer = current_layer_expect(pEncCtx);
 
-    let uiChromaQpIndexOffset = layer_pps_ref(pEncCtx, &*pCurDqLayer)
+    let uiChromaQpIndexOffset = layer_pps_ref(pEncCtx, pCurDqLayer)
         .expect("the layer's PPS is stamped")
         .uiChromaQpIndexOffset;
     let mut sMvd = SMVUnitXY::default();
@@ -1136,7 +1136,7 @@ pub fn WelsSpatialWriteMbSynCabac(
         let pFuncList = pEncCtx.func_list();
         iRet = WelsWriteMbResidualCabac(
             buf,
-            &*pFuncList,
+            pFuncList,
             pSlice,
             mbs,
             uiChromaQpIndexOffset as u32,

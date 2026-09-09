@@ -463,7 +463,7 @@ fn decode_case(case: &Case) -> (Run, String) {
     unsafe {
         let mut decoder: *mut ISVCDecoder = std::ptr::null_mut();
         let ret = WelsCreateDecoder(&mut decoder);
-        assert_eq!(i64::from(ret), CM_RESULT_SUCCESS as i64, "WelsCreateDecoder");
+        assert_eq!(ret, CM_RESULT_SUCCESS as i64, "WelsCreateDecoder");
         assert!(!decoder.is_null());
 
         let mut dec_param = SDecodingParam::default();
@@ -471,7 +471,7 @@ fn decode_case(case: &Case) -> (Run, String) {
         dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
         dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
         let init_ret = ISVCDecoder::Initialize(decoder, &dec_param as *const SDecodingParam);
-        assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64, "Initialize");
+        assert_eq!(init_ret, CM_RESULT_SUCCESS as i64, "Initialize");
 
         let mut run = Run::default();
         let mut hasher = Sha1Hasher::new();

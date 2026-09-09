@@ -2517,7 +2517,7 @@ mod tests {
         let mut param = SWelsSvcCodingParam::default();
         let mut ctx = sWelsEncCtx::new();
         param.sDependencyLayers[0].bEncCurFrmAsIdrFlag = true;
-        ctx.pSvcParam = Some(Box::new(param.clone()));
+        ctx.pSvcParam = Some(Box::new(param));
         // The context owns the block, so the fixture hands it one.
         ctx.pVaa = Some(Box::new(VaaBlock::Base(SVAAFrameInfo::default())));
 
@@ -2530,7 +2530,7 @@ mod tests {
         let param = SWelsSvcCodingParam::default();
         let mut ctx = sWelsEncCtx::default();
         // The context brings its own table; the fixture reads it back out.
-        ctx.pSvcParam = Some(Box::new(param.clone()));
+        ctx.pSvcParam = Some(Box::new(param));
 
         let ret = InitFunctionPointers(&mut ctx, 0);
         assert_eq!(ret, ENC_RETURN_SUCCESS);

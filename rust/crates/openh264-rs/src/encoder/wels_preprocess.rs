@@ -31,21 +31,14 @@ pub use crate::processing::complexity_analysis::{FRAME_SAD, GOM_SAD, GOM_VAR};
 // ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-/// # Video Pre-Processing & Video Analysis/Assessment (VAA) Subsystem
-///
-/// Translated from `codec/encoder/core/inc/wels_preprocess.h` and `codec/encoder/core/src/wels_preprocess.cpp`.
-///
-/// Handles raw YUV 4:2:0 ingestion, cropping, border padding, bilateral denoising,
-/// spatial downsampling pyramids, video analytics assessment (8x8 SAD, 16x16 variance/SSD,
-/// background macroblock detection, adaptive quantization delta-QP estimation),
-/// scene change detection, scroll motion vector detection, and multi-reference picture ranking.
-
-#[allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+// # Video Pre-Processing & Video Analysis/Assessment (VAA) Subsystem
+//
+// Translated from `codec/encoder/core/inc/wels_preprocess.h` and `codec/encoder/core/src/wels_preprocess.cpp`.
+//
+// Handles raw YUV 4:2:0 ingestion, cropping, border padding, bilateral denoising,
+// spatial downsampling pyramids, video analytics assessment (8x8 SAD, 16x16 variance/SSD,
+// background macroblock detection, adaptive quantization delta-QP estimation),
+// scene change detection, scroll motion vector detection, and multi-reference picture ranking.
 use crate::encoder::picture::{PicPlanes, RecPicId, SrcPicId, SrcPicPool};
 use crate::{
     EUsageType, SSourcePicture, VideoFormat,
@@ -68,7 +61,7 @@ pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 pub use crate::encoder::rc::SWelsSvcRc;
 pub const INVALID_TEMPORAL_ID: u8 = 0xff;
 pub const STATIC_SCENE_MOTION_RATIO: f32 = 0.01;
-pub const g_kiPixMapSizeInBits: i32 = (size_of::<u8>() * 8) as i32;
+pub const g_kiPixMapSizeInBits: i32 = u8::BITS as i32;
 
 /// `rc.h:57`. Only `SComplexityAnalysisScreenParam` uses it:
 /// `CComplexityAnalysisScreen` divides the frame into GOM buckets `GOM_H_SCC`
@@ -3195,6 +3188,11 @@ impl CWelsPreProcess {
     }
 }
 
+
+/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+static VP_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static VP_DUMP_SQD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3265,7 +3263,3 @@ mod tests {
         assert_eq!(judgement.iMinFrameNumGap, i32::MAX);
     }
 }
-
-/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
-static VP_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-static VP_DUMP_SQD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

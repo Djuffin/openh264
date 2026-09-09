@@ -75,13 +75,13 @@ fn resolution_change_stream_matches_the_reference_and_does_not_abort() {
     // `ERROR_CON_SLICE_COPY`, one NAL per call, then the end-of-stream drain.
     unsafe {
         let mut decoder: *mut ISVCDecoder = std::ptr::null_mut();
-        assert_eq!(i64::from(WelsCreateDecoder(&mut decoder)), CM_RESULT_SUCCESS as i64);
+        assert_eq!(WelsCreateDecoder(&mut decoder), CM_RESULT_SUCCESS as i64);
         let mut param = SDecodingParam::default();
         param.uiTargetDqLayer = u8::MAX;
         param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
         param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
         assert_eq!(
-            i64::from(ISVCDecoder::Initialize(decoder, &param as *const SDecodingParam)),
+            ISVCDecoder::Initialize(decoder, &param as *const SDecodingParam),
             CM_RESULT_SUCCESS as i64
         );
 

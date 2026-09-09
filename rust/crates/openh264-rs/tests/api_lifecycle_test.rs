@@ -21,7 +21,7 @@ fn test_decoder_create_and_destroy_lifecycle() {
     unsafe {
         let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
         let ret = WelsCreateDecoder(&mut p_decoder);
-        assert_eq!(i64::from(ret), CM_RESULT_SUCCESS as i64);
+        assert_eq!(ret, CM_RESULT_SUCCESS as i64);
         assert!(!p_decoder.is_null());
 
         let mut param = SDecodingParam::default();
@@ -29,7 +29,7 @@ fn test_decoder_create_and_destroy_lifecycle() {
 
         // 1. Initialize
         let init_ret = ISVCDecoder::Initialize(p_decoder, &param as *const SDecodingParam);
-        assert_eq!(i64::from(init_ret), CM_RESULT_SUCCESS as i64);
+        assert_eq!(init_ret, CM_RESULT_SUCCESS as i64);
 
         // 2. DecodeFrame
         let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
@@ -105,7 +105,7 @@ fn test_decoder_create_and_destroy_lifecycle() {
             DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
             &mut trace_level as *mut i32 as *mut std::ffi::c_void,
         );
-        assert_eq!(i64::from(set_opt_ret), CM_RESULT_SUCCESS as i64);
+        assert_eq!(set_opt_ret, CM_RESULT_SUCCESS as i64);
 
         // `DECODER_OPTION_TRACE_LEVEL` is settable and **not gettable**: the two
         // switches in `welsDecoderExt.cpp` are not the same set, and `GetOption`
@@ -116,11 +116,11 @@ fn test_decoder_create_and_destroy_lifecycle() {
             DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
             &mut trace_level as *mut i32 as *mut std::ffi::c_void,
         );
-        assert_eq!(i64::from(get_opt_ret), CM_INIT_PARA_ERROR as i64);
+        assert_eq!(get_opt_ret, CM_INIT_PARA_ERROR as i64);
 
         // 9. Uninitialize
         let uninit_ret = ISVCDecoder::Uninitialize(p_decoder);
-        assert_eq!(i64::from(uninit_ret), CM_RESULT_SUCCESS as i64);
+        assert_eq!(uninit_ret, CM_RESULT_SUCCESS as i64);
 
         WelsDestroyDecoder(p_decoder);
     }
@@ -291,9 +291,9 @@ fn test_decoder_reinit_does_not_inherit_reordering_slots() {
 
         // --- the reference: a decoder that has only ever seen one session ------
         let mut p_fresh: *mut ISVCDecoder = std::ptr::null_mut();
-        assert_eq!(i64::from(WelsCreateDecoder(&mut p_fresh)), CM_RESULT_SUCCESS as i64);
+        assert_eq!(WelsCreateDecoder(&mut p_fresh), CM_RESULT_SUCCESS as i64);
         assert_eq!(
-            i64::from(ISVCDecoder::Initialize(p_fresh, &param)),
+            ISVCDecoder::Initialize(p_fresh, &param),
             CM_RESULT_SUCCESS as i64
         );
         let (fresh_frames, _) = decode_pass(p_fresh, &units, units.len());
@@ -303,9 +303,9 @@ fn test_decoder_reinit_does_not_inherit_reordering_slots() {
 
         // --- the subject: interrupted mid-stream, then re-initialised ---------
         let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
-        assert_eq!(i64::from(WelsCreateDecoder(&mut p_decoder)), CM_RESULT_SUCCESS as i64);
+        assert_eq!(WelsCreateDecoder(&mut p_decoder), CM_RESULT_SUCCESS as i64);
         assert_eq!(
-            i64::from(ISVCDecoder::Initialize(p_decoder, &param)),
+            ISVCDecoder::Initialize(p_decoder, &param),
             CM_RESULT_SUCCESS as i64
         );
         // Stop while the reordering buffer still holds pictures. A B-slice stream
@@ -318,11 +318,11 @@ fn test_decoder_reinit_does_not_inherit_reordering_slots() {
         );
 
         assert_eq!(
-            i64::from(ISVCDecoder::Uninitialize(p_decoder)),
+            ISVCDecoder::Uninitialize(p_decoder),
             CM_RESULT_SUCCESS as i64
         );
         assert_eq!(
-            i64::from(ISVCDecoder::Initialize(p_decoder, &param)),
+            ISVCDecoder::Initialize(p_decoder, &param),
             CM_RESULT_SUCCESS as i64
         );
 
