@@ -40,7 +40,7 @@ use core::arch::x86_64::*;
 /// `clamp(v, -128, 127)`, which is `0` only for `v == 0`. A truncating narrow
 /// would lose every multiple of 256.
 #[target_feature(enable = "sse2")]
-unsafe fn nonzero_mask(dct: &[i16; 16]) -> u32 {
+fn nonzero_mask(dct: &[i16; 16]) -> u32 {
     unsafe {
         let zero = _mm_setzero_si128();
         let v0 = _mm_loadu_si128(dct.as_ptr() as *const __m128i);
@@ -75,10 +75,10 @@ fn highest_set(m: u32) -> i32 {
 /// The result depends on `dct` **only** through this mask, which is what lets
 /// `single_ctr_matches_the_scalar_for_every_mask` check all 65536 of them.
 #[target_feature(enable = "sse2")]
-unsafe fn calculate_single_ctr_4x4_sse2_impl(dct: &[i16; 16]) -> i32 {
+fn calculate_single_ctr_4x4_sse2_impl(dct: &[i16; 16]) -> i32 {
     use crate::encoder::encode_mb_aux::KI_TRUN_TABLE;
 
-    let nz = unsafe { nonzero_mask(dct) };
+    let nz = nonzero_mask(dct);
 
     let mut single_ctr: i32 = 0;
     // The scalar's first loop: skip the trailing zeros above the top coefficient.

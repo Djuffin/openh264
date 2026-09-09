@@ -11,7 +11,7 @@ use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples, SampleCursor};
 
 /// Forward 1D DCT on 4 horizontal samples in low 64 bits of `__m128i`.
 #[target_feature(enable = "sse2")]
-unsafe fn dct_row(d: __m128i) -> __m128i {
+fn dct_row(d: __m128i) -> __m128i {
     let d_rev = _mm_shufflelo_epi16(d, 0b00_01_10_11); // [d3, d2, d1, d0]
     let sum = _mm_add_epi16(d, d_rev); // [s0, s1, s1, s0]
     let diff = _mm_sub_epi16(d, d_rev); // [s3, s2, -s2, -s3]
@@ -33,7 +33,7 @@ unsafe fn dct_row(d: __m128i) -> __m128i {
 ///
 /// C++: `WelsDctT4_sse2`, `codec/common/x86/dct.asm`.
 #[target_feature(enable = "sse2")]
-unsafe fn dct_4x4_sse2_impl<A: SampleCursor, B: SampleCursor>(
+fn dct_4x4_sse2_impl<A: SampleCursor, B: SampleCursor>(
     dct: &mut [i16; 16],
     pix1: &A,
     pix2: &B,
@@ -108,17 +108,15 @@ pub fn dct_4x4<A: SampleCursor, B: SampleCursor>(
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn dct_four_4x4_sse2_impl<A: SampleCursor, B: SampleCursor>(
+fn dct_four_4x4_sse2_impl<A: SampleCursor, B: SampleCursor>(
     dct: &mut [i16; 64],
     pix1: &A,
     pix2: &B,
 ) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
-    unsafe {
-        for (k, &(dx, dy)) in SUBS.iter().enumerate() {
-            let sub: &mut [i16; 16] = (&mut dct[k << 4..][..16]).try_into().unwrap();
-            dct_4x4_sse2_impl(sub, &pix1.advance(dx, dy), &pix2.advance(dx, dy));
-        }
+    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+        let sub: &mut [i16; 16] = (&mut dct[k << 4..][..16]).try_into().unwrap();
+        dct_4x4_sse2_impl(sub, &pix1.advance(dx, dy), &pix2.advance(dx, dy));
     }
 }
 
@@ -159,7 +157,7 @@ fn idct_row(r0: i16, r1: i16, r2: i16, r3: i16) -> __m128i {
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn add_res_and_clip(pred_4bytes: [u8; 4], res: __m128i) -> [u8; 4] {
+fn add_res_and_clip(pred_4bytes: [u8; 4], res: __m128i) -> [u8; 4] {
     unsafe {
         let p32 = (pred_4bytes.as_ptr() as *const i32).read_unaligned();
         let p_vec = _mm_cvtsi32_si128(p32);
@@ -230,13 +228,11 @@ fn compute_idct_residuals(dct: &[i16; 16]) -> (__m128i, __m128i, __m128i, __m128
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_res_add_pred_sse2_impl(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
-    unsafe {
-        let (res0, res1, res2, res3) = compute_idct_residuals(rs);
-        for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
-            let row: &mut [u8; 4] = pred.row_mut(dy as isize, 0, 4).try_into().unwrap();
-            *row = add_res_and_clip(*row, res);
-        }
+fn idct_res_add_pred_sse2_impl(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
+    let (res0, res1, res2, res3) = compute_idct_residuals(rs);
+    for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
+        let row: &mut [u8; 4] = pred.row_mut(dy as isize, 0, 4).try_into().unwrap();
+        *row = add_res_and_clip(*row, res);
     }
 }
 
@@ -249,18 +245,16 @@ pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_t4_rec_sse2_impl(
+fn idct_t4_rec_sse2_impl(
     rec: &mut PlaneCursorMut<'_>,
     pred: &PlaneCursor<'_>,
     dct: &[i16; 16],
 ) {
-    unsafe {
-        let (res0, res1, res2, res3) = compute_idct_residuals(dct);
-        for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
-            let p: [u8; 4] = pred.row_view(dy as isize, 0, 4).try_into().unwrap();
-            let row: &mut [u8; 4] = rec.row_mut(dy as isize, 0, 4).try_into().unwrap();
-            *row = add_res_and_clip(p, res);
-        }
+    let (res0, res1, res2, res3) = compute_idct_residuals(dct);
+    for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
+        let p: [u8; 4] = pred.row_view(dy as isize, 0, 4).try_into().unwrap();
+        let row: &mut [u8; 4] = rec.row_mut(dy as isize, 0, 4).try_into().unwrap();
+        *row = add_res_and_clip(p, res);
     }
 }
 
@@ -277,10 +271,8 @@ pub fn idct_t4_rec(
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_t4_rec_in_place_sse2_impl(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
-    unsafe {
-        idct_res_add_pred_sse2_impl(rec, dct);
-    }
+fn idct_t4_rec_in_place_sse2_impl(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
+    idct_res_add_pred_sse2_impl(rec, dct);
 }
 
 /// [`idct_t4_rec`] in place on `rec`.
@@ -290,17 +282,15 @@ pub fn idct_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_four_t4_rec_sse2_impl(
+fn idct_four_t4_rec_sse2_impl(
     rec: &mut PlaneCursorMut<'_>,
     pred: &PlaneCursor<'_>,
     dct: &[i16; 64],
 ) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
-    unsafe {
-        for (k, &(dx, dy)) in SUBS.iter().enumerate() {
-            let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-            idct_t4_rec_sse2_impl(&mut rec.reborrow(dx, dy), &pred.advance(dx, dy), sub);
-        }
+    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+        let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
+        idct_t4_rec_sse2_impl(&mut rec.reborrow(dx, dy), &pred.advance(dx, dy), sub);
     }
 }
 
@@ -317,13 +307,11 @@ pub fn idct_four_t4_rec(
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_four_t4_rec_in_place_sse2_impl(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
+fn idct_four_t4_rec_in_place_sse2_impl(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
-    unsafe {
-        for (k, &(dx, dy)) in SUBS.iter().enumerate() {
-            let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-            idct_t4_rec_in_place_sse2_impl(&mut rec.reborrow(dx, dy), sub);
-        }
+    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+        let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
+        idct_t4_rec_in_place_sse2_impl(&mut rec.reborrow(dx, dy), sub);
     }
 }
 
@@ -334,19 +322,17 @@ pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) 
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_t4_rec_to_view_sse2_impl(
+fn idct_t4_rec_to_view_sse2_impl(
     rec: &RecCursor<'_>,
     pred: &[u8],
     pred_stride: usize,
     dct: &[i16; 16],
 ) {
-    unsafe {
-        let (res0, res1, res2, res3) = compute_idct_residuals(dct);
-        for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
-            let p: [u8; 4] = pred[dy * pred_stride..][..4].try_into().unwrap();
-            let out = add_res_and_clip(p, res);
-            rec.write_row::<4>(dy as isize, 0, &out);
-        }
+    let (res0, res1, res2, res3) = compute_idct_residuals(dct);
+    for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
+        let p: [u8; 4] = pred[dy * pred_stride..][..4].try_into().unwrap();
+        let out = add_res_and_clip(p, res);
+        rec.write_row::<4>(dy as isize, 0, &out);
     }
 }
 
@@ -362,19 +348,17 @@ pub fn idct_t4_rec_to_view(
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_four_t4_rec_to_view_sse2_impl(
+fn idct_four_t4_rec_to_view_sse2_impl(
     rec: &RecCursor<'_>,
     pred: &[u8],
     pred_stride: usize,
     dct: &[i16; 64],
 ) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
-    unsafe {
-        for (k, &(dx, dy)) in SUBS.iter().enumerate() {
-            let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-            let off = dy as usize * pred_stride + dx as usize;
-            idct_t4_rec_to_view_sse2_impl(&rec.advance(dx, dy), &pred[off..], pred_stride, sub);
-        }
+    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+        let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
+        let off = dy as usize * pred_stride + dx as usize;
+        idct_t4_rec_to_view_sse2_impl(&rec.advance(dx, dy), &pred[off..], pred_stride, sub);
     }
 }
 
@@ -390,14 +374,12 @@ pub fn idct_four_t4_rec_to_view(
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_t4_rec_in_place_view_sse2_impl(rec: &RecCursor<'_>, dct: &[i16; 16]) {
-    unsafe {
-        let (res0, res1, res2, res3) = compute_idct_residuals(dct);
-        for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
-            let cur = rec.row::<4>(dy as isize, 0);
-            let out = add_res_and_clip(cur, res);
-            rec.write_row::<4>(dy as isize, 0, &out);
-        }
+fn idct_t4_rec_in_place_view_sse2_impl(rec: &RecCursor<'_>, dct: &[i16; 16]) {
+    let (res0, res1, res2, res3) = compute_idct_residuals(dct);
+    for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
+        let cur = rec.row::<4>(dy as isize, 0);
+        let out = add_res_and_clip(cur, res);
+        rec.write_row::<4>(dy as isize, 0, &out);
     }
 }
 
@@ -408,13 +390,11 @@ pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_four_t4_rec_in_place_view_sse2_impl(rec: &RecCursor<'_>, dct: &[i16; 64]) {
+fn idct_four_t4_rec_in_place_view_sse2_impl(rec: &RecCursor<'_>, dct: &[i16; 64]) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
-    unsafe {
-        for (k, &(dx, dy)) in SUBS.iter().enumerate() {
-            let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-            idct_t4_rec_in_place_view_sse2_impl(&rec.advance(dx, dy), sub);
-        }
+    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
+        let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
+        idct_t4_rec_in_place_view_sse2_impl(&rec.advance(dx, dy), sub);
     }
 }
 
@@ -425,13 +405,11 @@ pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_t4_rec_on_mb_in_place_view_sse2_impl(rec: &RecCursor<'_>, dct: &[i16; 256]) {
+fn idct_t4_rec_on_mb_in_place_view_sse2_impl(rec: &RecCursor<'_>, dct: &[i16; 256]) {
     const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
-    unsafe {
-        for (k, &(dx, dy)) in QUADS.iter().enumerate() {
-            let sub: &[i16; 64] = (&dct[k << 6..][..64]).try_into().unwrap();
-            idct_four_t4_rec_in_place_view_sse2_impl(&rec.advance(dx, dy), sub);
-        }
+    for (k, &(dx, dy)) in QUADS.iter().enumerate() {
+        let sub: &[i16; 64] = (&dct[k << 6..][..64]).try_into().unwrap();
+        idct_four_t4_rec_in_place_view_sse2_impl(&rec.advance(dx, dy), sub);
     }
 }
 
@@ -442,7 +420,7 @@ pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_rec_i16x16_dc_sse2_impl(
+fn idct_rec_i16x16_dc_sse2_impl(
     rec: &mut PlaneCursorMut<'_>,
     pred: &PlaneCursor<'_>,
     dc: &[i16; 16],
@@ -489,7 +467,7 @@ pub fn idct_rec_i16x16_dc(
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn idct_rec_i16x16_dc_to_view_sse2_impl(
+fn idct_rec_i16x16_dc_to_view_sse2_impl(
     rec: &RecCursor<'_>,
     pred: &[u8],
     pred_stride: usize,

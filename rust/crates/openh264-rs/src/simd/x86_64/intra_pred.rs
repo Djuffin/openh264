@@ -124,7 +124,7 @@ unsafe fn i16x16_plane_fill<O: PredOut>(
 /// C++: `WelsI16x16LumaPredDc_c` and its `_T`/`_NA` siblings — one body, because the
 /// three differ only in which sums are in scope and what they are rounded by.
 #[target_feature(enable = "sse2")]
-unsafe fn i16x16_dc_mean<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
+fn i16x16_dc_mean<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
     unsafe {
         let sum_top = if use_top {
             let top = src.row_n::<16>(-1, 0);
@@ -190,7 +190,7 @@ fn chroma_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
 
 /// The 8x8 chroma plane fill, from the three coefficients.
 #[target_feature(enable = "sse2")]
-unsafe fn chroma_plane_fill<O: PredOut>(
+fn chroma_plane_fill<O: PredOut>(
     out: &mut O,
     top_shift: i32,
     left_shift: i32,

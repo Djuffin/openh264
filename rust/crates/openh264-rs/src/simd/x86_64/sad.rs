@@ -24,7 +24,7 @@ use crate::safe::plane::{BlockRows, RefSamples};
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn sad_16x<S: RefSamples, const H: usize>(
+pub fn sad_16x<S: RefSamples, const H: usize>(
     sample1: &S,
     sample2: &S,
     dx: isize,
@@ -48,7 +48,7 @@ pub unsafe fn sad_16x<S: RefSamples, const H: usize>(
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-pub unsafe fn sad_16x_avx2<S: RefSamples, const H: usize>(
+pub fn sad_16x_avx2<S: RefSamples, const H: usize>(
     sample1: &S,
     sample2: &S,
     dx: isize,
@@ -91,7 +91,7 @@ pub unsafe fn sad_16x_avx2<S: RefSamples, const H: usize>(
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn sad_8x<S: RefSamples, const H: usize>(
+pub fn sad_8x<S: RefSamples, const H: usize>(
     sample1: &S,
     sample2: &S,
     dx: isize,
@@ -113,7 +113,7 @@ pub unsafe fn sad_8x<S: RefSamples, const H: usize>(
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn sad_4x<S: RefSamples, const H: usize>(
+pub fn sad_4x<S: RefSamples, const H: usize>(
     sample1: &S,
     sample2: &S,
     dx: isize,
@@ -133,7 +133,7 @@ pub unsafe fn sad_4x<S: RefSamples, const H: usize>(
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
+pub fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sample1: &S,
     sample2: &S,
     sad: &mut [i32; 4],
@@ -191,7 +191,7 @@ pub unsafe fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn sample_sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
+pub fn sample_sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sample1: &S,
     sample2: &S,
     sad: &mut [i32; 4],
@@ -240,7 +240,7 @@ pub unsafe fn sample_sad_four_8x<S: RefSamples, const H: usize, const HW: usize,
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub unsafe fn sample_sad_four_4x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
+pub fn sample_sad_four_4x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sample1: &S,
     sample2: &S,
     sad: &mut [i32; 4],

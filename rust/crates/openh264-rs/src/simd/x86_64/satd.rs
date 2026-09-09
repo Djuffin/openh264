@@ -11,7 +11,7 @@ use crate::safe::plane::{BlockRows, RefSamples};
 
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
-unsafe fn abs_epi16(v: __m128i) -> __m128i {
+fn abs_epi16(v: __m128i) -> __m128i {
     unsafe {
         let sign = _mm_srai_epi16(v, 15);
         _mm_sub_epi16(_mm_xor_si128(v, sign), sign)
@@ -20,7 +20,7 @@ unsafe fn abs_epi16(v: __m128i) -> __m128i {
 
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
-unsafe fn sum_sub(a: &mut __m128i, b: &mut __m128i) {
+fn sum_sub(a: &mut __m128i, b: &mut __m128i) {
     unsafe {
         let tmp = *b;
         *b = _mm_add_epi16(*a, *b);
@@ -38,19 +38,17 @@ unsafe fn hdm4(
     r2: &mut __m128i,
     r3: &mut __m128i,
 ) {
-    unsafe {
-        sum_sub(r0, r1);
-        sum_sub(r2, r3);
-        sum_sub(r1, r3);
-        sum_sub(r0, r2);
-    }
+    sum_sub(r0, r1);
+    sum_sub(r2, r3);
+    sum_sub(r1, r3);
+    sum_sub(r0, r2);
 }
 
 /// Transposes 4x4 matrix of 16-bit words in lower 64 bits of 4 registers.
 /// Returns (col01, col23) where col01 = [col0 (64b), col1 (64b)] and col23 = [col2 (64b), col3 (64b)].
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
-unsafe fn transpose_4x4_w(
+fn transpose_4x4_w(
     r0: __m128i,
     r1: __m128i,
     r2: __m128i,
@@ -68,7 +66,7 @@ unsafe fn transpose_4x4_w(
 /// Horizontal sum of all 8 unsigned 16-bit integers in a 128-bit register.
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
-unsafe fn sum_u16_8(v: __m128i) -> i32 {
+fn sum_u16_8(v: __m128i) -> i32 {
     unsafe {
         let hi64 = _mm_srli_si128(v, 8);
         let sum64 = _mm_add_epi16(v, hi64);
