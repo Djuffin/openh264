@@ -39,9 +39,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 #![forbid(unsafe_code)]
@@ -308,17 +306,6 @@ pub type PDeQuantization4x4Func = fn(pRes: &mut [i16; 16], kpMF: &[u16; 8]);
 pub type PDeQuantizationIHadamard4x4Func = unsafe extern "C" fn(*mut i16, u16);
 pub type PCopyAlignedFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32);
 
-#[inline(always)]
-fn WelsClip1(val: i32) -> u8 {
-    if val < 0 {
-        0
-    } else if val > 255 {
-        255
-    } else {
-        val as u8
-    }
-}
-
 // ============================================================================
 // Math & Transform Helpers (C reference fallbacks)
 // ============================================================================
@@ -381,8 +368,6 @@ pub fn WelsEncRecI16x16Y(
     let mut aDctT4Dc = [0i16; 16];
     let pFuncList = pEncCtx.func_list();
     let pCurDqLayer = current_layer_expect(pEncCtx);
-    let kiEncStride = pCurDqLayer.iEncStride[0];
-    let kiRecStride = pCurDqLayer.iCsStride[0];
     // The prediction scratch is an owned `[u8; 2*256+16]` on the cache.
     // Stride 16 is the scratch's own geometry.
     let pBestPred = RecCursor::over_owned(
@@ -511,7 +496,6 @@ pub fn WelsEncRecI4x4Y(
 ) {
     let pFuncList = pEncCtx.func_list();
     let pCurDqLayer = current_layer_expect(pEncCtx);
-    let iEncStride = pCurDqLayer.iEncStride[0];
     let uiQp = pCurMb.uiLumaQp;
 
     let iRecStride = pCurDqLayer.iCsStride[0];

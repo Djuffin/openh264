@@ -28,7 +28,6 @@ use std::ptr;
 use std::time::{Duration, Instant};
 
 #[path = "../tests/common/mod.rs"]
-#[allow(dead_code)]
 mod common;
 use common::{Sha1Hasher, dylib};
 

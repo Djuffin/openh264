@@ -38,9 +38,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 #![deny(unsafe_code)]
@@ -750,7 +748,7 @@ pub fn WelsChromaDcIdct(pBlock: &mut [i16]) {
 
 pub fn DecodeCabacIntraMbType(
     pCtx: &mut SliceCtx<'_>,
-    pNeighAvail: &SWelsNeighAvail,
+    _pNeighAvail: &SWelsNeighAvail,
     ctx_base: i32,
 ) -> u32 {
     let mut uiCode: u32 = 0;
@@ -1056,7 +1054,7 @@ pub fn ParseMBTypeISliceCabac(
 
 pub fn ParseMBTypePSliceCabac(
     pCtx: &mut SliceCtx<'_>,
-    pNeighAvail: &SWelsNeighAvail,
+    _pNeighAvail: &SWelsNeighAvail,
     uiMbType: &mut u32,
 ) -> i32 {
     let mut uiCode: u32 = 0;
@@ -1639,8 +1637,6 @@ pub fn ParseInterPMotionInfoCabac(
 ) -> i32 {
     let pRefCountHdr =
         pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
-    let iDirectSpatialMvPredFlag = pCurDqLayer
-        .sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag;
     let ppRefPic = &pCtx.sRefPic.pRefList[LIST_0];
     let pRefCount0 = pRefCountHdr[0];
     let iMbXy = pCurDqLayer.iMbXyIndex as usize;

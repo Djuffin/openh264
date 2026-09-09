@@ -38,9 +38,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 #![forbid(unsafe_code)]
@@ -974,7 +972,6 @@ pub fn RcCalculateIdrQp(pEncCtx: &mut sWelsEncCtx) {
     }
 
     let did = pEncCtx.uiDependencyId as usize;
-    let eSliceType = pEncCtx.eSliceType;
     let (pParam, pWelsSvcRc) = pEncCtx.param_and_rc_at_mut(did);
     let pDLayerParam = &pParam.sSpatialLayers[did];
     let pDLayerParamInternal = &pParam.sDependencyLayers[did];
@@ -2134,8 +2131,6 @@ pub extern "C" fn WelsRcMbInfoUpdateGom(
     pSlice: &mut SSlice,
     pCtxOutBs: Option<&crate::encoder::vlc_encoder::BsWriter>,
 ) {
-    let did = pEncCtx.uiDependencyId as usize;
-    let pWelsSvcRc = pEncCtx.rc_at(did);
     let pSOverRc = &mut pSlice.sSlicingOverRc;
 
     let cur_bs = pEncCtx.func_list().eEntropyCoder.GetBsPosition(

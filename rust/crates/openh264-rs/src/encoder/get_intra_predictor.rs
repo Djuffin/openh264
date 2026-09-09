@@ -25,7 +25,7 @@
 //! (`V` and `H`) it imports rather than redefines — those two really are the same
 //! function, and the table below installs the imported ones.
 
-#![allow(non_snake_case, non_upper_case_globals, dead_code)]
+#![allow(non_snake_case, non_upper_case_globals)]
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]

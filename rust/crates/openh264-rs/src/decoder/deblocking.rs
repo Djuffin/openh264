@@ -39,9 +39,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 #![forbid(unsafe_code)]
 
@@ -297,7 +295,7 @@ pub fn ON_MB_BS(
     ref_p0: Option<PicId>,
     ref_q0: Option<PicId>,
     ref_p1: Option<PicId>,
-    ref_q1: Option<PicId>,
+    _ref_q1: Option<PicId>,
     mv0: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
     mv1: &MbArray<[[i16; MV_A]; MB_BLOCK4x4_NUM]>,
     iMbXy: usize,

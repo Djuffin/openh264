@@ -1,9 +1,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 #![deny(unsafe_code)]
@@ -804,7 +802,7 @@ pub fn ParseNalHeader(
         15 => EWelsNalUnitType::NAL_UNIT_SUBSET_SPS,
         19 => EWelsNalUnitType::NAL_UNIT_AUX_CODED_SLICE,
         20 => EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT,
-        other => EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
+        _ => EWelsNalUnitType::NAL_UNIT_UNSPEC_0,
     };
     pCtx.sCurNalHead = *pNalUnitHeader;
 

@@ -3,9 +3,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 // CPU feature flags from cpu_core.h
@@ -350,22 +348,27 @@ pub fn mc_copy<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, widt
 
 /// The seven luma partition shapes: `BaseMC`'s block sizes in the decoder, and the
 /// sizes `mc_luma`'s quarter-pel composites run their leaves at.
+#[cfg(test)]
 pub(crate) const SHAPES_LUMA: [(usize, usize); 7] =
     [(16, 16), (16, 8), (8, 16), (8, 8), (8, 4), (4, 8), (4, 4)];
 
 /// `MeRefineFracPixel`'s horizontal filter, `(kiW + 1, kiH)` at the four block sizes
 /// the motion search refines (`svc_base_layer_md.rs`; the sub-8x8 partitions are
 /// `#if 0` upstream and `unreachable!` here).
+#[cfg(test)]
 pub(crate) const SHAPES_REFINE_HOR: [(usize, usize); 4] = [(17, 16), (17, 8), (9, 16), (9, 8)];
 
 /// The same refinement's vertical filter, `(kiW, kiH + 1)`.
+#[cfg(test)]
 pub(crate) const SHAPES_REFINE_VER: [(usize, usize); 4] = [(16, 17), (16, 9), (8, 17), (8, 9)];
 
 /// The same refinement's centre filter, `(kiW + 1, kiH + 1)`.
+#[cfg(test)]
 pub(crate) const SHAPES_REFINE_CEN: [(usize, usize); 4] = [(17, 17), (17, 9), (9, 17), (9, 9)];
 
 /// The chroma shapes: half of each luma partition, so the decoder's 4x4 partitions
 /// reach 2x2 and the encoder's 8x8 ones reach 4x4.
+#[cfg(test)]
 pub(crate) const SHAPES_CHROMA: [(usize, usize); 7] =
     [(8, 8), (8, 4), (4, 8), (4, 4), (4, 2), (2, 4), (2, 2)];
 
@@ -1257,7 +1260,7 @@ fn luma_shaped<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usiz
 }
 
 /// The run-time-shape twin of [`luma_shaped`] — cold, for a shape
-/// [`SHAPES_LUMA`] does not carry; see [`McLeaves`]. The same sixteen arms over the
+/// `SHAPES_LUMA` does not carry; see [`McLeaves`]. The same sixteen arms over the
 /// `_any` leaves and the same 16-stride scratch, so it is correct wherever the const
 /// path is and slow everywhere.
 fn luma_any<L: McLeaves, S: RefSamples + Copy>(
@@ -1717,7 +1720,7 @@ pub fn mc_chroma_same(
 }
 
 // ============================================================================
-// Read reaches and spans
+// Read reaches
 // ============================================================================
 //
 // A kernel reaches past the block it is given: the 6-tap filter needs two samples
@@ -1748,64 +1751,6 @@ pub fn mc_chroma_same(
 // out of the reference picture into `pBufferInterPredMe` scratch
 // (`encoder/md.rs:1043-1046`), and the search window is bounded before the call
 // rather than by a clamp inside it.
-
-/// The samples a kernel reads around `pSrc`'s `(0, 0)`: `x` in
-/// `-left .. width + right`, `y` in `-top .. height + bottom`.
-#[derive(Clone, Copy)]
-struct Reach {
-    left: usize,
-    top: usize,
-    right: usize,
-    bottom: usize,
-}
-
-/// Copy path: the block and nothing else.
-const R_COPY: Reach = Reach { left: 0, top: 0, right: 0, bottom: 0 };
-/// Horizontal 6-tap: two samples left, three right.
-const R_HOR: Reach = Reach { left: 2, top: 0, right: 3, bottom: 0 };
-/// Vertical 6-tap: two rows above, three below.
-const R_VER: Reach = Reach { left: 0, top: 2, right: 0, bottom: 3 };
-/// Both, which is also the union over every quarter-pel kernel.
-const R_CEN: Reach = Reach { left: 2, top: 2, right: 3, bottom: 3 };
-/// Bilinear chroma: one sample right and one row below, for the `(1 - a)` terms.
-const R_CHROMA: Reach = Reach { left: 0, top: 0, right: 1, bottom: 1 };
-
-/// Per-kernel read reach, in `[iMvX & 3][iMvY & 3]` order.
-///
-/// It is not one reach for all sixteen: `McHorVer10_c` reads no row outside its
-/// block and `McHorVer13_c` reads five.
-///
-/// **`static`, not `const`, and that is worth 8% of decode time.** A `const` is
-/// substituted at each use, so `LUMA_REACH[x][y]` with runtime indices makes the
-/// compiler materialise all sixteen entries on the stack at every `McLuma_c` call
-/// and then index that copy — 64 stores to read four words. As a `static` it lives
-/// in rodata and the same expression is one load.
-static LUMA_REACH: [[Reach; 4]; 4] = [
-    [R_COPY, R_VER, R_VER, R_VER],
-    [R_HOR, R_CEN, R_CEN, R_CEN],
-    [R_HOR, R_CEN, R_CEN, R_CEN],
-    [R_HOR, R_CEN, R_CEN, R_CEN],
-];
-
-/// `(slice length, cursor centre)` for a source slice anchored at
-/// `pSrc - top*stride - left`.
-///
-/// This and [`block_span`] are the only places in the module where a span is
-/// computed.
-#[inline]
-fn src_span(stride: usize, width: usize, height: usize, r: Reach) -> (usize, usize) {
-    let center = r.top * stride + r.left;
-    let len = center + (height + r.bottom - 1) * stride + width + r.right;
-    (len, center)
-}
-
-/// Bytes spanned by a `width` x `height` block at `stride`, from its own `(0, 0)` —
-/// the destination surface of every kernel here, and the source of the ones that
-/// read nothing outside their block.
-#[inline]
-fn block_span(stride: usize, width: usize, height: usize) -> usize {
-    (height - 1) * stride + width
-}
 
 /// C++: `InitMcFunc`, `codec/common/src/mc.cpp` — both codecs call it at open time.
 ///

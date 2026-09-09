@@ -62,9 +62,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 #![forbid(unsafe_code)]
 
@@ -1159,7 +1157,7 @@ pub fn DecodeUEGMvCabac(
     win: &[u8],
     pDecEngine: &mut SWelsCabacDecEngine,
     pBinCtx: &mut [SWelsCabacCtx],
-    iMaxC: u32,
+    _iMaxC: u32,
     uiCode: &mut u32,
 ) -> i32 {
     {

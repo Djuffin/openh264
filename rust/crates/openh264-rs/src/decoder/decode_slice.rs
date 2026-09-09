@@ -1,10 +1,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables,
-    unused_mut
+    non_upper_case_globals
 )]
 
 #![deny(unsafe_code)]
@@ -1831,7 +1828,7 @@ fn inter_pred(
 }
 
 pub fn WelsFillRecNeededMbInfo(
-    pCtx: &mut SliceCtx<'_>,
+    _pCtx: &mut SliceCtx<'_>,
     pDec: Option<&mut SPicture>,
     bOutput: bool,
     pCurDqLayer: &mut DqLayerState,
@@ -1841,8 +1838,6 @@ pub fn WelsFillRecNeededMbInfo(
     };
     let iLumaStride = pCurPic.linesize(0);
     let iChromaStride = pCurPic.linesize(1);
-    let iMbX = pCurDqLayer.iMbX;
-    let iMbY = pCurDqLayer.iMbY;
 
     pCurDqLayer.iLumaStride = iLumaStride;
     pCurDqLayer.iChromaStride = iChromaStride;
@@ -2343,8 +2338,8 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
         let mut uiCode = 0u32;
         let mut iCode = 0i32;
         let mut uiCbp;
-        let mut uiCbpC;
-        let mut uiCbpL;
+        let uiCbpC;
+        let uiCbpL;
 
         let mut sNeighAvail = SWelsNeighAvail::default();
         let mut pNonZeroCount = [0u8; 48];
@@ -2359,7 +2354,7 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
         if ret != 0 {
             return ret as i32;
         }
-        let mut uiMbType = uiCode;
+        let uiMbType = uiCode;
         if uiMbType > 25 {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_MB_TYPE);
         }
@@ -2446,8 +2441,6 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
 
         if *dq.grid.cbp.get(iMbXy) == 0 && IS_INTRANxN(*pDec.pMbType.get(iMbXy)) {
             let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-            let pps_sh_entropy = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
-            let pps_sh_transform8x8 = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
             *dq.grid.luma_qp.get_mut(iMbXy) = dq.sLayerInfo.sSliceInLayer.iLastMbQp as i8;
             for i in 0..2 {
                 let idx = WELS_CLIP3(
@@ -2475,8 +2468,6 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             *dq.grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
             dq.sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
             let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-            let pps_sh_entropy = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
-            let pps_sh_transform8x8 = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
             for i in 0..2 {
                 let idx = WELS_CLIP3(new_qp + pps_sh_chroma_qp_offset[i] as i32, 0, 51);
                 dq.grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
@@ -2743,7 +2734,7 @@ pub fn WelsDecodeMbCavlcISlice(
     pCtx: &mut SliceCtx<'_>,
     dq: &mut DqLayerState,
     pDec: &mut SPicture,
-    pRefs: PicRefs<'_>,
+    _pRefs: PicRefs<'_>,
     pNalCur: &mut SNalUnit,
     uiEosFlag: &mut u32,
 ) -> i32 {
@@ -2966,8 +2957,6 @@ pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
         let mb_type = *pDec.pMbType.get(iMbXy);
         if *dq.grid.cbp.get(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
             let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-            let pps_sh_entropy = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
-            let pps_sh_transform8x8 = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
             *dq.grid.luma_qp.get_mut(iMbXy) = dq.sLayerInfo.sSliceInLayer.iLastMbQp as i8;
             for i in 0..2 {
                 let idx = WELS_CLIP3(
@@ -2995,8 +2984,6 @@ pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             *dq.grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
             dq.sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
             let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-            let pps_sh_entropy = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
-            let pps_sh_transform8x8 = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
             for i in 0..2 {
                 let idx = WELS_CLIP3(new_qp + pps_sh_chroma_qp_offset[i] as i32, 0, 51);
                 dq.grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
@@ -3296,8 +3283,6 @@ pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
         let mb_type = *pDec.pMbType.get(iMbXy);
         if *dq.grid.cbp.get(iMbXy) == 0 && !IS_INTRA16x16(mb_type) && mb_type != MB_TYPE_INTRA_BL {
             let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-            let pps_sh_entropy = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
-            let pps_sh_transform8x8 = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
             *dq.grid.luma_qp.get_mut(iMbXy) = dq.sLayerInfo.sSliceInLayer.iLastMbQp as i8;
             for i in 0..2 {
                 let idx = WELS_CLIP3(
@@ -3325,8 +3310,6 @@ pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             *dq.grid.luma_qp.get_mut(iMbXy) = new_qp as i8;
             dq.sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
             let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-            let pps_sh_entropy = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
-            let pps_sh_transform8x8 = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
             for i in 0..2 {
                 let idx = WELS_CLIP3(new_qp + pps_sh_chroma_qp_offset[i] as i32, 0, 51);
                 dq.grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
@@ -3458,8 +3441,6 @@ pub fn WelsDecodeMbCavlcBSlice(
                 let iLastMbQp = dq.sLayerInfo.sSliceInLayer.iLastMbQp;
                 *dq.grid.luma_qp.get_mut(iMbXy) = iLastMbQp as i8;
                 let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-                let pps_sh_entropy = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
-                let pps_sh_transform8x8 = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
                 for i in 0..2 {
                     let idx = WELS_CLIP3(
                         *dq.grid.luma_qp.get(iMbXy) as i32 + pps_sh_chroma_qp_offset[i] as i32,
@@ -3530,11 +3511,9 @@ pub fn ParseIntra4x4Mode(
 
     uiNeighAvail = ((iSampleAvail[6] << 2) | (iSampleAvail[0] << 1) | (iSampleAvail[1])) as u8;
 
-    let pps_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
 
     let pps_entropy = pCtx.pps_of(dq.sLayerInfo.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
 
-    let pps_transform8x8 = pCtx.pps_of(dq.sLayerInfo.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
     let pIntra4x4FinalMode = dq.grid.intra4x4_final_mode.get_mut(iMbXy);
     for i in 0..16 {
         let iPrevIntra4x4PredMode;
@@ -3667,11 +3646,9 @@ pub fn ParseIntra8x8Mode(
         | (iSampleAvail[1])) as u8;
     *dq.grid.intra_nxn_avail_flag.get_mut(iMbXy) = uiNeighAvail;
 
-    let pps_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
 
     let pps_entropy = pCtx.pps_of(dq.sLayerInfo.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
 
-    let pps_transform8x8 = pCtx.pps_of(dq.sLayerInfo.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
     let pIntra4x4FinalMode = dq.grid.intra4x4_final_mode.get_mut(iMbXy);
     for i in 0..4usize {
         let iPrevIntra4x4PredMode;
@@ -3811,11 +3788,9 @@ pub fn ParseIntra16x16Mode(
         return ERR_NONE;
     }
 
-    let pps_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
 
     let pps_entropy = pCtx.pps_of(dq.sLayerInfo.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
 
-    let pps_transform8x8 = pCtx.pps_of(dq.sLayerInfo.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
     if pps_entropy {
         let ret = crate::decoder::parse_mb_syn_cabac::ParseIntraPredModeChromaCabac(
             pCtx, dq,
@@ -3871,8 +3846,6 @@ fn WelsDecodeMbCabacIntraModeHelper(
 
         if uiMbType == 0 {
             *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA4x4;
-            let pps_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-            let pps_entropy = pCtx.pps_of(dq.sLayerInfo.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
             let pps_transform8x8 = pCtx.pps_of(dq.sLayerInfo.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
             if pps_transform8x8 {
                 let mut bTransformSize8x8Flag = false;
@@ -3917,7 +3890,6 @@ fn WelsDecodeMbCabacIntraModeHelper(
 
 fn WelsDecodeMbCabacResidualHelper(
     pCtx: &mut SliceCtx<'_>,
-    pNalCur: &mut SNalUnit,
     dq: &mut DqLayerState,
     pDec: &mut SPicture,
     pNeighAvail: &mut SWelsNeighAvail,
@@ -3926,14 +3898,7 @@ fn WelsDecodeMbCabacResidualHelper(
     iScanIdxEnd: usize,
 ) -> i32 {
     {
-        let pBsRd: &mut BsReader = &mut pNalCur.sNalData.sVclNal.sSliceBitsRead;
-        let buf = pCtx.sRawData.window_from(pBsRd.start);
-        let pBsAux: &mut BsCursor = &mut pBsRd.cursor;
         let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-        let pps_sh_entropy = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
-        let pps_sh_transform8x8 = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
-        let pps_layer_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-        let pps_layer_entropy = pCtx.pps_of(dq.sLayerInfo.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
         let pps_layer_transform8x8 = pCtx.pps_of(dq.sLayerInfo.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
         let iMbXy = dq.iMbXyIndex as usize;
         let iMbXyIndex = dq.iMbXyIndex;
@@ -4276,8 +4241,6 @@ fn WelsDecodeMbCabacResidualHelper(
             let last_qp = dq.sLayerInfo.sSliceInLayer.iLastMbQp;
             *dq.grid.luma_qp.get_mut(iMbXy) = last_qp as i8;
             let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-            let pps_sh_entropy = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
-            let pps_sh_transform8x8 = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
             for i in 0..2 {
                 let idx =
                     WELS_CLIP3(last_qp + pps_sh_chroma_qp_offset[i] as i32, 0, 51);
@@ -4293,7 +4256,7 @@ pub fn WelsDecodeMbCabacISliceBaseMode0(
     pNalCur: &mut SNalUnit,
     dq: &mut DqLayerState,
     pDec: &mut SPicture,
-    pRefs: PicRefs<'_>,
+    _pRefs: PicRefs<'_>,
     uiEosFlag: &mut u32,
 ) -> i32 {
     {
@@ -4372,7 +4335,6 @@ pub fn WelsDecodeMbCabacISliceBaseMode0(
 
         ret = WelsDecodeMbCabacResidualHelper(
             pCtx,
-            pNalCur,
             dq,
             &mut *pDec,
             &mut sNeighAvail,
@@ -4524,7 +4486,6 @@ pub fn WelsDecodeMbCabacPSliceBaseMode0(
 
         ret = WelsDecodeMbCabacResidualHelper(
             pCtx,
-            pNalCur,
             dq,
             &mut *pDec,
             pNeighAvail,
@@ -4612,8 +4573,6 @@ pub fn WelsDecodeMbCabacPSlice(
             let last_qp = dq.sLayerInfo.sSliceInLayer.iLastMbQp;
             *dq.grid.luma_qp.get_mut(iMbXy) = last_qp as i8;
             let pps_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-            let pps_entropy = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
-            let pps_transform8x8 = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
             for i in 0..2 {
                 let idx =
                     WELS_CLIP3(last_qp + pps_chroma_qp_offset[i] as i32, 0, 51);
@@ -4750,7 +4709,6 @@ pub fn WelsDecodeMbCabacBSliceBaseMode0(
 
         ret = WelsDecodeMbCabacResidualHelper(
             pCtx,
-            pNalCur,
             dq,
             &mut *pDec,
             pNeighAvail,
@@ -4871,8 +4829,6 @@ pub fn WelsDecodeMbCabacBSlice(
             let last_qp = dq.sLayerInfo.sSliceInLayer.iLastMbQp;
             *dq.grid.luma_qp.get_mut(iMbXy) = last_qp as i8;
             let pps_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
-            let pps_entropy = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bEntropyCodingModeFlag);
-            let pps_transform8x8 = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).is_some_and(|p| p.bTransform8x8ModeFlag);
             for i in 0..2 {
                 let idx =
                     WELS_CLIP3(last_qp + pps_chroma_qp_offset[i] as i32, 0, 51);
@@ -4903,7 +4859,7 @@ pub fn WelsDecodeMbCabacBSlice(
 pub fn WelsDecodeSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: &mut DqLayerState,
-    bFirstSliceInLayer: bool,
+    _bFirstSliceInLayer: bool,
     nal_idx: Option<usize>,
 ) -> i32 {
     pCurDqLayer.sLayerInfo.sSliceInLayer.iTotalMbInCurSlice = 0;

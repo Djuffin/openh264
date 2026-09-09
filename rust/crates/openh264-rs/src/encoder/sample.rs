@@ -10,7 +10,7 @@
 //! `libopenh264.a` on this machine, `WelsCPUFeatureDetect` returns `0x00000000`, so
 //! the reference leaves all five NULL — matching this port, which has no SIMD.
 
-#![allow(non_snake_case, non_upper_case_globals, dead_code)]
+#![allow(non_snake_case, non_upper_case_globals)]
 
 // ---------------------------------------------------------------------------
 // Arithmetic parity: the whole butterfly is `i32`, exactly as the C++

@@ -1,9 +1,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 //! CAVLC Macroblock Syntax Elements Serialization and Residual Bitstream Encoding.
@@ -369,7 +367,7 @@ pub fn WriteBlockResidualCavlc(
 ///
 /// Matches `void WelsSpatialWriteMbPred (sWelsEncCtx* pEncCtx, SSlice* pSlice, SMB* pCurMb)`
 pub fn WelsSpatialWriteMbPred(
-    pEncCtx: &sWelsEncCtx,
+    _pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
     pSliceBsBuf: &mut [u8],
@@ -491,7 +489,7 @@ pub fn WelsSpatialWriteMbPred(
 ///
 /// Matches `void WelsSpatialWriteSubMbPred (sWelsEncCtx* pEncCtx, SSlice* pSlice, SMB* pCurMb)`
 pub fn WelsSpatialWriteSubMbPred(
-    pEncCtx: &sWelsEncCtx,
+    _pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
     pSliceBsBuf: &mut [u8],
@@ -562,9 +560,6 @@ pub fn WelsSpatialWriteSubMbPred(
     for i in 0..4 {
         let uiSubMbType = pCurMb.uiSubMbType[i] as u32;
         let s0 = g_kuiMbCountScan4Idx[kpScan4_idx] as usize;
-        let s1 = g_kuiMbCountScan4Idx[kpScan4_idx + 1] as usize;
-        let s2 = g_kuiMbCountScan4Idx[kpScan4_idx + 2] as usize;
-        let s3 = g_kuiMbCountScan4Idx[kpScan4_idx + 3] as usize;
 
         let cur_mv = &pCurMb.sMv;
 

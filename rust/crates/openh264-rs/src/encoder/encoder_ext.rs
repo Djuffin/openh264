@@ -229,7 +229,6 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
     let mut iLineSizeUV = [[0i32; 2]; MAX_DEPENDENCY_LAYER];
     let mut iMapSpatialIdx = [[0i32; 2]; MAX_DEPENDENCY_LAYER];
     let mut iCountLayersNeedCs = [0i32; 2];
-    let kiUnit1Size: i32 = 24 * 4; // 24 * sizeof(int32_t)
     let mut iUnit2Size: i32 = 0;
     let mut i: i32;
     let mut iSpatialIdx: i32;

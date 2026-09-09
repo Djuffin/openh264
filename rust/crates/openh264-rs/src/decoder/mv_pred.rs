@@ -40,11 +40,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables,
-    unused_mut,
-    unused_assignments
+    non_upper_case_globals
 )]
 #![forbid(unsafe_code)]
 
@@ -287,10 +283,10 @@ pub fn PredPSkipMvFromNeighbor(
     pDec: Option<&SPicture>,
     iMvp: &mut [i16; 2],
 ) {
-    let mut bTopAvail = false;
-    let mut bLeftTopAvail = false;
-    let mut bRightTopAvail = false;
-    let mut bLeftAvail = false;
+    let bTopAvail: bool;
+    let bLeftTopAvail: bool;
+    let bRightTopAvail: bool;
+    let bLeftAvail: bool;
 
     let iCurXy = pCurDqLayer.iMbXyIndex;
     let iCurX = pCurDqLayer.iMbX;
@@ -308,7 +304,6 @@ pub fn PredPSkipMvFromNeighbor(
         bLeftAvail = iLeftSliceIdc == iCurSliceIdc;
     } else {
         bLeftAvail = false;
-        bLeftTopAvail = false;
     }
 
     if iCurY != 0 {
@@ -341,14 +336,14 @@ pub fn PredPSkipMvFromNeighbor(
     let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbType.get(iLeftTopXy as usize) } else { 0 };
     let iRightTopType = if iCurX != (pCurDqLayer.iMbWidth - 1) && iCurY != 0 && bRightTopAvail { *pMbType.get(iRightTopXy as usize) } else { 0 };
 
-    let mut iMvA = [0i16; 2];
-    let mut iMvB = [0i16; 2];
-    let mut iMvC = [0i16; 2];
-    let mut iMvD = [0i16; 2];
-    let mut iLeftRef: i8;
-    let mut iTopRef: i8;
-    let mut iRightTopRef: i8;
-    let mut iLeftTopRef: i8;
+    let iMvA: [i16; 2];
+    let iMvB: [i16; 2];
+    let mut iMvC: [i16; 2];
+    let iMvD: [i16; 2];
+    let iLeftRef: i8;
+    let iTopRef: i8;
+    let iRightTopRef: i8;
+    let iLeftTopRef: i8;
 
 
     // left
@@ -462,13 +457,9 @@ pub fn PredMv(
     let kiLeftTopRef = iRefIndex[listIdx][kuiLeftTopIdx];
     let mut iDiagonalRef = kiRightTopRef;
 
-    let mut iAMV = [0i16; 2];
-    let mut iBMV = [0i16; 2];
-    let mut iCMV = [0i16; 2];
-
-    iAMV = iMotionVector[listIdx][kuiLeftIdx];
-    iBMV = iMotionVector[listIdx][kuiTopIdx];
-    iCMV = iMotionVector[listIdx][kuiRightTopIdx];
+    let iAMV = iMotionVector[listIdx][kuiLeftIdx];
+    let iBMV = iMotionVector[listIdx][kuiTopIdx];
+    let mut iCMV = iMotionVector[listIdx][kuiRightTopIdx];
 
     if REF_NOT_AVAIL == iDiagonalRef {
         iDiagonalRef = kiLeftTopRef;
@@ -891,7 +882,6 @@ pub fn PredBDirectTemporal(
     ref_idx: &mut [i8; 2],
     subMbType: &mut SubMbType,
 ) -> i32 {
-    let mut ret = ERR_NONE;
     let iMbXy = pCurDqLayer.iMbXyIndex as usize;
     let pMbType = GetMbType(pCurDqLayer, Some(&*pDec));
     let curMbType = *pMbType.get(iMbXy);
@@ -899,7 +889,7 @@ pub fn PredBDirectTemporal(
 
     let mut mbType: MbType = 0;
     let colocPicForMb = pRefs.resolve(pCtx.ref_id(LIST_1, 0), Some(&*pDec));
-    ret = GetColocatedMb(pCtx, pCurDqLayer, Some(&*pDec), colocPicForMb, &mut mbType, subMbType);
+    let ret = GetColocatedMb(pCtx, pCurDqLayer, Some(&*pDec), colocPicForMb, &mut mbType, subMbType);
     if ret != ERR_NONE {
         return ret;
     }
@@ -1298,7 +1288,6 @@ pub fn UpdateP8x8DirectCabac(pCurDqLayer: &mut DqLayerState, iPartIdx: i32) {
 #[inline(always)]
 pub fn UpdateP16x16DirectCabac(pCurDqLayer: &mut DqLayerState) {
     let iMbXy = pCurDqLayer.iMbXyIndex as usize;
-    let direct: u16 = (1 << 8) | 1;
     {
         let direct_ptr = pCurDqLayer.grid.direct.get_mut(iMbXy);
         for i in (0..16).step_by(4) {

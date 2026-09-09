@@ -10,7 +10,6 @@
 //! emit -- `Ip A0:0 C420jpeg XYSCSS=420JPEG`, plus a per-stream frame rate --
 //! so a plain byte comparison would fail on the header of every single stream.
 
-#![allow(dead_code)]
 
 /// Luma samples per macroblock edge. Used to report mismatches by macroblock,
 /// which is the unit you actually debug a decoder in.

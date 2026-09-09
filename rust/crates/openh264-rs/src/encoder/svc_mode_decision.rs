@@ -1,9 +1,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 //! SVC Spatial Enhancement Layer Mode Decision & Screen Content Coding Engine.
@@ -1582,7 +1580,7 @@ pub fn CheckBorder(
 pub extern "C" fn JudgeStaticSkip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
-    pMbCache: &mut SMbCache,
+    _pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD<'_>,
 ) -> bool {
     let pCurDqLayer = current_layer_expect(pEncCtx);
@@ -1625,7 +1623,7 @@ pub extern "C" fn JudgeStaticSkip(
 pub extern "C" fn JudgeScrollSkip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
-    pMbCache: &mut SMbCache,
+    _pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD<'_>,
 ) -> bool {
     let pCurDqLayer = current_layer_expect(pEncCtx);
@@ -1709,11 +1707,6 @@ pub extern "C" fn SvcMdSCDMbEnc(
     // `WelsMdInterInit`'s single `kiCurStrideUV` applied to both chroma planes.
     let pRefPic = layer_ref_pic_expect(pEncCtx, &*pCurDqLayer);
     let pd = &pMbCache.SPicData;
-    let pRefLuma = pRefPic.data_ptr_shared(0).wrapping_offset(pd.mb_offset(pRefPic.stride(0), 0));
-    let pRefCb = pRefPic.data_ptr_shared(1).wrapping_offset(pd.mb_offset(pRefPic.stride(1), 1));
-    let pRefCr = pRefPic.data_ptr_shared(2).wrapping_offset(pd.mb_offset(pRefPic.stride(1), 2));
-    let iLineSizeY = layer_ref_pic(pEncCtx, &*pCurDqLayer).map_or(0, |p| p.stride(0));
-    let iLineSizeUV = layer_ref_pic(pEncCtx, &*pCurDqLayer).map_or(0, |p| p.stride(1));
 
     // The anchors: `mb_offset(stride, 0)` is `(iMbX << 4) + (iMbY << 4) * stride`,
     // and `iOffsetY` adds `(mvX >> 2) + (mvY >> 2) * stride` — together a cursor at

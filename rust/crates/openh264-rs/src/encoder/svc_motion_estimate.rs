@@ -39,8 +39,6 @@
     non_snake_case,
     non_camel_case_types,
     non_upper_case_globals,
-    dead_code,
-    unused_variables,
     clippy::too_many_arguments
 )]
 
@@ -429,7 +427,7 @@ pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
 /// Populates motion estimation function pointer table based on CPU capabilities and content type.
 pub fn WelsInitMeFunc(
     pFuncList: &mut SWelsFuncPtrList,
-    uiCpuFlag: u32,
+    _uiCpuFlag: u32,
     bScreenContent: bool,
 ) {
     {

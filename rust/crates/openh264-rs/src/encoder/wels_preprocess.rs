@@ -43,9 +43,7 @@ pub use crate::processing::complexity_analysis::{FRAME_SAD, GOM_SAD, GOM_VAR};
 #[allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 use crate::encoder::picture::{PicPlanes, RecPicId, RecPicPool, SrcPicId, SrcPicPool};
@@ -2231,7 +2229,6 @@ impl CWelsPreProcess {
         let (cur_w, cur_h) = (cur_pic.iWidthInPixel, cur_pic.iHeightInPixel);
         let ref_pic = pick(pRefPicture);
         let ref_y = ref_pic.plane(0);
-        let (ref_w, ref_h) = (ref_pic.iWidthInPixel, ref_pic.iHeightInPixel);
 
         // METHOD_SCENE_CHANGE_DETECTION_VIDEO: no `Set` in the C++ either.
         let mut sSceneChangeDetectResult = SSceneChangeResult::default();

@@ -18,7 +18,7 @@
 //! Generated shape, one line each: same name, same signature, calls the scalar.
 
 #![forbid(unsafe_code)]
-#![allow(non_snake_case, unused_variables)]
+#![allow(non_snake_case)]
 
 pub mod copy;
 pub mod dct;

@@ -1,4 +1,4 @@
-#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 //! Port of `codec/processing/` — the video-processing (VP) plugins the encoder's
 //! pre-processor drives.

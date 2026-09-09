@@ -39,10 +39,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables,
-    unused_mut
+    non_upper_case_globals
 )]
 
 #![deny(unsafe_code)]
@@ -1559,7 +1556,6 @@ pub fn WelsSliceHeaderExtWrite(
 
 pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     let pCurLayer = current_layer_expect(pEncCtx);
-    let kiEncStride = pCurLayer.iEncStride[1];
     let kiBestPredOff =
         best_pred_intra_chroma_off(pMbCache.uiMemPredLumaHalf, pMbCache.uiBestPredIntraChromaHalf);
     let view_chroma = layer_rec_view_expect(&*pCurLayer);
@@ -1602,7 +1598,6 @@ pub fn WelsIMbChromaEncode(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &m
 
 pub fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
     let pCurLayer = current_layer_expect(pEncCtx);
-    let kiEncStride = pCurLayer.iEncStride[1];
     let pMbCache = &mut pSlice.sMbCacheInfo;
     // Note the base: this one starts at `pCoeffLevel + 256`
     // (`svc_encode_slice.cpp:499`) where the intra path starts at 0, which is why
@@ -1629,7 +1624,7 @@ pub fn WelsPMbChromaEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &
     crate::encoder::svc_encode_mb::WelsEncRecUV(&*pFunc, pCurMb, &mut *pMbCache, 320, 2);
 }
 
-pub fn OutputPMbWithoutConstructCsRsNoCopy(pCtx: &sWelsEncCtx, pDq: Option<&SDqLayer>, pSlice: &mut SSlice, pMb: &SMB) {
+pub fn OutputPMbWithoutConstructCsRsNoCopy(_pCtx: &sWelsEncCtx, pDq: Option<&SDqLayer>, pSlice: &mut SSlice, pMb: &SMB) {
     let Some(pDq) = pDq else {
         return;
     };
@@ -1729,8 +1724,8 @@ pub fn WelsISliceMdEnc(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
-    pRestoreBuf: Option<&mut [u8]>,
-    pNextSlice: Option<&mut SSlice>,
+    _pRestoreBuf: Option<&mut [u8]>,
+    _pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     let Some(pCurLayer) = current_layer_ref(pEncCtx) else {
         return ENC_RETURN_SUCCESS;
@@ -1794,7 +1789,7 @@ pub fn WelsISliceMdEnc(
             crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pMbs.cur_mut(), &mut *pMbCache);
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
-            let mut iEncReturn;
+            let iEncReturn;
             {
                 iEncReturn = func_list
                     .eEntropyCoder
@@ -1914,7 +1909,7 @@ pub fn WelsISliceMdEncDynamic(
             crate::encoder::svc_base_layer_md::WelsMdIntraMb(pEncCtx, &mut sMd, pMbs.cur_mut(), &mut *pMbCache);
             UpdateNonZeroCountCache(pMbs.cur(), &mut *pMbCache);
 
-            let mut iEncReturn;
+            let iEncReturn;
             {
                 iEncReturn = func_list
                     .eEntropyCoder
@@ -2035,8 +2030,8 @@ pub fn WelsMdInterMbLoop<'a>(
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
-    pRestoreBuf: Option<&mut [u8]>,
-    pNextSlice: Option<&mut SSlice>,
+    _pRestoreBuf: Option<&mut [u8]>,
+    _pNextSlice: Option<&mut SSlice>,
 ) -> i32 {
     if current_layer_ref(pEncCtx).is_none() || pMbs.stride() == 0 || current_layer_expect(pEncCtx).iMbWidth <= 0 || current_layer_expect(pEncCtx).iMbHeight <= 0 {
         return ENC_RETURN_SUCCESS;
@@ -2175,7 +2170,7 @@ pub fn WelsMdInterMbLoop<'a>(
                 UpdateNonZeroCountCache(&*pCurMb, &mut pSlice.sMbCacheInfo);
             }
 
-            let mut iEncReturn;
+            let iEncReturn;
             {
                 iEncReturn = func_list
                     .eEntropyCoder
@@ -2375,7 +2370,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
                 UpdateNonZeroCountCache(&*pCurMb, &mut pSlice.sMbCacheInfo);
             }
 
-            let mut iEncReturn;
+            let iEncReturn;
             {
                 iEncReturn = func_list
                     .eEntropyCoder
@@ -2466,7 +2461,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
 pub fn WelsPSliceMdEnc(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
-    kbIsHighestDlayerFlag: bool,
+    _kbIsHighestDlayerFlag: bool,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -2499,7 +2494,7 @@ pub fn WelsPSliceMdEnc(
 pub fn WelsPSliceMdEncDynamic(
     pEncCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
-    kbIsHighestDlayerFlag: bool,
+    _kbIsHighestDlayerFlag: bool,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -2691,7 +2686,7 @@ pub fn StampLayerIdrFlagForSliceType(pEncCtx: &mut sWelsEncCtx) {
 pub fn WelsCodeOneSlice(
     pEncCtx: &sWelsEncCtx,
     pCurSlice: &mut SSlice,
-    kiNalType: i32,
+    _kiNalType: i32,
     pSliceBsBuf: &mut [u8],
     pCtxOutBs: &mut Option<&mut BsWriter>,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
@@ -2939,8 +2934,8 @@ pub fn InitSliceBoundaryInfo(
     let kiCountNumMbInFrame: i32 = kiMBWidth * kiMBHeight;
 
     for iSliceIdx in 0..kiSliceNumInFrame {
-        let mut iFirstMBInSlice: i32;
-        let mut iMbNumInSlice: i32;
+        let iFirstMBInSlice: i32;
+        let iMbNumInSlice: i32;
 
         match pSliceArgument.uiSliceMode {
             SliceMode::SM_SINGLE_SLICE => {
@@ -3660,7 +3655,7 @@ pub fn SliceLayerInfoUpdate(
     ENC_RETURN_SUCCESS
 }
 
-pub fn WelsInitSliceEncodingFuncs(uiCpuFlag: u32) {
+pub fn WelsInitSliceEncodingFuncs(_uiCpuFlag: u32) {
     // Dynamically wires CPU architecture flags if SIMD variants are enabled
 }
 
