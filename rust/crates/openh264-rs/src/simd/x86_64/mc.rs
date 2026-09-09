@@ -12,7 +12,7 @@ use crate::common::mc::{
     avg_shaped, cen_shaped, chroma_shaped, filter_input_8bit, g_kuiABCD, hor_filter_input_16bit, hor_shaped, mc_copy,
     ver_shaped, McLeaves, WelsClip1,
 };
-use crate::safe::plane::{BlockRows, PlaneCursor, PlaneCursorMut, RefSamples};
+use crate::safe::plane::{BlockRows, PlaneCursorMut, RefSamples};
 
 // ============================================================================
 // Block shapes and lane moves
@@ -802,6 +802,7 @@ pub fn mc_luma<S: RefSamples + Copy>(
 
 #[cfg(test)]
 mod tests {
+    use crate::safe::plane::PlaneCursor;
     use super::*;
     // These MUST be the `_c` scalar kernels, not the same-named dispatchers:
     // the dispatchers route to the very SSE2 kernels under test, which would

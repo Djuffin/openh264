@@ -14,7 +14,7 @@
 //! Every such gap involves B slices, B-slice weighted prediction, or
 //! High-profile 8x8 coding.
 
-#![allow(non_snake_case, unused_imports)]
+#![allow(non_snake_case)]
 
 mod common;
 use common::compare_y4m_buffers;
@@ -22,7 +22,7 @@ use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 fn workspace_root() -> PathBuf {

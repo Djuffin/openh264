@@ -9,9 +9,8 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
 use std::sync::atomic::{AtomicU16, Ordering};
-use crate::encoder::picture::{RecPicId, RecPicPool, SrcPicId, SrcPicPool};
+use crate::encoder::picture::RecPicPool;
 use crate::encoder::md::CostFamily;
-use std::ffi::c_char;
 
 use crate::api::codec_api::EUsageType::{CAMERA_VIDEO_REAL_TIME, SCREEN_CONTENT_REAL_TIME};
 use crate::api::codec_api::SliceModeEnum;
@@ -21,13 +20,11 @@ use crate::api::codec_api::ELevelIdc;
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
     ctx_dq_idc_map, ctx_ltr_at,
-    ctx_paraset_arrays,
-    sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, SSubsetSps, SWelsPPS,
+    sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, SSubsetSps,
     SWelsSPS, BASE_DEPENDENCY_ID,
 };
-use crate::encoder::md::INTRA_4x4_MODE_NUM;
 use crate::encoder::param_svc::{
-    SExistingParasetList, SWelsSvcCodingParam, MB_WIDTH_LUMA, UNSPECIFIED_BIT_RATE,
+    SExistingParasetList, SWelsSvcCodingParam, MB_WIDTH_LUMA,
 };
 use crate::encoder::param_svc::{PpsId, SpsId, SubsetSpsId};
 use crate::encoder::svc_encode_slice::current_layer_mut;
@@ -40,7 +37,6 @@ use crate::encoder::slice_multi_threading::{
 };
 use crate::encoder::svc_enc_slice_segment::{GetInitialSliceNum, InitSlicePEncCtx};
 use crate::encoder::svc_encode_slice::{InitSliceInLayer, WelsMbToSliceIdc, current_layer_ref};
-use crate::encoder::svc_encode_slice::{ctx_sps, ctx_pps};
 use crate::encoder::svc_encode_slice::set_current_layer;
 use crate::encoder::svc_mode_decision::{
     LEFT_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS, TOP_MB_POS,
@@ -48,7 +44,7 @@ use crate::encoder::svc_mode_decision::{
 use crate::encoder::svc_motion_estimate::{FME_DEFAULT_FEATURE_INDEX, ME_DIA_CROSS, ME_DIA_CROSS_FME};
 use crate::encoder::wels_preprocess::AllocPicture;
 use crate::encoder::svc_encode_slice::{
-    LayerIdx, SDqLayer, SMB, MB_BLOCK4x4_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM,
+    LayerIdx, SDqLayer, SMB,
 };
 use crate::safe::mb_grid::{MbArray, MbDims};
 use crate::encoder::svc_motion_estimate::{
@@ -68,13 +64,12 @@ use crate::encoder::wels_encoder_ext::{NON_VIDEO_CODING_LAYER, VIDEO_CODING_LAYE
 use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType, EWelsSliceType};
 use crate::encoder::param_svc::{SSpatialLayerInternal, INVALID_TEMPORAL_ID};
 use crate::encoder::encoder_context::MAX_PPS_COUNT;
-use crate::encoder::encoder_context::dq_layer_ref;
 use crate::common::wels_common_defs::SNalUnitHeaderExt;
 use crate::encoder::wels_encoder_ext::ENC_RETURN_MEMOVERFLOWFOUND;
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 use crate::encoder::svc_motion_estimate::{
-    PSearchMethodFunc, BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4,
-    BLOCK_4x8, ME_DIA, ME_CROSS, ME_FULL,
+    BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4,
+    BLOCK_4x8,
 };
 use crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
 use crate::encoder::wels_preprocess::EStaticBlockIdc;
@@ -117,7 +112,7 @@ fn WELS_ROUND_f(x: f32) -> i32 {
 pub fn WelsGetEncBlockStrideOffset(pBlock: &mut [i32; 24], kiStrideY: i32, kiStrideUV: i32) {
     for j in 0..4i32 {
         let i = (j << 2) as usize;
-        let k = ((j & 0x01) << 1) as i32;
+        let k = (j & 0x01) << 1;
         let r = j & 0x02;
         pBlock[i] = (k + r * kiStrideY) << 2;
         pBlock[i + 1] = (1 + k + r * kiStrideY) << 2;
@@ -391,7 +386,7 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
     let iMaxMbWidth = WELS_ALIGN(sMbSizeMap[(kiNumSpatialLayers - 1) as usize].iMbWidth, 4);
     let iRowSize = iMaxMbWidth * 2;
 
-    let mut sTmpRow = vec![0i16; (iRowSize as usize).div_ceil(std::mem::size_of::<i16>())];
+    let mut sTmpRow = vec![0i16; (iRowSize as usize).div_ceil(size_of::<i16>())];
     // initialize the scratch row: 0, 1, 2, ...
     for (idx, v) in sTmpRow.iter_mut().take(iMaxMbWidth as usize).enumerate() {
         *v = idx as i16;
@@ -605,7 +600,7 @@ pub fn InitDqLayers(
     let iNumRef = ctx.param().iMaxNumRefFrame as u32;
 
     // FME_DEFAULT_FEATURE_INDEX / ME_DIA_CROSS / ME_DIA_CROSS_FME, screen content only
-    let kiFeatureStrategyIndex: i32 = FME_DEFAULT_FEATURE_INDEX as i32;
+    let kiFeatureStrategyIndex: i32 = FME_DEFAULT_FEATURE_INDEX;
     let kiMe16x16: i32 = ME_DIA_CROSS as i32;
     let kiMe8x8: i32 = ME_DIA_CROSS_FME as i32;
     let kiNeedFeatureStorage = if ctx.param().iUsageType != SCREEN_CONTENT_REAL_TIME {
@@ -748,9 +743,9 @@ pub fn InitDqLayers(
     }
     let kiNeededSpsNum = ParasetStrategy(ctx).GetNeededSpsNum() as i32;
     let kiNeededSubsetSpsNum = ParasetStrategy(ctx).GetNeededSubsetSpsNum() as i32;
-    ctx.pSpsArray = vec![crate::encoder::param_svc::SWelsSPS::ZERO; kiNeededSpsNum as usize];
+    ctx.pSpsArray = vec![SWelsSPS::ZERO; kiNeededSpsNum as usize];
     ctx.pSubsetArray = vec![
-        crate::encoder::param_svc::SSubsetSps::ZERO;
+        SSubsetSps::ZERO;
         kiNeededSubsetSpsNum.max(0) as usize
     ];
 
@@ -771,10 +766,10 @@ pub fn InitDqLayers(
 
     iDlayerIndex = 0;
     while iDlayerIndex < iDlayerCount {
-        let bUseSubsetSps = !ctx.param().bSimulcastAVC && (iDlayerIndex > BASE_DEPENDENCY_ID as i32);
+        let bUseSubsetSps = !ctx.param().bSimulcastAVC && (iDlayerIndex > BASE_DEPENDENCY_ID);
         let bSvcBaselayer = !ctx.param().bSimulcastAVC
-            && (iDlayerCount > BASE_DEPENDENCY_ID as i32)
-            && (iDlayerIndex == BASE_DEPENDENCY_ID as i32);
+            && (iDlayerCount > BASE_DEPENDENCY_ID)
+            && (iDlayerIndex == BASE_DEPENDENCY_ID);
 
         let (strategy, pParam, pSpsArray, pSubsetArray, pPpsArray) =
             crate::encoder::paraset_strategy::ctx_strategy_and_param_arrays(ctx);
@@ -1121,7 +1116,7 @@ pub fn RequestMemorySvc(
     ctx.pMvdCostTable = vec![
         0u16;
         (52 * kuiMvdCacheAlignedSize + kuiMvdCostTableOvershoot) as usize
-            / std::mem::size_of::<u16>()
+            / size_of::<u16>()
     ];
     crate::encoder::md::MvdCostInit(
         ctx.mvd_cost_table_mut(),
@@ -1166,7 +1161,7 @@ pub fn InitSliceSettings(
                 iMaxSliceCount = crate::encoder::svc_enc_slice_segment::AVERSLICENUM_CONSTRAINT
                     as u16;
             }
-            crate::api::codec_api::SliceModeEnum::SM_FIXEDSLCNUM_SLICE => {
+            SliceModeEnum::SM_FIXEDSLCNUM_SLICE => {
                 let kiRCMode = pCodingParam.iRCMode;
                 let iReturn =
                     crate::encoder::svc_enc_slice_segment::SliceArgumentValidationFixedSliceMode(
@@ -1184,7 +1179,7 @@ pub fn InitSliceSettings(
                     iMaxSliceCount = pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16;
                 }
             }
-            SM_SINGLE_SLICE | crate::api::codec_api::SliceModeEnum::SM_RASTER_SLICE => {
+            SM_SINGLE_SLICE | SliceModeEnum::SM_RASTER_SLICE => {
                 if pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16 > iMaxSliceCount {
                     iMaxSliceCount = pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16;
                 }
@@ -1373,10 +1368,12 @@ pub fn FreeDqLayer(p: &mut SDqLayer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::encoder::encoder_context::dq_layer_ref;
+    use crate::encoder::svc_encode_slice::{ctx_pps, ctx_sps};
     use crate::api::codec_api::EProfileIdc;
     use crate::encoder::encoder_context::InitFunctionPointers;
     use crate::encoder::param_svc::NewCodingParam;
-    use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+    
 
     /// Builds the context up to and including `RequestMemorySvc`, which is everything
     /// `WelsInitEncoderExt` does before the preprocessor.
@@ -1400,7 +1397,7 @@ mod tests {
         ext.iLoopFilterDisableIdc = 0;
         ext.bEnableDenoise = false;
         ext.bEnableLongTermReference = false;
-        ext.eSpsPpsIdStrategy = crate::api::codec_api::EParameterSetStrategy::CONSTANT_ID;
+        ext.eSpsPpsIdStrategy = EParameterSetStrategy::CONSTANT_ID;
         ext.sSpatialLayers[0].iVideoWidth = 160;
         ext.sSpatialLayers[0].iVideoHeight = 96;
         ext.sSpatialLayers[0].fFrameRate = 6.0;
@@ -1417,13 +1414,13 @@ mod tests {
         let mut iCacheLineSize: i32 = 16;
         let mut uiCpuFeatureFlags: u32 = 0;
         assert_eq!(
-            crate::encoder::wels_encoder_ext::ParamValidationExt(crate::common::wels_trace::SLogContext::default(), &mut param),
+            crate::encoder::wels_encoder_ext::ParamValidationExt(SLogContext::default(), &mut param),
             ENC_RETURN_SUCCESS
         );
         assert_eq!(param.DetermineTemporalSettings(), ENC_RETURN_SUCCESS);
         assert_eq!(
             GetMultipleThreadIdc(
-                crate::common::wels_trace::SLogContext::default(),
+                SLogContext::default(),
                 &mut param,
                 &mut iSliceNum,
                 &mut iCacheLineSize,
@@ -1924,7 +1921,7 @@ pub fn AddPrefixNal(
     );
     // Written through `&AtomicI32`, never `&mut i32` — a `&mut` here retags the
     // whole buffer `Unique` and pops the C-ABI pointer the application holds.
-    sNalLen[kiSlot].store(kiNalLenOut, std::sync::atomic::Ordering::Relaxed);
+    sNalLen[kiSlot].store(kiNalLenOut, Ordering::Relaxed);
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
@@ -2694,9 +2691,9 @@ pub fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer) {
     );
 
     loop {
-        let uiSliceIdc = crate::encoder::svc_encode_slice::WelsMbToSliceIdc(
+        let uiSliceIdc = WelsMbToSliceIdc(
             Some(sSliceEncCtx),
-            mbs.at(iIdx as usize).iMbXY as i32,
+            mbs.at(iIdx as usize).iMbXY,
         );
         crate::encoder::svc_encode_slice::UpdateMbNeighbor(
             Some(sSliceEncCtx),
@@ -2976,7 +2973,7 @@ pub fn WelsCodeOnePicPartition(
         let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
         let mut sMbData = std::mem::replace(
             &mut current_layer_expect_mut(pCtx).sMbDataP,
-            crate::safe::mb_grid::MbArray::empty(),
+            MbArray::empty(),
         );
         let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
         // The CABAC restore scratch — partition 0 is the only one a
@@ -3026,7 +3023,7 @@ pub fn WelsCodeOnePicPartition(
         );
         // Written through `&AtomicI32`, never `&mut i32` — a `&mut` here retags the
         // whole buffer `Unique` and pops the C-ABI pointer the application holds.
-        sNalLen[kiSlot].store(kiNalLenOut, std::sync::atomic::Ordering::Relaxed);
+        sNalLen[kiSlot].store(kiNalLenOut, Ordering::Relaxed);
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
@@ -3047,8 +3044,8 @@ pub fn WelsCodeOnePicPartition(
 
     // slice based packing???
     pFbi.sLayerInfo[iLbi].uiLayerType = VIDEO_CODING_LAYER;
-    pFbi.sLayerInfo[iLbi].uiSpatialId = pCtx.uiDependencyId as u8;
-    pFbi.sLayerInfo[iLbi].uiTemporalId = pCtx.uiTemporalId as u8;
+    pFbi.sLayerInfo[iLbi].uiSpatialId = pCtx.uiDependencyId;
+    pFbi.sLayerInfo[iLbi].uiTemporalId = pCtx.uiTemporalId;
     pFbi.sLayerInfo[iLbi].uiQualityId = 0;
     pFbi.sLayerInfo[iLbi].iNalCount = iNalIdxInLayer;
     ENC_RETURN_SUCCESS
@@ -3177,7 +3174,7 @@ pub fn WelsEncoderEncodeExt(
     while iSpatialIdx < iSpatialNum {
         iCurDid = pCtx.sSpatialIndexMap[iSpatialIdx as usize].iDid as i8;
         let iDecompositionStages =
-            pCtx.param().sDependencyLayers[iCurDid as usize].iDecompositionStages as i32;
+            pCtx.param().sDependencyLayers[iCurDid as usize].iDecompositionStages;
         set_current_layer(pCtx, Some(LayerIdx(iCurDid as u8)));
         pCtx.uiDependencyId = iCurDid as u8;
 
@@ -3239,7 +3236,7 @@ pub fn WelsEncoderEncodeExt(
                     }
                 }
             }
-            SliceModeEnum::SM_SIZELIMITED_SLICE => {
+            SM_SIZELIMITED_SLICE => {
                 let iPicIPartitionNum = PicPartitionNumDecision(pCtx);
                 // MT compatibility: try to activate a number of threads equal to
                 // the number of picture partitions.
@@ -3392,7 +3389,7 @@ pub fn WelsEncoderEncodeExt(
             let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
             let mut sMbData = std::mem::replace(
                 &mut current_layer_expect_mut(pCtx).sMbDataP,
-                crate::safe::mb_grid::MbArray::empty(),
+                MbArray::empty(),
             );
             let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
             // The CABAC restore scratch — partition 0 is the only one a
@@ -3438,7 +3435,7 @@ pub fn WelsEncoderEncodeExt(
             // Written through `&AtomicI32`, never `&mut i32` — a `&mut` here retags
             // the whole buffer `Unique` and pops the C-ABI pointer the application
             // holds.
-            sNalLen[kiSlot].store(kiNalLenOut, std::sync::atomic::Ordering::Relaxed);
+            sNalLen[kiSlot].store(kiNalLenOut, Ordering::Relaxed);
             pCtx.iEncoderError = kiEncodeNalRet;
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
@@ -3483,7 +3480,7 @@ pub fn WelsEncoderEncodeExt(
             // non-SM_SIZELIMITED_SLICE
             iSliceCount =
                 crate::encoder::svc_encode_slice::GetCurrentSliceNum(current_layer_expect_mut(pCtx));
-            if iLayerNum + 1 >= MAX_LAYER_NUM_OF_FRAME as i32 {
+            if iLayerNum + 1 >= MAX_LAYER_NUM_OF_FRAME {
                 // check available layer_bs_info for further writing as followed
                 return ENC_RETURN_UNSUPPORTED_PARA;
             }
@@ -3617,7 +3614,7 @@ pub fn WelsEncoderEncodeExt(
                 let mut pCtxOutBs: Option<&mut crate::encoder::vlc_encoder::BsWriter> = Some(&mut sOutBsWrite);
                 let mut sMbData = std::mem::replace(
                     &mut current_layer_expect_mut(pCtx).sMbDataP,
-                    crate::safe::mb_grid::MbArray::empty(),
+                    MbArray::empty(),
                 );
                 let mut sMbWindow = crate::safe::mb_grid::MbWindow::whole(&mut sMbData, 0);
                 // The CABAC restore scratch — partition 0 is the only one a
@@ -3671,7 +3668,7 @@ pub fn WelsEncoderEncodeExt(
                 // Written through `&AtomicI32`, never `&mut i32` — a `&mut` here
                 // retags the whole buffer `Unique` and pops the C-ABI pointer the
                 // application holds.
-                sNalLen[kiSlot].store(kiNalLenOut, std::sync::atomic::Ordering::Relaxed);
+                sNalLen[kiSlot].store(kiNalLenOut, Ordering::Relaxed);
                 pCtx.iEncoderError = kiEncodeNalRet;
                 if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                     return pCtx.iEncoderError;

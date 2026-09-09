@@ -5,14 +5,22 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    unused_imports
+    non_upper_case_globals
 )]
-// Both are warn-by-default; naming them here is the record that the crate is meant
-// to be built with them on. They were blanket-allowed per module while the port was
-// landing files that only later gained callers — that phase is over, so a body with
-// no caller and a parameter with no reader are findings again, not noise.
-#![warn(dead_code, unused_variables)]
+// The first two are warn-by-default and were blanket-allowed per module while the
+// port was landing files that only later gained callers; that phase is over, so a
+// body with no caller and a parameter with no reader are findings again. The last
+// three are allow-by-default and are on deliberately: this is a line-by-line port,
+// and an import nothing uses, a path spelled out where the name is already in
+// scope, and a cast from a type to itself are all residue of moving a C++ file
+// across rather than anything the Rust needs.
+#![warn(
+    dead_code,
+    unused_variables,
+    unused_imports,
+    unused_qualifications,
+    trivial_numeric_casts
+)]
 #![deny(
     unused_assignments,
     unused_mut,

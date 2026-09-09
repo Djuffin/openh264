@@ -870,7 +870,7 @@ pub fn WelsInitPps(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::codec_api::EProfileIdc;
+    
 
     /// The 160x96 / 6fps / baseline case the differential harness drives.
     fn gate_layer() -> (SSpatialLayerConfig, SSpatialLayerInternal) {
@@ -878,7 +878,7 @@ mod tests {
         lp.iVideoWidth = 160;
         lp.iVideoHeight = 96;
         lp.iSpatialBitrate = 500_000;
-        lp.uiProfileIdc = EProfileIdc::PRO_BASELINE;
+        lp.uiProfileIdc = PRO_BASELINE;
         lp.uiLevelIdc = LEVEL_UNKNOWN;
 
         let mut li = SSpatialLayerInternal::default();
@@ -907,7 +907,7 @@ mod tests {
         assert_eq!(sps.uiPocType, 2);
         assert_eq!(sps.iLog2MaxPocLsb, 16);
         assert_eq!(sps.iNumRefFrames, 1);
-        assert_eq!(sps.uiProfileIdc, EProfileIdc::PRO_BASELINE as u8);
+        assert_eq!(sps.uiProfileIdc, PRO_BASELINE as u8);
         // WelsGetLevelIdc picks LEVEL_1_3 for 60 MBs at 6fps and 500 kbit/s, and
         // writes it back into the layer config.
         assert_eq!(sps.iLevelIdc, 13);

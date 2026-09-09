@@ -30,7 +30,7 @@
 //! **The default sink is `welsStderrTrace` at `WELS_LOG_WARNING`, which is
 //! upstream's.** A caller who wants silence installs a quiet callback.
 
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::CString;
 
 pub use crate::api::codec_api::{TraceUserCtx, WelsTraceCallback};
 

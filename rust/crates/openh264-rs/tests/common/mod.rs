@@ -7,7 +7,7 @@
 // is true of the module as a whole, and there is no way to scope it per-consumer
 // short of duplicating the helpers. It covers the `#[path]`-included `prng` too,
 // which is live code in `src/safe/prng.rs`.
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
 pub mod sha1;
 pub mod y4m;
@@ -16,7 +16,12 @@ pub mod y4m;
 /// so that a seed printed by an in-module unit test replays identically here.
 #[path = "../../src/safe/prng.rs"]
 pub mod prng;
+// The two convenience re-exports, for the same reason `dead_code` is allowed above:
+// each consumer of this module is its own crate and pulls in only one of them, or
+// neither.
+#[allow(unused_imports)]
 pub use sha1::Sha1Hasher;
+#[allow(unused_imports)]
 pub use y4m::compare_y4m_buffers;
 
 /// **Loading the shipped C++ library at runtime.**

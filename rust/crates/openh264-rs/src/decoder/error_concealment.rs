@@ -45,7 +45,7 @@
 #![forbid(unsafe_code)]
 
 use crate::decoder::decoder_context::{
-    PicRefs, SpsRef, active_pps, active_sps, cur_and_refs, dec_pic, pps_of, prev_dpb_id, sps_of,
+    active_sps, dec_pic, prev_dpb_id,
 };
 
 // ============================================================================
@@ -215,7 +215,7 @@ pub extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCurDqLaye
     };
     let mut pSrcPic = pRefs.classify(prev);
 
-    let uiHeightInPixelY = (iMbHeight as u32) << 4;
+    let uiHeightInPixelY = iMbHeight << 4;
     let iStrideY = pDstPic.linesize(0);
     let iStrideUV = pDstPic.linesize(1);
     pDstPic.iMbEcedNum = (iMbWidth * iMbHeight) as i32;
@@ -772,6 +772,7 @@ pub extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decoder::decoder_context::SpsRef;
     
     #[test]
     fn test_need_error_con() {

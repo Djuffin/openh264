@@ -1087,8 +1087,8 @@ mod tests {
     fn the_two_arrays_f32_corrected_carry_their_element_counts() {
         let dims = MbDims::new(4, 4);
         let mut g = MbGrid::new(dims);
-        assert_eq!(std::mem::size_of_val(g.intra_pred_mode.as_slice()), dims.count() * 8);
-        assert_eq!(std::mem::size_of_val(g.intra4x4_final_mode.as_slice()), dims.count() * 16);
+        assert_eq!(size_of_val(g.intra_pred_mode.as_slice()), dims.count() * 8);
+        assert_eq!(size_of_val(g.intra4x4_final_mode.as_slice()), dims.count() * 16);
         // slot 7 is the I16x16 mode, slots 0..4 the next macroblock's left cache
         g.intra_pred_mode.get_mut(dims.count() - 1)[7] = 3;
         assert_eq!(g.intra_pred_mode.get(dims.count() - 1)[7], 3);

@@ -15,7 +15,7 @@
 use wide::i16x8;
 
 use super::lanes::{load8, low8, narrow, widen_lo};
-use crate::safe::plane::{BlockRows, PlaneSamples, RefSamples};
+use crate::safe::plane::{BlockRows, PlaneSamples};
 use crate::encoder::encoder_context::SMVUnitXY;
 
 // ============================================================================

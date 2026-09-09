@@ -19,7 +19,7 @@ use crate::decoder::slice::EWelsSliceType;
 use crate::decoder::decode_slice::IntraPredConstraint;
 use crate::decoder::parse_mb_syn_cavlc::SVlcTable;
 use crate::decoder::error_concealment::ERROR_CON_IDC;
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 
 
 // ---------------------------------------------------------------------------
@@ -1286,7 +1286,7 @@ pub struct SWelsDecoderContext {
     /// The three C++ slots `pFillInfoCacheIntraNxNFunc`, `pMapNxNNeighToSampleFunc`
     /// and `pMap16x16NeighToSampleFunc`, which were always set together from one
     /// flag. See [`IntraPredConstraint`](crate::decoder::decode_slice::IntraPredConstraint).
-    pub eIntraPredConstraint: crate::decoder::decode_slice::IntraPredConstraint,
+    pub eIntraPredConstraint: IntraPredConstraint,
     pub iFeedbackVclNalInAu: i32,
     pub iFeedbackTidInAu: i32,
     pub iFeedbackNalRefIdc: i32,
@@ -1443,7 +1443,7 @@ impl Default for SWelsDecoderContext {
             iCurSeqIntervalMaxPicHeight: 0,
             // `Constrain0 = 0` is the zero pattern *and* the fallback every former
             // uninstalled slot named — `decode_slice.rs`'s note is the authority.
-            eIntraPredConstraint: crate::decoder::decode_slice::IntraPredConstraint::Constrain0,
+            eIntraPredConstraint: IntraPredConstraint::Constrain0,
             iFeedbackVclNalInAu: 0,
             iFeedbackTidInAu: 0,
             iFeedbackNalRefIdc: 0,

@@ -740,7 +740,7 @@ pub struct RoPicView {
 
 impl RoPicView {
     /// Captures a picture's three planes for reading.
-    pub fn build(pic: &crate::encoder::picture::SPicture) -> Self {
+    pub fn build(pic: &SPicture) -> Self {
         let planes = [0usize, 1, 2].map(|i| {
             let p = pic.plane(i);
             if p.is_empty() {
@@ -818,7 +818,7 @@ mod tests {
     /// `row_view`, on both cursor types.
     #[test]
     fn the_row_accessors_agree_across_both_cursor_types() {
-        use crate::safe::plane::{BlockRows, PlaneCursor, RefSamples};
+        use crate::safe::plane::{BlockRows, RefSamples};
 
         let mut rng_state = 0x51ED_270Fu32;
         let mut next = move || {

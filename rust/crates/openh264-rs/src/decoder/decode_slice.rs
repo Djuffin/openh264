@@ -8,13 +8,12 @@
 #![forbid(unsafe_code)]
 
 use crate::decoder::decoder_context::{
-    PicRefs, SRefPic, SliceCtx, SpsRef, active_fmo, active_pps, active_sps, cur_au, pps_of,
-    ref_id, slice_split, sps_of,
+    PicRefs, SRefPic, SliceCtx, active_pps, active_sps, cur_au, pps_of,
+    ref_id, slice_split,
 };
 use crate::decoder::pic_queue::RefSlot;
 use crate::safe::bits::BsCursor;
 use crate::decoder::bit_stream::BsReader;
-use std::ffi::c_void;
 
 // ============================================================================
 // Constants & Error Codes
@@ -2406,9 +2405,9 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_INVALID_CBP);
             }
             uiCbp = if pCtx.uiChromaFormatIdc() != 0 {
-                crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
+                g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
             } else {
-                crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable400[uiCbp as usize] as u32
+                g_kuiIntra4x4CbpTable400[uiCbp as usize] as u32
             };
             *dq.grid.cbp.get_mut(iMbXy) = uiCbp as i8;
             uiCbpC = uiCbp >> 4;
@@ -2444,7 +2443,7 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             *dq.grid.luma_qp.get_mut(iMbXy) = dq.sLayerInfo.sSliceInLayer.iLastMbQp as i8;
             for i in 0..2 {
                 let idx = WELS_CLIP3(
-                    *dq.grid.luma_qp.get(iMbXy) as i32 + pps_sh_chroma_qp_offset[i] as i32,
+                    *dq.grid.luma_qp.get(iMbXy) as i32 + pps_sh_chroma_qp_offset[i],
                     0,
                     51,
                 );
@@ -2469,7 +2468,7 @@ pub fn WelsActualDecodeMbCavlcISlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             dq.sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
             let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
             for i in 0..2 {
-                let idx = WELS_CLIP3(new_qp + pps_sh_chroma_qp_offset[i] as i32, 0, 51);
+                let idx = WELS_CLIP3(new_qp + pps_sh_chroma_qp_offset[i], 0, 51);
                 dq.grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
             }
 
@@ -2611,8 +2610,8 @@ fn WelsDecodeMbCavlcResidual(
                         iIndex += 1;
                     }
                 } else {
-                    let idx0 = crate::decoder::parse_mb_syn_cavlc::g_kuiCache48CountScan4Idx[iId8x8 << 2] as usize;
-                    let idx2 = crate::decoder::parse_mb_syn_cavlc::g_kuiCache48CountScan4Idx[(iId8x8 << 2) + 2] as usize;
+                    let idx0 = g_kuiCache48CountScan4Idx[iId8x8 << 2] as usize;
+                    let idx2 = g_kuiCache48CountScan4Idx[(iId8x8 << 2) + 2] as usize;
                     pNonZeroCount[idx0] = 0;
                     pNonZeroCount[idx0 + 1] = 0;
                     pNonZeroCount[idx2] = 0;
@@ -2649,8 +2648,8 @@ fn WelsDecodeMbCavlcResidual(
                         iIndex += 1;
                     }
                 } else {
-                    let idx0 = crate::decoder::parse_mb_syn_cavlc::g_kuiCache48CountScan4Idx[iId8x8 << 2] as usize;
-                    let idx2 = crate::decoder::parse_mb_syn_cavlc::g_kuiCache48CountScan4Idx[(iId8x8 << 2) + 2] as usize;
+                    let idx0 = g_kuiCache48CountScan4Idx[iId8x8 << 2] as usize;
+                    let idx2 = g_kuiCache48CountScan4Idx[(iId8x8 << 2) + 2] as usize;
                     pNonZeroCount[idx0] = 0;
                     pNonZeroCount[idx0 + 1] = 0;
                     pNonZeroCount[idx2] = 0;
@@ -2918,9 +2917,9 @@ pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             let mb_type = *pDec.pMbType.get(iMbXy);
             uiCbp = if MB_TYPE_INTRA4x4 == mb_type || MB_TYPE_INTRA8x8 == mb_type {
                 if pCtx.uiChromaFormatIdc() != 0 {
-                    crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
+                    g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
                 } else {
-                    crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable400[uiCbp as usize] as u32
+                    g_kuiIntra4x4CbpTable400[uiCbp as usize] as u32
                 }
             } else {
                 if pCtx.uiChromaFormatIdc() != 0 {
@@ -2960,7 +2959,7 @@ pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             *dq.grid.luma_qp.get_mut(iMbXy) = dq.sLayerInfo.sSliceInLayer.iLastMbQp as i8;
             for i in 0..2 {
                 let idx = WELS_CLIP3(
-                    *dq.grid.luma_qp.get(iMbXy) as i32 + pps_sh_chroma_qp_offset[i] as i32,
+                    *dq.grid.luma_qp.get(iMbXy) as i32 + pps_sh_chroma_qp_offset[i],
                     0,
                     51,
                 );
@@ -2985,7 +2984,7 @@ pub fn WelsActualDecodeMbCavlcPSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             dq.sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
             let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
             for i in 0..2 {
-                let idx = WELS_CLIP3(new_qp + pps_sh_chroma_qp_offset[i] as i32, 0, 51);
+                let idx = WELS_CLIP3(new_qp + pps_sh_chroma_qp_offset[i], 0, 51);
                 dq.grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
             }
 
@@ -3055,7 +3054,7 @@ pub fn WelsDecodeMbCavlcPSlice(
             let pps_ptr_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
             for i in 0..2 {
                 let offset = pps_ptr_chroma_qp_offset[i];
-                let qp_idx = WELS_CLIP3(iLastMbQp as i32 + offset as i32, 0, 51) as usize;
+                let qp_idx = WELS_CLIP3(iLastMbQp + offset, 0, 51) as usize;
                 dq.grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[qp_idx] as i8;
             }
 
@@ -3244,9 +3243,9 @@ pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             let mb_type = *pDec.pMbType.get(iMbXy);
             uiCbp = if MB_TYPE_INTRA4x4 == mb_type || MB_TYPE_INTRA8x8 == mb_type {
                 if pCtx.uiChromaFormatIdc() != 0 {
-                    crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
+                    g_kuiIntra4x4CbpTable[uiCbp as usize] as u32
                 } else {
-                    crate::decoder::dec_golomb::g_kuiIntra4x4CbpTable400[uiCbp as usize] as u32
+                    g_kuiIntra4x4CbpTable400[uiCbp as usize] as u32
                 }
             } else {
                 if pCtx.uiChromaFormatIdc() != 0 {
@@ -3286,7 +3285,7 @@ pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             *dq.grid.luma_qp.get_mut(iMbXy) = dq.sLayerInfo.sSliceInLayer.iLastMbQp as i8;
             for i in 0..2 {
                 let idx = WELS_CLIP3(
-                    *dq.grid.luma_qp.get(iMbXy) as i32 + pps_sh_chroma_qp_offset[i] as i32,
+                    *dq.grid.luma_qp.get(iMbXy) as i32 + pps_sh_chroma_qp_offset[i],
                     0,
                     51,
                 );
@@ -3311,7 +3310,7 @@ pub fn WelsActualDecodeMbCavlcBSlice(pCtx: &mut SliceCtx<'_>, buf: &[u8], pBs: &
             dq.sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
             let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
             for i in 0..2 {
-                let idx = WELS_CLIP3(new_qp + pps_sh_chroma_qp_offset[i] as i32, 0, 51);
+                let idx = WELS_CLIP3(new_qp + pps_sh_chroma_qp_offset[i], 0, 51);
                 dq.grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
             }
 
@@ -3443,7 +3442,7 @@ pub fn WelsDecodeMbCavlcBSlice(
                 let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
                 for i in 0..2 {
                     let idx = WELS_CLIP3(
-                        *dq.grid.luma_qp.get(iMbXy) as i32 + pps_sh_chroma_qp_offset[i] as i32,
+                        *dq.grid.luma_qp.get(iMbXy) as i32 + pps_sh_chroma_qp_offset[i],
                         0,
                         51,
                     );
@@ -3549,7 +3548,7 @@ pub fn ParseIntra4x4Mode(
             } else {
                 let ret = crate::decoder::dec_golomb::BsGetBits(buf, &mut *pBsAux, 3, &mut uiCode);
                 if ret != 0 {
-                    return ret as i32;
+                    return ret;
                 }
                 iBestMode = (uiCode as i32 + if (uiCode as i32) >= kiPredMode { 1 } else { 0 }) as i8;
             }
@@ -3685,7 +3684,7 @@ pub fn ParseIntra8x8Mode(
             } else {
                 let ret = crate::decoder::dec_golomb::BsGetBits(buf, &mut *pBsAux, 3, &mut uiCode);
                 if ret != 0 {
-                    return ret as i32;
+                    return ret;
                 }
                 iBestMode = (uiCode as i32 + if (uiCode as i32) >= kiPredMode { 1 } else { 0 }) as i8;
             }
@@ -3999,7 +3998,7 @@ fn WelsDecodeMbCabacResidualHelper(
             dq.sLayerInfo.sSliceInLayer.iLastMbQp = new_qp;
             for i in 0..2 {
                 let idx =
-                    WELS_CLIP3(new_qp + pps_sh_chroma_qp_offset[i] as i32, 0, 51);
+                    WELS_CLIP3(new_qp + pps_sh_chroma_qp_offset[i], 0, 51);
                 dq.grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
             }
 
@@ -4088,8 +4087,8 @@ fn WelsDecodeMbCabacResidualHelper(
                                 return ret;
                             }
                         } else {
-                            pNonZeroCount[g_kCacheNzcScanIdx[(iId8x8 * 4) as usize] as usize] = 0;
-                            pNonZeroCount[g_kCacheNzcScanIdx[(iId8x8 * 4 + 2) as usize] as usize] = 0;
+                            pNonZeroCount[g_kCacheNzcScanIdx[iId8x8 * 4] as usize] = 0;
+                            pNonZeroCount[g_kCacheNzcScanIdx[iId8x8 * 4 + 2] as usize] = 0;
                         }
                     }
                     // `ST32 (&pNzc[iMbXy][n], LD32 (&pNonZeroCount[1 + 8 * k]))`: each store
@@ -4133,8 +4132,8 @@ fn WelsDecodeMbCabacResidualHelper(
                                 iIdx += 1;
                             }
                         } else {
-                            pNonZeroCount[g_kCacheNzcScanIdx[(iId8x8 * 4) as usize] as usize] = 0;
-                            pNonZeroCount[g_kCacheNzcScanIdx[(iId8x8 * 4 + 2) as usize] as usize] = 0;
+                            pNonZeroCount[g_kCacheNzcScanIdx[iId8x8 * 4] as usize] = 0;
+                            pNonZeroCount[g_kCacheNzcScanIdx[iId8x8 * 4 + 2] as usize] = 0;
                         }
                     }
                     // `ST32 (&pNzc[iMbXy][n], LD32 (&pNonZeroCount[1 + 8 * k]))`: each store
@@ -4243,7 +4242,7 @@ fn WelsDecodeMbCabacResidualHelper(
             let pps_sh_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
             for i in 0..2 {
                 let idx =
-                    WELS_CLIP3(last_qp + pps_sh_chroma_qp_offset[i] as i32, 0, 51);
+                    WELS_CLIP3(last_qp + pps_sh_chroma_qp_offset[i], 0, 51);
                 dq.grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
             }
         }
@@ -4575,7 +4574,7 @@ pub fn WelsDecodeMbCabacPSlice(
             let pps_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
             for i in 0..2 {
                 let idx =
-                    WELS_CLIP3(last_qp + pps_chroma_qp_offset[i] as i32, 0, 51);
+                    WELS_CLIP3(last_qp + pps_chroma_qp_offset[i], 0, 51);
                 dq.grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
             }
 
@@ -4831,7 +4830,7 @@ pub fn WelsDecodeMbCabacBSlice(
             let pps_chroma_qp_offset = pCtx.pps_of(dq.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.pps_id).map_or([0i32; 2], |p| p.iChromaQpIndexOffset);
             for i in 0..2 {
                 let idx =
-                    WELS_CLIP3(last_qp + pps_chroma_qp_offset[i] as i32, 0, 51);
+                    WELS_CLIP3(last_qp + pps_chroma_qp_offset[i], 0, 51);
                 dq.grid.chroma_qp.get_mut(iMbXy)[i] = g_kuiChromaQpTable[idx as usize] as i8;
             }
 
@@ -5111,7 +5110,7 @@ pub fn WelsDecodeAndConstructSlice(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::safe::mb_grid::MbDims;
+    use crate::decoder::decoder_context::SpsRef;
 
     #[test]
     fn test_wels_target_slice_construction_null_layer() {

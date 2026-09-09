@@ -197,9 +197,9 @@ pub struct SWelsMD_sMe<'a> {
 #[derive(Clone, Copy)]
 pub struct MdSliceCtx<'a> {
     /// `current_layer_expect`.
-    pub layer: &'a crate::encoder::svc_encode_slice::SDqLayer,
+    pub layer: &'a SDqLayer,
     /// `sWelsEncCtx::func_list`.
-    pub func: &'a crate::encoder::wels_func_ptr_def::SWelsFuncPtrList,
+    pub func: &'a SWelsFuncPtrList,
     /// `layer_enc_view_expect` — the frame's source planes.
     pub enc: &'a crate::encoder::rec_view::RoPicView,
     /// `layer_rec_view_expect` — the reconstruction seam.
@@ -252,15 +252,15 @@ pub struct MdSliceCtx<'a> {
 /// `Copy` — a `RecCursor` is a slice, an offset and a stride.
 #[derive(Clone, Copy)]
 pub struct MbCursors<'a> {
-    pub enc_y: crate::encoder::rec_view::RecCursor<'a>,
-    pub enc_cb: crate::encoder::rec_view::RecCursor<'a>,
-    pub enc_cr: crate::encoder::rec_view::RecCursor<'a>,
-    pub ref_y: crate::encoder::rec_view::RecCursor<'a>,
-    pub ref_cb: crate::encoder::rec_view::RecCursor<'a>,
-    pub ref_cr: crate::encoder::rec_view::RecCursor<'a>,
-    pub rec_y: crate::encoder::rec_view::RecCursor<'a>,
-    pub rec_cb: crate::encoder::rec_view::RecCursor<'a>,
-    pub rec_cr: crate::encoder::rec_view::RecCursor<'a>,
+    pub enc_y: RecCursor<'a>,
+    pub enc_cb: RecCursor<'a>,
+    pub enc_cr: RecCursor<'a>,
+    pub ref_y: RecCursor<'a>,
+    pub ref_cb: RecCursor<'a>,
+    pub ref_cr: RecCursor<'a>,
+    pub rec_y: RecCursor<'a>,
+    pub rec_cb: RecCursor<'a>,
+    pub rec_cr: RecCursor<'a>,
 }
 
 /// The reference picture's three per-macroblock entries, **taken once** where
@@ -327,8 +327,8 @@ impl<'a> MdSliceCtx<'a> {
     /// no coding path reaches.
     #[inline]
     pub fn build(
-        pCtx: &'a crate::encoder::encoder_context::sWelsEncCtx,
-        pLayer: &'a crate::encoder::svc_encode_slice::SDqLayer,
+        pCtx: &'a sWelsEncCtx,
+        pLayer: &'a SDqLayer,
         ref_view: Option<&'a crate::encoder::rec_view::RoPicView>,
     ) -> Self {
         use crate::encoder::svc_mode_decision::BLOCK_16x16;
@@ -339,7 +339,7 @@ impl<'a> MdSliceCtx<'a> {
         Self {
             layer: pLayer,
             func,
-            enc: ses::layer_enc_view_expect(pLayer),
+            enc: layer_enc_view_expect(pLayer),
             rec: ses::layer_rec_view_expect(pLayer),
             refv: ref_view,
             ref_pic: ses::layer_ref_pic(pCtx, pLayer),
@@ -853,8 +853,6 @@ pub type PUpdateMbMvFunc = fn(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv
 // SMcFunc is a common-layer type (codec/common/inc/mc.h:46).
 pub use crate::common::mc::SMcFunc;
 // MC and the half-pel filters are called directly, not via `sMcFuncs`.
-use crate::encoder::svc_encode_slice::{layer_enc_view, layer_ref_pic, layer_ref_view, current_layer_ref};
-use crate::encoder::picture::{RecPicId};
 use crate::common::mc::{mc_hor_ver02, mc_hor_ver20, mc_hor_ver22, pixel_avg};
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::SDCTCoeff;

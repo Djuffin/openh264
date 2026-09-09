@@ -12,8 +12,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    unused_imports
+    non_upper_case_globals
 )]
 // The module denies, and every item that needs it carries its own tagged
 // `#[allow(unsafe_code)]`.
@@ -22,11 +21,9 @@
 use std::ffi::c_void;
 
 use crate::api::codec_api::{
-    EComplexityMode, EncoderOption, RCMode, SBitrateInfo, SEncParamBase, SEncParamExt,
-    SSpatialLayerConfig, VideoFormat,
+    EComplexityMode, EncoderOption, SBitrateInfo, SEncParamBase, SEncParamExt,
 };
 use crate::api::codec_api::LAYER_NUM::*;
-use crate::api::codec_api::ECOMPLEXITY_MODE::*;
 use crate::api::codec_api::EParameterSetStrategy::*;
 use crate::common::wels_trace::{WelsLog, WelsTraceCallback, WELS_LOG_INFO};
 use crate::encoder::param_svc::{
@@ -40,7 +37,7 @@ use crate::api::codec_api::RC_MODES::*;
 use crate::encoder::wels_encoder_ext::{
     cmInitExpected, cmInitParaError, cmResultSuccess, rc_mode_from_raw, CWelsH264SVCEncoder,
     CheckLevelSetting, CheckProfileSetting, CheckReferenceNumSetting, SDeliveryStatus, SLTRConfig,
-    SLevelInfo, SProfileInfo, TagVideoEncoderStatistics, WelsEncoderApplyBitRate,
+    SLevelInfo, SProfileInfo, WelsEncoderApplyBitRate,
     WelsEncoderApplyBitVaryRang, WelsEncoderApplyFrameRate, WelsEncoderApplyLTR,
     WelsEncoderParamAdjust, MAX_BIT_RATE, MAX_DEPENDENCY_LAYER, MAX_FRAME_RATE, MIN_BIT_RATE,
     MIN_FRAME_RATE,
@@ -387,8 +384,8 @@ impl CWelsH264SVCEncoder {
                         return cmInitExpected;
                     };
                     let pProfileInfo = &*(pOption as *const SProfileInfo);
-                    if (pProfileInfo.iLayer as i32) < SPATIAL_LAYER_0 as i32
-                        || (pProfileInfo.iLayer as i32) > SPATIAL_LAYER_3 as i32
+                    if pProfileInfo.iLayer < SPATIAL_LAYER_0 as i32
+                        || pProfileInfo.iLayer > SPATIAL_LAYER_3 as i32
                     {
                         return cmInitParaError;
                     }
@@ -396,7 +393,7 @@ impl CWelsH264SVCEncoder {
                     CheckProfileSetting(
                         log_ctx,
                         ctx.param_mut(),
-                        pProfileInfo.iLayer as i32,
+                        pProfileInfo.iLayer,
                         pProfileInfo.uiProfileIdc,
                     );
                 }
@@ -405,8 +402,8 @@ impl CWelsH264SVCEncoder {
                         return cmInitExpected;
                     };
                     let pLevelInfo = &*(pOption as *const SLevelInfo);
-                    if (pLevelInfo.iLayer as i32) < SPATIAL_LAYER_0 as i32
-                        || (pLevelInfo.iLayer as i32) > SPATIAL_LAYER_3 as i32
+                    if pLevelInfo.iLayer < SPATIAL_LAYER_0 as i32
+                        || pLevelInfo.iLayer > SPATIAL_LAYER_3 as i32
                     {
                         return cmInitParaError;
                     }
@@ -414,7 +411,7 @@ impl CWelsH264SVCEncoder {
                     CheckLevelSetting(
                         log_ctx,
                         ctx.param_mut(),
-                        pLevelInfo.iLayer as i32,
+                        pLevelInfo.iLayer,
                         pLevelInfo.uiLevelIdc,
                     );
                 }

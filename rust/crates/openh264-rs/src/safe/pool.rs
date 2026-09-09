@@ -429,8 +429,8 @@ mod tests {
         // `[[Option<PicId>; 16]; 2]` per macroblock and compares six of them per
         // edge; this is what keeps that one word and one comparison.
         assert_eq!(
-            std::mem::size_of::<Option<Id>>(),
-            std::mem::size_of::<Id>()
+            size_of::<Option<Id>>(),
+            size_of::<Id>()
         );
         // And the bias is invisible from outside: slot 0 round-trips.
         assert_eq!(pool_of(1).id(0).index(), 0);

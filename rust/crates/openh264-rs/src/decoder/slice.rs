@@ -12,7 +12,6 @@
 //! Translated from `codec/decoder/core/inc/slice.h`.
 //! Corresponds to ITU-T H.264 Section 7.3.3 and Annex G (SVC) Section G.7.3.3.4.
 
-use std::ffi::c_void;
 use crate::decoder::decoder_context::SpsRef;
 
 // Constants matching `wels_common_defs.h` and `wels_const.h`

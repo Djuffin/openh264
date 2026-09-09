@@ -26,7 +26,7 @@ use crate::encoder::param_svc::{SSpsSvcExt, SSubsetSps, SWelsPPS, SWelsSPS};
 use crate::common::mc::SMcFunc;
 use crate::encoder::encoder_context::{sWelsEncCtx, SLTRState, SSpatialPicIndex, SStrideTables};
 use crate::encoder::md::{SMB, SMbCache, SMeRefinePointer, SSampleDealingFunc, SWelsMD};
-use crate::encoder::svc_encode_slice::{SDqLayer, SLayerInfo, SSlice, SSliceBufferInfo};
+use crate::encoder::svc_encode_slice::{SDqLayer, SLayerInfo, SSliceBufferInfo};
 use crate::encoder::picture::{SPicture, SScreenBlockFeatureStorage};
 use crate::encoder::param_svc::{SSpatialLayerInternal, SWelsSvcCodingParam};
 use crate::encoder::rc::{SRCSlicing, SWelsSvcRc};

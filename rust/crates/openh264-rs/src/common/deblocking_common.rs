@@ -61,7 +61,7 @@ pub fn WelsClip1(iX: i32) -> u8 {
 // int-to-uint8_t conversion. `WelsClip1` is applied only where the C++ applies it
 // (p0'/q0').
 
-use crate::safe::plane::{PlaneCursorMut, PlaneSamples};
+use crate::safe::plane::PlaneSamples;
 
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
@@ -361,7 +361,7 @@ mod tests {
 
 #[cfg(test)]
 mod dispatch_tests {
-    use super::*;
+    
 
 
 }

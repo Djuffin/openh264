@@ -46,7 +46,6 @@
 )]
 #![forbid(unsafe_code)]
 
-use core::ffi::{c_char, c_void};
 use crate::decoder::parameter_sets::{SPps, SSps};
 
 // ============================================================================

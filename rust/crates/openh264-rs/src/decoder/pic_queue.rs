@@ -43,8 +43,6 @@
 )]
 #![forbid(unsafe_code)]
 
-use std::ffi::{c_char, c_void};
-use crate::decoder::decoder_context::SDecodingParam;
 use crate::decoder::decoder_core::{ERR_INFO_INVALID_PARAM, ERR_INFO_OUT_OF_MEMORY, ERR_NONE};
 
 // ============================================================================
@@ -787,7 +785,7 @@ pub fn DestroyPicBuff(pCtx: &mut SWelsDecoderContext, pool: Option<Box<PicPool>>
 
 #[cfg(test)]
 mod tests {
-    use crate::decoder::decoder_context::parse_only;
+    use crate::decoder::decoder_context::{SDecodingParam, parse_only};
     use super::*;
     
     #[test]
@@ -849,7 +847,7 @@ mod tests {
         {
             let pCtx = &mut *ctx;
             assert!(
-                crate::decoder::decoder_context::parse_only(&pCtx.pParam),
+                parse_only(&pCtx.pParam),
                 "the accessor reads the field the callee used to reach for itself"
             );
             let mut pic = alloc_picture(parse_only(&pCtx.pParam), 160, 120)
@@ -953,7 +951,7 @@ mod tests {
     /// `iPicBuffIdx`.
     #[test]
     fn destroying_the_pool_resets_the_reordering_buffers() {
-        use crate::decoder::decoder_context::{IMinInt32, SPictInfo, SPictReoderingStatus};
+        use crate::decoder::decoder_context::IMinInt32;
 
         let param = SDecodingParam::default();
         let mut ctx = SWelsDecoderContext::new_boxed();

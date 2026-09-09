@@ -25,42 +25,35 @@
 #![forbid(unsafe_code)]
 use crate::encoder::rec_view::RecCursor;
 use crate::encoder::rec_view::copy_block_to_view;
-use crate::encoder::svc_encode_slice::{
-    layer_enc_view, layer_rec_view, layer_ref_pic, layer_ref_view,
-    current_layer_ref,
-};
-use crate::encoder::picture::{RecPicId, SrcPicId};
+use crate::encoder::svc_encode_slice::current_layer_ref;
 use crate::common::mc::{mc_chroma, mc_luma};
 use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_8x16, copy_8x8};
 use crate::safe::plane::PlaneCursorMut;
-use crate::encoder::encoder_context::{sWelsEncCtx, SMVComponentUnit, SMVUnitXY, SPicData};
+use crate::encoder::encoder_context::{sWelsEncCtx, SMVUnitXY};
 use crate::encoder::md::MdSliceCtx;
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
 use crate::encoder::md::{
     FillNeighborCacheIntra, InitMeRefinePointer, MdIntraAnalysisVaaInfo, MeRefineFracPixel, SMB,
     SMbCache, SMeRefinePointer, SWelsMD, BsSizeUE, MB_TYPE_16x16, MB_TYPE_16x8, MB_TYPE_8x16,
-    MB_TYPE_8x8, MB_TYPE_INTRA16x16, MB_TYPE_INTRA4x4, MB_TYPE_SKIP,
-    ME_REFINE_BUF_STRIDE_BLK4, ME_REFINE_BUF_STRIDE_BLK8, ME_REFINE_BUF_WIDTH_BLK4,
+    MB_TYPE_8x8, MB_TYPE_INTRA16x16, MB_TYPE_INTRA4x4, MB_TYPE_SKIP, ME_REFINE_BUF_STRIDE_BLK8,
     ME_REFINE_BUF_WIDTH_BLK8, PredictSad,
 };
 use crate::encoder::svc_encode_mb::{WelsDctMb, WelsEncRecI4x4Y, WelsTryPUVskip, WelsTryPYskip};
 use crate::encoder::svc_encode_slice::{SDqLayer, SSlice};
 use crate::encoder::svc_mode_decision::{
-    g_kiIntra16AvaliMode, g_kiMapModeI16x16, g_kuiMbCountScan4Idx, update_P8x16_motion_info,
+    g_kuiMbCountScan4Idx, update_P8x16_motion_info,
     InitMe, PredInter16x8Mv, PredInter8x16Mv, PredMv, PredSkipMv, UpdateP16x16MotionInfo,
     UpdateP16x8Motion2Cache, UpdateP16x8MotionInfo, UpdateP8x16Motion2Cache,
     UpdateP8x8MotionInfo, WelsMdInterDecidedPskip, WelsMdInterJudgePskip,
     WelsMdInterSecondaryModesEnc, WelsMdIntraSecondaryModesEnc, BLOCK_16x16, BLOCK_16x8,
-    BLOCK_4x4, BLOCK_4x8, BLOCK_8x16, BLOCK_8x4, BLOCK_8x8, IS_SKIP, MB_TYPE_BACKGROUND,
+    BLOCK_4x4, BLOCK_8x16, BLOCK_8x8, IS_SKIP,
     REF_NOT_AVAIL, SUB_MB_TYPE_8x8,
 };
-use crate::encoder::svc_motion_estimate::{SetMvWithinIntegerMvRange, SWelsME};
+use crate::encoder::svc_motion_estimate::SetMvWithinIntegerMvRange;
 use crate::encoder::svc_set_mb_syn_cavlc::{g_kuiCache48CountScan4Idx, IS_INTRA16x16};
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
-use crate::common::wels_common_defs::EWelsSliceType;
 use crate::encoder::md::{LEFT_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS, TOP_MB_POS};
-use crate::encoder::picture::SScreenBlockFeatureStorage;
-use crate::encoder::svc_encode_slice::{current_layer_expect, layer_rec_view_expect, layer_ref_pic_expect, layer_ref_view_expect};
+use crate::encoder::svc_encode_slice::{current_layer_expect, layer_rec_view_expect, layer_ref_view_expect};
 use crate::encoder::svc_encode_slice::layer_enc_view_expect;
 use crate::simd::kernels;
 
@@ -745,7 +738,7 @@ pub fn WelsMdIntraFinePartitionVaa(
     pMbCache: &mut SMbCache,
 ) -> i32 {
     let pCurLayer = current_layer_expect(pEncCtx);
-    let encView = crate::encoder::svc_encode_slice::layer_enc_view_expect(&*pCurLayer);
+    let encView = layer_enc_view_expect(&*pCurLayer);
     let cEncMb = pMbCache.SPicData.mb_cursor_ro(encView, 0);
     if MdIntraAnalysisVaaInfo(pEncCtx, &cEncMb) {
         let iCosti4x4 = WelsMdI4x4Fast(pEncCtx, pWelsMd, pCurMb, pMbCache);
@@ -1130,8 +1123,8 @@ pub fn WelsMdPSkipEnc(
 
     // Special case, need to clip the vector //
     let sQpelMvp = SMVUnitXY {
-        iMvX: (sMvp.iMvX >> 2) as i16,
-        iMvY: (sMvp.iMvY >> 2) as i16,
+        iMvX: (sMvp.iMvX >> 2),
+        iMvY: (sMvp.iMvY >> 2),
     };
     n = ((pCurMb.iMbX as i32) << 4) + sQpelMvp.iMvX as i32;
     if n < -29 {
@@ -1413,7 +1406,7 @@ pub fn WelsMdInterMbRefinement(
                 let sMv = pWelsMd.sMe.sMe16x8[i].sMv;
                 let dx = sMv.iMvX as i32 >> 3;
                 let dy = iBlk4Y + (sMv.iMvY as i32 >> 3);
-                let iDstOff = (i as usize) << 5; // 4 rows x 8
+                let iDstOff = i << 5; // 4 rows x 8
                 mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 8, 4); //Cb
                 mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 8, 4); //Cr
             }

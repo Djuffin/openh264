@@ -26,7 +26,7 @@
 
 use crate::encoder::wels_preprocess::{SAdaptiveQuantizationParam, SMotionTextureUnit, SPixMap, SVAACalcResult};
 
-use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
+use super::vaacalc::RET_SUCCESS;
 
 /// `util.h:61-64`.
 const AQ_INT_MULTIPLY: i64 = 10000000;

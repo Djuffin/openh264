@@ -11,9 +11,7 @@
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
-use std::ffi::c_void;
 use crate::decoder::decoder_core::DqLayerState;
-use crate::decoder::parameter_sets::SSps;
 pub use crate::decoder::nalu::{EWelsNalUnitType, EWelsNalUnitType::*};
 pub use crate::decoder::slice::{EWelsSliceType, EWelsSliceType::*, MMCO_END, MMCO_SHORT2UNUSED, MMCO_LONG2UNUSED, MMCO_SHORT2LONG, MMCO_SET_MAX_LONG, MMCO_RESET, MMCO_LONG};
 pub use crate::decoder::error_concealment::{ERROR_CON_IDC, ERROR_CON_IDC::*};
@@ -61,7 +59,7 @@ pub use crate::decoder::decoder_context::{Picture, SPicture};
 
 
 pub use crate::decoder::decoder_context::SRefPic;
-use crate::decoder::decoder_context::{active_pps, active_sps, pic_and_refs_mut, pps_of, ref_set, sps_of};
+use crate::decoder::decoder_context::{active_pps, active_sps, pic_and_refs_mut, ref_set, sps_of};
 use crate::decoder::pic_queue::RefSlot;
 use crate::decoder::decoder_context::ec_active_idc;
 pub use crate::decoder::slice::{SRefPicListReorderSyn, SRefPicMarking};
@@ -75,8 +73,8 @@ pub use crate::decoder::decoder_context::SLogContext;
 
 pub use crate::decoder::decoder_context::SWelsDecoderContext;
 use crate::decoder::decoder_context::{
-    cur_au, dec_pic, long_ref_pic, pic_and_refs, pic_pool_mut, pool_pic, pool_pic_mut,
-    prev_dpb_id, ref_pic, short_ref_pic, short_ref_pic_mut,
+    cur_au, dec_pic, long_ref_pic, pic_pool_mut, pool_pic, pool_pic_mut,
+    prev_dpb_id, ref_pic, short_ref_pic,
 };
 pub use crate::decoder::pic_queue::PicId;
 
@@ -120,10 +118,10 @@ pub extern "C" fn SetUnRef(ref_pic: &mut SPicture) {
         ref_pic.iRefCount = 0;
         ref_pic.pSetUnRef = None;
 
-        if ref_pic.eSliceType == EWelsSliceType::I_SLICE {
+        if ref_pic.eSliceType == I_SLICE {
             return;
         }
-        let lists = if ref_pic.eSliceType == EWelsSliceType::P_SLICE { 1 } else { 2 };
+        let lists = if ref_pic.eSliceType == P_SLICE { 1 } else { 2 };
         for i in 0..MAX_DPB_COUNT {
             for list in 0..lists {
                 ref_pic.pRefPic[list][i] = None;
@@ -556,11 +554,11 @@ pub fn RemainOneBufferInDpbForEC(
 pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i32 {
 
     if (pCtx.sRefPic.uiShortRefCount[LIST_0] + pCtx.sRefPic.uiLongRefCount[LIST_0] <= 0)
-        && (pCtx.eSliceType != EWelsSliceType::I_SLICE && pCtx.eSliceType != EWelsSliceType::SI_SLICE)
+        && (pCtx.eSliceType != I_SLICE && pCtx.eSliceType != SI_SLICE)
     {
         let ec_mode = ec_active_idc(&pCtx.pParam);
 
-        if ec_mode != crate::decoder::error_concealment::ERROR_CON_IDC::ERROR_CON_DISABLE {
+        if ec_mode != ERROR_CON_DISABLE {
             let sps_id = active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).map(|s| s.iSpsId);
             let pps_id = active_pps(&pCtx.sSpsPpsCtx, pCtx.active_pps).map(|p| p.iPpsId);
             let ec_slot = match pic_pool_mut(pCtx) {
@@ -578,7 +576,7 @@ pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i
                 if let Some(iPpsId) = pps_id {
                     pRef.iPpsId = iPpsId;
                 }
-                if eSliceType == EWelsSliceType::B_SLICE {
+                if eSliceType == B_SLICE {
                     for list in 0..LIST_A {
                         for i in 0..MAX_DPB_COUNT {
                             pRef.pRefPic[list][i] = None;
@@ -1016,7 +1014,7 @@ pub fn WelsReorderRefList(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&m
 
     for listIdx in 0..list_count {
         let iMaxRefIdx = (pCtx.iPicQueueNumber as usize).min(MAX_REF_PIC_COUNT);
-        let iRefCount = pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[listIdx] as i32;
+        let iRefCount = pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[listIdx];
         let mut iPredFrameNum = pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iFrameNum;
         let iMaxPicNum = 1i32 << pSps.uiLog2MaxFrameNum;
         let mut iReorderingIndex = 0usize;

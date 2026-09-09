@@ -6,11 +6,8 @@
 
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
-use std::ffi::c_char;
-use crate::api::codec_api::ECOMPLEXITY_MODE::*;
 use crate::{
-    EUsageType, RCMode, SEncParamExt, SEncoderStatistics, SSliceArgument,
-    SSpatialLayerConfig, SSourcePicture, VideoFormat,
+    EUsageType, SSourcePicture, VideoFormat,
     MAX_QUALITY_LAYER_NUM, MAX_TEMPORAL_LAYER_NUM,
 };
 
@@ -242,7 +239,6 @@ impl Default for SMVComponentUnit {
 
 
 pub use crate::encoder::svc_encode_slice::SDqLayer;
-use crate::encoder::svc_encode_slice::ctx_sps;
 
 pub use crate::encoder::wels_encoder_ext::{SSpatialLayerInternal, SWelsSvcCodingParam};
 
@@ -642,7 +638,7 @@ pub fn ctx_paraset_arrays(
 /// One owner per field, so the compiler grants all five at once.
 pub struct LtrFamilyMut<'a> {
     /// One dependency layer's parameter slot — `sDependencyLayers[kiDid]`.
-    pub param_layer: &'a mut crate::encoder::param_svc::SSpatialLayerInternal,
+    pub param_layer: &'a mut SSpatialLayerInternal,
     /// The video-analysis block, absent before the preprocess builds it.
     pub vaa: Option<&'a mut SVAAFrameInfo>,
     /// The dependency layer's reference list, absent before it is allocated.
@@ -949,7 +945,7 @@ impl sWelsEncCtx {
     pub fn rc_and_current_layer_mut(
         &mut self,
         kiDid: usize,
-    ) -> (&mut SWelsSvcRc, Option<&mut crate::encoder::svc_encode_slice::SDqLayer>) {
+    ) -> (&mut SWelsSvcRc, Option<&mut SDqLayer>) {
         let sWelsEncCtx { pWelsSvcRc, iCurDqLayer, ppDqLayerList, .. } = self;
         let layer = iCurDqLayer
             .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
@@ -1647,7 +1643,7 @@ pub fn InitFunctionPointers(
     let kbSimulcastAVC = pEncCtx.param().bSimulcastAVC;
     let kiSpatialLayerNum = pEncCtx.param().iSpatialLayerNum;
     let bScreenContent = pEncCtx.param().iUsageType
-        == crate::api::codec_api::EUsageType::SCREEN_CONTENT_REAL_TIME;
+        == EUsageType::SCREEN_CONTENT_REAL_TIME;
     let fl: &mut SWelsFuncPtrList = pEncCtx.func_list_mut();
 
     // `encoder.cpp:193` installed `sExpandPicFunc` here. The call it fed now names
@@ -2007,9 +2003,9 @@ mod tests {
         let mut ctx = Box::new(sWelsEncCtx::new());
 
         // Everything the accessors resolve through, at its smallest live shape.
-        ctx.pSpsArray = vec![crate::encoder::param_svc::SWelsSPS::ZERO; 2];
-        ctx.pSubsetArray = vec![crate::encoder::param_svc::SSubsetSps::ZERO; 2];
-        ctx.pPPSArray = vec![crate::encoder::param_svc::SWelsPPS::ZERO; 2];
+        ctx.pSpsArray = vec![SWelsSPS::ZERO; 2];
+        ctx.pSubsetArray = vec![SSubsetSps::ZERO; 2];
+        ctx.pPPSArray = vec![SWelsPPS::ZERO; 2];
         ctx.pDqIdcMap = vec![SDqIdc::default(); 2];
         ctx.pLtr = vec![SLTRState::default(); 2];
         ctx.pWelsSvcRc = (0..2).map(|_| SWelsSvcRc::default()).collect();
@@ -2019,7 +2015,7 @@ mod tests {
         ctx.pSvcParam = Some(Box::new(SWelsSvcCodingParam::default()));
         ctx.ppRefPicListExt = vec![Some(SRefList::new())];
         ctx.ppDqLayerList = vec![Some(Box::new(
-            crate::encoder::svc_encode_slice::SDqLayer::default(),
+            SDqLayer::default(),
         ))];
 
         let p: *mut sWelsEncCtx = &mut *ctx;
@@ -2092,7 +2088,7 @@ mod tests {
         assert_eq!(ctx.pFrameBs.len(), ctx.iFrameBsSize as usize);
     }
 
-    use crate::encoder::wels_preprocess::CWelsPreProcess;
+    
 
     /// The context-level read path, before and after the tables exist.
     #[test]

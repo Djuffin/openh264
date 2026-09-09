@@ -12,12 +12,11 @@
 #![forbid(unsafe_code)]
 
 use crate::{
-    EComplexityMode, EParameterSetStrategy, EUsageType, RCMode, SEncParamBase, SEncParamExt,
-    SSliceArgument, SSpatialLayerConfig, SliceMode, VideoFormat,
+    EComplexityMode, EParameterSetStrategy, EUsageType, RCMode, SEncParamBase, SEncParamExt, SSpatialLayerConfig, SliceMode,
 };
 // Profile/level/complexity/SPS-id enumerators live in api::codec_api (one definition
 // per type); glob-import the variants so the C++ spellings stay bare, as in the C++.
-use crate::api::codec_api::{EProfileIdc, ELevelIdc as _ELevelIdc};
+use crate::api::codec_api::EProfileIdc;
 use crate::api::codec_api::{
     EColorMatrix, EColorPrimaries, ESampleAspectRatio, ETransferCharacteristics, EVideoFormatSPS,
 };

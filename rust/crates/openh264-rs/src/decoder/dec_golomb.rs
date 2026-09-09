@@ -13,7 +13,6 @@
 //! - Associated documentation in `rust/docs/dec_golomb.h.md`
 
 use crate::safe::bits::BsCursor;
-use crate::safe::err::ErrInfo;
 
 // Error and status return codes matching OpenH264 error_code.h
 pub const ERR_NONE: i32 = 0;

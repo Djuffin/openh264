@@ -11,8 +11,7 @@
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
-use std::ffi::{c_char, c_void};
-use std::ptr::{null, null_mut};
+use std::ffi::c_char;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::encoder::au_set::{
@@ -26,19 +25,13 @@ use crate::encoder::svc_enc_slice_segment::{
     CheckRasterMultiSliceSetting, CheckRowMbMultiSliceSetting,
     SliceArgumentValidationFixedSliceMode,
 };
-use crate::api::codec_api::SSliceArgument;
 
 use crate::{
-    EComplexityMode, EParameterSetStrategy, EUsageType, EVideoFrameType, EncoderOption,
-    OpenH264Version, RCMode, SBitrateInfo, SEncParamBase,
-    SEncParamExt, SFrameBSInfo, SLayerBSInfo, SSourcePicture, SSpatialLayerConfig, VideoFormat,
-    CM_INIT_EXPECTED, CM_INIT_PARA_ERROR, CM_MALLOC_MEM_ERROR, CM_RESULT_SUCCESS,
-    CM_UNKNOWN_REASON, CM_UNSUPPORTED_DATA, MAX_LAYER_NUM_OF_FRAME, MAX_SPATIAL_LAYER_NUM,
-    MAX_TEMPORAL_LAYER_NUM,
+    EVideoFrameType, RCMode, SEncParamBase,
+    SEncParamExt, SFrameBSInfo, SSourcePicture, VideoFormat, MAX_LAYER_NUM_OF_FRAME, MAX_SPATIAL_LAYER_NUM,
 };
-use crate::api::codec_api::{EProfileIdc, ELevelIdc, LAYER_NUM};
+use crate::api::codec_api::{EProfileIdc, ELevelIdc};
 use crate::api::codec_api::LAYER_NUM::*;
-use crate::api::codec_api::ECOMPLEXITY_MODE::*;
 use crate::api::codec_api::EParameterSetStrategy::*;
 use crate::api::codec_api::EUsageType::*;
 use crate::api::codec_api::RC_MODES::*;
@@ -64,8 +57,6 @@ use crate::encoder::encoder_context::{
 use crate::encoder::encoder_ext::{
     GetMultipleThreadIdc, WelsInitEncoderExt, WelsUninitEncoderExt,
 };
-use crate::encoder::rc::WelsRcInitFuncPointers;
-use crate::encoder::ref_list_mgr_svc::{FilterLTRMarkingFeedback, FilterLTRRecoveryRequest};
 
 pub const VERSION_NUMBER: &str = "openh264 2.6.0";
 
@@ -1763,7 +1754,7 @@ impl CWelsH264SVCEncoder {
             return cmInitParaError;
         }
 
-        if pCfg.iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME {
+        if pCfg.iUsageType == SCREEN_CONTENT_REAL_TIME {
             if pCfg.bEnableLongTermReference {
                 pCfg.iLTRRefNum = LONG_TERM_REF_NUM_SCREEN;
                 if pCfg.iNumRefFrame == AUTO_REF_PIC_COUNT {
@@ -1812,7 +1803,7 @@ impl CWelsH264SVCEncoder {
         self.TraceParamInfo(&mut pCfg.to_param_ext());
         let log_ctx = self.m_pWelsTrace.m_sLogCtx;
 
-        if crate::encoder::encoder_ext::WelsInitEncoderExt(
+        if WelsInitEncoderExt(
             &mut self.m_pEncContext,
             pCfg,
             log_ctx,
@@ -1841,7 +1832,7 @@ impl CWelsH264SVCEncoder {
                 Self::version_number()
             ),
         );
-        crate::encoder::encoder_ext::WelsUninitEncoderExt(self.m_pEncContext.take());
+        WelsUninitEncoderExt(self.m_pEncContext.take());
         self.m_bInitialFlag = false;
         0
     }
@@ -1873,7 +1864,7 @@ impl CWelsH264SVCEncoder {
             return cmUnsupportedData;
         }
         let Some(pCtx) = self.m_pEncContext.as_deref_mut() else {
-            crate::encoder::encoder_ext::WelsUninitEncoderExt(None);
+            WelsUninitEncoderExt(None);
             return cmMallocMemeError;
         };
 
@@ -1886,7 +1877,7 @@ impl CWelsH264SVCEncoder {
             || kiEncoderReturn == ENC_RETURN_MEMOVERFLOWFOUND
             || kiEncoderReturn == ENC_RETURN_VLCOVERFLOWFOUND
         {
-            crate::encoder::encoder_ext::WelsUninitEncoderExt(self.m_pEncContext.take());
+            WelsUninitEncoderExt(self.m_pEncContext.take());
             return cmMallocMemeError;
         } else if kiEncoderReturn == ENC_RETURN_INVALIDINPUT {
             return cmUnsupportedData;
@@ -2093,7 +2084,7 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                 None => &[],
             };
             let mut kiBase = 0usize;
-            for iLayerNum in 0..(pBsInfo.iLayerNum as usize).min(MAX_LAYER_NUM_OF_FRAME as usize) {
+            for iLayerNum in 0..(pBsInfo.iLayerNum as usize).min(MAX_LAYER_NUM_OF_FRAME) {
                 let pLayerInfo = &pBsInfo.sLayerInfo[iLayerNum];
                 let kiCount = pLayerInfo.iNalCount.max(0) as usize;
                 if pLayerInfo.uiLayerType == VIDEO_CODING_LAYER
@@ -2221,9 +2212,9 @@ impl Drop for CWelsH264SVCEncoder {
     fn drop(&mut self) {
         // `welsEncoderExt.cpp:136` — the destructor announces itself first, then
         // uninitializes, so the two lines land in the reference's order.
-        crate::common::wels_trace::WelsLog(
+        WelsLog(
             self.m_pWelsTrace.m_sLogCtx,
-            crate::common::wels_trace::WELS_LOG_INFO,
+            WELS_LOG_INFO,
             "CWelsH264SVCEncoder::~CWelsH264SVCEncoder()",
         );
         self.Uninitialize();

@@ -46,15 +46,10 @@ pub use crate::processing::complexity_analysis::{FRAME_SAD, GOM_SAD, GOM_VAR};
     non_upper_case_globals
 )]
 
-use crate::encoder::picture::{PicPlanes, RecPicId, RecPicPool, SrcPicId, SrcPicPool};
-use std::ffi::c_char;
-use std::mem::size_of;
+use crate::encoder::picture::{PicPlanes, RecPicId, SrcPicId, SrcPicPool};
 use crate::{
-    EUsageType, SEncParamExt, SSourcePicture, SSpatialLayerConfig, VideoFormat,
+    EUsageType, SSourcePicture, VideoFormat,
 };
-use crate::encoder::encoder_ext::{PADDING_LENGTH, WELS_ALIGN};
-use crate::encoder::param_svc::{MB_HEIGHT_LUMA, MB_WIDTH_LUMA};
-use crate::encoder::encoder_context::SMVUnitXY;
 
 // ============================================================================
 // Constants
@@ -73,7 +68,7 @@ pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 pub use crate::encoder::rc::SWelsSvcRc;
 pub const INVALID_TEMPORAL_ID: u8 = 0xff;
 pub const STATIC_SCENE_MOTION_RATIO: f32 = 0.01;
-pub const g_kiPixMapSizeInBits: i32 = (std::mem::size_of::<u8>() * 8) as i32;
+pub const g_kiPixMapSizeInBits: i32 = (size_of::<u8>() * 8) as i32;
 
 /// `rc.h:57`. Only `SComplexityAnalysisScreenParam` uses it:
 /// `CComplexityAnalysisScreen` divides the frame into GOM buckets `GOM_H_SCC`
@@ -2010,15 +2005,15 @@ impl CWelsPreProcess {
             }
         } else {
             while iDlayerIndex < kiDlayerCount as usize {
-                let kiLayerInTemporal = self.m_uiSpatialLayersInTemporal[iDlayerIndex as usize] as usize;
-                self.m_pLastSpatialPicture[iDlayerIndex as usize][0] =
-                    self.m_pSpatialPic[iDlayerIndex as usize][kiLayerInTemporal.saturating_sub(2)];
-                self.m_pLastSpatialPicture[iDlayerIndex as usize][1] = None;
+                let kiLayerInTemporal = self.m_uiSpatialLayersInTemporal[iDlayerIndex] as usize;
+                self.m_pLastSpatialPicture[iDlayerIndex][0] =
+                    self.m_pSpatialPic[iDlayerIndex][kiLayerInTemporal.saturating_sub(2)];
+                self.m_pLastSpatialPicture[iDlayerIndex][1] = None;
                 iDlayerIndex += 1;
             }
-            while (iDlayerIndex as usize) < MAX_DEPENDENCY_LAYER {
-                self.m_pLastSpatialPicture[iDlayerIndex as usize][0] = None;
-                self.m_pLastSpatialPicture[iDlayerIndex as usize][1] = None;
+            while iDlayerIndex < MAX_DEPENDENCY_LAYER {
+                self.m_pLastSpatialPicture[iDlayerIndex][0] = None;
+                self.m_pLastSpatialPicture[iDlayerIndex][1] = None;
                 iDlayerIndex += 1;
             }
         }
@@ -2528,7 +2523,7 @@ impl CWelsPreProcess {
             pPixMap.pPixel[0] = pPicture.pData[0];
             pPixMap.pPixel[1] = pPicture.pData[1];
             pPixMap.pPixel[2] = pPicture.pData[2];
-            pPixMap.iSizeInBits = std::mem::size_of::<u8>() as i32;
+            pPixMap.iSizeInBits = size_of::<u8>() as i32;
             pPixMap.iStride[0] = pPicture.iLineSize[0];
             pPixMap.iStride[1] = pPicture.iLineSize[1];
             pPixMap.sRect.iRectWidth = pPicture.iWidthInPixel;
@@ -2721,7 +2716,7 @@ impl CWelsPreProcess {
         &self,
         pCtx: &mut sWelsEncCtx,
         _iRefPicType: i32,
-    ) -> Option<crate::encoder::picture::RecPicId> {
+    ) -> Option<RecPicId> {
         let uiTid = pCtx.uiTemporalId;
         let uiDid = pCtx.uiDependencyId;
         let bLtrRecovery = pCtx.param().bEnableLongTermReference
@@ -2929,7 +2924,7 @@ impl CWelsPreProcess {
                 return;
             };
 
-            let mut idRefMbType: Option<crate::encoder::picture::RecPicId> = None;
+            let mut idRefMbType: Option<RecPicId> = None;
             if let Some(idRef) = sRefPic {
                 let iPictureType = pCtx
                     .ref_list(uiDidCur)
@@ -3158,7 +3153,7 @@ impl CWelsPreProcess {
         _pCurPicture: Option<SrcPicId>,
         kiCurDid: i32,
         kuiMarkLongTermPicIdx: i32,
-        pLongRefList: &crate::encoder::encoder_context::SRefList,
+        pLongRefList: &SRefList,
     ) {
         for i in 0..MAX_REF_PIC_COUNT {
             // The *source* picture at `i + 1` and the *reconstruction* picture at `i`

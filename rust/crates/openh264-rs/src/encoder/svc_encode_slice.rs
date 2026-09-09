@@ -51,10 +51,9 @@ use crate::encoder::decode_mb_aux::{
 use crate::encoder::encode_mb_aux::{blk_four4x4, blk_mb256};
 use std::sync::atomic::{AtomicI32, AtomicU16, Ordering};
 use crate::encoder::picture::{PicRef, RecPicId, SPicture, SrcPicId};
-use std::ffi::c_char;
 use crate::{
-    SliceMode, SFrameBSInfo, SLayerBSInfo, SSliceArgument,
-    MAX_LAYER_NUM_OF_FRAME, MAX_SPATIAL_LAYER_NUM, MAX_QUALITY_LAYER_NUM, MAX_NAL_UNITS_IN_LAYER,
+    SliceMode, SFrameBSInfo, SSliceArgument,
+    MAX_LAYER_NUM_OF_FRAME,
 };
 
 // ============================================================================
@@ -62,9 +61,6 @@ use crate::{
 // ============================================================================
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
-use crate::encoder::encoder_context::{
-    
-};
 
 pub const P_SLICE: i32 = 0;
 pub const B_SLICE: i32 = 1;
@@ -236,9 +232,8 @@ pub struct SSliceHeaderExt {
 }
 
 pub use crate::common::wels_common_defs::EWelsNalUnitType;
-use crate::safe::plane::PlaneCursor;
 pub use crate::safe::bits::BsWriter;
-use crate::safe::mb_grid::{MbArray, MbDims, MbWindow};
+use crate::safe::mb_grid::MbArray;
 use crate::safe::mvd_cost::MvdCostCursor;
 pub use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 use crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj;
@@ -323,7 +318,7 @@ pub struct SDynamicSlicingStack<'a> {
     pub iCurrentPos: i32,
     /// The CAVLC rollback snapshot.
     pub sBsStack: BsWriter,
-    pub sStoredCabac: crate::encoder::set_mb_syn_cabac::SCabacCtx,
+    pub sStoredCabac: SCabacCtx,
     pub iMbSkipRunStack: i32,
     pub uiLastMbQp: u8,
     /// The CABAC restore scratch, one of `pDynamicBsBuffer`'s per-partition
@@ -337,7 +332,7 @@ impl Default for SDynamicSlicingStack<'_> {
             iStartPos: 0,
             iCurrentPos: 0,
             sBsStack: BsWriter::new(),
-            sStoredCabac: crate::encoder::set_mb_syn_cabac::SCabacCtx::default(),
+            sStoredCabac: SCabacCtx::default(),
             iMbSkipRunStack: 0,
             uiLastMbQp: 0,
             pRestoreBuffer: None,
@@ -1220,7 +1215,7 @@ pub fn UpdateMbNeighbor(
 /// Writes through the window its caller owns; `MbWindow::at*` take raster
 /// addresses, so a partition-wide window indexes as a per-slice one does.
 pub fn UpdateMbNeighbourInfoForNextSlice(
-    pSliceCtx: &crate::encoder::slice_multi_threading::SSliceCtx,
+    pSliceCtx: &SSliceCtx,
     pMbs: &mut crate::safe::mb_grid::MbWindow<'_, SMB>,
     kiFirstMbIdxOfNextSlice: i32,
     kiLastMbIdxInPartition: i32,
@@ -1665,7 +1660,7 @@ pub fn UpdateQpForOverflow(pCurMb: &mut SMB, kuiChromaQpIndexOffset: u8) {
 // Macroblock Search & Traversal Loops
 // ============================================================================
 
-pub fn WelsGetNextMbOfSlice(pSliceSeg: &crate::encoder::slice_multi_threading::SSliceCtx, kiMbXY: i32) -> i32 {
+pub fn WelsGetNextMbOfSlice(pSliceSeg: &SSliceCtx, kiMbXY: i32) -> i32 {
     if kiMbXY < 0 || kiMbXY >= pSliceSeg.iMbNumInFrame {
         return -1;
     }
@@ -1892,7 +1887,7 @@ pub fn WelsISliceMdEncDynamic(
         if pSlice.bDynamicSlicingSliceSizeCtrlFlag {
             let max_qp = pEncCtx.rc_at(pEncCtx.uiDependencyId as usize).iMaxQp;
             pMbs.cur_mut().uiLumaQp = max_qp as u8;
-            pMbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
+            pMbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp + kuiChromaQpIndexOffset as i32)];
         }
         // The macroblock and its raster predecessors, held once: `WelsMdIntraInit`
         // and the neighbour cache under it took the window and re-indexed the
@@ -2322,7 +2317,7 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
         if pSlice.bDynamicSlicingSliceSizeCtrlFlag {
             let max_qp = pEncCtx.rc_at(pEncCtx.uiDependencyId as usize).iMaxQp;
             pMbs.cur_mut().uiLumaQp = max_qp as u8;
-            pMbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp as i32 + kuiChromaQpIndexOffset as i32)];
+            pMbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp + kuiChromaQpIndexOffset as i32)];
         }
 
         // step (2): save some values for future use, initialise pWelsMd.
@@ -2779,7 +2774,7 @@ pub fn WelsCodeOneSlice(
 pub fn WelsWriteSliceEndSyn(
     buf: &mut [u8],
     pBs: &mut BsWriter,
-    pCabacCtx: &mut crate::encoder::set_mb_syn_cabac::SCabacCtx,
+    pCabacCtx: &mut SCabacCtx,
     bEntropyCodingModeFlag: bool,
 ) {
     if bEntropyCodingModeFlag {
@@ -3353,7 +3348,7 @@ pub fn ReallocateSliceInThread(
     iRet = ReallocateSliceList(
         kiMaxSliceBufferSize,
         kbIndependenceBsBuffer,
-        pCtx.iNumRef0 as u8,
+        pCtx.iNumRef0,
         pCtx.iGlobalQp,
         pBank,
         iMaxSliceNum,
@@ -3429,7 +3424,7 @@ pub fn ReallocSliceBuffer(pCtx: &mut sWelsEncCtx) -> i32 {
     let kiMaxSliceBufferSize = pCtx.iSliceBufferSize[kiCurDid];
     let kbIndependenceBsBuffer = pCtx.param().iMultipleThreadIdc > 1
         && kuiSliceMode != SliceMode::SM_SINGLE_SLICE;
-    let (kiNumRef0, kiGlobalQp) = (pCtx.iNumRef0 as u8, pCtx.iGlobalQp);
+    let (kiNumRef0, kiGlobalQp) = (pCtx.iNumRef0, pCtx.iGlobalQp);
     let pCurLayer = current_layer_expect_mut(pCtx);
     iRet = ReallocateSliceList(
         kiMaxSliceBufferSize,
@@ -3585,7 +3580,7 @@ pub fn FrameBsRealloc(
     let pOut = pCtx.out_mut();
     pOut.sNalList.resize(iCountNals as usize, SWelsNalRaw::default());
     pOut.sNalLen
-        .resize_with(iCountNals as usize, || std::sync::atomic::AtomicI32::new(0));
+        .resize_with(iCountNals as usize, || AtomicI32::new(0));
 
     // The C++'s closing loop (`svc_encode_slice.cpp:1589`). The resize moves
     // `sNalLen`, so every `sLayerInfo[..].pNalLengthInByte` handed out before it

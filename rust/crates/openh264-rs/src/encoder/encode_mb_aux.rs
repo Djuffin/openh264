@@ -292,8 +292,7 @@ pub fn hadamard_dc_span(a: &[i16], off: usize) -> &[i16; 241] {
 // these kernels can panic in a debug build. The `as i16` narrowings are the C++'s
 // own implicit `int -> int16_t` conversions, kept where the C++ has them.
 
-use crate::common::copy_mb::{copy_16x16, copy_16x8, copy_4x4, copy_4x8, copy_8x16, copy_8x4, copy_8x8};
-use crate::safe::plane::{PlaneCursor, PlaneCursorMut, SampleCursor};
+use crate::safe::plane::SampleCursor;
 
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
@@ -875,6 +874,7 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::safe::plane::PlaneCursor;
 
     /// **`pfScan4x4` and `pfScan4x4Ac` are scalar by decision, not by omission.**
     /// Both kernels were written, measured against the scalar, and dropped — the

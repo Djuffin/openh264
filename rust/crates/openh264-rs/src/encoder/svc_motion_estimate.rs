@@ -46,7 +46,6 @@
 
 use crate::encoder::rec_view::SharedPlane;
 use crate::encoder::rec_view::RecCursor;
-use crate::safe::plane::{PaddedPlane, PlaneCursor};
 use crate::safe::mvd_cost::MvdCostCursor;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::picture::SPicture;
@@ -1899,7 +1898,7 @@ mod tests {
 
     #[test]
     fn test_fme_noop_callback() {
-        let mut layer = crate::encoder::svc_encode_slice::SDqLayer::default();
+        let mut layer = SDqLayer::default();
         UpdateFMESwitchNull(&mut layer);
     }
 
@@ -1908,7 +1907,7 @@ mod tests {
     fn fme_switch_layer(
         costs: &[u32],
         uiFMEGoodFrameCount: u8,
-    ) -> crate::encoder::svc_encode_slice::SDqLayer {
+    ) -> SDqLayer {
         use crate::encoder::svc_encode_slice::{SDqLayer, SSlice, SliceIdx};
         let mut layer = SDqLayer::default();
         layer.iMbWidth = 4;

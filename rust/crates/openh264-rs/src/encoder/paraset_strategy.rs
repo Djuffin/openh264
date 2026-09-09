@@ -34,7 +34,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::ptr::null_mut;
 
 use crate::api::codec_api::EParameterSetStrategy;
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
@@ -578,7 +577,7 @@ impl CWelsParametersetIdStrategyObj {
     /// `GenerateNewSps` — `paraset_strategy.cpp:265`.
     pub fn GenerateNewSps(
         &mut self,
-        pParam: &mut crate::encoder::param_svc::SWelsSvcCodingParam,
+        pParam: &mut SWelsSvcCodingParam,
         pSpsArray: &mut [SWelsSPS],
         pSubsetArray: &mut [SSubsetSps],
         _pPpsArray: &mut [SWelsPPS],
@@ -764,7 +763,7 @@ impl CWelsParametersetIdStrategyObj {
 
 /// `WelsGenerateNewSps` — `paraset_strategy.cpp:78` (file-static).
 pub fn WelsGenerateNewSps(
-    pParam: &mut crate::encoder::param_svc::SWelsSvcCodingParam,
+    pParam: &mut SWelsSvcCodingParam,
     pSpsArray: &mut [SWelsSPS],
     pSubsetArray: &mut [SSubsetSps],
     kbUseSubsetSps: bool,
@@ -923,7 +922,7 @@ pub fn ctx_strategy_and_param_arrays(
     pCtx: &mut sWelsEncCtx,
 ) -> (
     &mut CWelsParametersetIdStrategyObj,
-    &mut crate::encoder::param_svc::SWelsSvcCodingParam,
+    &mut SWelsSvcCodingParam,
     &mut [SWelsSPS],
     &mut [SSubsetSps],
     &mut [SWelsPPS],

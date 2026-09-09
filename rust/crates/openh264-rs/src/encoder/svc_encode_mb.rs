@@ -46,20 +46,17 @@
 
 use crate::encoder::rec_view::RecCursor;
 use crate::encoder::rec_view::copy_block_to_view;
-use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
 pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::encoder_context::SStrideTables;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
-use crate::encoder::svc_encode_slice::current_layer_ref;
 use crate::encoder::encode_mb_aux::{blk4x4, blk4x4_mut, blk_four4x4, blk_four4x4_mut, hadamard2x2_span,
     hadamard2x2_span_mut, hadamard_dc_span};
 pub use crate::encoder::md::SMbCache;
 use crate::encoder::md::{best_pred_i4x4_blk4_off, mem_pred_luma_off};
 use crate::encoder::decode_mb_aux::{idct_four_t4_rec_to_view, idct_rec_i16x16_dc_to_view, idct_t4_rec_to_view};
-use crate::encoder::svc_encode_slice::layer_rec_view;
 use crate::encoder::svc_encode_slice::layer_rec_view_expect;
 use crate::encoder::svc_encode_slice::current_layer_expect;
 pub use crate::encoder::md::SMB;
@@ -345,8 +342,8 @@ pub fn WelsDequantIHadamard2x2Dc(pDct: &mut [i16; 4], kuiMF: u16) {
 #[inline]
 pub fn WelsDctMb(
     pRes: &mut [i16],
-    pEncMb: &crate::encoder::rec_view::RecCursor<'_>,
-    pBestPred: &crate::encoder::rec_view::RecCursor<'_>,
+    pEncMb: &RecCursor<'_>,
+    pBestPred: &RecCursor<'_>,
     pfDctFourT4: PDctFunc,
 ) {
     for (k, (dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)].into_iter().enumerate() {
@@ -826,7 +823,7 @@ pub fn WelsTryPUVskip(
 
     let chroma_qp_index_offset = if let Some(pps) = crate::encoder::svc_encode_slice::layer_pps_ref(
         pEncCtx,
-        crate::encoder::svc_encode_slice::current_layer_expect(pEncCtx),
+        current_layer_expect(pEncCtx),
     ) {
         pps.uiChromaQpIndexOffset as i32
     } else {

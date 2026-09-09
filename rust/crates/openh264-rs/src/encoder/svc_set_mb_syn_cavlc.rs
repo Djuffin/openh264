@@ -12,7 +12,6 @@
 #![forbid(unsafe_code)]
 
 use crate::safe::bits::BsWriter;
-use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SDCTCoeff;
@@ -605,7 +604,7 @@ pub fn CheckBitstreamBuffer(
     let (pos, len) = (pBs.pos(), buf.len());
     debug_assert!(pos + 1 < len, "the writer is already at or past the buffer end");
 
-    if len < pos + 1 + MAX_MACROBLOCK_SIZE_IN_BYTE_x2 as usize {
+    if len < pos + 1 + MAX_MACROBLOCK_SIZE_IN_BYTE_x2 {
         return ENC_RETURN_VLCOVERFLOWFOUND;
     }
     ENC_RETURN_SUCCESS
