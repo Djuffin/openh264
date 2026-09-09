@@ -1612,17 +1612,24 @@ pub extern "C" fn MeRefineFracPixel(
         mc_hor_ver02(&cRef.advance(0, -1), &mut cDst, kiW, kiH + 1);
     }
 
-    // step 1: vertical filter
-    // (0, -2) [TOP]
-    iCurCost = {
+    // step 1: vertical filter — the `(0, -2)` and `(0, 2)` candidates, which are the
+    // same block one row apart in the plane the filter just wrote. **One cursor over
+    // that plane**, the second candidate being its anchor advanced: `over_owned`
+    // re-slices the arena and asserts the stride bound each time it is called, and it
+    // was called once per candidate. The two costs are computed before either
+    // comparison because `pfMeCost` reads and the comparisons only write locals.
+    let (iCostTop, iCostBottom) = {
         let off = pMeRefine.half_pix_v();
         let cTmp = RecCursor::over_owned(
-            &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
+            &mut pMbCache.sBufferInterPredMe[off..][..kiBufStride + span_wh(kiW, kiH)],
             0,
             kiBufStride,
         );
-        pfMeCost(&cEnc, &cTmp)
-    }
+        (pfMeCost(&cEnc, &cTmp), pfMeCost(&cEnc, &cTmp.advance(0, 1)))
+    };
+
+    // (0, -2) [TOP]
+    iCurCost = iCostTop
         + COST_MVD(pMe.pMvdCost, (iMvx - pMe.sMvp.iMvX) as i32, (iMvy - 2 - pMe.sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
@@ -1631,15 +1638,8 @@ pub extern "C" fn MeRefineFracPixel(
     }
 
     // (0, 2) [BOTTOM]
-    iCurCost = {
-        let off = pMeRefine.half_pix_v() + kiBufStride;
-        let cTmp = RecCursor::over_owned(
-            &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
-            0,
-            kiBufStride,
-        );
-        pfMeCost(&cEnc, &cTmp)
-    } + COST_MVD(pMe.pMvdCost, (iMvx - pMe.sMvp.iMvX) as i32, (iMvy + 2 - pMe.sMvp.iMvY) as i32);
+    iCurCost = iCostBottom
+        + COST_MVD(pMe.pMvdCost, (iMvx - pMe.sMvp.iMvX) as i32, (iMvy + 2 - pMe.sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_BOTTOM;
@@ -1657,17 +1657,20 @@ pub extern "C" fn MeRefineFracPixel(
         mc_hor_ver20(&cRef.advance(-1, 0), &mut cDst, kiW + 1, kiH);
     }
 
-    // step 2: horizontal filter
-    // (-2, 0) [LEFT]
-    iCurCost = {
+    // step 2: horizontal filter — `(-2, 0)` and `(2, 0)`, one column apart in the
+    // plane the filter just wrote; one cursor over it, as above.
+    let (iCostLeft, iCostRight) = {
         let off = pMeRefine.half_pix_h();
         let cTmp = RecCursor::over_owned(
-            &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
+            &mut pMbCache.sBufferInterPredMe[off..][..1 + span_wh(kiW, kiH)],
             0,
             kiBufStride,
         );
-        pfMeCost(&cEnc, &cTmp)
-    }
+        (pfMeCost(&cEnc, &cTmp), pfMeCost(&cEnc, &cTmp.advance(1, 0)))
+    };
+
+    // (-2, 0) [LEFT]
+    iCurCost = iCostLeft
         + COST_MVD(pMe.pMvdCost, (iMvx - 2 - pMe.sMvp.iMvX) as i32, (iMvy - pMe.sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
@@ -1676,15 +1679,8 @@ pub extern "C" fn MeRefineFracPixel(
     }
 
     // (2, 0) [RIGHT]
-    iCurCost = {
-        let off = pMeRefine.half_pix_h() + 1;
-        let cTmp = RecCursor::over_owned(
-            &mut pMbCache.sBufferInterPredMe[off..][..span_wh(kiW, kiH)],
-            0,
-            kiBufStride,
-        );
-        pfMeCost(&cEnc, &cTmp)
-    } + COST_MVD(pMe.pMvdCost, (iMvx + 2 - pMe.sMvp.iMvX) as i32, (iMvy - pMe.sMvp.iMvY) as i32);
+    iCurCost = iCostRight
+        + COST_MVD(pMe.pMvdCost, (iMvx + 2 - pMe.sMvp.iMvX) as i32, (iMvy - pMe.sMvp.iMvY) as i32);
     if iCurCost < iBestCost {
         iBestCost = iCurCost;
         iBestHalfPix = REFINE_ME_HALF_PIXEL_RIGHT;
