@@ -130,6 +130,33 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
                 update_hash_from_frame(&mut hasher, p_dst, &buf_info);
                 decoded_frames += 1;
             }
+
+            // The null `DecodeFrame2` that `h264dec` follows every NAL with:
+            // `h264dec.cpp:418-430` on the `-legacy` path — its own zeroed
+            // `SBufferInfo`, and whatever frame it returns written out, which is
+            // the shape here — and `DecodeFrameNoDelay` (`welsDecoderExt.cpp:720-725`)
+            // otherwise. It constructs the access unit the NAL completed instead
+            // of leaving it pending, and that is observable: a same-id PPS
+            // arriving next is parked in the spare slot for
+            // `WriteBackActiveParameters` rather than overwriting `sPpsBuffer[id]`
+            // in place under the pending picture (`au_parser.cpp:1458` against
+            // `:1465`). Every hash below is the C++ decoder's, so
+            // the calls that produced them belong here too.
+            let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+            let mut buf_info = SBufferInfo::default();
+            let dec_ret = ISVCDecoder::DecodeFrame2(
+                p_decoder,
+                std::ptr::null(),
+                0,
+                p_dst.as_mut_ptr(),
+                &mut buf_info,
+            );
+            if (hash_concealed || dec_ret == DECODING_STATE::dsErrorFree)
+                && buf_info.iBufferStatus == 1
+            {
+                update_hash_from_frame(&mut hasher, p_dst, &buf_info);
+                decoded_frames += 1;
+            }
         }
 
         // Flush remaining frames in decoder buffer
@@ -602,4 +629,24 @@ asset_test!(
     test_asset_cqm8x8_inter_176x144,
     "cqm8x8_inter_176x144.264",
     "af78d465b33871858868f29eb61b79e7a4c5e5e1"
+);
+
+// ---------------------------------------------------------------------------
+// A same-id PPS replaced before every picture
+//
+// `CACQP3_Sony_D.jsv` sends a PPS with `pic_parameter_set_id = 0` ahead of each
+// of its 50 pictures, stepping `chroma_qp_index_offset` from -12 to +12. Which
+// offset a picture is reconstructed with depends on whether its access unit is
+// still pending when the next PPS is parsed: pending, and `pCtx->pPps` is null,
+// so `au_parser.cpp:1465` overwrites `sPpsBuffer[0]` in place under it;
+// constructed, and `au_parser.cpp:1458` parks the new PPS in the spare slot for
+// `WriteBackActiveParameters` (`decoder_core.cpp:2216`) to install afterwards.
+//
+// The harness above resolves that the way `h264dec` does — a null
+// `DecodeFrame2` after every NAL — so this hash is a claim about the whole
+// mechanism, and it is the SHA-1 of `h264dec`'s own raw output on this stream.
+asset_test!(
+    test_asset_cacqp3_sony_d,
+    "CACQP3_Sony_D.jsv",
+    "b5773233f1c57587a3744d1752a0d563f0f6bd76"
 );
