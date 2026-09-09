@@ -738,6 +738,13 @@ int32_t GetInterBPred (uint8_t* pPredYCbCr[3], uint8_t* pTempPredYCbCr[3], PWels
       }
     }
   } else if (IS_INTER_16x8 (iMBType)) {
+    // Local patch, not in upstream 2.6.0: predict each list into its own destination at
+    // the partition's own coordinate and combine once, per Rec. ITU-T H.264 8.4.2.3.
+    // Upstream ran one BaseMC () per active list into the same pMCRefMem, and GetRefPic ()
+    // sets only the source pointers, so on a bi-predicted partition the LIST_1 motion
+    // compensation overwrote the LIST_0 prediction and BiPrediction () then averaged the
+    // LIST_1 prediction with itself; the destination step under "if (i)" likewise ran once
+    // per list, so the bottom partition's average landed in the macroblock below.
     for (int32_t i = 0; i < 2; ++i) {
       int32_t iPartIdx = i << 3;
       uint32_t listCount = 0;
@@ -1010,9 +1017,14 @@ int32_t GetInterBPred (uint8_t* pPredYCbCr[3], uint8_t* pTempPredYCbCr[3], PWels
             iMVs[1] = pCurDqLayer->pDec->pMv[LIST_0][iMBXY][iIIdx + iJIdx][1];
             BaseMC (pCtx, &pMCRefMem, LIST_0, iRefIndex0, iXOffset + iBlk4X, iYOffset + iBlk4Y, pMCFunc, 4, 4, iMVs);
 
-            pTempMCRefMem.pDstY = pDstY2 + iBlk8X + iBlk8Y * iDstLineLuma;
+            // Local patch, not in upstream 2.6.0: the LIST_1 luma destination takes the
+            // 4x4 step, like its chroma and like the LIST_0 destination above. Upstream
+            // indexed it with iBlk8X/iBlk8Y, which pDstY2 already carries, so the 8x8 step
+            // was applied twice and the two hypotheses of one 4x4 block were averaged from
+            // different samples.
+            pTempMCRefMem.pDstY = pDstY2 + iBlk4X + iBlk4Y * iDstLineLuma;
             pTempMCRefMem.pDstU = pDstU2 + iUVLineStride;
-            pTempMCRefMem.pDstV = pDstV2 + iUVLineStride;;
+            pTempMCRefMem.pDstV = pDstV2 + iUVLineStride;
 
             iMVs[0] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][iIIdx + iJIdx][0];
             iMVs[1] = pCurDqLayer->pDec->pMv[LIST_1][iMBXY][iIIdx + iJIdx][1];
