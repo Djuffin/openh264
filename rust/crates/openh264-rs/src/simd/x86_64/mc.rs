@@ -313,7 +313,7 @@ fn mc_chroma_frac<S: RefSamples + Copy>(
 /// `x = 4 * (p2 + p3) - (p1 + p4)`
 /// `val = (p0 + p5) + x + (x << 2)`
 #[target_feature(enable = "sse2")]
-unsafe fn filter_6tap_8_samples(
+fn filter_6tap_8_samples(
     p0: __m128i,
     p1: __m128i,
     p2: __m128i,
@@ -334,7 +334,7 @@ unsafe fn filter_6tap_8_samples(
 /// Computes the unclipped 16-bit intermediate for 2D filter:
 /// `val = (p0 + p5) - 5 * (p1 + p4) + 20 * (p2 + p3)`
 #[target_feature(enable = "sse2")]
-unsafe fn filter_6tap_intermediate_8_samples(
+fn filter_6tap_intermediate_8_samples(
     p0: __m128i,
     p1: __m128i,
     p2: __m128i,
@@ -410,27 +410,25 @@ macro_rules! hor_row {
 /// `McHorVer20` over one const-shape block: one span for the source, one for the
 /// destination, and a window per [`ROW_GROUP`] rows.
 #[target_feature(enable = "sse2")]
-unsafe fn hor_block<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const AVG: usize>(
+fn hor_block<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const AVG: usize>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
-    unsafe {
-        let s = src.span::<SW, H>(0, -2);
-        let mut d = dst.span_mut::<W, H>(0, 0);
-        let mut y = 0;
-        while y + ROW_GROUP <= H {
-            let g = s.window::<SW>(y, ROW_GROUP);
-            let mut gd = d.window_mut::<W>(y, ROW_GROUP);
-            for k in 0..ROW_GROUP {
-                hor_row!(gd.row_mut::<W>(k, 0), &g, k, AVG);
-            }
-            y += ROW_GROUP;
+    let s = src.span::<SW, H>(0, -2);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    let mut y = 0;
+    while y + ROW_GROUP <= H {
+        let g = s.window::<SW>(y, ROW_GROUP);
+        let mut gd = d.window_mut::<W>(y, ROW_GROUP);
+        for k in 0..ROW_GROUP {
+            hor_row!(gd.row_mut::<W>(k, 0), &g, k, AVG);
         }
-        while y < H {
-            let g = s.window::<SW>(y, 1);
-            hor_row!(d.row_mut::<W>(y, 0), &g, 0, AVG);
-            y += 1;
-        }
+        y += ROW_GROUP;
+    }
+    while y < H {
+        let g = s.window::<SW>(y, 1);
+        hor_row!(d.row_mut::<W>(y, 0), &g, 0, AVG);
+        y += 1;
     }
 }
 
@@ -471,57 +469,55 @@ pub fn mc_hor_ver20<S: RefSamples + Copy>(
 /// The vertical filter at width 16, 8 or 4: the five-row window carried in widened
 /// registers and one new row read per output row.
 #[target_feature(enable = "sse2")]
-unsafe fn ver_lanes<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+fn ver_lanes<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
-    unsafe {
-        let s = src.span::<W, SH>(-2, 0);
-        let mut d = dst.span_mut::<W, H>(0, 0);
-        // `[lo, hi]` per row; the high half is idle below width 16.
-        let row = |y: usize| -> [__m128i; 2] {
-            if W == 16 {
-                [w8(&s, y, 0), w8(&s, y, 8)]
-            } else if W == 8 {
-                [w8(&s, y, 0), _mm_setzero_si128()]
-            } else {
-                [w4(&s, y, 0), _mm_setzero_si128()]
-            }
-        };
-        let (mut r0, mut r1, mut r2, mut r3, mut r4) = (row(0), row(1), row(2), row(3), row(4));
-        for y in 0..H {
-            let r5 = row(y + 5);
-            let mut v = filter_6tap_8_samples(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
-            let out = d.row_mut::<W>(y, 0);
-            if W == 16 {
-                let hi = filter_6tap_8_samples(r0[1], r1[1], r2[1], r3[1], r4[1], r5[1]);
-                if AVG != 0 {
-                    let tap = ld16(&s.row::<16>(y + AVG, 0));
-                    let both = _mm_avg_epu8(_mm_unpacklo_epi64(v, hi), tap);
-                    st16(out, both);
-                } else {
-                    st8(&mut out[..], v);
-                    st8(&mut out[8..], hi);
-                }
-            } else if W == 8 {
-                if AVG != 0 {
-                    v = _mm_avg_epu8(v, ld8(&s.row::<8>(y + AVG, 0)));
-                }
-                st8(out, v);
-            } else {
-                if AVG != 0 {
-                    v = _mm_avg_epu8(v, ld4(&s.row::<4>(y + AVG, 0)));
-                }
-                st4(out, v);
-            }
-            (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
+    let s = src.span::<W, SH>(-2, 0);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    // `[lo, hi]` per row; the high half is idle below width 16.
+    let row = |y: usize| -> [__m128i; 2] {
+        if W == 16 {
+            [w8(&s, y, 0), w8(&s, y, 8)]
+        } else if W == 8 {
+            [w8(&s, y, 0), _mm_setzero_si128()]
+        } else {
+            [w4(&s, y, 0), _mm_setzero_si128()]
         }
+    };
+    let (mut r0, mut r1, mut r2, mut r3, mut r4) = (row(0), row(1), row(2), row(3), row(4));
+    for y in 0..H {
+        let r5 = row(y + 5);
+        let mut v = filter_6tap_8_samples(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
+        let out = d.row_mut::<W>(y, 0);
+        if W == 16 {
+            let hi = filter_6tap_8_samples(r0[1], r1[1], r2[1], r3[1], r4[1], r5[1]);
+            if AVG != 0 {
+                let tap = ld16(&s.row::<16>(y + AVG, 0));
+                let both = _mm_avg_epu8(_mm_unpacklo_epi64(v, hi), tap);
+                st16(out, both);
+            } else {
+                st8(&mut out[..], v);
+                st8(&mut out[8..], hi);
+            }
+        } else if W == 8 {
+            if AVG != 0 {
+                v = _mm_avg_epu8(v, ld8(&s.row::<8>(y + AVG, 0)));
+            }
+            st8(out, v);
+        } else {
+            if AVG != 0 {
+                v = _mm_avg_epu8(v, ld4(&s.row::<4>(y + AVG, 0)));
+            }
+            st4(out, v);
+        }
+        (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
     }
 }
 
 /// The widths the lane path has no form for: the scalar over the same span.
 #[target_feature(enable = "sse2")]
-unsafe fn ver_odd<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+fn ver_odd<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -543,15 +539,13 @@ unsafe fn ver_odd<S: RefSamples + Copy, const W: usize, const H: usize, const SH
 /// `McHorVer02` over one const-shape block: the width picks the path, and the
 /// `match` folds because `W` is a constant.
 #[target_feature(enable = "sse2")]
-unsafe fn ver_block<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+fn ver_block<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
-    unsafe {
-        match W {
-            16 | 8 | 4 => ver_lanes::<S, W, H, SH, AVG>(src, dst),
-            _ => ver_odd::<S, W, H, SH, AVG>(src, dst),
-        }
+    match W {
+        16 | 8 | 4 => ver_lanes::<S, W, H, SH, AVG>(src, dst),
+        _ => ver_odd::<S, W, H, SH, AVG>(src, dst),
     }
 }
 
@@ -598,7 +592,7 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
 /// the stack frame rather than panic. [`cen_shaped`] only instantiates the shapes
 /// the codec calls; [`cen_any`] states the bound for everything else.
 #[target_feature(enable = "sse2")]
-unsafe fn cen_block<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn cen_block<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {

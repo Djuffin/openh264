@@ -77,7 +77,7 @@ unsafe fn copy_rows16(
 
 /// The 8-wide form of [`copy_rows16`]; same contract with `8` for `16`.
 #[target_feature(enable = "sse2")]
-unsafe fn copy_rows8(
+fn copy_rows8(
     dst: &[Cell<u8>],
     dst_stride: usize,
     src: &[Cell<u8>],

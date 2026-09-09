@@ -12,7 +12,7 @@ use core::arch::x86_64::*;
 ///
 /// Matches C++ `SSE2_Quant8` in `codec/encoder/core/x86/quant.asm`.
 #[target_feature(enable = "sse2")]
-unsafe fn quant_8(v: __m128i, ff: __m128i, mf: __m128i) -> __m128i {
+fn quant_8(v: __m128i, ff: __m128i, mf: __m128i) -> __m128i {
     let zero = _mm_setzero_si128();
     let sign = _mm_cmpgt_epi16(zero, v); // 0xFFFF where v < 0, 0 where v >= 0
     let abs = _mm_sub_epi16(_mm_xor_si128(v, sign), sign);
@@ -24,7 +24,7 @@ unsafe fn quant_8(v: __m128i, ff: __m128i, mf: __m128i) -> __m128i {
 /// In-place dead-zone quantization of 8 consecutive 16-bit coefficients,
 /// returning both the signed quantized values and the un-signed magnitudes.
 #[target_feature(enable = "sse2")]
-unsafe fn quant_8_with_mag(v: __m128i, ff: __m128i, mf: __m128i) -> (__m128i, __m128i) {
+fn quant_8_with_mag(v: __m128i, ff: __m128i, mf: __m128i) -> (__m128i, __m128i) {
     let zero = _mm_setzero_si128();
     let sign = _mm_cmpgt_epi16(zero, v);
     let abs = _mm_sub_epi16(_mm_xor_si128(v, sign), sign);
@@ -36,7 +36,7 @@ unsafe fn quant_8_with_mag(v: __m128i, ff: __m128i, mf: __m128i) -> (__m128i, __
 
 /// Horizontal maximum of 8 unsigned 16-bit values in an XMM register.
 #[target_feature(enable = "sse2")]
-unsafe fn hmax_u16(m: __m128i) -> i16 {
+fn hmax_u16(m: __m128i) -> i16 {
     let m1 = _mm_shuffle_epi32(m, 0b01_00_11_10);
     let m2 = _mm_max_epi16(m, m1);
     let m3 = _mm_shufflelo_epi16(m2, 0b01_00_11_10);
@@ -50,7 +50,7 @@ unsafe fn hmax_u16(m: __m128i) -> i16 {
 ///
 /// C++: `WelsQuant4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
 #[target_feature(enable = "sse2")]
-unsafe fn quant_4x4_sse2_impl(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
+fn quant_4x4_sse2_impl(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
     unsafe {
         let vff = _mm_loadu_si128(ff.as_ptr() as *const __m128i);
         let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
@@ -75,7 +75,7 @@ pub fn quant_4x4(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn quant_4x4_dc_sse2_impl(dct: &mut [i16; 16], ff: i16, mf: i16) {
+fn quant_4x4_dc_sse2_impl(dct: &mut [i16; 16], ff: i16, mf: i16) {
     unsafe {
         let vff = _mm_set1_epi16(ff);
         let vmf = _mm_set1_epi16(mf);
@@ -100,7 +100,7 @@ pub fn quant_4x4_dc(dct: &mut [i16; 16], ff: i16, mf: i16) {
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn quant_four_4x4_sse2_impl(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
+fn quant_four_4x4_sse2_impl(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
     unsafe {
         let vff = _mm_loadu_si128(ff.as_ptr() as *const __m128i);
         let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
@@ -122,7 +122,7 @@ pub fn quant_four_4x4(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn quant_four_4x4_max_sse2_impl(
+fn quant_four_4x4_max_sse2_impl(
     dct: &mut [i16; 64],
     ff: &[i16; 8],
     mf: &[i16; 8],
@@ -167,7 +167,7 @@ pub fn quant_four_4x4_max(
 // ============================================================================
 
 #[target_feature(enable = "sse2")]
-unsafe fn dequant_4x4_sse2_impl(res: &mut [i16; 16], mf: &[u16; 8]) {
+fn dequant_4x4_sse2_impl(res: &mut [i16; 16], mf: &[u16; 8]) {
     unsafe {
         let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
         let v0 = _mm_loadu_si128(res.as_ptr() as *const __m128i);
@@ -187,7 +187,7 @@ pub fn dequant_4x4(res: &mut [i16; 16], mf: &[u16; 8]) {
 }
 
 #[target_feature(enable = "sse2")]
-unsafe fn dequant_four_4x4_sse2_impl(res: &mut [i16; 64], mf: &[u16; 8]) {
+fn dequant_four_4x4_sse2_impl(res: &mut [i16; 64], mf: &[u16; 8]) {
     unsafe {
         let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
         for k in 0..8usize {
@@ -210,7 +210,7 @@ pub fn dequant_four_4x4(res: &mut [i16; 64], mf: &[u16; 8]) {
 // ============================================================================
 
 #[target_feature(enable = "sse2")]
-unsafe fn get_none_zero_count_sse2_impl(level: &[i16; 16]) -> i32 {
+fn get_none_zero_count_sse2_impl(level: &[i16; 16]) -> i32 {
     unsafe {
         let zero = _mm_setzero_si128();
         let v0 = _mm_loadu_si128(level.as_ptr() as *const __m128i);
@@ -242,7 +242,7 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
 /// Transposes four vectors of four `i32` lanes: lane `j` of result `k` becomes lane
 /// `k` of input `j`.
 #[target_feature(enable = "sse2")]
-unsafe fn transpose4_epi32(
+fn transpose4_epi32(
     v0: __m128i,
     v1: __m128i,
     v2: __m128i,
@@ -264,7 +264,7 @@ unsafe fn transpose4_epi32(
 /// lanes of each result are the next row's data and are never read: the butterflies
 /// are lane-wise and the stores are `_mm_storel_epi64`.
 #[target_feature(enable = "sse2")]
-unsafe fn transpose4_epi16_lo(
+fn transpose4_epi16_lo(
     v0: __m128i,
     v1: __m128i,
     v2: __m128i,
@@ -298,7 +298,7 @@ unsafe fn transpose4_epi16_lo(
 /// Arithmetic is `i32` throughout, as the scalar's is: `|input| <= 32768` bounds the
 /// row pass at `|p| <= 131072` and the column pass at `|t0 ± t1| <= 524288`.
 #[target_feature(enable = "sse2")]
-unsafe fn hadamard_t4_dc_sse2_impl(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
+fn hadamard_t4_dc_sse2_impl(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
     unsafe {
         // Lane k = scalar row k. Within a row: A = dct[idx], B = dct[idx + 16],
         // C = dct[idx + 64], D = dct[idx + 80] — the scalar's d0, d16, d64, d80.
@@ -351,7 +351,7 @@ pub fn hadamard_t4_dc(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
 /// `(a0, a1, a2, a3)` are the four taps of one line — a row in the first pass, a column
 /// in the second — with one line per lane.
 #[target_feature(enable = "sse2")]
-unsafe fn ihadamard_butterfly(
+fn ihadamard_butterfly(
     a0: __m128i,
     a1: __m128i,
     a2: __m128i,
@@ -395,7 +395,7 @@ unsafe fn ihadamard_butterfly(
 /// exactly. The wrapping is load-bearing, not incidental: the C++ is `int16_t`
 /// throughout and its overflow is observable in the output.
 #[target_feature(enable = "sse2")]
-unsafe fn dequant_ihadamard_4x4_sse2_impl(res: &mut [i16; 16], mf: u16) {
+fn dequant_ihadamard_4x4_sse2_impl(res: &mut [i16; 16], mf: u16) {
     unsafe {
         let src = res.as_ptr();
         let r0 = _mm_loadl_epi64(src as *const __m128i);
