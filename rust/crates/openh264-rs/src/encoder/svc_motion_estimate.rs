@@ -41,19 +41,18 @@
     non_upper_case_globals,
     clippy::too_many_arguments
 )]
-
 #![forbid(unsafe_code)]
 
-use crate::encoder::rec_view::{RecCursor, SharedPlane};
-use crate::safe::mvd_cost::MvdCostCursor;
 pub use crate::encoder::encoder_context::SMVUnitXY;
+pub use crate::encoder::md::SSampleDealingFunc;
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::SScreenBlockFeatureStorage;
-pub use crate::encoder::md::SSampleDealingFunc;
+use crate::encoder::rec_view::{RecCursor, SharedPlane};
 pub use crate::encoder::slice_multi_threading::SSliceCtx;
-pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+use crate::safe::mvd_cost::MvdCostCursor;
 
 // ============================================================================
 // Constants, Limits, and Enums
@@ -109,15 +108,9 @@ pub const ENC_RETURN_UNEXPECTED: i32 = 0x04;
 
 /// Quantization Step Lookup Table ($16 \times Q_{\text{step}}$ for $\text{QP} \in [0, 51]$)
 pub static QStepx16ByQp: [i32; 52] = [
-    10, 11, 13, 14, 16, 18,
-    20, 22, 26, 28, 32, 36,
-    40, 44, 52, 56, 64, 72,
-    80, 88, 104, 112, 128, 144,
-    160, 176, 208, 224, 256, 288,
-    320, 352, 416, 448, 512, 576,
-    640, 704, 832, 896, 1024, 1152,
-    1280, 1408, 1664, 1792, 2048, 2304,
-    2560, 2816, 3328, 3584,
+    10, 11, 13, 14, 16, 18, 20, 22, 26, 28, 32, 36, 40, 44, 52, 56, 64, 72, 80, 88, 104, 112, 128,
+    144, 160, 176, 208, 224, 256, 288, 320, 352, 416, 448, 512, 576, 640, 704, 832, 896, 1024,
+    1152, 1280, 1408, 1664, 1792, 2048, 2304, 2560, 2816, 3328, 3584,
 ];
 
 // ============================================================================
@@ -345,10 +338,6 @@ impl Default for SMeFuncs {
     }
 }
 
-
-
-
-
 // ============================================================================
 // Helper Macros and Inline Functions
 // ============================================================================
@@ -396,10 +385,14 @@ pub fn SetMvWithinIntegerMvRange(
     pMvMax: &mut SMVUnitXY,
 ) {
     {
-        pMvMin.iMvX = (-1 * ((kiMbX + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN).max(-1 * kiMaxMvRange) as i16;
-        pMvMin.iMvY = (-1 * ((kiMbY + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN).max(-1 * kiMaxMvRange) as i16;
-        pMvMax.iMvX = (((kiMbWidth - kiMbX) * (1 << 4)) - INTPEL_NEEDED_MARGIN).min(kiMaxMvRange) as i16;
-        pMvMax.iMvY = (((kiMbHeight - kiMbY) * (1 << 4)) - INTPEL_NEEDED_MARGIN).min(kiMaxMvRange) as i16;
+        pMvMin.iMvX =
+            (-1 * ((kiMbX + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN).max(-1 * kiMaxMvRange) as i16;
+        pMvMin.iMvY =
+            (-1 * ((kiMbY + 1) * (1 << 4)) + INTPEL_NEEDED_MARGIN).max(-1 * kiMaxMvRange) as i16;
+        pMvMax.iMvX =
+            (((kiMbWidth - kiMbX) * (1 << 4)) - INTPEL_NEEDED_MARGIN).min(kiMaxMvRange) as i16;
+        pMvMax.iMvY =
+            (((kiMbHeight - kiMbY) * (1 << 4)) - INTPEL_NEEDED_MARGIN).min(kiMaxMvRange) as i16;
     }
 }
 
@@ -415,7 +408,10 @@ pub fn CalcFMESwitchFlag(
 
 #[inline]
 pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
-    pCurDq.sSliceEncCtx.iSliceNumInFrame.load(std::sync::atomic::Ordering::Relaxed)
+    pCurDq
+        .sSliceEncCtx
+        .iSliceNumInFrame
+        .load(std::sync::atomic::Ordering::Relaxed)
 }
 
 // ============================================================================
@@ -423,11 +419,7 @@ pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
 // ============================================================================
 
 /// Populates motion estimation function pointer table based on CPU capabilities and content type.
-pub fn WelsInitMeFunc(
-    pFuncList: &mut SWelsFuncPtrList,
-    _uiCpuFlag: u32,
-    bScreenContent: bool,
-) {
+pub fn WelsInitMeFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32, bScreenContent: bool) {
     {
         pFuncList.pfUpdateFMESwitch = Some(UpdateFMESwitchNull);
 
@@ -473,8 +465,7 @@ pub fn WelsMotionEstimateSearch(
         for di in 0..pSlice.uiMvcNum as usize {
             mvc.push_str(&format!(
                 "{}/{},",
-                pSlice.sMvc[di].iMvX,
-                pSlice.sMvc[di].iMvY
+                pSlice.sMvc[di].iMvX, pSlice.sMvc[di].iMvY
             ));
         }
         let kiX = pMe.iCurMeBlockPixX as isize;
@@ -531,10 +522,7 @@ pub fn WelsMotionEstimateSearch(
     if crate::encoder::dump_enabled(&ME_DUMP, "OH264_MEDUMP") {
         eprintln!(
             "ME> mv={},{} sad={} satd={}",
-            pMe.sMv.iMvX,
-            pMe.sMv.iMvY,
-            pMe.uiSadCost,
-            pMe.uiSatdCost
+            pMe.sMv.iMvX, pMe.sMv.iMvY, pMe.uiSadCost, pMe.uiSatdCost
         );
     }
 }
@@ -556,10 +544,13 @@ pub fn WelsMotionEstimateSearchStatic(
     pMe.sMv.iMvY = 0;
 
     if let Some(sad_fn) = sdf.pfSampleSad[block_size] {
-        pMe.uiSadCost =
-            sad_fn(&pEncPlane.cursor(kiX, kiY), &pRefPlane.cursor(kiX, kiY)) as u32;
+        pMe.uiSadCost = sad_fn(&pEncPlane.cursor(kiX, kiY), &pRefPlane.cursor(kiX, kiY)) as u32;
     }
-    pMe.uiSadCost += COST_MVD(pMe.pMvdCost, -(pMe.sMvp.iMvX as i32), -(pMe.sMvp.iMvY as i32));
+    pMe.uiSadCost += COST_MVD(
+        pMe.pMvdCost,
+        -(pMe.sMvp.iMvX as i32),
+        -(pMe.sMvp.iMvY as i32),
+    );
 
     MeEndIntepelSearch(pMe);
 
@@ -632,8 +623,10 @@ pub fn WelsMotionEstimateInitialPoint(
     let ksMvp = pMe.sMvp;
 
     let mut sMv = SMVUnitXY {
-        iMvX: (((2 + ksMvp.iMvX as i32) >> 2).clamp(ksMvStartMin.iMvX as i32, ksMvStartMax.iMvX as i32)) as i16,
-        iMvY: (((2 + ksMvp.iMvY as i32) >> 2).clamp(ksMvStartMin.iMvY as i32, ksMvStartMax.iMvY as i32)) as i16,
+        iMvX: (((2 + ksMvp.iMvX as i32) >> 2)
+            .clamp(ksMvStartMin.iMvX as i32, ksMvStartMax.iMvX as i32)) as i16,
+        iMvY: (((2 + ksMvp.iMvY as i32) >> 2)
+            .clamp(ksMvStartMin.iMvY as i32, ksMvStartMax.iMvY as i32)) as i16,
     };
 
     let mut iBestSadCost: i32 = 0;
@@ -652,8 +645,10 @@ pub fn WelsMotionEstimateInitialPoint(
     let mut iSadCost: i32 = 0;
     for i in 0..kuiMvcNum {
         let mvc = pSlice.sMvc[i];
-        let iMvc0 = (((2 + mvc.iMvX as i32) >> 2).clamp(ksMvStartMin.iMvX as i32, ksMvStartMax.iMvX as i32)) as i16;
-        let iMvc1 = (((2 + mvc.iMvY as i32) >> 2).clamp(ksMvStartMin.iMvY as i32, ksMvStartMax.iMvY as i32)) as i16;
+        let iMvc0 = (((2 + mvc.iMvX as i32) >> 2)
+            .clamp(ksMvStartMin.iMvX as i32, ksMvStartMax.iMvX as i32)) as i16;
+        let iMvc1 = (((2 + mvc.iMvY as i32) >> 2)
+            .clamp(ksMvStartMin.iMvY as i32, ksMvStartMax.iMvY as i32)) as i16;
 
         if (iMvc0 != sMv.iMvX) || (iMvc1 != sMv.iMvY) {
             if let Some(sad_fn) = pSad {
@@ -677,7 +672,15 @@ pub fn WelsMotionEstimateInitialPoint(
     }
 
     if let Some(check_dir) = pMeFuncs.pfCheckDirectionalMv {
-        if check_dir(pSad, pMe, ksMvStartMin, ksMvStartMax, pEncPlane, pRefPlane, &mut iSadCost) {
+        if check_dir(
+            pSad,
+            pMe,
+            ksMvStartMin,
+            ksMvStartMax,
+            pEncPlane,
+            pRefPlane,
+            &mut iSadCost,
+        ) {
             sMv = pMe.sDirectionalMv;
             iBestSadCost = iSadCost;
         }
@@ -976,8 +979,16 @@ pub fn LineFullSearch_c(
 
     if uiBestCost < pMe.uiSadCost {
         let mut sBestMv = SMVUnitXY::default();
-        sBestMv.iMvX = if bVerticalSearch { 0 } else { (iBestPos - iCurMeBlockPix) as i16 };
-        sBestMv.iMvY = if bVerticalSearch { (iBestPos - iCurMeBlockPix) as i16 } else { 0 };
+        sBestMv.iMvX = if bVerticalSearch {
+            0
+        } else {
+            (iBestPos - iCurMeBlockPix) as i16
+        };
+        sBestMv.iMvY = if bVerticalSearch {
+            (iBestPos - iCurMeBlockPix) as i16
+        } else {
+            0
+        };
         UpdateMeResults(sBestMv, uiBestCost, pMe);
     }
 }
@@ -1187,8 +1198,7 @@ pub fn SumOf8x8BlockOfFrame_c(
         // The row base is `kiRefStride * y`, and each block starts `x` bytes into it.
         let kiRowBase = (kiRefStride * y) as usize;
         for x in 0..kiWidth {
-            let iSum =
-                SumOf8x8SingleBlock_c(&kpRefPicture[kiRowBase + x as usize..], kiRefStride);
+            let iSum = SumOf8x8SingleBlock_c(&kpRefPicture[kiRowBase + x as usize..], kiRefStride);
             pFeatureOfBlock[row + x as usize] = iSum as u16;
             pTimesOfFeatureValue[iSum as usize] += 1;
         }
@@ -1337,7 +1347,14 @@ pub fn CalculateFeatureOfBlock(
         let iRefStride = pRef.stride(0);
         let plane = pRef.plane(0);
         let kpRefData = &plane.as_slice()[plane.origin()..];
-        calc_frame_feature(kpRefData, iWidth, kiHeight, iRefStride, pFeatureOfBlock, pTimesOfFeatureValue);
+        calc_frame_feature(
+            kpRefData,
+            iWidth,
+            kiHeight,
+            iRefStride,
+            pFeatureOfBlock,
+            pTimesOfFeatureValue,
+        );
     }
 
     if let Some(init_hash) = kernels.init_hash {
@@ -1350,7 +1367,13 @@ pub fn CalculateFeatureOfBlock(
     }
 
     if let Some(fill_qpel) = kernels.fill_qpel {
-        fill_qpel(pFeatureOfBlock, iWidth, kiHeight, pBuf, pFeatureValuePointerList);
+        fill_qpel(
+            pFeatureOfBlock,
+            iWidth,
+            kiHeight,
+            pBuf,
+            pFeatureValuePointerList,
+        );
     }
 
     true
@@ -1414,13 +1437,21 @@ pub fn SetFeatureSearchIn<'a>(
     pFeatureSearchIn.pTimesOfFeature = &pRefFeatureStorage.pTimesOfFeatureValue;
     pFeatureSearchIn.pQpelLocationOfFeature = &pRefFeatureStorage.pLocationOfFeature;
     pFeatureSearchIn.pLocationPointer = &pRefFeatureStorage.pLocationPointer;
-    pFeatureSearchIn.pMvdCostX = sMe.pMvdCost.offset(-pFeatureSearchIn.iCurPixXQpel - sMe.sMvp.iMvX as i32);
-    pFeatureSearchIn.pMvdCostY = sMe.pMvdCost.offset(-pFeatureSearchIn.iCurPixYQpel - sMe.sMvp.iMvY as i32);
+    pFeatureSearchIn.pMvdCostX = sMe
+        .pMvdCost
+        .offset(-pFeatureSearchIn.iCurPixXQpel - sMe.sMvp.iMvX as i32);
+    pFeatureSearchIn.pMvdCostY = sMe
+        .pMvdCost
+        .offset(-pFeatureSearchIn.iCurPixYQpel - sMe.sMvp.iMvY as i32);
 
-    pFeatureSearchIn.iMinQpelX = pFeatureSearchIn.iCurPixXQpel + (pSlice.sMvStartMin.iMvX as i32 * 4);
-    pFeatureSearchIn.iMinQpelY = pFeatureSearchIn.iCurPixYQpel + (pSlice.sMvStartMin.iMvY as i32 * 4);
-    pFeatureSearchIn.iMaxQpelX = pFeatureSearchIn.iCurPixXQpel + (pSlice.sMvStartMax.iMvX as i32 * 4);
-    pFeatureSearchIn.iMaxQpelY = pFeatureSearchIn.iCurPixYQpel + (pSlice.sMvStartMax.iMvY as i32 * 4);
+    pFeatureSearchIn.iMinQpelX =
+        pFeatureSearchIn.iCurPixXQpel + (pSlice.sMvStartMin.iMvX as i32 * 4);
+    pFeatureSearchIn.iMinQpelY =
+        pFeatureSearchIn.iCurPixYQpel + (pSlice.sMvStartMin.iMvY as i32 * 4);
+    pFeatureSearchIn.iMaxQpelX =
+        pFeatureSearchIn.iCurPixXQpel + (pSlice.sMvStartMax.iMvX as i32 * 4);
+    pFeatureSearchIn.iMaxQpelY =
+        pFeatureSearchIn.iCurPixYQpel + (pSlice.sMvStartMax.iMvY as i32 * 4);
 
     if pFeatureSearchIn.pSad.is_none()
         || pFeatureSearchIn.pTimesOfFeature.is_empty()
@@ -1452,8 +1483,12 @@ pub fn FeatureSearchOne(
     }
 
     let pSad = sFeatureSearchIn.pSad;
-    let pEncPlane = sFeatureSearchIn.pEncPlane.expect("SetFeatureSearchIn bound the planes");
-    let pRefPlane = sFeatureSearchIn.pRefPlane.expect("SetFeatureSearchIn bound the planes");
+    let pEncPlane = sFeatureSearchIn
+        .pEncPlane
+        .expect("SetFeatureSearchIn bound the planes");
+    let pRefPlane = sFeatureSearchIn
+        .pRefPlane
+        .expect("SetFeatureSearchIn bound the planes");
     let uiSadCostThresh = sFeatureSearchIn.uiSadCostThresh as u32;
 
     let iCurPixX = sFeatureSearchIn.iCurPixX;
@@ -1546,7 +1581,12 @@ pub fn MotionEstimateFeatureFullSearch(
         };
 
         let iFeatureDifference = 0i32;
-        FeatureSearchOne(&sFeatureSearchIn, iFeatureDifference, kuiMaxSearchPoint, &mut sFeatureSearchOut);
+        FeatureSearchOne(
+            &sFeatureSearchIn,
+            iFeatureDifference,
+            kuiMaxSearchPoint,
+            &mut sFeatureSearchOut,
+        );
 
         if sFeatureSearchOut.uiBestSadCost < pMe.uiSadCost {
             UpdateMeResults(
@@ -1574,9 +1614,7 @@ fn CountFMECostDown(pCurLayer: &mut SDqLayer) -> u32 {
     let mut uiCostDownSum: u32 = 0;
     if kiSliceCount >= 1 {
         for iSliceIndex in 0..kiSliceCount {
-            if let Some(pSlice) =
-                slice_in_layer_mut(pCurLayer, iSliceIndex)
-            {
+            if let Some(pSlice) = slice_in_layer_mut(pCurLayer, iSliceIndex) {
                 // `uint32_t +=`: the C++ wraps, so this does. `uiSliceFMECostDown`
                 // is itself a wrapping `+=`/`-=` pair in
                 // `WelsDiamondCrossFeatureSearch`, and **nothing ever resets it** —
@@ -1681,7 +1719,6 @@ impl SFeatureSearchPreparation {
 // Unit Tests
 // ============================================================================
 
-
 /// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
 static ME_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
@@ -1692,7 +1729,7 @@ use crate::encoder::svc_encode_slice::slice_in_layer_mut;
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_constants_and_tables() {
         assert_eq!(CAMERA_STARTMV_RANGE, 64);
@@ -1807,12 +1844,23 @@ mod tests {
 
         // (1) every block position counted exactly once
         let counted: u64 = storage.pTimesOfFeatureValue.iter().map(|&n| n as u64).sum();
-        assert_eq!(counted, (bw * bh) as u64, "histogram must sum to the block count");
+        assert_eq!(
+            counted,
+            (bw * bh) as u64,
+            "histogram must sum to the block count"
+        );
 
         // the frame is not flat, so more than one bucket is populated — otherwise (2)
         // and (3) would hold vacuously for a single group starting at 0
-        let populated = storage.pTimesOfFeatureValue.iter().filter(|&&n| n > 0).count();
-        assert!(populated > 1, "synthetic frame collapsed to {populated} bucket(s)");
+        let populated = storage
+            .pTimesOfFeatureValue
+            .iter()
+            .filter(|&&n| n > 0)
+            .count();
+        assert!(
+            populated > 1,
+            "synthetic frame collapsed to {populated} bucket(s)"
+        );
 
         // (2) the groups tile the arena: base_{v+1} == base_v + 2*times_v, and each
         //     cursor finished exactly at its own group's end
@@ -1820,14 +1868,24 @@ mod tests {
         for v in 0..list_size {
             let base = storage.pLocationOfFeature[v];
             let times = storage.pTimesOfFeatureValue[v] as usize;
-            assert_eq!(base, expect_base, "group {v} does not start where {} ended", v.wrapping_sub(1));
             assert_eq!(
-                storage.pFeatureValuePointerList[v], base + 2 * times,
+                base,
+                expect_base,
+                "group {v} does not start where {} ended",
+                v.wrapping_sub(1)
+            );
+            assert_eq!(
+                storage.pFeatureValuePointerList[v],
+                base + 2 * times,
                 "group {v}'s cursor did not end 2*{times} past its base",
             );
             expect_base = base + 2 * times;
         }
-        assert_eq!(expect_base, 2 * bw * bh, "the groups must fill the arena exactly");
+        assert_eq!(
+            expect_base,
+            2 * bw * bh,
+            "the groups must fill the arena exactly"
+        );
 
         // (3) every written position is a legal qpel coordinate of this frame
         for v in 0..list_size {
@@ -1838,7 +1896,11 @@ mod tests {
                 let qy = storage.pLocationPointer[base + 2 * k + 1] as i32;
                 assert_eq!(qx & 3, 0, "x qpel {qx} is not a whole pixel (x << 2)");
                 assert_eq!(qy & 3, 0, "y qpel {qy} is not a whole pixel");
-                assert!(qx >> 2 < bw as i32, "x {} outside {bw} block columns", qx >> 2);
+                assert!(
+                    qx >> 2 < bw as i32,
+                    "x {} outside {bw} block columns",
+                    qx >> 2
+                );
                 assert!(qy >> 2 < bh as i32, "y {} outside {bh} block rows", qy >> 2);
             }
         }
@@ -1890,7 +1952,10 @@ mod tests {
         assert!(SetMeMethod(ME_DIA_CROSS, &mut slot));
         assert!(eq(&slot, WelsDiamondCrossSearch as PSearchMethodFunc));
         assert!(SetMeMethod(ME_DIA_CROSS_FME, &mut slot));
-        assert!(eq(&slot, WelsDiamondCrossFeatureSearch as PSearchMethodFunc));
+        assert!(eq(
+            &slot,
+            WelsDiamondCrossFeatureSearch as PSearchMethodFunc
+        ));
 
         // The two `false` cases: `ME_FULL`, and anything else. Both still fill
         // the slot — with the diamond search — which is why the C++'s callers
@@ -1911,19 +1976,18 @@ mod tests {
 
     /// A layer with two coded slices of known `uiSliceFMECostDown`, a 4x3
     /// macroblock grid and a preparation — the shape `UpdateFMESwitch` reads.
-    fn fme_switch_layer(
-        costs: &[u32],
-        uiFMEGoodFrameCount: u8,
-    ) -> SDqLayer {
+    fn fme_switch_layer(costs: &[u32], uiFMEGoodFrameCount: u8) -> SDqLayer {
         use crate::encoder::svc_encode_slice::{SDqLayer, SSlice, SliceIdx};
         let mut layer = SDqLayer::default();
         layer.iMbWidth = 4;
         layer.iMbHeight = 3;
-        layer.sSliceBufferInfo[0].pSliceBuffer =
-            costs.iter().map(|_| SSlice::default()).collect();
+        layer.sSliceBufferInfo[0].pSliceBuffer = costs.iter().map(|_| SSlice::default()).collect();
         for (i, &c) in costs.iter().enumerate() {
             layer.sSliceBufferInfo[0].pSliceBuffer[i].uiSliceFMECostDown = c;
-            layer.ppSliceInLayer.push(SliceIdx { bank: 0, offset: i as i32 });
+            layer.ppSliceInLayer.push(SliceIdx {
+                bank: 0,
+                offset: i as i32,
+            });
         }
         layer
             .sSliceEncCtx
@@ -1946,7 +2010,10 @@ mod tests {
         };
         // strictly above the threshold: up, and stuck at the maximum
         assert_eq!(step(3, 2), 3);
-        assert_eq!(step(3, FMESWITCH_GOODFRAMECOUNT_MAX), FMESWITCH_GOODFRAMECOUNT_MAX);
+        assert_eq!(
+            step(3, FMESWITCH_GOODFRAMECOUNT_MAX),
+            FMESWITCH_GOODFRAMECOUNT_MAX
+        );
         assert_eq!(step(u32::MAX, 4), 5);
         // at or below it: down, and stuck at zero (no `u8` underflow)
         assert_eq!(step(FMESWITCH_MBAVERCOSTSAVING_THRESHOLD, 2), 1);
@@ -1962,7 +2029,11 @@ mod tests {
         let mut layer = fme_switch_layer(&[20, 25], 2);
         UpdateFMESwitch(&mut layer);
         assert_eq!(
-            layer.pFeatureSearchPreparation.as_ref().unwrap().uiFMEGoodFrameCount,
+            layer
+                .pFeatureSearchPreparation
+                .as_ref()
+                .unwrap()
+                .uiFMEGoodFrameCount,
             3
         );
 
@@ -1970,7 +2041,11 @@ mod tests {
         let mut layer = fme_switch_layer(&[12, 12], 2);
         UpdateFMESwitch(&mut layer);
         assert_eq!(
-            layer.pFeatureSearchPreparation.as_ref().unwrap().uiFMEGoodFrameCount,
+            layer
+                .pFeatureSearchPreparation
+                .as_ref()
+                .unwrap()
+                .uiFMEGoodFrameCount,
             1
         );
 
@@ -1983,7 +2058,11 @@ mod tests {
             .store(2, std::sync::atomic::Ordering::Relaxed);
         UpdateFMESwitch(&mut layer);
         assert_eq!(
-            layer.pFeatureSearchPreparation.as_ref().unwrap().uiFMEGoodFrameCount,
+            layer
+                .pFeatureSearchPreparation
+                .as_ref()
+                .unwrap()
+                .uiFMEGoodFrameCount,
             3
         );
     }

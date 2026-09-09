@@ -46,3 +46,8 @@ overflow-checks = true
 
 [profile.release]
 debug = true
+
+# This driver mirrors cxx_enc.cpp statement for statement, including its
+# field-at-a-time parameter setup.
+[lints.clippy]
+field_reassign_with_default = "allow"

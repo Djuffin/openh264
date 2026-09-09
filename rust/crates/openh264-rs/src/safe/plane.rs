@@ -571,8 +571,14 @@ impl RowBuf {
     /// If `len` exceeds [`ROW_BUF_MAX`].
     #[inline]
     pub fn new(len: usize) -> Self {
-        assert!(len <= ROW_BUF_MAX, "row of {len} samples exceeds ROW_BUF_MAX");
-        Self { buf: [0; ROW_BUF_MAX], len }
+        assert!(
+            len <= ROW_BUF_MAX,
+            "row of {len} samples exceeds ROW_BUF_MAX"
+        );
+        Self {
+            buf: [0; ROW_BUF_MAX],
+            len,
+        }
     }
 
     /// The writable prefix.
@@ -589,7 +595,6 @@ impl std::ops::Deref for RowBuf {
         &self.buf[..self.len]
     }
 }
-
 
 /// A read view of a plane anchored at some sample — the safe form of a `const uint8_t*`
 /// walking a picture with a stride.
@@ -632,7 +637,13 @@ impl RefSamples for PlaneCursor<'_> {
 
     #[inline]
     fn span<const W: usize, const H: usize>(&self, dy0: isize, dx0: isize) -> PlaneSpan<'_> {
-        PlaneSpan::cut(self.buf, idx(self.center, dx0, dy0, self.stride), self.stride, W, H)
+        PlaneSpan::cut(
+            self.buf,
+            idx(self.center, dx0, dy0, self.stride),
+            self.stride,
+            W,
+            H,
+        )
     }
 
     type Row<'a>
@@ -650,7 +661,6 @@ impl RefSamples for PlaneCursor<'_> {
         PlaneCursor::advance(self, dx, dy)
     }
 }
-
 
 /// A plane cursor that can be read *and* written — [`RefSamples`] plus `set`.
 ///
@@ -715,7 +725,6 @@ pub trait PlaneSamples: RefSamples {
     }
 }
 
-
 /// A read-write view of a plane anchored at some sample — the safe form of the
 /// `pDstY`/`pEncMb`/`pDecMb` cursors (`decode_slice.rs:1944`,
 /// `svc_base_layer_md.rs:327-358`).
@@ -772,15 +781,24 @@ impl<'a> PlaneSpan<'a> {
     fn cut(buf: &'a [u8], start: usize, stride: usize, w: usize, h: usize) -> Self {
         debug_assert!(stride <= u32::MAX as usize, "cursor stride bound violated");
         let stride = stride as u32;
-        let len = if h == 0 { 0 } else { (h - 1) * stride as usize + w };
-        Self { buf: &buf[start..][..len], stride }
+        let len = if h == 0 {
+            0
+        } else {
+            (h - 1) * stride as usize + w
+        };
+        Self {
+            buf: &buf[start..][..len],
+            stride,
+        }
     }
 }
 
 impl BlockRows for PlaneSpan<'_> {
     #[inline]
     fn row<const W: usize>(&self, y: usize, x: usize) -> [u8; W] {
-        let r: &[u8; W] = self.buf[y * self.stride as usize + x..][..W].try_into().unwrap();
+        let r: &[u8; W] = self.buf[y * self.stride as usize + x..][..W]
+            .try_into()
+            .unwrap();
         *r
     }
 
@@ -788,7 +806,10 @@ impl BlockRows for PlaneSpan<'_> {
     fn window<const W: usize>(&self, y: usize, h: usize) -> Self {
         let stride = self.stride as usize;
         let len = if h == 0 { 0 } else { (h - 1) * stride + W };
-        Self { buf: &self.buf[y * stride..][..len], stride: self.stride }
+        Self {
+            buf: &self.buf[y * stride..][..len],
+            stride: self.stride,
+        }
     }
 }
 
@@ -828,8 +849,15 @@ impl<'a> PlaneSpanMut<'a> {
     fn cut(buf: &'a mut [u8], start: usize, stride: usize, w: usize, h: usize) -> Self {
         debug_assert!(stride <= u32::MAX as usize, "cursor stride bound violated");
         let stride = stride as u32;
-        let len = if h == 0 { 0 } else { (h - 1) * stride as usize + w };
-        Self { buf: &mut buf[start..][..len], stride }
+        let len = if h == 0 {
+            0
+        } else {
+            (h - 1) * stride as usize + w
+        };
+        Self {
+            buf: &mut buf[start..][..len],
+            stride,
+        }
     }
 
     /// `W` writable samples of row `y` starting at column `x` **of the span**.
@@ -839,7 +867,9 @@ impl<'a> PlaneSpanMut<'a> {
     /// span was cut for cannot reach.
     #[inline]
     pub fn row_mut<const W: usize>(&mut self, y: usize, x: usize) -> &mut [u8; W] {
-        (&mut self.buf[y * self.stride as usize + x..][..W]).try_into().unwrap()
+        (&mut self.buf[y * self.stride as usize + x..][..W])
+            .try_into()
+            .unwrap()
     }
 
     /// The `h`-row, `W`-wide window starting at row `y` — [`BlockRows::window`]'s
@@ -859,7 +889,10 @@ impl<'a> PlaneSpanMut<'a> {
     pub fn window_mut<const W: usize>(&mut self, y: usize, h: usize) -> PlaneSpanMut<'_> {
         let stride = self.stride as usize;
         let len = if h == 0 { 0 } else { (h - 1) * stride + W };
-        PlaneSpanMut { buf: &mut self.buf[y * stride..][..len], stride: self.stride }
+        PlaneSpanMut {
+            buf: &mut self.buf[y * stride..][..len],
+            stride: self.stride,
+        }
     }
 }
 
@@ -889,7 +922,11 @@ impl<'a> PlaneCursor<'a> {
             "cursor anchor {center} outside a buffer of {} bytes",
             buf.len()
         );
-        Self { buf, center, stride }
+        Self {
+            buf,
+            center,
+            stride,
+        }
     }
 
     /// Sample at `(dx, dy)` relative to the anchor.
@@ -954,7 +991,11 @@ impl<'a> PlaneCursor<'a> {
             "cursor anchor {center} outside a buffer of {} bytes",
             self.buf.len()
         );
-        Self { buf: self.buf, center, stride: self.stride }
+        Self {
+            buf: self.buf,
+            center,
+            stride: self.stride,
+        }
     }
 
     /// Byte offset of the anchor within the underlying buffer.
@@ -984,7 +1025,11 @@ impl<'a> PlaneCursorMut<'a> {
             "cursor anchor {center} outside a buffer of {} bytes",
             buf.len()
         );
-        Self { buf, center, stride }
+        Self {
+            buf,
+            center,
+            stride,
+        }
     }
 
     /// Sample at `(dx, dy)` relative to the anchor.
@@ -1027,7 +1072,11 @@ impl<'a> PlaneCursorMut<'a> {
     /// If the block leaves the buffer, at the slicing — same contract as
     /// [`row_mut`](Self::row_mut).
     #[inline]
-    pub fn span_mut<const W: usize, const H: usize>(&mut self, dy0: isize, dx0: isize) -> PlaneSpanMut<'_> {
+    pub fn span_mut<const W: usize, const H: usize>(
+        &mut self,
+        dy0: isize,
+        dx0: isize,
+    ) -> PlaneSpanMut<'_> {
         let start = idx(self.center, dx0, dy0, self.stride);
         PlaneSpanMut::cut(self.buf, start, self.stride, W, H)
     }
@@ -1128,7 +1177,9 @@ impl RefSamples for PlaneCursorMut<'_> {
     ) -> impl Iterator<Item = &[u8]> {
         let start = idx(self.center, dx0, dy0, self.stride);
         let span = if h == 0 { 0 } else { (h - 1) * self.stride + N };
-        self.buf[start..][..span].chunks(self.stride).map(|r| &r[..N])
+        self.buf[start..][..span]
+            .chunks(self.stride)
+            .map(|r| &r[..N])
     }
 
     type Span<'a>
@@ -1138,7 +1189,13 @@ impl RefSamples for PlaneCursorMut<'_> {
 
     #[inline]
     fn span<const W: usize, const H: usize>(&self, dy0: isize, dx0: isize) -> PlaneSpan<'_> {
-        PlaneSpan::cut(self.buf, idx(self.center, dx0, dy0, self.stride), self.stride, W, H)
+        PlaneSpan::cut(
+            self.buf,
+            idx(self.center, dx0, dy0, self.stride),
+            self.stride,
+            W,
+            H,
+        )
     }
 
     type Row<'a>
@@ -1158,7 +1215,11 @@ impl RefSamples for PlaneCursorMut<'_> {
     #[inline]
     fn advance(self, dx: isize, dy: isize) -> Self {
         let center = idx(self.center, dx, dy, self.stride);
-        Self { buf: self.buf, center, stride: self.stride }
+        Self {
+            buf: self.buf,
+            center,
+            stride: self.stride,
+        }
     }
 }
 

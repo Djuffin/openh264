@@ -1,9 +1,19 @@
 //! Scalar forwards for the `intra_pred` kernels — see the module header.
 
+use crate::decoder::get_intra_predictor::{
+    chroma_pred_dc, chroma_pred_h, chroma_pred_plane, chroma_pred_v, i4x4_luma_pred_dc,
+    i4x4_luma_pred_h, i4x4_luma_pred_v, i16x16_luma_pred_dc, i16x16_luma_pred_dc_na,
+    i16x16_luma_pred_dc_top, i16x16_luma_pred_h, i16x16_luma_pred_plane, i16x16_luma_pred_v,
+};
+use crate::encoder::get_intra_predictor::{
+    WelsI4x4LumaPredDDL_c, WelsI4x4LumaPredDDR_c, WelsI4x4LumaPredDc_c, WelsI4x4LumaPredH_c,
+    WelsI4x4LumaPredHD_c, WelsI4x4LumaPredHU_c, WelsI4x4LumaPredV_c, WelsI4x4LumaPredVL_c,
+    WelsI4x4LumaPredVR_c, WelsI16x16LumaPredDc_c, WelsI16x16LumaPredH_c, WelsI16x16LumaPredPlane_c,
+    WelsI16x16LumaPredV_c, WelsIChromaPredDc_c, WelsIChromaPredH_c, WelsIChromaPredPlane_c,
+    WelsIChromaPredV_c,
+};
 use crate::encoder::rec_view::RecCursor;
 use crate::safe::plane::PlaneCursorMut;
-use crate::decoder::get_intra_predictor::{chroma_pred_dc, chroma_pred_h, chroma_pred_plane, chroma_pred_v, i16x16_luma_pred_dc, i16x16_luma_pred_dc_na, i16x16_luma_pred_dc_top, i16x16_luma_pred_h, i16x16_luma_pred_plane, i16x16_luma_pred_v, i4x4_luma_pred_dc, i4x4_luma_pred_h, i4x4_luma_pred_v};
-use crate::encoder::get_intra_predictor::{WelsI16x16LumaPredDc_c, WelsI16x16LumaPredH_c, WelsI16x16LumaPredPlane_c, WelsI16x16LumaPredV_c, WelsI4x4LumaPredDDL_c, WelsI4x4LumaPredDDR_c, WelsI4x4LumaPredDc_c, WelsI4x4LumaPredHD_c, WelsI4x4LumaPredHU_c, WelsI4x4LumaPredH_c, WelsI4x4LumaPredVL_c, WelsI4x4LumaPredVR_c, WelsI4x4LumaPredV_c, WelsIChromaPredDc_c, WelsIChromaPredH_c, WelsIChromaPredPlane_c, WelsIChromaPredV_c};
 
 #[inline(always)]
 pub fn enc_i16x16_luma_pred_v(pred: &mut [u8; 256], rec: &RecCursor<'_>) {

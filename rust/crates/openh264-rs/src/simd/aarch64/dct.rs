@@ -37,7 +37,7 @@
 
 use core::arch::aarch64::*;
 
-use super::lanes::{ld16, ld8, ld8_i16, st16, st4_i16, st8, to16, to8};
+use super::lanes::{ld8, ld8_i16, ld16, st4_i16, st8, st16, to8, to16};
 use crate::encoder::rec_view::RecCursor;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut, SampleCursor};
 
@@ -49,7 +49,12 @@ use crate::safe::plane::{PlaneCursor, PlaneCursorMut, SampleCursor};
 /// inputs of every line, with a line per lane.
 #[inline]
 #[target_feature(enable = "neon")]
-fn dct_pass4(d0: int16x4_t, d1: int16x4_t, d2: int16x4_t, d3: int16x4_t) -> (int16x4_t, int16x4_t, int16x4_t, int16x4_t) {
+fn dct_pass4(
+    d0: int16x4_t,
+    d1: int16x4_t,
+    d2: int16x4_t,
+    d3: int16x4_t,
+) -> (int16x4_t, int16x4_t, int16x4_t, int16x4_t) {
     let s0 = vadd_s16(d0, d3);
     let s3 = vsub_s16(d0, d3);
     let s1 = vadd_s16(d1, d2);
@@ -65,7 +70,12 @@ fn dct_pass4(d0: int16x4_t, d1: int16x4_t, d2: int16x4_t, d3: int16x4_t) -> (int
 /// The eight-lane form, for two blocks side by side.
 #[inline]
 #[target_feature(enable = "neon")]
-fn dct_pass8(d0: int16x8_t, d1: int16x8_t, d2: int16x8_t, d3: int16x8_t) -> (int16x8_t, int16x8_t, int16x8_t, int16x8_t) {
+fn dct_pass8(
+    d0: int16x8_t,
+    d1: int16x8_t,
+    d2: int16x8_t,
+    d3: int16x8_t,
+) -> (int16x8_t, int16x8_t, int16x8_t, int16x8_t) {
     let s0 = vaddq_s16(d0, d3);
     let s3 = vsubq_s16(d0, d3);
     let s1 = vaddq_s16(d1, d2);
@@ -82,7 +92,12 @@ fn dct_pass8(d0: int16x8_t, d1: int16x8_t, d2: int16x8_t, d3: int16x8_t) -> (int
 /// then on doublewords. Lane `i` of input `j` comes back as lane `j` of output `i`.
 #[inline]
 #[target_feature(enable = "neon")]
-fn transpose4(v0: int16x4_t, v1: int16x4_t, v2: int16x4_t, v3: int16x4_t) -> (int16x4_t, int16x4_t, int16x4_t, int16x4_t) {
+fn transpose4(
+    v0: int16x4_t,
+    v1: int16x4_t,
+    v2: int16x4_t,
+    v3: int16x4_t,
+) -> (int16x4_t, int16x4_t, int16x4_t, int16x4_t) {
     let t0 = vreinterpret_s32_s16(vtrn1_s16(v0, v1));
     let t1 = vreinterpret_s32_s16(vtrn2_s16(v0, v1));
     let t2 = vreinterpret_s32_s16(vtrn1_s16(v2, v3));
@@ -99,7 +114,12 @@ fn transpose4(v0: int16x4_t, v1: int16x4_t, v2: int16x4_t, v3: int16x4_t) -> (in
 /// the `.8h`/`.4s` `trn` pairs do, so two blocks side by side stay side by side.
 #[inline]
 #[target_feature(enable = "neon")]
-fn transpose8(v0: int16x8_t, v1: int16x8_t, v2: int16x8_t, v3: int16x8_t) -> (int16x8_t, int16x8_t, int16x8_t, int16x8_t) {
+fn transpose8(
+    v0: int16x8_t,
+    v1: int16x8_t,
+    v2: int16x8_t,
+    v3: int16x8_t,
+) -> (int16x8_t, int16x8_t, int16x8_t, int16x8_t) {
     let t0 = vreinterpretq_s32_s16(vtrn1q_s16(v0, v1));
     let t1 = vreinterpretq_s32_s16(vtrn2q_s16(v0, v1));
     let t2 = vreinterpretq_s32_s16(vtrn1q_s16(v2, v3));
@@ -203,22 +223,42 @@ pub fn dct_four_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 64], pix1:
 /// word lanes, a line per lane, wrapping exactly where the scalar's `as i16` does.
 #[inline]
 #[target_feature(enable = "neon")]
-fn idct_row_pass4(c0: int16x4_t, c1: int16x4_t, c2: int16x4_t, c3: int16x4_t) -> (int16x4_t, int16x4_t, int16x4_t, int16x4_t) {
+fn idct_row_pass4(
+    c0: int16x4_t,
+    c1: int16x4_t,
+    c2: int16x4_t,
+    c3: int16x4_t,
+) -> (int16x4_t, int16x4_t, int16x4_t, int16x4_t) {
     let e0 = vadd_s16(c0, c2);
     let e1 = vsub_s16(c0, c2);
     let e2 = vsub_s16(vshr_n_s16::<1>(c1), c3);
     let e3 = vadd_s16(c1, vshr_n_s16::<1>(c3));
-    (vadd_s16(e0, e3), vadd_s16(e1, e2), vsub_s16(e1, e2), vsub_s16(e0, e3))
+    (
+        vadd_s16(e0, e3),
+        vadd_s16(e1, e2),
+        vsub_s16(e1, e2),
+        vsub_s16(e0, e3),
+    )
 }
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn idct_row_pass8(c0: int16x8_t, c1: int16x8_t, c2: int16x8_t, c3: int16x8_t) -> (int16x8_t, int16x8_t, int16x8_t, int16x8_t) {
+fn idct_row_pass8(
+    c0: int16x8_t,
+    c1: int16x8_t,
+    c2: int16x8_t,
+    c3: int16x8_t,
+) -> (int16x8_t, int16x8_t, int16x8_t, int16x8_t) {
     let e0 = vaddq_s16(c0, c2);
     let e1 = vsubq_s16(c0, c2);
     let e2 = vsubq_s16(vshrq_n_s16::<1>(c1), c3);
     let e3 = vaddq_s16(c1, vshrq_n_s16::<1>(c3));
-    (vaddq_s16(e0, e3), vaddq_s16(e1, e2), vsubq_s16(e1, e2), vsubq_s16(e0, e3))
+    (
+        vaddq_s16(e0, e3),
+        vaddq_s16(e1, e2),
+        vsubq_s16(e1, e2),
+        vsubq_s16(e0, e3),
+    )
 }
 
 /// `COL_TRANSFORM_1_STEP` + `TRANSFORM_4BYTES` (block_add): the column pass widened
@@ -226,19 +266,34 @@ fn idct_row_pass8(c0: int16x8_t, c1: int16x8_t, c2: int16x8_t, c3: int16x8_t) ->
 /// scalar's `tmp[..] as i32 >> 1` is.
 #[inline]
 #[target_feature(enable = "neon")]
-fn idct_col_pass4(g0: int16x4_t, g1: int16x4_t, g2: int16x4_t, g3: int16x4_t) -> (int32x4_t, int32x4_t, int32x4_t, int32x4_t) {
+fn idct_col_pass4(
+    g0: int16x4_t,
+    g1: int16x4_t,
+    g2: int16x4_t,
+    g3: int16x4_t,
+) -> (int32x4_t, int32x4_t, int32x4_t, int32x4_t) {
     let h0 = vaddl_s16(g0, g2);
     let h1 = vsubl_s16(g0, g2);
     let h2 = vsubl_s16(vshr_n_s16::<1>(g1), g3);
     let h3 = vaddl_s16(g1, vshr_n_s16::<1>(g3));
-    (vaddq_s32(h0, h3), vaddq_s32(h1, h2), vsubq_s32(h1, h2), vsubq_s32(h0, h3))
+    (
+        vaddq_s32(h0, h3),
+        vaddq_s32(h1, h2),
+        vsubq_s32(h1, h2),
+        vsubq_s32(h0, h3),
+    )
 }
 
 /// `(v + 32) >> 6` of four column-pass rows, narrowed and paired: `([row0 | row1],
 /// [row2 | row3])`.
 #[inline]
 #[target_feature(enable = "neon")]
-fn round_pairs(r0: int32x4_t, r1: int32x4_t, r2: int32x4_t, r3: int32x4_t) -> (int16x8_t, int16x8_t) {
+fn round_pairs(
+    r0: int32x4_t,
+    r1: int32x4_t,
+    r2: int32x4_t,
+    r3: int32x4_t,
+) -> (int16x8_t, int16x8_t) {
     (
         vcombine_s16(vrshrn_n_s32::<6>(r0), vrshrn_n_s32::<6>(r1)),
         vcombine_s16(vrshrn_n_s32::<6>(r2), vrshrn_n_s32::<6>(r3)),
@@ -267,8 +322,18 @@ fn residual8(dct: &[i16; 32]) -> [int16x8_t; 4] {
     let c = unsafe { vld4q_s16(dct.as_ptr()) };
     let (f0, f1, f2, f3) = idct_row_pass8(c.0, c.1, c.2, c.3);
     let (g0, g1, g2, g3) = transpose8(f0, f1, f2, f3);
-    let (l0, l1, l2, l3) = idct_col_pass4(vget_low_s16(g0), vget_low_s16(g1), vget_low_s16(g2), vget_low_s16(g3));
-    let (h0, h1, h2, h3) = idct_col_pass4(vget_high_s16(g0), vget_high_s16(g1), vget_high_s16(g2), vget_high_s16(g3));
+    let (l0, l1, l2, l3) = idct_col_pass4(
+        vget_low_s16(g0),
+        vget_low_s16(g1),
+        vget_low_s16(g2),
+        vget_low_s16(g3),
+    );
+    let (h0, h1, h2, h3) = idct_col_pass4(
+        vget_high_s16(g0),
+        vget_high_s16(g1),
+        vget_high_s16(g2),
+        vget_high_s16(g3),
+    );
     [
         vcombine_s16(vrshrn_n_s32::<6>(l0), vrshrn_n_s32::<6>(h0)),
         vcombine_s16(vrshrn_n_s32::<6>(l1), vrshrn_n_s32::<6>(h1)),
@@ -371,7 +436,12 @@ fn idct_t4_rec_to_view_neon(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn idct_four_t4_rec_to_view_neon(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dct: &[i16; 64]) {
+fn idct_four_t4_rec_to_view_neon(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dct: &[i16; 64],
+) {
     for k in 0..2usize {
         let sub: &[i16; 32] = (&dct[k * 32..][..32]).try_into().expect("two blocks");
         let rows = residual8(sub);
@@ -450,7 +520,12 @@ fn idct_rec_i16x16_dc_neon(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>,
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn idct_rec_i16x16_dc_to_view_neon(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dc: &[i16; 16]) {
+fn idct_rec_i16x16_dc_to_view_neon(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dc: &[i16; 16],
+) {
     let d = rounded_dc(dc);
     for g in 0..4usize {
         let lo = vcombine_s16(vdup_n_s16(d[4 * g]), vdup_n_s16(d[4 * g + 1]));
@@ -506,7 +581,12 @@ pub fn idct_t4_rec_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize,
 
 /// [`idct_four_t4_rec`]'s seam flavour.
 #[inline]
-pub fn idct_four_t4_rec_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dct: &[i16; 64]) {
+pub fn idct_four_t4_rec_to_view(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dct: &[i16; 64],
+) {
     unsafe { idct_four_t4_rec_to_view_neon(rec, pred, pred_stride, dct) }
 }
 
@@ -540,7 +620,12 @@ pub fn idct_rec_i16x16_dc(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, 
 
 /// [`idct_rec_i16x16_dc`]'s seam flavour.
 #[inline]
-pub fn idct_rec_i16x16_dc_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dc: &[i16; 16]) {
+pub fn idct_rec_i16x16_dc_to_view(
+    rec: &RecCursor<'_>,
+    pred: &[u8],
+    pred_stride: usize,
+    dc: &[i16; 16],
+) {
     unsafe { idct_rec_i16x16_dc_to_view_neon(rec, pred, pred_stride, dc) }
 }
 
@@ -554,20 +639,26 @@ mod tests {
     // These MUST be the `_c` scalar kernels, not the same-named dispatchers: the
     // dispatchers route to the very kernels under test.
     use crate::decoder::decode_mb_aux::idct_res_add_pred_c;
-    use crate::encoder::decode_mb_aux::{idct_rec_i16x16_dc_c, idct_t4_rec_c, idct_t4_rec_in_place_c};
+    use crate::encoder::decode_mb_aux::{
+        idct_rec_i16x16_dc_c, idct_t4_rec_c, idct_t4_rec_in_place_c,
+    };
     use crate::encoder::encode_mb_aux as enc;
     use crate::encoder::rec_view::shared_plane_for_test;
     use crate::safe::plane::PaddedPlane;
 
     fn lcg(seed: &mut u64) -> u8 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*seed >> 32) & 0xFF) as u8
     }
 
     /// Coefficients over the **full `i16` range**, which is what the decoder hands the
     /// IDCT: `rs` comes from the bitstream by way of dequantisation.
     fn lcg_i16(seed: &mut u64) -> i16 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32) as u16 as i16
     }
 
@@ -709,7 +800,12 @@ mod tests {
     #[test]
     fn idct_row_pass_narrows_like_the_scalar() {
         let (w, h, pad, stride) = (16usize, 16usize, 16usize, 64usize);
-        for &(a, c) in &[(32767i16, 32767i16), (-32768, -32768), (32767, 1), (-32768, 32767)] {
+        for &(a, c) in &[
+            (32767i16, 32767i16),
+            (-32768, -32768),
+            (32767, 1),
+            (-32768, 32767),
+        ] {
             let mut p_c = PaddedPlane::new(w, h, pad, stride);
             let mut p_simd = PaddedPlane::new(w, h, pad, stride);
             for y in 0..4isize {

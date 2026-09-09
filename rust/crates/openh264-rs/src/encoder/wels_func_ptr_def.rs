@@ -1,8 +1,4 @@
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 //! Encoder function-pointer table.
 //!
@@ -10,39 +6,50 @@
 
 #![forbid(unsafe_code)]
 
-
-use crate::encoder::rec_view::RecCursor;
 use crate::common::mc::SMcFunc;
 use crate::encoder::deblocking::DeblockingFunc;
-use crate::encoder::encoder_context::{
-    sWelsEncCtx, BLOCK_STATIC_IDC_ALL, C_PRED_A, I16_PRED_DC_A, I4_PRED_A,
+use crate::encoder::decode_mb_aux::{dequant_4x4, dequant_four_4x4, dequant_ihadamard_4x4};
+use crate::encoder::encode_mb_aux::{
+    PCalculateSingleCtrFunc, PCopyFunc, PDctFunc, PGetNoneZeroCountFunc, PQuantization4x4Func,
+    PQuantizationDcFunc, PQuantizationFunc, PQuantizationHadamardFunc, PQuantizationMaxFunc,
+    PQuantizationSkipFunc, PScanFunc, PTransformHadamard4x4Func,
 };
 use crate::encoder::encode_mb_aux::{
-    PCalculateSingleCtrFunc, PCopyFunc, PDctFunc, PGetNoneZeroCountFunc, PQuantizationDcFunc,
-    PQuantization4x4Func, PQuantizationFunc, PQuantizationHadamardFunc, PQuantizationMaxFunc,
-    PQuantizationSkipFunc,
-    PScanFunc, PTransformHadamard4x4Func,
+    WelsCopy4x4_c, WelsCopy4x8_c, WelsCopy8x4_c, WelsCopy8x8_c, WelsCopy8x16_c, WelsCopy16x8_c,
+    WelsCopy16x16_c, WelsDctFourT4_c, WelsDctT4_c, calculate_single_ctr_4x4, get_none_zero_count,
+    hadamard_quant_2x2, hadamard_quant_2x2_skip, hadamard_t4_dc, quant_4x4, quant_4x4_dc,
+    quant_four_4x4, quant_four_4x4_max, scan_4x4_ac, scan_4x4_dc_ac,
+};
+use crate::encoder::encoder_context::{
+    BLOCK_STATIC_IDC_ALL, C_PRED_A, I4_PRED_A, I16_PRED_DC_A, sWelsEncCtx,
+};
+use crate::encoder::md::{
+    AnalysisVaaInfoIntra_c, FillNeighborCacheInterWithoutBGD, MdInterAnalysisVaaInfo_c, SMbCache,
+    UpdateMbMv_c,
 };
 use crate::encoder::md::{
     PFillInterNeighborCacheFunc, PGetMbSignFromInterVaaFunc, PGetVarianceFromIntraVaaFunc,
-    PUpdateMbMvFunc, SSampleDealingFunc, SWelsMD, SMB,
+    PUpdateMbMvFunc, SMB, SSampleDealingFunc, SWelsMD,
 };
-use crate::encoder::md::{AnalysisVaaInfoIntra_c, FillNeighborCacheInterWithoutBGD, MdInterAnalysisVaaInfo_c, SMbCache, UpdateMbMv_c};
+use crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj;
 use crate::encoder::rc::SWelsRcFunc;
+use crate::encoder::rec_view::RecCursor;
+use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 use crate::encoder::svc_encode_mb::{PDeQuantization4x4Func, PDeQuantizationFunc};
 use crate::encoder::svc_encode_slice::{BsWriter, SDqLayer, SDynamicSlicingStack, SSlice};
+use crate::encoder::svc_mode_decision::{
+    WelsMdInterJudgeBGDPskipFalse, WelsMdInterJudgeSCDPskipFalse, WelsMdUpdateBGDInfoNULL,
+};
 use crate::encoder::svc_motion_estimate::{
-    PCalculateBlockFeatureOfFrame, PFillQpelLocationByFeatureValueFunc, PInitializeHashforFeatureFunc, PMotionSearchFunc, SMeFuncs,
-    PUpdateFMESwitch,
+    PCalculateBlockFeatureOfFrame, PFillQpelLocationByFeatureValueFunc,
+    PInitializeHashforFeatureFunc, PMotionSearchFunc, PUpdateFMESwitch, SMeFuncs,
+};
+use crate::encoder::svc_set_mb_syn_cabac::WelsSpatialWriteMbSynCabac;
+use crate::encoder::svc_set_mb_syn_cavlc::{
+    CavlcParamCal_c, GetBsPosCabac, GetBsPosCavlc, StashMBStatusCabac, StashMBStatusCavlc,
+    StashPopMBStatusCabac, StashPopMBStatusCavlc,
 };
 use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
-use crate::encoder::decode_mb_aux::{dequant_4x4, dequant_four_4x4, dequant_ihadamard_4x4};
-use crate::encoder::encode_mb_aux::{WelsCopy16x16_c, WelsCopy16x8_c, WelsCopy4x4_c, WelsCopy4x8_c, WelsCopy8x16_c, WelsCopy8x4_c, WelsCopy8x8_c, WelsDctFourT4_c, WelsDctT4_c, calculate_single_ctr_4x4, get_none_zero_count, hadamard_quant_2x2, hadamard_quant_2x2_skip, hadamard_t4_dc, quant_4x4, quant_4x4_dc, quant_four_4x4, quant_four_4x4_max, scan_4x4_ac, scan_4x4_dc_ac};
-use crate::encoder::paraset_strategy::CWelsParametersetIdStrategyObj;
-use crate::encoder::set_mb_syn_cabac::SCabacCtx;
-use crate::encoder::svc_mode_decision::{WelsMdInterJudgeBGDPskipFalse, WelsMdInterJudgeSCDPskipFalse, WelsMdUpdateBGDInfoNULL};
-use crate::encoder::svc_set_mb_syn_cabac::WelsSpatialWriteMbSynCabac;
-use crate::encoder::svc_set_mb_syn_cavlc::{CavlcParamCal_c, GetBsPosCabac, GetBsPosCavlc, StashMBStatusCabac, StashMBStatusCavlc, StashPopMBStatusCabac, StashPopMBStatusCavlc};
 use crate::safe::mb_grid::{MbSplit, MbWindow};
 
 // ============================================================================
@@ -228,12 +235,16 @@ impl EntropyCoder {
         pCtxOutBs: &mut Option<&mut BsWriter>,
     ) -> i32 {
         match self {
-            EntropyCoder::Cavlc => {
-                crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn(pEncCtx, pSlice, mbs, pSliceBsBuf, pCtxOutBs)
-            }
-            EntropyCoder::Cabac => WelsSpatialWriteMbSynCabac(
-                pEncCtx, pSlice, mbs, pSliceBsBuf, pCtxOutBs,
+            EntropyCoder::Cavlc => crate::encoder::svc_set_mb_syn_cavlc::WelsSpatialWriteMbSyn(
+                pEncCtx,
+                pSlice,
+                mbs,
+                pSliceBsBuf,
+                pCtxOutBs,
             ),
+            EntropyCoder::Cabac => {
+                WelsSpatialWriteMbSynCabac(pEncCtx, pSlice, mbs, pSliceBsBuf, pCtxOutBs)
+            }
         }
     }
 
@@ -257,12 +268,10 @@ impl EntropyCoder {
         iMbSkipRun: i32,
     ) {
         match self {
-            EntropyCoder::Cavlc => StashMBStatusCavlc(
-                pBs, pDss, kuiLastMbQp, iMbSkipRun,
-            ),
-            EntropyCoder::Cabac => StashMBStatusCabac(
-                buf, pDss, pCabacCtx, kuiLastMbQp, iMbSkipRun,
-            ),
+            EntropyCoder::Cavlc => StashMBStatusCavlc(pBs, pDss, kuiLastMbQp, iMbSkipRun),
+            EntropyCoder::Cabac => {
+                StashMBStatusCabac(buf, pDss, pCabacCtx, kuiLastMbQp, iMbSkipRun)
+            }
         }
     }
 
@@ -279,12 +288,8 @@ impl EntropyCoder {
         pCabacCtx: &mut SCabacCtx,
     ) -> i32 {
         match self {
-            EntropyCoder::Cavlc => {
-                StashPopMBStatusCavlc(pBs, pDss)
-            }
-            EntropyCoder::Cabac => {
-                StashPopMBStatusCabac(buf, pDss, pCabacCtx)
-            }
+            EntropyCoder::Cavlc => StashPopMBStatusCavlc(pBs, pDss),
+            EntropyCoder::Cabac => StashPopMBStatusCabac(buf, pDss, pCabacCtx),
         }
     }
 
@@ -293,11 +298,7 @@ impl EntropyCoder {
     /// position (`pBs`, from `slice_bs_writer`) and CABAC subtracts two offsets held
     /// in the slice's coder state.
     #[inline]
-    pub fn GetBsPosition(
-        self,
-        pBs: &BsWriter,
-        pCabacCtx: &SCabacCtx,
-    ) -> i32 {
+    pub fn GetBsPosition(self, pBs: &BsWriter, pCabacCtx: &SCabacCtx) -> i32 {
         match self {
             EntropyCoder::Cavlc => GetBsPosCavlc(pBs),
             EntropyCoder::Cabac => GetBsPosCabac(pCabacCtx),
@@ -399,8 +400,7 @@ pub struct SWelsFuncPtrList {
     /// the table itself is `WelsMallocz`'d and `WelsFree`'d, *this struct's* drop
     /// glue never runs — so `WelsUninitEncoderExt` `take()`s the field explicitly,
     /// at the same point `encoder_ext.cpp:1995` deletes it.
-    pub pParametersetStrategy:
-        Option<Box<CWelsParametersetIdStrategyObj>>,
+    pub pParametersetStrategy: Option<Box<CWelsParametersetIdStrategyObj>>,
 }
 
 pub type TagWelsFuncPointerList = SWelsFuncPtrList;
@@ -485,4 +485,3 @@ impl Default for SWelsFuncPtrList {
         }
     }
 }
-

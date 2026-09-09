@@ -77,13 +77,7 @@ unsafe fn copy_rows16(
 
 /// The 8-wide form of [`copy_rows16`]; same contract with `8` for `16`.
 #[target_feature(enable = "sse2")]
-fn copy_rows8(
-    dst: &[Cell<u8>],
-    dst_stride: usize,
-    src: &[Cell<u8>],
-    src_stride: usize,
-    h: usize,
-) {
+fn copy_rows8(dst: &[Cell<u8>], dst_stride: usize, src: &[Cell<u8>], src_stride: usize, h: usize) {
     unsafe {
         let s = src.as_ptr() as *const u8;
         let d = dst.as_ptr() as *mut u8;
@@ -144,18 +138,28 @@ pub fn copy_8x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encoder::encode_mb_aux::{WelsCopy16x16_c, WelsCopy16x8_c, WelsCopy8x16_c, WelsCopy8x8_c};
+    use crate::encoder::encode_mb_aux::{
+        WelsCopy8x8_c, WelsCopy8x16_c, WelsCopy16x8_c, WelsCopy16x16_c,
+    };
 
     /// A plane of `stride * rows` distinct-ish bytes, as cells.
     fn plane(stride: usize, rows: usize, seed: u8) -> Vec<u8> {
-        (0..stride * rows).map(|i| (i as u8).wrapping_mul(37).wrapping_add(seed)).collect()
+        (0..stride * rows)
+            .map(|i| (i as u8).wrapping_mul(37).wrapping_add(seed))
+            .collect()
     }
 
     /// Runs one shape through both the scalar slot body and the SSE2 kernel over
     /// identical planes, and requires the **whole plane** to match afterwards —
     /// not just the block. A kernel that ran a row long, or that walked the wrong
     /// stride, lands outside the block and only a whole-plane compare sees it.
-    fn check(w: usize, h: usize, stride: usize, scalar: fn(&RecCursor, &RecCursor), simd: fn(&RecCursor, &RecCursor)) {
+    fn check(
+        w: usize,
+        h: usize,
+        stride: usize,
+        scalar: fn(&RecCursor, &RecCursor),
+        simd: fn(&RecCursor, &RecCursor),
+    ) {
         // Two spare rows below the block and an anchor off (0, 0), so a kernel
         // that ignored the anchor or ran a row long has somewhere to land.
         let (ax, ay) = (3isize, 2isize);
@@ -207,7 +211,12 @@ mod tests {
     fn copy_walks_each_operand_on_its_own_stride() {
         for &(dw, sw) in &[(64usize, 16usize), (16, 64), (33, 16), (16, 16)] {
             for (w, h, scalar, simd) in [
-                (16usize, 16usize, WelsCopy16x16_c as fn(&RecCursor, &RecCursor), copy_16x16 as fn(&RecCursor, &RecCursor)),
+                (
+                    16usize,
+                    16usize,
+                    WelsCopy16x16_c as fn(&RecCursor, &RecCursor),
+                    copy_16x16 as fn(&RecCursor, &RecCursor),
+                ),
                 (16, 8, WelsCopy16x8_c, copy_16x8),
                 (8, 16, WelsCopy8x16_c, copy_8x16),
                 (8, 8, WelsCopy8x8_c, copy_8x8),

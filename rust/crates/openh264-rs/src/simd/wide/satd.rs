@@ -23,7 +23,10 @@
 
 use wide::{i16x8, u8x16};
 
-use super::lanes::{hsum_i16, rotate_quads, swap_adjacent, swap_halves, widen_hi, widen_lo, HIGH_HALF, QUAD_HIGH_PAIR};
+use super::lanes::{
+    HIGH_HALF, QUAD_HIGH_PAIR, hsum_i16, rotate_quads, swap_adjacent, swap_halves, widen_hi,
+    widen_lo,
+};
 use crate::safe::plane::{BlockRows, RefSamples};
 
 /// The horizontal Hadamard of two rows held as `[row_a | row_b]`, returned as a
@@ -126,7 +129,7 @@ pub fn satd_16x16<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) ->
 #[cfg(test)]
 mod tests {
     use crate::encoder::sample::{
-        satd_16x16, satd_16x8, satd_4x4, satd_4x8, satd_8x16, satd_8x4, satd_8x8,
+        satd_4x4, satd_4x8, satd_8x4, satd_8x8, satd_8x16, satd_16x8, satd_16x16,
     };
     use crate::safe::plane::PlaneCursor;
 
@@ -161,9 +164,21 @@ mod tests {
         assert_eq!(satd_8x4(&c1, &c2), satd_8x4(&c1, &c2), "satd_8x4 mismatch");
         assert_eq!(satd_4x8(&c1, &c2), satd_4x8(&c1, &c2), "satd_4x8 mismatch");
         assert_eq!(satd_8x8(&c1, &c2), satd_8x8(&c1, &c2), "satd_8x8 mismatch");
-        assert_eq!(satd_16x8(&c1, &c2), satd_16x8(&c1, &c2), "satd_16x8 mismatch");
-        assert_eq!(satd_8x16(&c1, &c2), satd_8x16(&c1, &c2), "satd_8x16 mismatch");
-        assert_eq!(satd_16x16(&c1, &c2), satd_16x16(&c1, &c2), "satd_16x16 mismatch");
+        assert_eq!(
+            satd_16x8(&c1, &c2),
+            satd_16x8(&c1, &c2),
+            "satd_16x8 mismatch"
+        );
+        assert_eq!(
+            satd_8x16(&c1, &c2),
+            satd_8x16(&c1, &c2),
+            "satd_8x16 mismatch"
+        );
+        assert_eq!(
+            satd_16x16(&c1, &c2),
+            satd_16x16(&c1, &c2),
+            "satd_16x16 mismatch"
+        );
     }
 
     #[test]

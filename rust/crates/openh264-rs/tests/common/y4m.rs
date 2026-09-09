@@ -10,7 +10,6 @@
 //! emit -- `Ip A0:0 C420jpeg XYSCSS=420JPEG`, plus a per-stream frame rate --
 //! so a plain byte comparison would fail on the header of every single stream.
 
-
 /// Luma samples per macroblock edge. Used to report mismatches by macroblock,
 /// which is the unit you actually debug a decoder in.
 const MB_WIDTH: usize = 16;
@@ -61,7 +60,12 @@ impl<'a> Y4mReader<'a> {
         let width = width.ok_or_else(|| format!("Y4M: no width in header {header:?}"))?;
         let height = height.ok_or_else(|| format!("Y4M: no height in header {header:?}"))?;
 
-        Ok(Self { data, pos: nl + 1, width, height })
+        Ok(Self {
+            data,
+            pos: nl + 1,
+            width,
+            height,
+        })
     }
 
     pub fn width(&self) -> usize {
@@ -144,7 +148,9 @@ fn compare_frames(width: usize, height: usize, actual: &Frame, expected: &Frame)
 
     if let Some((x, y, a, e)) = compare_plane(width, height, actual.y, expected.y) {
         let mb_idx = x / MB_WIDTH + (y / MB_WIDTH) * (width / MB_WIDTH);
-        result.push_str(&format!("Y-plane mismatch at {x},{y} (MB:{mb_idx}) : {a} != {e}\n"));
+        result.push_str(&format!(
+            "Y-plane mismatch at {x},{y} (MB:{mb_idx}) : {a} != {e}\n"
+        ));
     }
 
     let chroma_mb_width = MB_WIDTH / 2;
@@ -154,11 +160,15 @@ fn compare_frames(width: usize, height: usize, actual: &Frame, expected: &Frame)
 
     if let Some((x, y, a, e)) = compare_plane(chroma_width, chroma_height, actual.u, expected.u) {
         let mb_idx = x / chroma_mb_width + (y / chroma_mb_width) * width_in_mb;
-        result.push_str(&format!("U-plane mismatch at {x},{y} (MB:{mb_idx}) : {a} != {e}\n"));
+        result.push_str(&format!(
+            "U-plane mismatch at {x},{y} (MB:{mb_idx}) : {a} != {e}\n"
+        ));
     }
     if let Some((x, y, a, e)) = compare_plane(chroma_width, chroma_height, actual.v, expected.v) {
         let mb_idx = x / chroma_mb_width + (y / chroma_mb_width) * width_in_mb;
-        result.push_str(&format!("V-plane mismatch at {x},{y} (MB:{mb_idx}) : {a} != {e}\n"));
+        result.push_str(&format!(
+            "V-plane mismatch at {x},{y} (MB:{mb_idx}) : {a} != {e}\n"
+        ));
     }
 
     result
@@ -185,8 +195,7 @@ pub fn compare_y4m_buffers(actual_y4m_data: &[u8], expected_y4m_data: &[u8]) -> 
     loop {
         match (actual.read_frame()?, expected.read_frame()?) {
             (Some(actual_frame), Some(expected_frame)) => {
-                let compare_result =
-                    compare_frames(width, height, &actual_frame, &expected_frame);
+                let compare_result = compare_frames(width, height, &actual_frame, &expected_frame);
                 if !compare_result.is_empty() {
                     return Err(format!("Frame #{frame_idx} mismatch: {compare_result}"));
                 }

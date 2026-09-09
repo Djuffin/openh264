@@ -188,11 +188,8 @@ fn walk_picture<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     for _ in 0..mb_height {
         let mut mb_origin = row_origin;
         for _ in 0..mb_width {
-            let (q0, q1) = half_mb_stats::<VAR, SQDIFF, BGD>(
-                &cur[mb_origin..],
-                &refp[mb_origin..],
-                stride,
-            );
+            let (q0, q1) =
+                half_mb_stats::<VAR, SQDIFF, BGD>(&cur[mb_origin..], &refp[mb_origin..], stride);
             let (q2, q3) = half_mb_stats::<VAR, SQDIFF, BGD>(
                 &cur[mb_origin + bottom..],
                 &refp[mb_origin + bottom..],
@@ -247,14 +244,9 @@ pub fn vaa_calc_sad(
     pic_stride: i32,
     sad8x8: &mut [[i32; 4]],
 ) -> i32 {
-    walk_picture::<false, false, false>(
-        cur,
-        refp,
-        pic_width,
-        pic_height,
-        pic_stride,
-        |mb, s| sad8x8[mb] = [s[0].sad, s[1].sad, s[2].sad, s[3].sad],
-    )
+    walk_picture::<false, false, false>(cur, refp, pic_width, pic_height, pic_stride, |mb, s| {
+        sad8x8[mb] = [s[0].sad, s[1].sad, s[2].sad, s[3].sad]
+    })
 }
 
 /// C++: `VAACalcSadVar_c`, `vaacalcfuncs.cpp:121`.
@@ -273,18 +265,11 @@ pub fn vaa_calc_sad_var(
     sum16x16: &mut [i32],
     sqsum16x16: &mut [i32],
 ) -> i32 {
-    walk_picture::<true, false, false>(
-        cur,
-        refp,
-        pic_width,
-        pic_height,
-        pic_stride,
-        |mb, s| {
-            sad8x8[mb] = [s[0].sad, s[1].sad, s[2].sad, s[3].sad];
-            sum16x16[mb] = s[0].sum + s[1].sum + s[2].sum + s[3].sum;
-            sqsum16x16[mb] = s[0].sqsum + s[1].sqsum + s[2].sqsum + s[3].sqsum;
-        },
-    )
+    walk_picture::<true, false, false>(cur, refp, pic_width, pic_height, pic_stride, |mb, s| {
+        sad8x8[mb] = [s[0].sad, s[1].sad, s[2].sad, s[3].sad];
+        sum16x16[mb] = s[0].sum + s[1].sum + s[2].sum + s[3].sum;
+        sqsum16x16[mb] = s[0].sqsum + s[1].sqsum + s[2].sqsum + s[3].sqsum;
+    })
 }
 
 /// C++: `VAACalcSadSsd_c`, `vaacalcfuncs.cpp:225`.
@@ -303,19 +288,12 @@ pub fn vaa_calc_sad_ssd(
     sqsum16x16: &mut [i32],
     sqdiff16x16: &mut [i32],
 ) -> i32 {
-    walk_picture::<true, true, false>(
-        cur,
-        refp,
-        pic_width,
-        pic_height,
-        pic_stride,
-        |mb, s| {
-            sad8x8[mb] = [s[0].sad, s[1].sad, s[2].sad, s[3].sad];
-            sum16x16[mb] = s[0].sum + s[1].sum + s[2].sum + s[3].sum;
-            sqsum16x16[mb] = s[0].sqsum + s[1].sqsum + s[2].sqsum + s[3].sqsum;
-            sqdiff16x16[mb] = s[0].sqdiff + s[1].sqdiff + s[2].sqdiff + s[3].sqdiff;
-        },
-    )
+    walk_picture::<true, true, false>(cur, refp, pic_width, pic_height, pic_stride, |mb, s| {
+        sad8x8[mb] = [s[0].sad, s[1].sad, s[2].sad, s[3].sad];
+        sum16x16[mb] = s[0].sum + s[1].sum + s[2].sum + s[3].sum;
+        sqsum16x16[mb] = s[0].sqsum + s[1].sqsum + s[2].sqsum + s[3].sqsum;
+        sqdiff16x16[mb] = s[0].sqdiff + s[1].sqdiff + s[2].sqdiff + s[3].sqdiff;
+    })
 }
 
 /// C++: `VAACalcSadBgd_c`, `vaacalcfuncs.cpp:462`.
@@ -334,23 +312,16 @@ pub fn vaa_calc_sad_bgd(
     sd8x8: &mut [[i32; 4]],
     mad8x8: &mut [[u8; 4]],
 ) -> i32 {
-    walk_picture::<false, false, true>(
-        cur,
-        refp,
-        pic_width,
-        pic_height,
-        pic_stride,
-        |mb, s| {
-            sad8x8[mb] = [s[0].sad, s[1].sad, s[2].sad, s[3].sad];
-            sd8x8[mb] = [s[0].sd, s[1].sd, s[2].sd, s[3].sd];
-            mad8x8[mb] = [
-                s[0].mad as u8,
-                s[1].mad as u8,
-                s[2].mad as u8,
-                s[3].mad as u8,
-            ];
-        },
-    )
+    walk_picture::<false, false, true>(cur, refp, pic_width, pic_height, pic_stride, |mb, s| {
+        sad8x8[mb] = [s[0].sad, s[1].sad, s[2].sad, s[3].sad];
+        sd8x8[mb] = [s[0].sd, s[1].sd, s[2].sd, s[3].sd];
+        mad8x8[mb] = [
+            s[0].mad as u8,
+            s[1].mad as u8,
+            s[2].mad as u8,
+            s[3].mad as u8,
+        ];
+    })
 }
 
 /// C++: `VAACalcSadSsdBgd_c`, `vaacalcfuncs.cpp:640` — everything the other four
@@ -369,26 +340,19 @@ pub fn vaa_calc_sad_ssd_bgd(
     sd8x8: &mut [[i32; 4]],
     mad8x8: &mut [[u8; 4]],
 ) -> i32 {
-    walk_picture::<true, true, true>(
-        cur,
-        refp,
-        pic_width,
-        pic_height,
-        pic_stride,
-        |mb, s| {
-            sad8x8[mb] = [s[0].sad, s[1].sad, s[2].sad, s[3].sad];
-            sum16x16[mb] = s[0].sum + s[1].sum + s[2].sum + s[3].sum;
-            sqsum16x16[mb] = s[0].sqsum + s[1].sqsum + s[2].sqsum + s[3].sqsum;
-            sqdiff16x16[mb] = s[0].sqdiff + s[1].sqdiff + s[2].sqdiff + s[3].sqdiff;
-            sd8x8[mb] = [s[0].sd, s[1].sd, s[2].sd, s[3].sd];
-            mad8x8[mb] = [
-                s[0].mad as u8,
-                s[1].mad as u8,
-                s[2].mad as u8,
-                s[3].mad as u8,
-            ];
-        },
-    )
+    walk_picture::<true, true, true>(cur, refp, pic_width, pic_height, pic_stride, |mb, s| {
+        sad8x8[mb] = [s[0].sad, s[1].sad, s[2].sad, s[3].sad];
+        sum16x16[mb] = s[0].sum + s[1].sum + s[2].sum + s[3].sum;
+        sqsum16x16[mb] = s[0].sqsum + s[1].sqsum + s[2].sqsum + s[3].sqsum;
+        sqdiff16x16[mb] = s[0].sqdiff + s[1].sqdiff + s[2].sqdiff + s[3].sqdiff;
+        sd8x8[mb] = [s[0].sd, s[1].sd, s[2].sd, s[3].sd];
+        mad8x8[mb] = [
+            s[0].mad as u8,
+            s[1].mad as u8,
+            s[2].mad as u8,
+            s[3].mad as u8,
+        ];
+    })
 }
 
 /// The two luma planes [`CVAACalculation::Process`] reads, from each picture's
@@ -422,7 +386,8 @@ impl CVAACalculation {
         planes: VaaCalcPlanes<'_>,
         result: &mut SVAACalcResult,
     ) -> i32 {
-        let (iPicWidth, iPicHeight, iPicStride) = (src.sRect.iRectWidth, src.sRect.iRectHeight, src.iStride[0]);
+        let (iPicWidth, iPicHeight, iPicStride) =
+            (src.sRect.iRectWidth, src.sRect.iRectHeight, src.iStride[0]);
         if planes.cur.is_empty() || planes.refp.is_empty() {
             return RET_INVALIDPARAM;
         }
@@ -447,30 +412,81 @@ impl CVAACalculation {
                     ..
                 } = result;
                 kernels::vaa::vaa_calc_sad_ssd_bgd(
-                    cur, refp, iPicWidth, iPicHeight, iPicStride,
-                    pSad8x8, pSum16x16, pSumOfSquare16x16, pSsd16x16, pSumOfDiff8x8, pMad8x8,
+                    cur,
+                    refp,
+                    iPicWidth,
+                    iPicHeight,
+                    iPicStride,
+                    pSad8x8,
+                    pSum16x16,
+                    pSumOfSquare16x16,
+                    pSsd16x16,
+                    pSumOfDiff8x8,
+                    pMad8x8,
                 )
             } else {
-                let SVAACalcResult { pSad8x8, pSumOfDiff8x8, pMad8x8, .. } = result;
+                let SVAACalcResult {
+                    pSad8x8,
+                    pSumOfDiff8x8,
+                    pMad8x8,
+                    ..
+                } = result;
                 kernels::vaa::vaa_calc_sad_bgd(
-                    cur, refp, iPicWidth, iPicHeight, iPicStride,
-                    pSad8x8, pSumOfDiff8x8, pMad8x8,
+                    cur,
+                    refp,
+                    iPicWidth,
+                    iPicHeight,
+                    iPicStride,
+                    pSad8x8,
+                    pSumOfDiff8x8,
+                    pMad8x8,
                 )
             }
         } else if self.m_sCalcParam.iCalcSsd {
-            let SVAACalcResult { pSad8x8, pSum16x16, pSumOfSquare16x16, pSsd16x16, .. } = result;
+            let SVAACalcResult {
+                pSad8x8,
+                pSum16x16,
+                pSumOfSquare16x16,
+                pSsd16x16,
+                ..
+            } = result;
             kernels::vaa::vaa_calc_sad_ssd(
-                cur, refp, iPicWidth, iPicHeight, iPicStride,
-                pSad8x8, pSum16x16, pSumOfSquare16x16, pSsd16x16,
+                cur,
+                refp,
+                iPicWidth,
+                iPicHeight,
+                iPicStride,
+                pSad8x8,
+                pSum16x16,
+                pSumOfSquare16x16,
+                pSsd16x16,
             )
         } else if self.m_sCalcParam.iCalcVar {
-            let SVAACalcResult { pSad8x8, pSum16x16, pSumOfSquare16x16, .. } = result;
+            let SVAACalcResult {
+                pSad8x8,
+                pSum16x16,
+                pSumOfSquare16x16,
+                ..
+            } = result;
             kernels::vaa::vaa_calc_sad_var(
-                cur, refp, iPicWidth, iPicHeight, iPicStride,
-                pSad8x8, pSum16x16, pSumOfSquare16x16,
+                cur,
+                refp,
+                iPicWidth,
+                iPicHeight,
+                iPicStride,
+                pSad8x8,
+                pSum16x16,
+                pSumOfSquare16x16,
             )
         } else {
-            kernels::vaa::vaa_calc_sad(cur, refp, iPicWidth, iPicHeight, iPicStride, &mut result.pSad8x8)
+            kernels::vaa::vaa_calc_sad(
+                cur,
+                refp,
+                iPicWidth,
+                iPicHeight,
+                iPicStride,
+                &mut result.pSad8x8,
+            )
         };
         RET_SUCCESS
     }

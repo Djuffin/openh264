@@ -11,7 +11,6 @@
 //! `uiCpuFlag` tests that do not fire on any target this port builds for.
 
 #![allow(non_snake_case)]
-
 #![forbid(unsafe_code)]
 
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -29,16 +28,16 @@ fn WelsClip1(iX: i32) -> u8 {
     }
 }
 
+use crate::encoder::rec_view::RecCursor;
 use crate::encoder::svc_encode_mb::g_kuiDequantCoeff;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
-use crate::encoder::rec_view::RecCursor;
 
+use crate::common::cpu_core::WELS_CPU_SSE2;
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
 /// site because the kernels share their names with the scalars in this module — which
 /// is the point of the naming, and the reason the module qualifier has to stay.
 use crate::simd::kernels;
-use crate::common::cpu_core::WELS_CPU_SSE2;
 
 /// Inverse 4x4 Hadamard of the luma DC block, then scale by the
 /// dequantisation multiplier. The qp >= 12 path (the qp < 12 path is
@@ -269,12 +268,7 @@ pub fn idct_four_t4_rec_in_place_c(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]
 /// there `pRec` *is* `pPred`.
 ///
 /// 4x4 residual added to an arena prediction, saturated into the shared view.
-pub fn idct_t4_rec_to_view(
-    rec: &RecCursor<'_>,
-    pred: &[u8],
-    pred_stride: usize,
-    dct: &[i16; 16],
-) {
+pub fn idct_t4_rec_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dct: &[i16; 16]) {
     kernels::dct::idct_t4_rec_to_view(rec, pred, pred_stride, dct)
 }
 
@@ -525,7 +519,9 @@ mod tests {
     /// pattern cannot tell a transposed write from a correct one and real
     /// coefficients span the `as i16` narrowing the horizontal pass depends on.
     fn lcg(seed: &mut u64) -> u32 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 33) as u32
     }
 
@@ -554,7 +550,9 @@ mod tests {
     /// The arena prediction operand: `sMemPredMb`'s shape — a flat owned buffer at
     /// a fixed stride, never the picture.
     fn noisy_pred(seed: &mut u64, stride: usize, rows: usize) -> Vec<u8> {
-        (0..stride * rows).map(|_| (lcg(seed) & 0xFF) as u8).collect()
+        (0..stride * rows)
+            .map(|_| (lcg(seed) & 0xFF) as u8)
+            .collect()
     }
 
     #[test]
@@ -577,7 +575,11 @@ mod tests {
         let view = shared_plane_for_test(&mut pb);
         idct_t4_rec_to_view(&view.cursor(5, 7), &pred, 16, &dct);
 
-        assert_eq!(pa.as_slice(), pb.as_slice(), "whole allocation, not just the block");
+        assert_eq!(
+            pa.as_slice(),
+            pb.as_slice(),
+            "whole allocation, not just the block"
+        );
     }
 
     #[test]
@@ -647,7 +649,10 @@ mod tests {
         let (mut pa, mut pb) = twin_planes(&mut seed);
         let dct: [i16; 256] = noisy_coeffs(&mut seed);
 
-        for (k, &(dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)].iter().enumerate() {
+        for (k, &(dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)]
+            .iter()
+            .enumerate()
+        {
             let sub: &[i16; 64] = (&dct[k << 6..][..64]).try_into().unwrap();
             idct_four_t4_rec_in_place(&mut pa.cursor_mut(4 + dx, 4 + dy), sub);
         }

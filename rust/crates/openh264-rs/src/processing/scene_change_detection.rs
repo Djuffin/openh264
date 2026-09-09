@@ -19,9 +19,11 @@
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
-use crate::simd::kernels::sad::sample_sad_8x8;
-use crate::encoder::wels_preprocess::{ESceneChangeIdc, EStaticBlockIdc, SPixMap, SSceneChangeResult};
+use crate::encoder::wels_preprocess::{
+    ESceneChangeIdc, EStaticBlockIdc, SPixMap, SSceneChangeResult,
+};
 use crate::safe::plane::PlaneCursor;
+use crate::simd::kernels::sad::sample_sad_8x8;
 
 /// The two luma planes this detector walks, routed from the pool pictures that own
 /// them. `DenoisePlanes` is the same shape one plugin over
@@ -335,12 +337,20 @@ mod screen_tests {
         const H: usize = 32;
         let f = noise(W, H, 9);
         let mut idc = vec![0xEEu8; (W / 8) * (H / 8)];
-        let r = run(&f, &f, W as i32, H as i32, SScrollDetectionParam::default(), &mut idc);
+        let r = run(
+            &f,
+            &f,
+            W as i32,
+            H as i32,
+            SScrollDetectionParam::default(),
+            &mut idc,
+        );
         assert_eq!(r.iMotionBlockNum, 0);
         assert_eq!(r.iFrameComplexity, 0);
         assert_eq!(r.eSceneChangeIdc, ESceneChangeIdc::SIMILAR_SCENE);
         assert!(
-            idc.iter().all(|&v| v == EStaticBlockIdc::COLLOCATED_STATIC as u8),
+            idc.iter()
+                .all(|&v| v == EStaticBlockIdc::COLLOCATED_STATIC as u8),
             "every block collocated-static: {idc:?}"
         );
     }
@@ -386,7 +396,8 @@ mod screen_tests {
             assert_ne!(
                 idc[(BH - 1) * BW + i],
                 EStaticBlockIdc::SCROLLED_STATIC as u8,
-                "block ({i},{}) is outside the scroll bounds", BH - 1
+                "block ({i},{}) is outside the scroll bounds",
+                BH - 1
             );
         }
         assert!(r.iFrameComplexity > 0, "the bottom row still accumulates");
@@ -417,7 +428,8 @@ mod screen_tests {
 
         for i in 0..BW {
             assert_ne!(
-                idc[i], EStaticBlockIdc::SCROLLED_STATIC as u8,
+                idc[i],
+                EStaticBlockIdc::SCROLLED_STATIC as u8,
                 "block ({i},0) is above the scroll bounds"
             );
         }
@@ -443,7 +455,14 @@ mod screen_tests {
         let cur = noise(W, H, 5);
         let flat = vec![0u8; W * H];
         let mut idc = vec![0xEEu8; N];
-        let r = run(&cur, &flat, W as i32, H as i32, SScrollDetectionParam::default(), &mut idc);
+        let r = run(
+            &cur,
+            &flat,
+            W as i32,
+            H as i32,
+            SScrollDetectionParam::default(),
+            &mut idc,
+        );
         assert_eq!(r.iMotionBlockNum, N as i32);
         assert_eq!(r.eSceneChangeIdc, ESceneChangeIdc::LARGE_CHANGED_SCENE);
         assert!(idc.iter().all(|&v| v == EStaticBlockIdc::NO_STATIC as u8));
@@ -467,7 +486,10 @@ mod screen_tests {
             refp: &f,
             ref_stride: W as usize,
         };
-        assert_eq!(d.Process(&pixmap(W, H), &planes, &mut idc), RET_INVALIDPARAM);
+        assert_eq!(
+            d.Process(&pixmap(W, H), &planes, &mut idc),
+            RET_INVALIDPARAM
+        );
         assert!(idc.iter().all(|&v| v == 0xEE), "nothing was written");
     }
 
@@ -506,7 +528,14 @@ mod screen_tests {
         ] {
             let (cur, refp) = make(k);
             let mut idc = vec![0u8; N];
-            let r = run(&cur, &refp, W as i32, H as i32, SScrollDetectionParam::default(), &mut idc);
+            let r = run(
+                &cur,
+                &refp,
+                W as i32,
+                H as i32,
+                SScrollDetectionParam::default(),
+                &mut idc,
+            );
             assert_eq!(r.iMotionBlockNum, k as i32, "k={k}");
             assert_eq!(r.eSceneChangeIdc, want, "k={k}");
         }

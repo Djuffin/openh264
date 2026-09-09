@@ -1,9 +1,5 @@
 //! SIMD acceleration kernels and CPU feature detection for openh264-rs.
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
@@ -17,9 +13,34 @@ pub mod aarch64;
 pub mod wide;
 
 /// The scalar forwards, compiled only where they are what [`kernels`] names.
-#[cfg(any(feature = "scalar", not(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri)), feature = "wide"))))]
+#[cfg(any(
+    feature = "scalar",
+    not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", not(miri)),
+        feature = "wide"
+    ))
+))]
 pub mod scalar;
 
+#[cfg(all(
+    target_arch = "aarch64",
+    not(miri),
+    not(feature = "wide"),
+    not(feature = "scalar")
+))]
+pub use aarch64 as kernels;
+#[cfg(any(
+    feature = "scalar",
+    not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", not(miri)),
+        feature = "wide"
+    ))
+))]
+pub use scalar as kernels;
+#[cfg(all(feature = "wide", not(feature = "scalar")))]
+pub use wide as kernels;
 /// **The kernel set, and the whole of the dispatch.** Every direct call site and every
 /// `WELS_CPU_SSE2` table install names its kernel `kernels::<family>::<kernel>`, and
 /// this alias decides what that resolves to. Each dispatch file imports it once at
@@ -54,12 +75,6 @@ pub mod scalar;
 /// `benches/kernel_bench.rs` time the implementations of one kernel in one process.
 #[cfg(all(target_arch = "x86_64", not(feature = "wide"), not(feature = "scalar")))]
 pub use x86_64 as kernels;
-#[cfg(all(target_arch = "aarch64", not(miri), not(feature = "wide"), not(feature = "scalar")))]
-pub use aarch64 as kernels;
-#[cfg(all(feature = "wide", not(feature = "scalar")))]
-pub use wide as kernels;
-#[cfg(any(feature = "scalar", not(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri)), feature = "wide"))))]
-pub use scalar as kernels;
 
 use crate::common::cpu_core::*;
 
@@ -178,7 +193,11 @@ fn arch_cpu_features() -> u32 {
 /// `flags` is only `mut` where it is actually mutated (`lib.rs` denies `unused_mut`).
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 fn arch_cpu_features() -> u32 {
-    if cfg!(all(feature = "wide", not(feature = "scalar"))) { WELS_CPU_SSE2 } else { 0 }
+    if cfg!(all(feature = "wide", not(feature = "scalar"))) {
+        WELS_CPU_SSE2
+    } else {
+        0
+    }
 }
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -263,10 +282,16 @@ mod tests {
             let mut rest = without_tests(&text);
             while let Some(i) = rest.find("pub ").or_else(|| rest.find("pub(crate) ")) {
                 let tail = &rest[i..];
-                let tail = tail.strip_prefix("pub(crate) ").or_else(|| tail.strip_prefix("pub ")).unwrap();
+                let tail = tail
+                    .strip_prefix("pub(crate) ")
+                    .or_else(|| tail.strip_prefix("pub "))
+                    .unwrap();
                 let tail = tail.strip_prefix("unsafe ").unwrap_or(tail);
                 if let Some(tail) = tail.strip_prefix("fn ") {
-                    let name: String = tail.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                    let name: String = tail
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
                     if !name.is_empty() {
                         out.insert(name, file.clone());
                     }
@@ -286,13 +311,34 @@ mod tests {
     /// kernel that nothing dispatches is not on it, so the test names it. Forgetting to
     /// add a genuine helper costs one line and a failing test, never silent coverage.
     const INTERNAL: &[&str] = &[
-        "deblock_chroma_eq4_16", "deblock_chroma_lt4_16", "deblock_luma_eq4_16", "deblock_luma_lt4_16",
-        "sad_16x", "sad_16x_avx2", "sad_4x", "sad_8x",
-        "sample_sad_four_16x", "sample_sad_four_4x", "sample_sad_four_8x",
+        "deblock_chroma_eq4_16",
+        "deblock_chroma_lt4_16",
+        "deblock_luma_eq4_16",
+        "deblock_luma_lt4_16",
+        "sad_16x",
+        "sad_16x_avx2",
+        "sad_4x",
+        "sad_8x",
+        "sample_sad_four_16x",
+        "sample_sad_four_4x",
+        "sample_sad_four_8x",
         "satd_4x4_sse2_impl",
-        "hsum_i16", "load16", "load4", "load8", "load_w", "low4", "low8", "merge_lo64",
-        "narrow", "rotate_quads", "store_w", "swap_adjacent", "swap_halves", "transpose4_lo",
-        "widen_hi", "widen_lo",
+        "hsum_i16",
+        "load16",
+        "load4",
+        "load8",
+        "load_w",
+        "low4",
+        "low8",
+        "merge_lo64",
+        "narrow",
+        "rotate_quads",
+        "store_w",
+        "swap_adjacent",
+        "swap_halves",
+        "transpose4_lo",
+        "widen_hi",
+        "widen_lo",
     ];
 
     /// **A kernel that is written but never reached is the failure this tier is most
@@ -337,10 +383,16 @@ mod tests {
             while let Some(i) = rest.find("kernels::") {
                 let tail = &rest[i + "kernels::".len()..];
                 // `<module>::<kernel>` — take the second segment.
-                let seg: String = tail.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                let seg: String = tail
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
                 let after = &tail[seg.len()..];
                 if let Some(after) = after.strip_prefix("::") {
-                    let name: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                    let name: String = after
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
                     if !name.is_empty() {
                         used.insert(name);
                     }

@@ -1,9 +1,9 @@
 //! SSE2 implementations of Forward 4x4 DCT and Inverse DCT (IDCT) with Prediction Addition.
 #![allow(unsafe_code)]
 
-use core::arch::x86_64::*;
 use crate::encoder::rec_view::RecCursor;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples, SampleCursor};
+use core::arch::x86_64::*;
 
 // ============================================================================
 // Forward 4x4 Integer DCT
@@ -33,11 +33,7 @@ fn dct_row(d: __m128i) -> __m128i {
 ///
 /// C++: `WelsDctT4_sse2`, `codec/common/x86/dct.asm`.
 #[target_feature(enable = "sse2")]
-fn dct_4x4_sse2_impl<A: SampleCursor, B: SampleCursor>(
-    dct: &mut [i16; 16],
-    pix1: &A,
-    pix2: &B,
-) {
+fn dct_4x4_sse2_impl<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 16], pix1: &A, pix2: &B) {
     unsafe {
         let zero = _mm_setzero_si128();
 
@@ -45,29 +41,53 @@ fn dct_4x4_sse2_impl<A: SampleCursor, B: SampleCursor>(
         let r1_0 = pix1.row_n::<4>(0, 0);
         let r2_0 = pix2.row_n::<4>(0, 0);
         let diff0 = _mm_sub_epi16(
-            _mm_unpacklo_epi8(_mm_cvtsi32_si128((r1_0.as_ptr() as *const i32).read_unaligned()), zero),
-            _mm_unpacklo_epi8(_mm_cvtsi32_si128((r2_0.as_ptr() as *const i32).read_unaligned()), zero),
+            _mm_unpacklo_epi8(
+                _mm_cvtsi32_si128((r1_0.as_ptr() as *const i32).read_unaligned()),
+                zero,
+            ),
+            _mm_unpacklo_epi8(
+                _mm_cvtsi32_si128((r2_0.as_ptr() as *const i32).read_unaligned()),
+                zero,
+            ),
         );
 
         let r1_1 = pix1.row_n::<4>(1, 0);
         let r2_1 = pix2.row_n::<4>(1, 0);
         let diff1 = _mm_sub_epi16(
-            _mm_unpacklo_epi8(_mm_cvtsi32_si128((r1_1.as_ptr() as *const i32).read_unaligned()), zero),
-            _mm_unpacklo_epi8(_mm_cvtsi32_si128((r2_1.as_ptr() as *const i32).read_unaligned()), zero),
+            _mm_unpacklo_epi8(
+                _mm_cvtsi32_si128((r1_1.as_ptr() as *const i32).read_unaligned()),
+                zero,
+            ),
+            _mm_unpacklo_epi8(
+                _mm_cvtsi32_si128((r2_1.as_ptr() as *const i32).read_unaligned()),
+                zero,
+            ),
         );
 
         let r1_2 = pix1.row_n::<4>(2, 0);
         let r2_2 = pix2.row_n::<4>(2, 0);
         let diff2 = _mm_sub_epi16(
-            _mm_unpacklo_epi8(_mm_cvtsi32_si128((r1_2.as_ptr() as *const i32).read_unaligned()), zero),
-            _mm_unpacklo_epi8(_mm_cvtsi32_si128((r2_2.as_ptr() as *const i32).read_unaligned()), zero),
+            _mm_unpacklo_epi8(
+                _mm_cvtsi32_si128((r1_2.as_ptr() as *const i32).read_unaligned()),
+                zero,
+            ),
+            _mm_unpacklo_epi8(
+                _mm_cvtsi32_si128((r2_2.as_ptr() as *const i32).read_unaligned()),
+                zero,
+            ),
         );
 
         let r1_3 = pix1.row_n::<4>(3, 0);
         let r2_3 = pix2.row_n::<4>(3, 0);
         let diff3 = _mm_sub_epi16(
-            _mm_unpacklo_epi8(_mm_cvtsi32_si128((r1_3.as_ptr() as *const i32).read_unaligned()), zero),
-            _mm_unpacklo_epi8(_mm_cvtsi32_si128((r2_3.as_ptr() as *const i32).read_unaligned()), zero),
+            _mm_unpacklo_epi8(
+                _mm_cvtsi32_si128((r1_3.as_ptr() as *const i32).read_unaligned()),
+                zero,
+            ),
+            _mm_unpacklo_epi8(
+                _mm_cvtsi32_si128((r2_3.as_ptr() as *const i32).read_unaligned()),
+                zero,
+            ),
         );
 
         // Horizontal 1D DCT on each row
@@ -99,11 +119,7 @@ fn dct_4x4_sse2_impl<A: SampleCursor, B: SampleCursor>(
 ///
 /// C++: `WelsDctT4_sse2`, `codec/common/x86/dct.asm`.
 #[inline]
-pub fn dct_4x4<A: SampleCursor, B: SampleCursor>(
-    dct: &mut [i16; 16],
-    pix1: &A,
-    pix2: &B,
-) {
+pub fn dct_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 16], pix1: &A, pix2: &B) {
     unsafe { dct_4x4_sse2_impl(dct, pix1, pix2) }
 }
 
@@ -124,11 +140,7 @@ fn dct_four_4x4_sse2_impl<A: SampleCursor, B: SampleCursor>(
 ///
 /// C++: `WelsDctFourT4_sse2`, `codec/common/x86/dct.asm`.
 #[inline]
-pub fn dct_four_4x4<A: SampleCursor, B: SampleCursor>(
-    dct: &mut [i16; 64],
-    pix1: &A,
-    pix2: &B,
-) {
+pub fn dct_four_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 64], pix1: &A, pix2: &B) {
     unsafe { dct_four_4x4_sse2_impl(dct, pix1, pix2) }
 }
 
@@ -245,11 +257,7 @@ pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
 }
 
 #[target_feature(enable = "sse2")]
-fn idct_t4_rec_sse2_impl(
-    rec: &mut PlaneCursorMut<'_>,
-    pred: &PlaneCursor<'_>,
-    dct: &[i16; 16],
-) {
+fn idct_t4_rec_sse2_impl(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
     let (res0, res1, res2, res3) = compute_idct_residuals(dct);
     for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
         let p: [u8; 4] = pred.row_view(dy as isize, 0, 4).try_into().unwrap();
@@ -262,11 +270,7 @@ fn idct_t4_rec_sse2_impl(
 ///
 /// C++: `WelsIDctT4Rec_sse2`, `codec/common/x86/dct.asm`.
 #[inline]
-pub fn idct_t4_rec(
-    rec: &mut PlaneCursorMut<'_>,
-    pred: &PlaneCursor<'_>,
-    dct: &[i16; 16],
-) {
+pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
     unsafe { idct_t4_rec_sse2_impl(rec, pred, dct) }
 }
 
@@ -298,11 +302,7 @@ fn idct_four_t4_rec_sse2_impl(
 ///
 /// C++: `WelsIDctFourT4Rec_sse2`, `codec/common/x86/dct.asm`.
 #[inline]
-pub fn idct_four_t4_rec(
-    rec: &mut PlaneCursorMut<'_>,
-    pred: &PlaneCursor<'_>,
-    dct: &[i16; 64],
-) {
+pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 64]) {
     unsafe { idct_four_t4_rec_sse2_impl(rec, pred, dct) }
 }
 
@@ -338,12 +338,7 @@ fn idct_t4_rec_to_view_sse2_impl(
 
 /// [`idct_t4_rec_to_view`] using SSE2.
 #[inline]
-pub fn idct_t4_rec_to_view(
-    rec: &RecCursor<'_>,
-    pred: &[u8],
-    pred_stride: usize,
-    dct: &[i16; 16],
-) {
+pub fn idct_t4_rec_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dct: &[i16; 16]) {
     unsafe { idct_t4_rec_to_view_sse2_impl(rec, pred, pred_stride, dct) }
 }
 
@@ -458,11 +453,7 @@ fn idct_rec_i16x16_dc_sse2_impl(
 ///
 /// C++: `WelsIDctRecI16x16Dc_sse2`, `codec/common/x86/dct.asm`.
 #[inline]
-pub fn idct_rec_i16x16_dc(
-    rec: &mut PlaneCursorMut<'_>,
-    pred: &PlaneCursor<'_>,
-    dc: &[i16; 16],
-) {
+pub fn idct_rec_i16x16_dc(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc: &[i16; 16]) {
     unsafe { idct_rec_i16x16_dc_sse2_impl(rec, pred, dc) }
 }
 
@@ -525,16 +516,18 @@ mod tests {
     // These MUST be the `_c` scalar kernels, not the same-named dispatchers:
     // the dispatchers route to the very kernels under test, which would
     // make every assertion below a tautology.
+    use crate::decoder::decode_mb_aux::idct_res_add_pred_c as idct_res_add_pred;
     use crate::encoder::decode_mb_aux::{
         idct_rec_i16x16_dc_c as idct_rec_i16x16_dc, idct_t4_rec_c as idct_t4_rec,
         idct_t4_rec_in_place_c as idct_t4_rec_in_place,
     };
-    use crate::decoder::decode_mb_aux::idct_res_add_pred_c as idct_res_add_pred;
-    use crate::safe::plane::PaddedPlane;
     use crate::encoder::rec_view::shared_plane_for_test;
+    use crate::safe::plane::PaddedPlane;
 
     fn lcg(seed: &mut u64) -> u8 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*seed >> 32) & 0xFF) as u8
     }
 
@@ -544,7 +537,9 @@ mod tests {
     /// where 16- and 32-bit lanes agree, and passes on a kernel that is wrong — see
     /// `compute_idct_residuals`.
     fn lcg_i16(seed: &mut u64) -> i16 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32) as u16 as i16
     }
 
@@ -714,7 +709,11 @@ mod tests {
 
             for y in 0..16isize {
                 for x in 0..16isize {
-                    assert_eq!(rec_simd.at(x, y), rec_c.at(x, y), "dc mismatch at ({x}, {y})");
+                    assert_eq!(
+                        rec_simd.at(x, y),
+                        rec_c.at(x, y),
+                        "dc mismatch at ({x}, {y})"
+                    );
                 }
             }
         }

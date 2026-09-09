@@ -7,18 +7,18 @@
 //! `assert(0)` behind a `// TODO: implement`. The encoder only ever sets POC type 2
 //! (`WelsInitSps`), so the branch is unreachable in practice.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
-
 #![deny(unsafe_code)]
 
 use crate::api::codec_api::ELevelIdc::LEVEL_UNKNOWN;
-use crate::api::codec_api::ESampleAspectRatio::ASP_EXT_SAR;
 use crate::api::codec_api::EProfileIdc::*;
-use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
+use crate::api::codec_api::ESampleAspectRatio::ASP_EXT_SAR;
 use crate::api::codec_api::EUsageType::*;
-use crate::safe::bits::BsWriter;
+use crate::api::codec_api::{ELevelIdc, SSpatialLayerConfig};
+use crate::common::wels_trace::{WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING, WelsLog};
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::decoder::parameter_sets::SLevelLimits;
 use crate::encoder::encoder_context::SCropOffset;
+use crate::encoder::param_svc::UNSPECIFIED_BIT_RATE;
 use crate::encoder::param_svc::{
     SSpatialLayerInternal, SSubsetSps, SWelsPPS, SWelsSPS, SWelsSvcCodingParam, WELS_LOG2,
 };
@@ -28,12 +28,11 @@ use crate::encoder::vlc_encoder::{
     BsRbspTrailingBits, BsWriteBits, BsWriteOneBit, BsWriteSE, BsWriteUE,
 };
 use crate::encoder::wels_encoder_ext::{
-    SLogContext, AUTO_REF_PIC_COUNT, ENC_RETURN_SUCCESS, ENC_RETURN_UNSUPPORTED_PARA,
+    AUTO_REF_PIC_COUNT, ENC_RETURN_SUCCESS, ENC_RETURN_UNSUPPORTED_PARA, LEVEL_NUMBER,
     LONG_TERM_REF_NUM, LONG_TERM_REF_NUM_SCREEN, MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA,
-    MAX_REFERENCE_PICTURE_COUNT_NUM_SCREEN, MIN_REF_PIC_COUNT, LEVEL_NUMBER,
+    MAX_REFERENCE_PICTURE_COUNT_NUM_SCREEN, MIN_REF_PIC_COUNT, SLogContext,
 };
-use crate::encoder::param_svc::UNSPECIFIED_BIT_RATE;
-use crate::common::wels_trace::{WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING, WelsLog};
+use crate::safe::bits::BsWriter;
 
 /// `CpbBrNalFactor` — codec/common/inc/wels_common_defs.h:61.
 /// Baseline, main and extended profiles.
@@ -165,9 +164,7 @@ pub fn WelsBitRateVerification(
             WELS_LOG_ERROR,
             &format!(
                 "Invalid bitrate settings in layer {}, bitrate= {} at FrameRate({:.6})",
-                iLayerId,
-                pLayerParam.iSpatialBitrate,
-                pLayerParam.fFrameRate
+                iLayerId, pLayerParam.iSpatialBitrate, pLayerParam.fFrameRate
             ),
         );
         return ENC_RETURN_UNSUPPORTED_PARA;
@@ -176,8 +173,7 @@ pub fn WelsBitRateVerification(
     // deal with LEVEL_MAX_BR and MAX_BR setting
     let mut iCurLevelIdx = 0usize;
     while level_idc_from_raw(g_ksLevelLimits[iCurLevelIdx].uiLevelIdc) != ELevelIdc::LEVEL_5_2
-        && level_idc_from_raw(g_ksLevelLimits[iCurLevelIdx].uiLevelIdc)
-            != pLayerParam.uiLevelIdc
+        && level_idc_from_raw(g_ksLevelLimits[iCurLevelIdx].uiLevelIdc) != pLayerParam.uiLevelIdc
     {
         iCurLevelIdx += 1;
     }
@@ -194,8 +190,7 @@ pub fn WelsBitRateVerification(
                 WELS_LOG_INFO,
                 &format!(
                     "Current MaxSpatialBitrate is invalid (UNSPECIFIED_BIT_RATE or larger than LEVEL5_2) but level setting is valid, set iMaxSpatialBitrate to {} from level ({})",
-                    pLayerParam.iMaxSpatialBitrate,
-                    pLayerParam.uiLevelIdc as i32
+                    pLayerParam.iMaxSpatialBitrate, pLayerParam.uiLevelIdc as i32
                 ),
             );
         } else if pLayerParam.iMaxSpatialBitrate > iLevelMaxBitrate {
@@ -208,9 +203,7 @@ pub fn WelsBitRateVerification(
                 WELS_LOG_INFO,
                 &format!(
                     "LevelIdc is changed from ({}) to ({}) according to the iMaxSpatialBitrate({})",
-                    iCurLevel as i32,
-                    pLayerParam.uiLevelIdc as i32,
-                    pLayerParam.iMaxSpatialBitrate
+                    iCurLevel as i32, pLayerParam.uiLevelIdc as i32, pLayerParam.iMaxSpatialBitrate
                 ),
             );
         }
@@ -237,8 +230,7 @@ pub fn WelsBitRateVerification(
                 WELS_LOG_INFO,
                 &format!(
                     "Setting MaxSpatialBitrate ({}) the same at SpatialBitrate ({}) will make the actual bit rate lower than SpatialBitrate",
-                    pLayerParam.iMaxSpatialBitrate,
-                    pLayerParam.iSpatialBitrate
+                    pLayerParam.iMaxSpatialBitrate, pLayerParam.iSpatialBitrate
                 ),
             );
         } else if pLayerParam.iMaxSpatialBitrate < pLayerParam.iSpatialBitrate {
@@ -247,8 +239,7 @@ pub fn WelsBitRateVerification(
                 WELS_LOG_ERROR,
                 &format!(
                     "MaxSpatialBitrate ({}) should be larger than SpatialBitrate ({}), considering it as error setting",
-                    pLayerParam.iMaxSpatialBitrate,
-                    pLayerParam.iSpatialBitrate
+                    pLayerParam.iMaxSpatialBitrate, pLayerParam.iSpatialBitrate
                 ),
             );
             return ENC_RETURN_UNSUPPORTED_PARA;
@@ -279,8 +270,7 @@ pub fn WelsCheckNumRefSetting(
             WELS_LOG_WARNING,
             &format!(
                 "iLTRRefNum({}) does not equal to currently supported {}, will be reset",
-                pParam.iLTRRefNum,
-                iCurrentSupportedLtrNum
+                pParam.iLTRRefNum, iCurrentSupportedLtrNum
             ),
         );
         pParam.iLTRRefNum = iCurrentSupportedLtrNum;
@@ -291,13 +281,12 @@ pub fn WelsCheckNumRefSetting(
     // NB: the C++ carries a TODO saying the reasonable value is
     // WELS_MAX(1, WELS_LOG2(uiGopSize)) unconditionally, but changing it needs
     // reference-list updating changed too. Kept as-is.
-    let iCurrentStrNum = if pParam.iUsageType == SCREEN_CONTENT_REAL_TIME
-        && pParam.bEnableLongTermReference
-    {
-        WELS_MAX(1, WELS_LOG2(pParam.uiGopSize))
-    } else {
-        WELS_MAX(1, (pParam.uiGopSize >> 1) as i32)
-    };
+    let iCurrentStrNum =
+        if pParam.iUsageType == SCREEN_CONTENT_REAL_TIME && pParam.bEnableLongTermReference {
+            WELS_MAX(1, WELS_LOG2(pParam.uiGopSize))
+        } else {
+            WELS_MAX(1, (pParam.uiGopSize >> 1) as i32)
+        };
     let mut iNeededRefNum = if pParam.uiIntraPeriod != 1 {
         iCurrentStrNum + pParam.iLTRRefNum
     } else {
@@ -325,8 +314,7 @@ pub fn WelsCheckNumRefSetting(
             WELS_LOG_WARNING,
             &format!(
                 "iNumRefFrame({}) setting does not support the temporal and LTR setting, will be reset to {}",
-                pParam.iNumRefFrame,
-                iNeededRefNum
+                pParam.iNumRefFrame, iNeededRefNum
             ),
         );
         if bStrictCheck {
@@ -362,9 +350,7 @@ pub fn WelsCheckRefFrameLimitationLevelIdcFirst(
     pLogCtx: SLogContext,
     pParam: &mut SWelsSvcCodingParam,
 ) -> i32 {
-    if pParam.iNumRefFrame == AUTO_REF_PIC_COUNT
-        || pParam.iMaxNumRefFrame == AUTO_REF_PIC_COUNT
-    {
+    if pParam.iNumRefFrame == AUTO_REF_PIC_COUNT || pParam.iMaxNumRefFrame == AUTO_REF_PIC_COUNT {
         // no need to do the checking
         return ENC_RETURN_SUCCESS;
     }
@@ -400,12 +386,7 @@ pub fn WelsCheckRefFrameLimitationLevelIdcFirst(
 /// `WelsWriteVUI` — au_set.cpp:197.
 ///
 /// `pBsWriter` must have room for the VUI.
-pub fn WelsWriteVUI(
-    buf: &mut [u8],
-    pSps: &SWelsSPS,
-    pBsWriter: &mut BsWriter,
-) -> i32 {
-
+pub fn WelsWriteVUI(buf: &mut [u8], pSps: &SWelsSPS, pBsWriter: &mut BsWriter) -> i32 {
     BsWriteOneBit(buf, pBsWriter, pSps.bAspectRatioPresent as u32); // aspect_ratio_info_present_flag
     if pSps.bAspectRatioPresent {
         BsWriteBits(buf, pBsWriter, 8, pSps.eAspectRatio as u32); // aspect_ratio_idc
@@ -466,8 +447,6 @@ pub fn WelsWriteSpsSyntax(
     pSpsIdDelta: &[i32],
     bBaseLayer: bool,
 ) -> i32 {
-
-
     BsWriteBits(buf, pBsWriter, 8, pSps.uiProfileIdc as u32);
 
     BsWriteOneBit(buf, pBsWriter, pSps.bConstraintSet0Flag as u32);
@@ -488,9 +467,10 @@ pub fn WelsWriteSpsSyntax(
     }
     BsWriteBits(buf, pBsWriter, 8, pSps.iLevelIdc as u32); // iLevelIdc
     // seq_parameter_set_id
-    BsWriteUE(buf, pBsWriter,
-        pSps
-            .uiSpsId
+    BsWriteUE(
+        buf,
+        pBsWriter,
+        pSps.uiSpsId
             .wrapping_add(pSpsIdDelta[pSps.uiSpsId as usize] as u32),
     );
 
@@ -577,7 +557,12 @@ pub fn WelsWriteSubsetSpsSyntax(
         let pSubsetSpsExt = &pSubsetSps.sSpsSvcExt;
 
         BsWriteOneBit(buf, &mut *pBsWriter, 1); // bInterLayerDeblockingFilterCtrlPresentFlag
-        BsWriteBits(buf, &mut *pBsWriter, 2, pSubsetSpsExt.iExtendedSpatialScalability as u32);
+        BsWriteBits(
+            buf,
+            &mut *pBsWriter,
+            2,
+            pSubsetSpsExt.iExtendedSpatialScalability as u32,
+        );
         BsWriteOneBit(buf, &mut *pBsWriter, 0); // uiChromaPhaseXPlus1Flag
         BsWriteBits(buf, &mut *pBsWriter, 2, 1); // uiChromaPhaseYPlus1
         if pSubsetSpsExt.iExtendedSpatialScalability == 1 {
@@ -588,11 +573,23 @@ pub fn WelsWriteSubsetSpsSyntax(
             BsWriteSE(buf, &mut *pBsWriter, 0); // sSeqScaledRefLayer.right_offset
             BsWriteSE(buf, &mut *pBsWriter, 0); // sSeqScaledRefLayer.bottom_offset
         }
-        BsWriteOneBit(buf, &mut *pBsWriter, pSubsetSpsExt.bSeqTcoeffLevelPredFlag as u32);
+        BsWriteOneBit(
+            buf,
+            &mut *pBsWriter,
+            pSubsetSpsExt.bSeqTcoeffLevelPredFlag as u32,
+        );
         if pSubsetSpsExt.bSeqTcoeffLevelPredFlag {
-            BsWriteOneBit(buf, &mut *pBsWriter, pSubsetSpsExt.bAdaptiveTcoeffLevelPredFlag as u32);
+            BsWriteOneBit(
+                buf,
+                &mut *pBsWriter,
+                pSubsetSpsExt.bAdaptiveTcoeffLevelPredFlag as u32,
+            );
         }
-        BsWriteOneBit(buf, &mut *pBsWriter, pSubsetSpsExt.bSliceHeaderRestrictionFlag as u32);
+        BsWriteOneBit(
+            buf,
+            &mut *pBsWriter,
+            pSubsetSpsExt.bSliceHeaderRestrictionFlag as u32,
+        );
 
         BsWriteOneBit(buf, &mut *pBsWriter, 0); // bSvcVuiParamPresentFlag
     }
@@ -614,16 +611,17 @@ pub fn WelsWritePpsSyntax(
     pBsWriter: &mut BsWriter,
     pParametersetStrategy: &CWelsParametersetIdStrategyObj,
 ) -> i32 {
-
-    BsWriteUE(buf, pBsWriter,
-        pPps
-            .iPpsId
+    BsWriteUE(
+        buf,
+        pBsWriter,
+        pPps.iPpsId
             .wrapping_add(pParametersetStrategy.GetPpsIdOffset(pPps.iPpsId as i32) as u32),
     );
-    BsWriteUE(buf, pBsWriter,
+    BsWriteUE(
+        buf,
+        pBsWriter,
         pPps.iSpsId.wrapping_add(
-            pParametersetStrategy.GetSpsIdOffset(pPps.iPpsId as i32, pPps.iSpsId as i32)
-                as u32,
+            pParametersetStrategy.GetSpsIdOffset(pPps.iPpsId as i32, pPps.iSpsId as i32) as u32,
         ),
     );
 
@@ -643,7 +641,9 @@ pub fn WelsWritePpsSyntax(
     BsWriteSE(buf, pBsWriter, pPps.iPicInitQs as i32 - 26);
 
     BsWriteSE(buf, pBsWriter, pPps.uiChromaQpIndexOffset as i32);
-    BsWriteOneBit(buf, pBsWriter,
+    BsWriteOneBit(
+        buf,
+        pBsWriter,
         pPps.bDeblockingFilterControlPresentFlag as u32,
     );
     BsWriteOneBit(buf, pBsWriter, 0); // bConstainedIntraPredFlag
@@ -866,7 +866,6 @@ pub fn WelsInitPps(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     /// The 160x96 / 6fps / baseline case the differential harness drives.
     fn gate_layer() -> (SSpatialLayerConfig, SSpatialLayerInternal) {
@@ -895,7 +894,10 @@ mod tests {
     fn init_sps_matches_cxx_for_the_gate_configuration() {
         let (mut lp, li) = gate_layer();
         let mut sps = SWelsSPS::default();
-        assert_eq!(WelsInitSps(&mut sps, &mut lp, &li, 0, 1, 0, true, false, 1, false), 0);
+        assert_eq!(
+            WelsInitSps(&mut sps, &mut lp, &li, 0, 1, 0, true, false, 1, false),
+            0
+        );
 
         assert_eq!(sps.iMbWidth, 10);
         assert_eq!(sps.iMbHeight, 6);
@@ -933,7 +935,9 @@ mod tests {
 
         assert_eq!(
             &buf[..written],
-            &[0x42, 0xc0, 0x0d, 0x8c, 0x68, 0x28, 0xd2, 0x01, 0xe1, 0x10, 0x8d, 0x40],
+            &[
+                0x42, 0xc0, 0x0d, 0x8c, 0x68, 0x28, 0xd2, 0x01, 0xe1, 0x10, 0x8d, 0x40
+            ],
             "SPS RBSP diverged from the C++ reference"
         );
     }
@@ -991,10 +995,7 @@ mod tests {
     #[test]
     fn init_pps_rejects_missing_sps() {
         let mut pps = SWelsPPS::default();
-        assert_eq!(
-            WelsInitPps(&mut pps, None, None, 0, true, false, false),
-            1
-        );
+        assert_eq!(WelsInitPps(&mut pps, None, None, 0, true, false, false), 1);
     }
 
     /// `WelsGetPaddingOffset` — au_set.cpp:476. A 1920x1080 coded frame carrying

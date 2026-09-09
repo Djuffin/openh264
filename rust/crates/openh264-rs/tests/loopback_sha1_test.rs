@@ -77,7 +77,9 @@ fn test_loopback_encode_and_decode_pipeline() {
             src_pic.iStride[2] = width / 2;
             src_pic.pData[0] = yuv_input.as_mut_ptr();
             src_pic.pData[1] = yuv_input.as_mut_ptr().add((width * height) as usize);
-            src_pic.pData[2] = yuv_input.as_mut_ptr().add((width * height * 5 / 4) as usize);
+            src_pic.pData[2] = yuv_input
+                .as_mut_ptr()
+                .add((width * height * 5 / 4) as usize);
 
             let enc_frame_ret = ISVCEncoder::EncodeFrame(p_encoder, &src_pic, &mut bs_info);
             assert_eq!(enc_frame_ret, CM_RESULT_SUCCESS);
@@ -111,7 +113,10 @@ fn test_loopback_encode_and_decode_pipeline() {
 
             // 5. Uninitialize and destroy safely
             assert_eq!(ISVCEncoder::Uninitialize(p_encoder), CM_RESULT_SUCCESS);
-            assert_eq!(ISVCDecoder::Uninitialize(p_decoder), CM_RESULT_SUCCESS as i64);
+            assert_eq!(
+                ISVCDecoder::Uninitialize(p_decoder),
+                CM_RESULT_SUCCESS as i64
+            );
 
             WelsDestroySVCEncoder(p_encoder);
             WelsDestroyDecoder(p_decoder);
@@ -165,9 +170,17 @@ fn test_decode_encode_full_cycle_sha1_parity() {
     let repo_root = workspace_root();
     for param in K_DECODE_ENCODE_FILE_ARRAY {
         let file_path = repo_root.join(param.file_name);
-        assert!(file_path.exists(), "Asset file {} must exist", file_path.display());
+        assert!(
+            file_path.exists(),
+            "Asset file {} must exist",
+            file_path.display()
+        );
         let data = std::fs::read(&file_path).expect("Failed to read bitstream asset");
-        assert!(!data.is_empty(), "Asset file {} must not be empty", file_path.display());
+        assert!(
+            !data.is_empty(),
+            "Asset file {} must not be empty",
+            file_path.display()
+        );
 
         unsafe {
             // 1. Create decoder
@@ -210,31 +223,32 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             let mut hasher = Sha1Hasher::new();
             let units = split_annexb_units(&data);
 
-            let encode_picture_frame = |p_dst: [*mut u8; 3], buf_info: &SBufferInfo, hasher: &mut Sha1Hasher| {
-                if buf_info.iBufferStatus == 1 {
-                    let w = buf_info.UsrData.sSystemBuffer.iWidth;
-                    let h = buf_info.UsrData.sSystemBuffer.iHeight;
-                    let stride_y = buf_info.UsrData.sSystemBuffer.iStride[0];
-                    let stride_uv = buf_info.UsrData.sSystemBuffer.iStride[1];
+            let encode_picture_frame =
+                |p_dst: [*mut u8; 3], buf_info: &SBufferInfo, hasher: &mut Sha1Hasher| {
+                    if buf_info.iBufferStatus == 1 {
+                        let w = buf_info.UsrData.sSystemBuffer.iWidth;
+                        let h = buf_info.UsrData.sSystemBuffer.iHeight;
+                        let stride_y = buf_info.UsrData.sSystemBuffer.iStride[0];
+                        let stride_uv = buf_info.UsrData.sSystemBuffer.iStride[1];
 
-                    let mut src_pic = SSourcePicture::default();
-                    src_pic.iPicWidth = w;
-                    src_pic.iPicHeight = h;
-                    src_pic.iColorFormat = EVideoFormatType::videoFormatI420 as i32;
-                    src_pic.iStride[0] = stride_y;
-                    src_pic.iStride[1] = stride_uv;
-                    src_pic.iStride[2] = stride_uv;
-                    src_pic.pData[0] = p_dst[0];
-                    src_pic.pData[1] = p_dst[1];
-                    src_pic.pData[2] = p_dst[2];
+                        let mut src_pic = SSourcePicture::default();
+                        src_pic.iPicWidth = w;
+                        src_pic.iPicHeight = h;
+                        src_pic.iColorFormat = EVideoFormatType::videoFormatI420 as i32;
+                        src_pic.iStride[0] = stride_y;
+                        src_pic.iStride[1] = stride_uv;
+                        src_pic.iStride[2] = stride_uv;
+                        src_pic.pData[0] = p_dst[0];
+                        src_pic.pData[1] = p_dst[1];
+                        src_pic.pData[2] = p_dst[2];
 
-                    let mut bs_info = SFrameBSInfo::default();
-                    let enc_ret = ISVCEncoder::EncodeFrame(p_encoder, &src_pic, &mut bs_info);
-                    if enc_ret == CM_RESULT_SUCCESS {
-                        update_hash_from_encoded_frame(hasher, &bs_info);
+                        let mut bs_info = SFrameBSInfo::default();
+                        let enc_ret = ISVCEncoder::EncodeFrame(p_encoder, &src_pic, &mut bs_info);
+                        if enc_ret == CM_RESULT_SUCCESS {
+                            update_hash_from_encoded_frame(hasher, &bs_info);
+                        }
                     }
-                }
-            };
+                };
 
             let mut timestamp = 0u64;
             for unit in units {
@@ -299,7 +313,8 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             for _ in 0..remaining_frames {
                 let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
                 let mut buf_info = SBufferInfo::default();
-                let flush_ret = ISVCDecoder::FlushFrame(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
+                let flush_ret =
+                    ISVCDecoder::FlushFrame(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
                 if flush_ret == DECODING_STATE::dsErrorFree {
                     encode_picture_frame(p_dst, &buf_info, &mut hasher);
                 }

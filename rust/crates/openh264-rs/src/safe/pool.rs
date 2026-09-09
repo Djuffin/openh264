@@ -256,7 +256,8 @@ impl<T> Pool<T> {
                 .max()
                 .unwrap_or(0)
                 .wrapping_add(1);
-            self.generations.resize(self.slots.len() + extra.len(), fresh);
+            self.generations
+                .resize(self.slots.len() + extra.len(), fresh);
         }
         self.slots.extend(extra);
     }
@@ -297,7 +298,10 @@ impl<T> Pool<T> {
         let mut seen = vec![false; old_len];
         for &i in order {
             assert!(i < old_len, "index {i} outside a pool of {old_len}");
-            assert!(!std::mem::replace(&mut seen[i], true), "index {i} named twice");
+            assert!(
+                !std::mem::replace(&mut seen[i], true),
+                "index {i} named twice"
+            );
         }
 
         #[cfg(debug_assertions)]
@@ -428,10 +432,7 @@ mod tests {
         // `Option<Id>` needs no discriminant. `deblocking.rs` fills
         // `[[Option<PicId>; 16]; 2]` per macroblock and compares six of them per
         // edge; this is what keeps that one word and one comparison.
-        assert_eq!(
-            size_of::<Option<Id>>(),
-            size_of::<Id>()
-        );
+        assert_eq!(size_of::<Option<Id>>(), size_of::<Id>());
         // And the bias is invisible from outside: slot 0 round-trips.
         assert_eq!(pool_of(1).id(0).index(), 0);
     }
@@ -583,7 +584,11 @@ mod tests {
         let mut p = pool_of(5);
         let slot1 = p.id(1);
         p.reorder_and_shrink(&[0, 1, 2]);
-        assert_eq!(*p.get(slot1), 10, "order[1] == 1, so the handle is still good");
+        assert_eq!(
+            *p.get(slot1),
+            10,
+            "order[1] == 1, so the handle is still good"
+        );
     }
 
     /// Growing after a shrink must not resurrect a handle to a slot the shrink

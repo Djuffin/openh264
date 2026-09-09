@@ -1,8 +1,4 @@
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 //! SVC Spatial Enhancement Layer Mode Decision & Screen Content Coding Engine.
 //!
@@ -11,42 +7,46 @@
 
 #![deny(unsafe_code)]
 
-
-use crate::encoder::rec_view::{copy_block_to_view, RecCursor};
-use crate::encoder::svc_encode_slice::{CLIP3_QP_0_51, WelsIMbChromaEncode, WelsPMbChromaEncode, ctx_pic_ref, g_kuiChromaQpTable, layer_ref_feature_storage, layer_ref_pic};
+use crate::common::mc::{mc_chroma, mc_luma};
+pub use crate::encoder::encoder_context::EWelsSliceType;
+pub use crate::encoder::encoder_context::SMVComponentUnit;
+pub use crate::encoder::encoder_context::SMVUnitXY;
+pub use crate::encoder::encoder_context::SPicData;
+pub use crate::encoder::encoder_context::sWelsEncCtx;
+pub use crate::encoder::md::SMB;
+pub use crate::encoder::md::SMbCache;
+pub use crate::encoder::md::SMcFunc;
+pub use crate::encoder::md::SWelsMD;
+pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_BLOCK8x8_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};
 use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
+pub use crate::encoder::param_svc::SWelsPPS;
+pub use crate::encoder::picture::SPicture;
+pub use crate::encoder::picture::SScreenBlockFeatureStorage;
+use crate::encoder::rec_view::{RecCursor, copy_block_to_view};
 use crate::encoder::svc_encode_mb::{WelsEncInterY, WelsEncRecI16x16Y};
+pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::svc_encode_slice::SLayerInfo;
+pub use crate::encoder::svc_encode_slice::SSlice;
+use crate::encoder::svc_encode_slice::{
+    CLIP3_QP_0_51, WelsIMbChromaEncode, WelsPMbChromaEncode, ctx_pic_ref, g_kuiChromaQpTable,
+    layer_ref_feature_storage, layer_ref_pic,
+};
+use crate::encoder::svc_encode_slice::{
+    current_layer_expect, layer_ref_pic_expect, layer_ref_view_expect,
+};
+use crate::encoder::svc_encode_slice::{layer_enc_view_expect, layer_rec_view_expect};
+pub use crate::encoder::svc_motion_estimate::SWelsME;
 use crate::encoder::svc_set_mb_syn_cavlc::IS_INTRA16x16;
 use crate::encoder::vlc_encoder::BsSizeUE;
-pub use crate::encoder::encoder_context::SMVUnitXY;
-pub use crate::encoder::encoder_context::SMVComponentUnit;
-pub use crate::encoder::encoder_context::EWelsSliceType;
-pub use crate::encoder::picture::SScreenBlockFeatureStorage;
-pub use crate::encoder::picture::SPicture;
-pub use crate::encoder::param_svc::SWelsPPS;
+pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 pub use crate::encoder::wels_preprocess::EStaticBlockIdc;
-pub use crate::encoder::md::SMcFunc;
-use crate::common::mc::{mc_chroma, mc_luma};
-use crate::safe::plane::PlaneCursorMut;
-pub use crate::encoder::wels_preprocess::SVAACalcResult;
 pub use crate::encoder::wels_preprocess::SScrollDetectionParam;
-pub use crate::encoder::svc_motion_estimate::SWelsME;
-use crate::safe::mvd_cost::MvdCostCursor;
-use crate::encoder::svc_encode_slice::{current_layer_expect, layer_ref_pic_expect, layer_ref_view_expect};
-use crate::encoder::svc_encode_slice::{layer_enc_view_expect, layer_rec_view_expect};
-pub use crate::encoder::md::SWelsMD;
+pub use crate::encoder::wels_preprocess::SVAACalcResult;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
-pub use crate::encoder::svc_encode_slice::SLayerInfo;
-pub use crate::encoder::md::SMbCache;
-pub use crate::encoder::encoder_context::SPicData;
-pub use crate::encoder::md::SMB;
-pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_BLOCK8x8_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
-pub use crate::encoder::svc_encode_slice::SSlice;
-pub use crate::encoder::svc_encode_slice::SDqLayer;
-pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
-pub use crate::encoder::encoder_context::sWelsEncCtx;
+use crate::safe::mvd_cost::MvdCostCursor;
+use crate::safe::plane::PlaneCursorMut;
 
 // ============================================================================
 // Constants and Thresholds
@@ -63,9 +63,8 @@ pub const MB_TOP_BIT: u32 = 1;
 pub const MB_TOPRIGHT_BIT: u32 = 2;
 pub const REF_NOT_AVAIL: i8 = -2;
 
-pub const g_kuiCache30ScanIdx: [u8; 16] = [
-    7, 8, 13, 14, 9, 10, 15, 16, 19, 20, 25, 26, 21, 22, 27, 28,
-];
+pub const g_kuiCache30ScanIdx: [u8; 16] =
+    [7, 8, 13, 14, 9, 10, 15, 16, 19, 20, 25, 26, 21, 22, 27, 28];
 
 pub const I16_PRED_V: i8 = 0;
 pub const I16_PRED_H: i8 = 1;
@@ -77,13 +76,49 @@ pub const I16_PRED_DC_128: i8 = 6;
 pub const I16_PRED_INVALID: i8 = -1;
 
 pub const g_kiIntra16AvaliMode: [[i8; 5]; 8] = [
-    [I16_PRED_DC_128, I16_PRED_INVALID, I16_PRED_INVALID, I16_PRED_INVALID, 1],
-    [I16_PRED_DC_L, I16_PRED_H, I16_PRED_INVALID, I16_PRED_INVALID, 2],
-    [I16_PRED_DC_T, I16_PRED_V, I16_PRED_INVALID, I16_PRED_INVALID, 2],
+    [
+        I16_PRED_DC_128,
+        I16_PRED_INVALID,
+        I16_PRED_INVALID,
+        I16_PRED_INVALID,
+        1,
+    ],
+    [
+        I16_PRED_DC_L,
+        I16_PRED_H,
+        I16_PRED_INVALID,
+        I16_PRED_INVALID,
+        2,
+    ],
+    [
+        I16_PRED_DC_T,
+        I16_PRED_V,
+        I16_PRED_INVALID,
+        I16_PRED_INVALID,
+        2,
+    ],
     [I16_PRED_V, I16_PRED_H, I16_PRED_DC, I16_PRED_INVALID, 3],
-    [I16_PRED_DC_128, I16_PRED_INVALID, I16_PRED_INVALID, I16_PRED_INVALID, 1],
-    [I16_PRED_DC_L, I16_PRED_H, I16_PRED_INVALID, I16_PRED_INVALID, 2],
-    [I16_PRED_DC_T, I16_PRED_V, I16_PRED_INVALID, I16_PRED_INVALID, 2],
+    [
+        I16_PRED_DC_128,
+        I16_PRED_INVALID,
+        I16_PRED_INVALID,
+        I16_PRED_INVALID,
+        1,
+    ],
+    [
+        I16_PRED_DC_L,
+        I16_PRED_H,
+        I16_PRED_INVALID,
+        I16_PRED_INVALID,
+        2,
+    ],
+    [
+        I16_PRED_DC_T,
+        I16_PRED_V,
+        I16_PRED_INVALID,
+        I16_PRED_INVALID,
+        2,
+    ],
     [I16_PRED_V, I16_PRED_H, I16_PRED_DC, I16_PRED_P, 4],
 ];
 
@@ -147,7 +182,6 @@ pub enum ESkipModes {
     SCROLLED = 1,
 }
 
-
 pub type pJudgeSkipFun = extern "C" fn(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -178,14 +212,17 @@ impl Default for SSampleDealingPicData {
 }
 
 // wels_func_ptr_def.h:127 takes uint8_t*, not const uint8_t*.
+use crate::encoder::encoder_context::dq_layer_ref;
 pub use crate::encoder::md::PSampleSadSatdCostFunc;
 use crate::encoder::md::{MbCursors, MdSliceCtx};
+use crate::encoder::md::{SSampleDealingFunc, SWelsMD_sMe};
+use crate::encoder::svc_base_layer_md::{
+    WelsMdInterDoubleCheckPskip, WelsMdInterEncode, WelsMdInterMbRefinement, WelsMdIntraChroma,
+    WelsMdPSkipEnc,
+};
+use crate::safe::mb_grid::MbSplit;
 /// The kernel set the direct dispatch sites below name; see `simd::kernels`.
 use crate::simd::kernels;
-use crate::encoder::encoder_context::dq_layer_ref;
-use crate::encoder::md::{SSampleDealingFunc, SWelsMD_sMe};
-use crate::encoder::svc_base_layer_md::{WelsMdInterDoubleCheckPskip, WelsMdInterEncode, WelsMdInterMbRefinement, WelsMdIntraChroma, WelsMdPSkipEnc};
-use crate::safe::mb_grid::MbSplit;
 
 // ============================================================================
 // Macro / Inline Condition Helpers
@@ -311,10 +348,9 @@ pub extern "C" fn WelsMdInterSecondaryModesEnc<'a>(
         WelsMdInterDecidedPskip(pWelsMd, pSlice, pCurMb);
     } else {
         //Step 3: SubP16 MD
-        pFuncList.pfSetScrollingMv.expect("pfSetScrollingMv is unset")(
-            pEncCtx.vaa_ext_ref(),
-            pWelsMd,
-        ); //SCC
+        pFuncList
+            .pfSetScrollingMv
+            .expect("pfSetScrollingMv is unset")(pEncCtx.vaa_ext_ref(), pWelsMd); //SCC
         pFuncList.pfInterFineMd.expect(
             "pfInterFineMd is unset; PreprocessSliceCoding must assign \
              WelsMdInterFinePartition[Vaa] before any P macroblock is coded",
@@ -421,9 +457,18 @@ fn VaaBackgroundMbDataUpdate(sc: &MdSliceCtx<'_>, pCurMb: &mut SMB) {
     let (lx, ly) = (((pCurMb.iMbX as isize) << 4), ((pCurMb.iMbY as isize) << 4));
     let (cx, cy) = (((pCurMb.iMbX as isize) << 3), ((pCurMb.iMbY as isize) << 3));
 
-    kernels::copy::copy_16x16(&curView.plane(0).cursor(lx, ly), &refView.plane(0).cursor(lx, ly));
-    kernels::copy::copy_8x8(&curView.plane(1).cursor(cx, cy), &refView.plane(1).cursor(cx, cy));
-    kernels::copy::copy_8x8(&curView.plane(2).cursor(cx, cy), &refView.plane(2).cursor(cx, cy));
+    kernels::copy::copy_16x16(
+        &curView.plane(0).cursor(lx, ly),
+        &refView.plane(0).cursor(lx, ly),
+    );
+    kernels::copy::copy_8x8(
+        &curView.plane(1).cursor(cx, cy),
+        &refView.plane(1).cursor(cx, cy),
+    );
+    kernels::copy::copy_8x8(
+        &curView.plane(2).cursor(cx, cy),
+        &refView.plane(2).cursor(cx, cy),
+    );
 }
 
 /// Encodes a background macroblock: motion-compensates it from the reference frame at
@@ -515,10 +560,8 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
         (sc.func.pfUpdateMbMv)(&mut pCurMb.sMv, sMvp);
 
         pCurMb.uiLumaQp = pSlice.uiLastMbQp;
-        pCurMb.uiChromaQp = g_kuiChromaQpTable
-            [CLIP3_QP_0_51(
-                pCurMb.uiLumaQp as i32 + sc.chroma_qp_offset,
-            )];
+        pCurMb.uiChromaQp =
+            g_kuiChromaQpTable[CLIP3_QP_0_51(pCurMb.uiLumaQp as i32 + sc.chroma_qp_offset)];
 
         WelsRecPskip(pWelsMd.mbc(), pCurMb, &mut *pMbCache);
         VaaBackgroundMbDataUpdate(&sc, pCurMb);
@@ -551,11 +594,7 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     }
 
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
-    WelsPMbChromaEncode(
-        pEncCtx,
-        &mut *pSlice,
-        pCurMb,
-    );
+    WelsPMbChromaEncode(pEncCtx, &mut *pSlice, pCurMb);
 
     let mbc = pWelsMd.mbc();
     let pMbCache = &pSlice.sMbCacheInfo;
@@ -598,7 +637,10 @@ pub extern "C" fn PredMv(
         sMvC = kpMvComp.sMotionVectorCache[kuiTopIdx + iPartW as usize];
     }
 
-    if (REF_NOT_AVAIL as i32 == iTopRef) && (REF_NOT_AVAIL as i32 == iDiagonalRef) && iLeftRef != REF_NOT_AVAIL as i32 {
+    if (REF_NOT_AVAIL as i32 == iTopRef)
+        && (REF_NOT_AVAIL as i32 == iDiagonalRef)
+        && iLeftRef != REF_NOT_AVAIL as i32
+    {
         *sMvp = sMvA;
         return;
     }
@@ -624,8 +666,12 @@ pub extern "C" fn PredSkipMv(kpMvComp: &SMVComponentUnit, sMvp: &mut SMVUnitXY) 
 
     if REF_NOT_AVAIL as i32 == kiLeftRef
         || REF_NOT_AVAIL as i32 == kiTopRef
-        || (0 == kiLeftRef && kpMvComp.sMotionVectorCache[6].iMvX == 0 && kpMvComp.sMotionVectorCache[6].iMvY == 0)
-        || (0 == kiTopRef && kpMvComp.sMotionVectorCache[1].iMvX == 0 && kpMvComp.sMotionVectorCache[1].iMvY == 0)
+        || (0 == kiLeftRef
+            && kpMvComp.sMotionVectorCache[6].iMvX == 0
+            && kpMvComp.sMotionVectorCache[6].iMvY == 0)
+        || (0 == kiTopRef
+            && kpMvComp.sMotionVectorCache[1].iMvX == 0
+            && kpMvComp.sMotionVectorCache[1].iMvY == 0)
     {
         *sMvp = SMVUnitXY { iMvX: 0, iMvY: 0 };
         return;
@@ -634,7 +680,12 @@ pub extern "C" fn PredSkipMv(kpMvComp: &SMVComponentUnit, sMvp: &mut SMVUnitXY) 
     PredMv(kpMvComp, 0, 4, 0, sMvp);
 }
 
-pub extern "C" fn PredInter16x8Mv(kpMvComp: &SMVComponentUnit, iPartIdx: i32, iRef: i8, sMvp: &mut SMVUnitXY) {
+pub extern "C" fn PredInter16x8Mv(
+    kpMvComp: &SMVComponentUnit,
+    iPartIdx: i32,
+    iRef: i8,
+    sMvp: &mut SMVUnitXY,
+) {
     if 0 == iPartIdx {
         let kiTopRef = kpMvComp.iRefIndexCache[1];
         if iRef == kiTopRef {
@@ -651,7 +702,12 @@ pub extern "C" fn PredInter16x8Mv(kpMvComp: &SMVComponentUnit, iPartIdx: i32, iR
     PredMv(kpMvComp, iPartIdx as i8, 4, iRef as i32, sMvp);
 }
 
-pub extern "C" fn PredInter8x16Mv(kpMvComp: &SMVComponentUnit, iPartIdx: i32, iRef: i8, sMvp: &mut SMVUnitXY) {
+pub extern "C" fn PredInter8x16Mv(
+    kpMvComp: &SMVComponentUnit,
+    iPartIdx: i32,
+    iRef: i8,
+    sMvp: &mut SMVUnitXY,
+) {
     if 0 == iPartIdx {
         let kiLeftRef = kpMvComp.iRefIndexCache[6];
         if iRef == kiLeftRef {
@@ -906,7 +962,9 @@ pub fn WelsMdI16x16FromLayer(
         return i32::MAX;
     };
     let (kiMbOrgX, kiMbOrgY) = pMbCache.SPicData.luma_origin();
-    let cRecLuma = layer_rec_view_expect(pCurDqLayer).plane(0).cursor(kiMbOrgX, kiMbOrgY);
+    let cRecLuma = layer_rec_view_expect(pCurDqLayer)
+        .plane(0)
+        .cursor(kiMbOrgX, kiMbOrgY);
     let cEncLuma = layer_enc_view_expect(pCurDqLayer)
         .plane(0)
         .cursor(kiMbOrgX, kiMbOrgY);
@@ -1070,13 +1128,7 @@ pub fn WelsMdP16x16<'a>(
         }
     }
 
-    PredMv(
-        &pMbCache.sMvComponents,
-        0,
-        4,
-        0,
-        &mut pMe16x16.sMvp,
-    );
+    PredMv(&pMbCache.sMvComponents, 0, 4, 0, &mut pMe16x16.sMvp);
 
     if let Some(search_fn) = pFunc.pfMotionSearch[0] {
         let pEncPicture = layer_enc_view_expect(pCurLayer);
@@ -1188,7 +1240,10 @@ pub extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, 
     );
 
     let dct_fn = pFuncList.pfDctFourT4;
-    for (k, (dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)].into_iter().enumerate() {
+    for (k, (dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)]
+        .into_iter()
+        .enumerate()
+    {
         dct_fn(
             &mut pMbCache.sCoeffLevel[k << 6..],
             &pEncMb.advance(dx, dy),
@@ -1209,9 +1264,9 @@ pub extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, 
 /// reads through the list rather than through the current layer.
 #[inline(always)]
 pub fn GetRefMb(pEncCtx: &sWelsEncCtx, pCurMb: &SMB) -> SMB {
-    let kRefIdx = current_layer_expect(pEncCtx)
-        .pRefLayer
-        .expect("GetRefMb on a layer with no base layer: bBaseLayerAvailableFlag gates every caller");
+    let kRefIdx = current_layer_expect(pEncCtx).pRefLayer.expect(
+        "GetRefMb on a layer with no base layer: bBaseLayerAvailableFlag gates every caller",
+    );
     let kpRefLayer = dq_layer_ref(pEncCtx, kRefIdx.get())
         .expect("the base layer is built before its enhancement layer encodes");
     let kiRefMbIdx =
@@ -1242,11 +1297,7 @@ pub fn GetRefMb(pEncCtx: &sWelsEncCtx, pCurMb: &SMB) -> SMB {
 }
 
 /// Scales base-layer motion vectors by 2x to initialize enhancement-layer candidates.
-pub fn SetMvBaseEnhancelayer(
-    pMd: &mut SWelsMD<'_>,
-    pCurMb: &mut SMB,
-    kpRefMb: &SMB,
-) {
+pub fn SetMvBaseEnhancelayer(pMd: &mut SWelsMD<'_>, pCurMb: &mut SMB, kpRefMb: &SMB) {
     let kuiRefMbType = kpRefMb.uiMbType;
 
     if !IS_SVC_INTRA(kuiRefMbType) {
@@ -1311,7 +1362,13 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
     let bSkip: bool;
 
     let pfBgd = pEncCtx.func_list().pfInterMdBackgroundDecision;
-    if pfBgd(pEncCtx, pWelsMd, &mut *pSlice, mbs.cur_mut(), &mut bKeepSkip) {
+    if pfBgd(
+        pEncCtx,
+        pWelsMd,
+        &mut *pSlice,
+        mbs.cur_mut(),
+        &mut bKeepSkip,
+    ) {
         return;
     }
 
@@ -1334,8 +1391,14 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
             );
 
             // Step 2: P_16x16
-            pWelsMd.iCostLuma =
-                WelsMdP16x16(pEncCtx, pEncCtx.func_list(), pCurDqLayer, pWelsMd, pSlice, mbs);
+            pWelsMd.iCostLuma = WelsMdP16x16(
+                pEncCtx,
+                pEncCtx.func_list(),
+                pCurDqLayer,
+                pWelsMd,
+                pSlice,
+                mbs,
+            );
             mbs.cur_mut().uiMbType = MB_TYPE_16x16;
         }
 
@@ -1514,7 +1577,9 @@ pub extern "C" fn WelsMdUpdateBGDInfo(
     } else {
         (&layer_ref_pic_expect(pEncCtx, pCurLayer).pRefMbQp)[kiMbXY]
     };
-    layer_rec_view_expect(pCurLayer).ref_mb_qp().set(kiMbXY, uiQp);
+    layer_rec_view_expect(pCurLayer)
+        .ref_mb_qp()
+        .set(kiMbXY, uiQp);
 
     if pCurMb.uiMbType == MB_TYPE_BACKGROUND {
         pCurMb.uiMbType = MB_TYPE_SKIP;
@@ -1528,7 +1593,13 @@ pub extern "C" fn WelsMdUpdateBGDInfoNULL(
     bCollocatedPredFlag: bool,
     iRefPictureType: i32,
 ) {
-    WelsMdUpdateBGDInfo(pEncCtx, pCurLayer, pCurMb, bCollocatedPredFlag, iRefPictureType);
+    WelsMdUpdateBGDInfo(
+        pEncCtx,
+        pCurLayer,
+        pCurMb,
+        bCollocatedPredFlag,
+        iRefPictureType,
+    );
 }
 
 // ============================================================================
@@ -1716,8 +1787,14 @@ pub extern "C" fn SvcMdSCDMbEnc(
     // `>> 3`, and **plane 2 keeps stride index 1**.
     let (lx, ly) = pd.luma_origin();
     let (cx, cy) = pd.chroma_origin();
-    let (dx_l, dy_l) = ((sCandidateMv.iMvX as isize) >> 2, (sCandidateMv.iMvY as isize) >> 2);
-    let (dx_c, dy_c) = ((sCandidateMv.iMvX as isize) >> 3, (sCandidateMv.iMvY as isize) >> 3);
+    let (dx_l, dy_l) = (
+        (sCandidateMv.iMvX as isize) >> 2,
+        (sCandidateMv.iMvY as isize) >> 2,
+    );
+    let (dx_c, dy_c) = (
+        (sCandidateMv.iMvX as isize) >> 3,
+        (sCandidateMv.iMvY as isize) >> 3,
+    );
     let to_pred = !bQpSimilarFlag || !bMbSkipFlag;
     let luma_off = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
     let chroma_off = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
@@ -1794,7 +1871,12 @@ pub extern "C" fn SvcMdSCDMbEnc(
     );
     pMbCache.sMbMvp[0] = pWelsMd.sMe.sMe16x16.sMvp;
 
-    UpdateP16x16MotionInfo(&mut pMbCache.sMvComponents, pCurMb, 0, &mut pWelsMd.sMe.sMe16x16.sMv);
+    UpdateP16x16MotionInfo(
+        &mut pMbCache.sMvComponents,
+        pCurMb,
+        0,
+        &mut pWelsMd.sMe.sMe16x16.sMv,
+    );
 
     if pWelsMd.bMdUsingSad {
         pWelsMd.iCostLuma = pCurMb.iSadCost;
@@ -1808,11 +1890,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
     }
 
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
-    WelsPMbChromaEncode(
-        pEncCtx,
-        &mut *pSlice,
-        pCurMb,
-    );
+    WelsPMbChromaEncode(pEncCtx, &mut *pSlice, pCurMb);
 
     let pMbCache = &mut pSlice.sMbCacheInfo;
     // The chroma cursors both resolve at stride index 1 — `mb_offset`'s rule.
@@ -1849,7 +1927,8 @@ pub extern "C" fn MdInterSCDPskipProcess(
     };
     let pCurDqLayer = current_layer_expect(pEncCtx);
 
-    let kiRefMbQp = (&layer_ref_pic_expect(pEncCtx, pCurDqLayer).pRefMbQp)[pCurMb.iMbXY as usize] as i32;
+    let kiRefMbQp =
+        (&layer_ref_pic_expect(pEncCtx, pCurDqLayer).pRefMbQp)[pCurMb.iMbXY as usize] as i32;
     let kiCurMbQp = pCurMb.uiLumaQp as i32;
 
     let pJudgeSkip: [pJudgeSkipFun; 2] = [JudgeStaticSkip, JudgeScrollSkip];
@@ -1897,7 +1976,6 @@ pub fn SetBlockStaticIdcToMd(
     pCurMb: &mut SMB,
     pDqLayer: &SDqLayer,
 ) {
-
     let kiMbX = pCurMb.iMbX as i32;
     let kiMbY = pCurMb.iMbY as i32;
     let kiMbWidth: i32 = pDqLayer.iMbWidth as i32;
@@ -1981,12 +2059,13 @@ pub fn IsSameMv(sMv0: &SMVUnitXY, sMv1: &SMVUnitXY) -> bool {
     sMv0.iMvX == sMv1.iMvX && sMv0.iMvY == sMv1.iMvY
 }
 
-pub fn TryModeMerge(
-    pMbCache: &mut SMbCache,
-    pWelsMd: &mut SWelsMD<'_>,
-    pCurMb: &mut SMB,
-) -> bool {
-    let SWelsMD_sMe { sMe8x8, sMe16x8, sMe8x16, .. } = &mut pWelsMd.sMe;
+pub fn TryModeMerge(pMbCache: &mut SMbCache, pWelsMd: &mut SWelsMD<'_>, pCurMb: &mut SMB) -> bool {
+    let SWelsMD_sMe {
+        sMe8x8,
+        sMe16x8,
+        sMe8x16,
+        ..
+    } = &mut pWelsMd.sMe;
 
     let bSameMv16x8_0 = IsSameMv(&sMe8x8[0].sMv, &sMe8x8[1].sMv);
     let bSameMv16x8_1 = IsSameMv(&sMe8x8[2].sMv, &sMe8x8[3].sMv);
@@ -1999,9 +2078,9 @@ pub fn TryModeMerge(
     let bSameRefIdx8x16_0 = true;
     let bSameRefIdx8x16_1 = true;
 
-    let iSameMv = (((bSameMv16x8_0 && bSameRefIdx16x8_0 && bSameMv16x8_1 && bSameRefIdx16x8_1) as i32)
-        << 1)
-        | ((bSameMv8x16_0 && bSameRefIdx8x16_0 && bSameMv8x16_1 && bSameRefIdx8x16_1) as i32);
+    let iSameMv =
+        (((bSameMv16x8_0 && bSameRefIdx16x8_0 && bSameMv16x8_1 && bSameRefIdx16x8_1) as i32) << 1)
+            | ((bSameMv8x16_0 && bSameRefIdx8x16_0 && bSameMv8x16_1 && bSameRefIdx8x16_1) as i32);
 
     match iSameMv {
         2 => {
@@ -2036,11 +2115,7 @@ pub fn WelsMdInterFinePartitionVaaOnScreen<'a>(
     let pCurDqLayer = current_layer_expect(pEncCtx);
 
     let get_sign = pEncCtx.func_list().pfGetMbSignFromInterVaa;
-    let uiMbSign = get_sign(
-        &pEncCtx
-            .vaa_expect().sVaaCalcInfo
-            .pSad8x8[pCurMb.iMbXY as usize],
-    );
+    let uiMbSign = get_sign(&pEncCtx.vaa_expect().sVaaCalcInfo.pSad8x8[pCurMb.iMbXY as usize]);
 
     if uiMbSign == MBVAASIGN_FLAT {
         return;
@@ -2170,9 +2245,7 @@ mod tests {
             "every byte of row {SELECTED} is row {SELECTED}'s"
         );
         assert_eq!(
-            SVAAFrameInfoExt::default()
-                .pVaaBlockStaticIdc
-                .select(0),
+            SVAAFrameInfoExt::default().pVaaBlockStaticIdc.select(0),
             None,
             "the port never allocates the store, so every selector is the C++'s NULL"
         );
@@ -2352,13 +2425,11 @@ mod tests {
             iCbpDc: 0,
         };
 
-        let mut target_mv = SMVUnitXY { iMvX: 42, iMvY: -15 };
-        UpdateP16x16MotionInfo(
-            &mut mb_cache.sMvComponents,
-            &mut cur_mb,
-            0,
-            &mut target_mv,
-        );
+        let mut target_mv = SMVUnitXY {
+            iMvX: 42,
+            iMvY: -15,
+        };
+        UpdateP16x16MotionInfo(&mut mb_cache.sMvComponents, &mut cur_mb, 0, &mut target_mv);
 
         assert_eq!(cur_mb.sMv[0], target_mv);
         assert_eq!(cur_mb.iRefIndex[0], 0);
@@ -2434,7 +2505,9 @@ mod tests {
                 pRecView: Some(crate::encoder::rec_view::RecPicView::build(&mut rec_pic)),
                 // `WelsInitCurrentLayer` builds this beside `pRecView` for every real
                 // frame.
-                pEncView: Some(crate::encoder::rec_view::RoPicView::build(src_pool.get(src_id))),
+                pEncView: Some(crate::encoder::rec_view::RoPicView::build(
+                    src_pool.get(src_id),
+                )),
                 ..Default::default()
             };
 
@@ -2463,12 +2536,20 @@ mod tests {
             // answers are taken first and the expectation is derived last, so the tag
             // that reads the buffer is on top.
             assert_eq!(mb_cache.uiMemPredLumaHalf, 0);
-            let pLuma = std::ptr::addr_of_mut!(mb_cache.sMemPredMb).cast::<u8>().add(mem_pred_luma_off(mb_cache.uiMemPredLumaHalf));
-            let pChroma = std::ptr::addr_of_mut!(mb_cache.sMemPredMb).cast::<u8>().add(mem_pred_chroma_off(mb_cache.uiMemPredLumaHalf));
+            let pLuma = std::ptr::addr_of_mut!(mb_cache.sMemPredMb)
+                .cast::<u8>()
+                .add(mem_pred_luma_off(mb_cache.uiMemPredLumaHalf));
+            let pChroma = std::ptr::addr_of_mut!(mb_cache.sMemPredMb)
+                .cast::<u8>()
+                .add(mem_pred_chroma_off(mb_cache.uiMemPredLumaHalf));
             let pPredBuf = std::ptr::addr_of_mut!(mb_cache.sMemPredMb).cast::<u8>();
             assert_eq!(pLuma, pPredBuf);
             assert_eq!(pChroma, pPredBuf.add(256));
-            assert!(std::slice::from_raw_parts(pPredBuf, 256).iter().all(|&b| b == 128));
+            assert!(
+                std::slice::from_raw_parts(pPredBuf, 256)
+                    .iter()
+                    .all(|&b| b == 128)
+            );
         }
     }
 

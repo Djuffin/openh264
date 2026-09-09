@@ -171,7 +171,11 @@ impl SharedPlane {
     #[inline]
     fn new(cells: SharedCells<u8>, stride: usize, origin: usize) -> Self {
         assert!(stride <= u32::MAX as usize, "stride {stride} exceeds u32");
-        Self { cells, stride, origin }
+        Self {
+            cells,
+            stride,
+            origin,
+        }
     }
 
     /// Bytes per row — the C++ `iLineSize[i]`.
@@ -208,7 +212,10 @@ impl SharedPlane {
     /// buys.
     #[inline]
     pub fn cursor(&self, x: isize, y: isize) -> RecCursor<'_> {
-        debug_assert!(self.stride <= u32::MAX as usize, "plane stride bound violated");
+        debug_assert!(
+            self.stride <= u32::MAX as usize,
+            "plane stride bound violated"
+        );
         RecCursor {
             cells: self.cells.cells(),
             center: idx(self.origin, x, y, self.stride),
@@ -342,14 +349,21 @@ impl<'a> RecCursor<'a> {
     #[inline]
     pub fn over_owned(buf: &'a mut [u8], center: usize, stride: usize) -> Self {
         assert!(stride <= u32::MAX as usize, "stride {stride} exceeds u32");
-        Self { cells: Cell::from_mut(buf).as_slice_of_cells(), center, stride }
+        Self {
+            cells: Cell::from_mut(buf).as_slice_of_cells(),
+            center,
+            stride,
+        }
     }
 
     /// The same anchor moved by `(dx, dy)`.
     #[inline]
     #[must_use]
     pub fn advance(self, dx: isize, dy: isize) -> Self {
-        Self { center: idx(self.center, dx, dy, self.stride), ..self }
+        Self {
+            center: idx(self.center, dx, dy, self.stride),
+            ..self
+        }
     }
 
     /// Bytes per row.
@@ -391,8 +405,15 @@ impl<'a> CellSpan<'a> {
     fn cut(cells: &'a [Cell<u8>], start: usize, stride: usize, w: usize, h: usize) -> Self {
         debug_assert!(stride <= u32::MAX as usize, "cursor stride bound violated");
         let stride = stride as u32;
-        let len = if h == 0 { 0 } else { (h - 1) * stride as usize + w };
-        Self { cells: &cells[start..][..len], stride }
+        let len = if h == 0 {
+            0
+        } else {
+            (h - 1) * stride as usize + w
+        };
+        Self {
+            cells: &cells[start..][..len],
+            stride,
+        }
     }
 }
 
@@ -410,7 +431,9 @@ impl<'a> CellSpan<'a> {
     /// for cannot reach.
     #[inline]
     pub(crate) fn row_cells<const W: usize>(&self, y: usize) -> &'a [Cell<u8>; W] {
-        self.cells[y * self.stride as usize..][..W].try_into().expect("W cells")
+        self.cells[y * self.stride as usize..][..W]
+            .try_into()
+            .expect("W cells")
     }
 }
 
@@ -428,7 +451,10 @@ impl crate::safe::plane::BlockRows for CellSpan<'_> {
     fn window<const W: usize>(&self, y: usize, h: usize) -> Self {
         let stride = self.stride as usize;
         let len = if h == 0 { 0 } else { (h - 1) * stride + W };
-        Self { cells: &self.cells[y * stride..][..len], stride: self.stride }
+        Self {
+            cells: &self.cells[y * stride..][..len],
+            stride: self.stride,
+        }
     }
 }
 
@@ -507,7 +533,13 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
 
     #[inline]
     fn span<const W: usize, const H: usize>(&self, dy0: isize, dx0: isize) -> CellSpan<'_> {
-        CellSpan::cut(self.cells, idx(self.center, dx0, dy0, self.stride), self.stride, W, H)
+        CellSpan::cut(
+            self.cells,
+            idx(self.center, dx0, dy0, self.stride),
+            self.stride,
+            W,
+            H,
+        )
     }
 
     /// The one implementor whose row is **owned** — cells cannot lend `&[u8]`.
@@ -644,10 +676,18 @@ impl RecPicView {
         });
         Self {
             planes,
-            sMvList: SharedMbArray { cells: SharedCells::capture(&mut pic.sMvList) },
-            pRefMbQp: SharedMbArray { cells: SharedCells::capture(&mut pic.pRefMbQp) },
-            pMbSkipSad: SharedMbArray { cells: SharedCells::capture(&mut pic.pMbSkipSad) },
-            uiRefMbType: SharedMbArray { cells: SharedCells::capture(&mut pic.uiRefMbType) },
+            sMvList: SharedMbArray {
+                cells: SharedCells::capture(&mut pic.sMvList),
+            },
+            pRefMbQp: SharedMbArray {
+                cells: SharedCells::capture(&mut pic.pRefMbQp),
+            },
+            pMbSkipSad: SharedMbArray {
+                cells: SharedCells::capture(&mut pic.pMbSkipSad),
+            },
+            uiRefMbType: SharedMbArray {
+                cells: SharedCells::capture(&mut pic.uiRefMbType),
+            },
         }
     }
 
@@ -823,7 +863,9 @@ mod tests {
 
         let mut rng_state = 0x51ED_270Fu32;
         let mut next = move || {
-            rng_state = rng_state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            rng_state = rng_state
+                .wrapping_mul(1_664_525)
+                .wrapping_add(1_013_904_223);
             (rng_state >> 24) as u8
         };
         for &stride in &[16usize, 48, 96] {
@@ -843,21 +885,37 @@ mod tests {
                 // `row_view`: the run-time-length read, both types.
                 for len in [1usize, 4, 8] {
                     let want = plain.row(dy, dx, len).to_vec();
-                    assert_eq!(RefSamples::row_view(&plain, dy, dx, len), &want[..],
-                        "plane row_view, stride {stride}, ({dx},{dy}), len {len}");
-                    assert_eq!(&*RefSamples::row_view(&cells, dy, dx, len), &want[..],
-                        "cell row_view, stride {stride}, ({dx},{dy}), len {len}");
+                    assert_eq!(
+                        RefSamples::row_view(&plain, dy, dx, len),
+                        &want[..],
+                        "plane row_view, stride {stride}, ({dx},{dy}), len {len}"
+                    );
+                    assert_eq!(
+                        &*RefSamples::row_view(&cells, dy, dx, len),
+                        &want[..],
+                        "cell row_view, stride {stride}, ({dx},{dy}), len {len}"
+                    );
                 }
                 // `row_blocks`: the folded block walk, both types, against a
                 // straight `row` walk of the same block.
                 let want: Vec<Vec<u8>> =
                     (0..3).map(|k| plain.row(dy + k, dx, 4).to_vec()).collect();
-                let got_plain: Vec<Vec<u8>> =
-                    plain.row_blocks::<4>(dy, dx, 3).map(|r| r.to_vec()).collect();
-                let got_cells: Vec<Vec<u8>> =
-                    cells.row_blocks::<4>(dy, dx, 3).map(|r| r.to_vec()).collect();
-                assert_eq!(got_plain, want, "plane row_blocks, stride {stride}, ({dx},{dy})");
-                assert_eq!(got_cells, want, "cell row_blocks, stride {stride}, ({dx},{dy})");
+                let got_plain: Vec<Vec<u8>> = plain
+                    .row_blocks::<4>(dy, dx, 3)
+                    .map(|r| r.to_vec())
+                    .collect();
+                let got_cells: Vec<Vec<u8>> = cells
+                    .row_blocks::<4>(dy, dx, 3)
+                    .map(|r| r.to_vec())
+                    .collect();
+                assert_eq!(
+                    got_plain, want,
+                    "plane row_blocks, stride {stride}, ({dx},{dy})"
+                );
+                assert_eq!(
+                    got_cells, want,
+                    "cell row_blocks, stride {stride}, ({dx},{dy})"
+                );
 
                 // `span`: the once-checked block, both types, read back row by row
                 // against the same straight `row` walk — including at column offsets
@@ -866,16 +924,28 @@ mod tests {
                 let sp_cells = RefSamples::span::<4, 3>(&cells, dy, dx);
                 for k in 0..3usize {
                     let want4 = plain.row(dy + k as isize, dx, 4);
-                    assert_eq!(&sp_plain.row::<4>(k, 0), want4,
-                        "plane span row, stride {stride}, ({dx},{dy}), row {k}");
-                    assert_eq!(&sp_cells.row::<4>(k, 0), want4,
-                        "cell span row, stride {stride}, ({dx},{dy}), row {k}");
+                    assert_eq!(
+                        &sp_plain.row::<4>(k, 0),
+                        want4,
+                        "plane span row, stride {stride}, ({dx},{dy}), row {k}"
+                    );
+                    assert_eq!(
+                        &sp_cells.row::<4>(k, 0),
+                        want4,
+                        "cell span row, stride {stride}, ({dx},{dy}), row {k}"
+                    );
                     for x0 in 0..3usize {
                         let want2 = plain.row(dy + k as isize, dx + x0 as isize, 2);
-                        assert_eq!(&sp_plain.row::<2>(k, x0), want2,
-                            "plane span subrow, stride {stride}, ({dx},{dy}), ({x0},{k})");
-                        assert_eq!(&sp_cells.row::<2>(k, x0), want2,
-                            "cell span subrow, stride {stride}, ({dx},{dy}), ({x0},{k})");
+                        assert_eq!(
+                            &sp_plain.row::<2>(k, x0),
+                            want2,
+                            "plane span subrow, stride {stride}, ({dx},{dy}), ({x0},{k})"
+                        );
+                        assert_eq!(
+                            &sp_cells.row::<2>(k, x0),
+                            want2,
+                            "cell span subrow, stride {stride}, ({dx},{dy}), ({x0},{k})"
+                        );
                     }
                 }
             }
@@ -925,8 +995,12 @@ mod tests {
     fn two_threads_stamp_disjoint_entries_of_one_side_array() {
         let mut mvs: Vec<SMVUnitXY> = vec![SMVUnitXY::default(); 64];
         let mut qps: Vec<u8> = vec![0; 64];
-        let arr = SharedMbArray { cells: SharedCells::capture(&mut mvs) };
-        let qp = SharedMbArray { cells: SharedCells::capture(&mut qps) };
+        let arr = SharedMbArray {
+            cells: SharedCells::capture(&mut mvs),
+        };
+        let qp = SharedMbArray {
+            cells: SharedCells::capture(&mut qps),
+        };
         // Interleaved, not split: consecutive indices land on different
         // threads, so neighbouring entries share a cache line and any
         // whole-array retag would be caught.
@@ -936,7 +1010,13 @@ mod tests {
                 s.spawn(move || {
                     let mut i = t;
                     while i < 64 {
-                        arr.set(i, SMVUnitXY { iMvX: i as i16, iMvY: -(i as i16) });
+                        arr.set(
+                            i,
+                            SMVUnitXY {
+                                iMvX: i as i16,
+                                iMvY: -(i as i16),
+                            },
+                        );
                         qp.set(i, i as u8);
                         i += 2;
                     }
@@ -945,7 +1025,13 @@ mod tests {
         });
 
         for i in 0..64usize {
-            assert_eq!(arr.get(i), SMVUnitXY { iMvX: i as i16, iMvY: -(i as i16) });
+            assert_eq!(
+                arr.get(i),
+                SMVUnitXY {
+                    iMvX: i as i16,
+                    iMvY: -(i as i16)
+                }
+            );
             assert_eq!(qp.get(i), i as u8);
         }
     }
@@ -962,9 +1048,14 @@ mod tests {
     #[test]
     fn the_block_copy_lands_exactly_where_a_per_sample_walk_would() {
         fn check<const W: usize, const H: usize>(stride: usize) {
-            let src: Vec<u8> = (0..W * H).map(|i| (i as u8).wrapping_mul(37).wrapping_add(11)).collect();
+            let src: Vec<u8> = (0..W * H)
+                .map(|i| (i as u8).wrapping_mul(37).wrapping_add(11))
+                .collect();
             let (ax, ay) = (3isize, 2isize);
-            let (mut want, mut got) = (PaddedPlane::new(stride - 8, 24, 4, stride), PaddedPlane::new(stride - 8, 24, 4, stride));
+            let (mut want, mut got) = (
+                PaddedPlane::new(stride - 8, 24, 4, stride),
+                PaddedPlane::new(stride - 8, 24, 4, stride),
+            );
             for p in [&mut want, &mut got] {
                 for y in -4..28isize {
                     for x in -4..(stride as isize - 12) {
@@ -982,7 +1073,11 @@ mod tests {
             }
             let vg = view_of(&mut got);
             copy_block_to_view::<W, H>(&src, &vg.cursor(ax, ay));
-            assert_eq!(want.as_slice(), got.as_slice(), "{W}x{H} over stride {stride}");
+            assert_eq!(
+                want.as_slice(),
+                got.as_slice(),
+                "{W}x{H} over stride {stride}"
+            );
         }
         for &stride in &[16usize, 33, 64] {
             check::<4, 4>(stride);
@@ -1001,7 +1096,10 @@ mod tests {
         use crate::safe::plane::PlaneSamples;
 
         for &(dy, dx0) in &[(0isize, 0isize), (2, -2), (-1, -4), (5, 3)] {
-            let (mut want, mut got) = (PaddedPlane::new(32, 16, 8, 48), PaddedPlane::new(32, 16, 8, 48));
+            let (mut want, mut got) = (
+                PaddedPlane::new(32, 16, 8, 48),
+                PaddedPlane::new(32, 16, 8, 48),
+            );
             let row: [u8; 6] = [9, 8, 7, 6, 5, 4];
             let vw = view_of(&mut want);
             let mut cw = vw.cursor(6, 5);
@@ -1011,7 +1109,11 @@ mod tests {
             let vg = view_of(&mut got);
             let mut cg = vg.cursor(6, 5);
             PlaneSamples::set_row_n::<6>(&mut cg, dy, dx0, &row);
-            assert_eq!(want.as_slice(), got.as_slice(), "set_row_n at ({dx0}, {dy})");
+            assert_eq!(
+                want.as_slice(),
+                got.as_slice(),
+                "set_row_n at ({dx0}, {dy})"
+            );
         }
     }
 
@@ -1021,12 +1123,15 @@ mod tests {
     #[test]
     fn an_absent_side_array_reports_empty_rather_than_dangling() {
         let mut none: Vec<i32> = Vec::new();
-        let a = SharedMbArray { cells: SharedCells::capture(&mut none) };
+        let a = SharedMbArray {
+            cells: SharedCells::capture(&mut none),
+        };
         assert!(a.is_empty());
         assert_eq!(a.len(), 0);
 
-        let b: SharedMbArray<u32> = SharedMbArray { cells: SharedCells::empty() };
+        let b: SharedMbArray<u32> = SharedMbArray {
+            cells: SharedCells::empty(),
+        };
         assert!(b.is_empty());
     }
 }
-

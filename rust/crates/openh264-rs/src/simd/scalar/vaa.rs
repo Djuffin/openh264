@@ -43,7 +43,15 @@ pub fn vaa_calc_sad_ssd(
     sqdiff16x16: &mut [i32],
 ) -> i32 {
     crate::processing::vaacalc::vaa_calc_sad_ssd(
-        cur, refp, pic_width, pic_height, pic_stride, sad8x8, sum16x16, sqsum16x16, sqdiff16x16,
+        cur,
+        refp,
+        pic_width,
+        pic_height,
+        pic_stride,
+        sad8x8,
+        sum16x16,
+        sqsum16x16,
+        sqdiff16x16,
     )
 }
 
@@ -80,7 +88,16 @@ pub fn vaa_calc_sad_ssd_bgd(
     mad8x8: &mut [[u8; 4]],
 ) -> i32 {
     crate::processing::vaacalc::vaa_calc_sad_ssd_bgd(
-        cur, refp, pic_width, pic_height, pic_stride, sad8x8, sum16x16, sqsum16x16, sqdiff16x16,
-        sd8x8, mad8x8,
+        cur,
+        refp,
+        pic_width,
+        pic_height,
+        pic_stride,
+        sad8x8,
+        sum16x16,
+        sqsum16x16,
+        sqdiff16x16,
+        sd8x8,
+        mad8x8,
     )
 }

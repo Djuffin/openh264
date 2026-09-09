@@ -33,11 +33,11 @@
 #![forbid(unsafe_code)]
 
 use crate::common::intra_pred_common::{i16x16_luma_pred_h, i16x16_luma_pred_v};
-use crate::simd::kernels::sad::sample_sad_16x16;
 use crate::encoder::wels_preprocess::{
     SComplexityAnalysisParam, SComplexityAnalysisScreenParam, SPixMap, SVAACalcResult,
 };
 use crate::safe::plane::PlaneCursor;
+use crate::simd::kernels::sad::sample_sad_16x16;
 
 use super::scene_change_detection::ScdPlanes;
 
@@ -59,11 +59,7 @@ fn IS_INTRA(uiMbType: u32) -> bool {
 
 #[inline]
 fn WELS_MIN(a: i32, b: i32) -> i32 {
-    if a < b {
-        a
-    } else {
-        b
-    }
+    if a < b { a } else { b }
 }
 
 /// `CComplexityAnalysis` — `ComplexityAnalysis.h:61`.
@@ -110,15 +106,28 @@ impl CComplexityAnalysis {
     ) -> i32 {
         match self.m_sComplexityAnalysisParam.iComplexityAnalysisMode {
             FRAME_SAD => self.AnalyzeFrameComplexityViaSad(
-                pSrcPixMap, pRefPixMap, calc, pGomForegroundBlockNum,
-                pBackgroundMbFlag, uiRefMbType,
+                pSrcPixMap,
+                pRefPixMap,
+                calc,
+                pGomForegroundBlockNum,
+                pBackgroundMbFlag,
+                uiRefMbType,
             ),
             GOM_SAD => self.AnalyzeGomComplexityViaSad(
-                pSrcPixMap, pRefPixMap, calc, pGomComplexity, pGomForegroundBlockNum,
-                pBackgroundMbFlag, uiRefMbType,
+                pSrcPixMap,
+                pRefPixMap,
+                calc,
+                pGomComplexity,
+                pGomForegroundBlockNum,
+                pBackgroundMbFlag,
+                uiRefMbType,
             ),
             GOM_VAR => self.AnalyzeGomComplexityViaVar(
-                pSrcPixMap, pRefPixMap, calc, pGomComplexity, pGomForegroundBlockNum,
+                pSrcPixMap,
+                pRefPixMap,
+                calc,
+                pGomComplexity,
+                pGomForegroundBlockNum,
             ),
             _ => return RET_INVALIDPARAM,
         }
@@ -139,11 +148,14 @@ impl CComplexityAnalysis {
 
         if self.m_sComplexityAnalysisParam.iCalcBgd {
             //BGD control
-            self.m_sComplexityAnalysisParam.iFrameComplexity =
-                self.GetFrameSadExcludeBackground(
-                    pSrcPixMap, pRefPixMap, calc, pGomForegroundBlockNum,
-                    pBackgroundMbFlag, uiRefMbType,
-                ) as i64;
+            self.m_sComplexityAnalysisParam.iFrameComplexity = self.GetFrameSadExcludeBackground(
+                pSrcPixMap,
+                pRefPixMap,
+                calc,
+                pGomForegroundBlockNum,
+                pBackgroundMbFlag,
+                uiRefMbType,
+            ) as i64;
         }
     }
 
@@ -170,16 +182,13 @@ impl CComplexityAnalysis {
         let iMbNumInGom = self.m_sComplexityAnalysisParam.iMbNumInGom;
         let iGomMbNum = (iMbNum + iMbNumInGom - 1) / iMbNumInGom;
 
-
         let mut uiFrameSad: u32 = 0;
         for j in 0..iGomMbNum {
             let iGomMbStartIndex = j * iMbNumInGom;
             let iGomMbEndIndex = WELS_MIN((j + 1) * iMbNumInGom, iMbNum);
 
             for i in iGomMbStartIndex..iGomMbEndIndex {
-                if pBackgroundMbFlag[i as usize] == 0
-                    || IS_INTRA(uiRefMbType[i as usize])
-                {
+                if pBackgroundMbFlag[i as usize] == 0 || IS_INTRA(uiRefMbType[i as usize]) {
                     pGomForegroundBlockNum[j as usize] += 1;
                     let sad8x8 = &calc.pSad8x8[(i as isize) as usize];
                     uiFrameSad = uiFrameSad.wrapping_add(sad8x8[0] as u32);
@@ -215,7 +224,6 @@ impl CComplexityAnalysis {
 
         let iMbNumInGom = self.m_sComplexityAnalysisParam.iMbNumInGom;
         let iGomMbNum = (iMbNum + iMbNumInGom - 1) / iMbNumInGom;
-
 
         let mut uiFrameSad: u32 = 0;
         // `InitGomSadFunc (m_pfGomSad, iCalcBgd)`.
@@ -306,11 +314,10 @@ impl CComplexityAnalysis {
 
             loop {
                 for i in iMbStartIndex..iMbEndIndex {
-                    uiSampleSum = uiSampleSum
-                        .wrapping_add(calc.pSum16x16[(i as isize) as usize] as u32);
-                    uiSquareSum = uiSquareSum.wrapping_add(
-                        calc.pSumOfSquare16x16[(i as isize) as usize] as u32,
-                    );
+                    uiSampleSum =
+                        uiSampleSum.wrapping_add(calc.pSum16x16[(i as isize) as usize] as u32);
+                    uiSquareSum = uiSquareSum
+                        .wrapping_add(calc.pSumOfSquare16x16[(i as isize) as usize] as u32);
                 }
 
                 iMbStartIndex = iMbEndIndex;
@@ -384,7 +391,10 @@ impl CComplexityAnalysisScreen {
         planes: &ScdPlanes<'_>,
         pGomComplexity: &mut [i32],
     ) -> i32 {
-        let bScrollFlag = self.m_ComplexityAnalysisParam.sScrollResult.bScrollDetectFlag;
+        let bScrollFlag = self
+            .m_ComplexityAnalysisParam
+            .sScrollResult
+            .bScrollDetectFlag;
         let iIdrFlag = self.m_ComplexityAnalysisParam.iIdrFlag;
         let iScrollMvX = self.m_ComplexityAnalysisParam.sScrollResult.iScrollMvX;
         let iScrollMvY = self.m_ComplexityAnalysisParam.sScrollResult.iScrollMvY;
@@ -607,7 +617,12 @@ mod screen_tests {
     }
 
     fn planes<'a>(cur: &'a [u8], refp: &'a [u8], w: usize) -> ScdPlanes<'a> {
-        ScdPlanes { cur, cur_stride: w, refp, ref_stride: w }
+        ScdPlanes {
+            cur,
+            cur_stride: w,
+            refp,
+            ref_stride: w,
+        }
     }
 
     fn param(iIdrFlag: i32, iMbRowInGom: i32) -> SComplexityAnalysisScreenParam {
@@ -631,7 +646,12 @@ mod screen_tests {
         let mut c = CComplexityAnalysisScreen::default();
         c.Set(&param(1, 8));
         assert_eq!(
-            c.Process(&pixmap(W as i32, H as i32), None, &planes(&flat, &[], W), &mut gom),
+            c.Process(
+                &pixmap(W as i32, H as i32),
+                None,
+                &planes(&flat, &[], W),
+                &mut gom
+            ),
             RET_SUCCESS
         );
         let mut out = SComplexityAnalysisScreenParam::default();
@@ -664,7 +684,12 @@ mod screen_tests {
         let mut c = CComplexityAnalysisScreen::default();
         c.Set(&param(1, 8));
         assert_eq!(
-            c.Process(&pixmap(W as i32, H as i32), None, &planes(&grad, &[], W), &mut gom),
+            c.Process(
+                &pixmap(W as i32, H as i32),
+                None,
+                &planes(&grad, &[], W),
+                &mut gom
+            ),
             RET_SUCCESS
         );
         let mut out = SComplexityAnalysisScreenParam::default();
@@ -721,7 +746,10 @@ mod screen_tests {
             "iMbRowInGom <= 0"
         );
         c.Set(&param(1, -1));
-        assert_eq!(c.Process(&map, None, &planes(&f, &[], W), &mut gom), RET_INVALIDPARAM);
+        assert_eq!(
+            c.Process(&map, None, &planes(&f, &[], W), &mut gom),
+            RET_INVALIDPARAM
+        );
 
         // A P frame with no reference: the C++'s `!iIdrFlag && pRef == NULL`.
         c.Set(&param(0, 8));
@@ -747,10 +775,18 @@ mod screen_tests {
         p.iGomNumInFrame = 999; // the caller's `iGomSize`
         c.Set(&p);
         assert_eq!(
-            c.Process(&pixmap(W as i32, H as i32), None, &planes(&flat, &[], W), &mut gom),
+            c.Process(
+                &pixmap(W as i32, H as i32),
+                None,
+                &planes(&flat, &[], W),
+                &mut gom
+            ),
             RET_SUCCESS
         );
         c.Get(&mut p);
-        assert_eq!(p.iGomNumInFrame, 2, "the plugin's count, not the staged 999");
+        assert_eq!(
+            p.iGomNumInFrame, 2,
+            "the plugin's count, not the staged 999"
+        );
     }
 }

@@ -26,12 +26,10 @@
 //! function, and the table below installs the imported ones.
 
 #![allow(non_snake_case, non_upper_case_globals)]
-
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
 use crate::common::intra_pred_common::{i16x16_luma_pred_h, i16x16_luma_pred_v};
-use crate::safe::plane::RefSamples;
 use crate::encoder::rec_view::RecCursor;
 use crate::encoder::svc_base_layer_md::{
     C_PRED_DC, C_PRED_DC_128, C_PRED_DC_L, C_PRED_DC_T, C_PRED_H, C_PRED_P, C_PRED_V, I4_PRED_DC,
@@ -42,13 +40,14 @@ use crate::encoder::svc_mode_decision::{
     I16_PRED_DC, I16_PRED_DC_128, I16_PRED_DC_L, I16_PRED_DC_T, I16_PRED_H, I16_PRED_P, I16_PRED_V,
 };
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+use crate::safe::plane::RefSamples;
 
+use crate::common::cpu_core::WELS_CPU_SSE2;
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
 /// site because the kernels share their names with the scalars in this module — which
 /// is the point of the naming, and the reason the module qualifier has to stay.
 use crate::simd::kernels;
-use crate::common::cpu_core::WELS_CPU_SSE2;
 
 #[inline(always)]
 fn WelsClip1(iX: i32) -> u8 {
@@ -639,10 +638,10 @@ pub fn chroma_pred_plane(pred: &mut [u8; 64], reference: &impl RefSamples) {
     let mut top_sum: i32 = 0;
     let mut left_sum: i32 = 0;
     for i in 0..4isize {
-        top_sum += (i as i32 + 1)
-            * (reference.at(4 + i, -1) as i32 - reference.at(2 - i, -1) as i32);
-        left_sum += (i as i32 + 1)
-            * (reference.at(-1, 4 + i) as i32 - reference.at(-1, 2 - i) as i32);
+        top_sum +=
+            (i as i32 + 1) * (reference.at(4 + i, -1) as i32 - reference.at(2 - i, -1) as i32);
+        left_sum +=
+            (i as i32 + 1) * (reference.at(-1, 4 + i) as i32 - reference.at(-1, 2 - i) as i32);
     }
 
     let lt_shift = (reference.at(-1, 7) as i32 + reference.at(7, -1) as i32) << 4;
@@ -674,7 +673,12 @@ pub fn chroma_pred_dc(pred: &mut [u8; 64], reference: &impl RefSamples) {
         reference.at(-1, 7),
     ];
     /* caculate the iMean value */
-    let mean1 = ((top[..4].iter().chain(left[..4].iter()).map(|&v| v as i32).sum::<i32>() + 4)
+    let mean1 = ((top[..4]
+        .iter()
+        .chain(left[..4].iter())
+        .map(|&v| v as i32)
+        .sum::<i32>()
+        + 4)
         >> 3) as u8;
     let sum2: u32 = top[4..].iter().map(|&v| v as u32).sum();
     let sum3: u32 = left[4..].iter().map(|&v| v as u32).sum();
@@ -735,10 +739,10 @@ pub fn i16x16_luma_pred_plane(pred: &mut [u8; 256], reference: &impl RefSamples)
     let mut top_sum: i32 = 0;
     let mut left_sum: i32 = 0;
     for i in 0..8isize {
-        top_sum += (i as i32 + 1)
-            * (reference.at(8 + i, -1) as i32 - reference.at(6 - i, -1) as i32);
-        left_sum += (i as i32 + 1)
-            * (reference.at(-1, 8 + i) as i32 - reference.at(-1, 6 - i) as i32);
+        top_sum +=
+            (i as i32 + 1) * (reference.at(8 + i, -1) as i32 - reference.at(6 - i, -1) as i32);
+        left_sum +=
+            (i as i32 + 1) * (reference.at(-1, 8 + i) as i32 - reference.at(-1, 6 - i) as i32);
     }
 
     let lt_shift = (reference.at(-1, 15) as i32 + reference.at(15, -1) as i32) << 4;
@@ -851,7 +855,7 @@ pub fn WelsI4x4LumaPredV_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsI4x4LumaPredH_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    i4x4_luma_pred_h(pred, rec)  // reach: REACH_I4X4_LEFT
+    i4x4_luma_pred_h(pred, rec) // reach: REACH_I4X4_LEFT
 }
 
 /// C++: `WelsI4x4LumaPredDc_c`, `:106`.
@@ -863,7 +867,7 @@ pub fn WelsI4x4LumaPredH_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsI4x4LumaPredDc_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    i4x4_luma_pred_dc(pred, rec)  // reach: REACH_I4X4_DC
+    i4x4_luma_pred_dc(pred, rec) // reach: REACH_I4X4_DC
 }
 
 /// C++: `WelsI4x4LumaPredDcLeft_c`, `:114`.
@@ -876,7 +880,7 @@ pub fn WelsI4x4LumaPredDc_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsI4x4LumaPredDcLeft_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    i4x4_luma_pred_dc_left(pred, rec)  // reach: REACH_I4X4_LEFT
+    i4x4_luma_pred_dc_left(pred, rec) // reach: REACH_I4X4_LEFT
 }
 
 /// C++: `WelsI4x4LumaPredDcTop_c`, `:121`.
@@ -938,7 +942,7 @@ pub fn WelsI4x4LumaPredDDLTop_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsI4x4LumaPredDDR_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    i4x4_luma_pred_ddr(pred, rec)  // reach: REACH_I4X4_DDR
+    i4x4_luma_pred_ddr(pred, rec) // reach: REACH_I4X4_DDR
 }
 
 /// C++: `WelsI4x4LumaPredVL_c`, `:228` — vertical left.
@@ -976,7 +980,7 @@ pub fn WelsI4x4LumaPredVLTop_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsI4x4LumaPredVR_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    i4x4_luma_pred_vr(pred, rec)  // reach: REACH_I4X4_VR
+    i4x4_luma_pred_vr(pred, rec) // reach: REACH_I4X4_VR
 }
 
 /// C++: `WelsI4x4LumaPredHU_c`, `:332` — horizontal up.
@@ -987,7 +991,7 @@ pub fn WelsI4x4LumaPredVR_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsI4x4LumaPredHU_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    i4x4_luma_pred_hu(pred, rec)  // reach: REACH_I4X4_LEFT
+    i4x4_luma_pred_hu(pred, rec) // reach: REACH_I4X4_LEFT
 }
 
 /// C++: `WelsI4x4LumaPredHD_c`, `:363` — horizontal down.
@@ -999,7 +1003,7 @@ pub fn WelsI4x4LumaPredHU_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsI4x4LumaPredHD_c(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    i4x4_luma_pred_hd(pred, rec)  // reach: REACH_I4X4_HD
+    i4x4_luma_pred_hd(pred, rec) // reach: REACH_I4X4_HD
 }
 
 // --- chroma 8x8 --------------------------------------------------------------
@@ -1023,7 +1027,7 @@ pub fn WelsIChromaPredV_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsIChromaPredH_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
-    chroma_pred_h(pred, rec)  // reach: REACH_CHROMA_LEFT
+    chroma_pred_h(pred, rec) // reach: REACH_CHROMA_LEFT
 }
 
 /// C++: `WelsIChromaPredPlane_c`, `:433`.
@@ -1036,7 +1040,7 @@ pub fn WelsIChromaPredH_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsIChromaPredPlane_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
-    chroma_pred_plane(pred, rec)  // reach: REACH_CHROMA_PLANE
+    chroma_pred_plane(pred, rec) // reach: REACH_CHROMA_PLANE
 }
 
 /// C++: `WelsIChromaPredDc_c`, `:457`.
@@ -1048,7 +1052,7 @@ pub fn WelsIChromaPredPlane_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsIChromaPredDc_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
-    chroma_pred_dc(pred, rec)  // reach: REACH_CHROMA_DC
+    chroma_pred_dc(pred, rec) // reach: REACH_CHROMA_DC
 }
 
 /// C++: `WelsIChromaPredDcLeft_c`, `:489`.
@@ -1059,7 +1063,7 @@ pub fn WelsIChromaPredDc_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsIChromaPredDcLeft_c(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
-    chroma_pred_dc_left(pred, rec)  // reach: REACH_CHROMA_LEFT
+    chroma_pred_dc_left(pred, rec) // reach: REACH_CHROMA_LEFT
 }
 
 /// C++: `WelsIChromaPredDcTop_c`, `:512`.
@@ -1094,7 +1098,7 @@ pub fn WelsIChromaPredDcNA_c(pred: &mut [u8; 64], _rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsI16x16LumaPredPlane_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
-    i16x16_luma_pred_plane(pred, rec)  // reach: REACH_I16X16_PLANE
+    i16x16_luma_pred_plane(pred, rec) // reach: REACH_I16X16_PLANE
 }
 
 /// C++: `WelsI16x16LumaPredDc_c`, `:566`.
@@ -1106,7 +1110,7 @@ pub fn WelsI16x16LumaPredPlane_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsI16x16LumaPredDc_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
-    i16x16_luma_pred_dc(pred, rec)  // reach: REACH_I16X16_DC
+    i16x16_luma_pred_dc(pred, rec) // reach: REACH_I16X16_DC
 }
 
 /// C++: `WelsI16x16LumaPredDcTop_c`, `:582`.
@@ -1130,7 +1134,7 @@ pub fn WelsI16x16LumaPredDcTop_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
 /// If `rec` is anchored so that this reach leaves the plane — `RecCursor` reads
 /// are slice indexes.
 pub fn WelsI16x16LumaPredDcLeft_c(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
-    i16x16_luma_pred_dc_left(pred, rec)  // reach: REACH_I16X16_LEFT
+    i16x16_luma_pred_dc_left(pred, rec) // reach: REACH_I16X16_LEFT
 }
 
 /// C++: `WelsI16x16LumaPredDcNA_c`, `:610`.
@@ -1365,10 +1369,16 @@ mod tests {
         WelsInitIntraPredFuncs(&mut fl, 0);
 
         for mode in 0..14usize {
-            let Some(f) = fl.pfGetLumaI4x4Pred[mode] else { continue };
+            let Some(f) = fl.pfGetLumaI4x4Pred[mode] else {
+                continue;
+            };
             let mut pred = [0u8; 16];
             f(&mut pred, &rec);
-            let expected = if mode == I4_PRED_DC_128 as usize { 0x80 } else { 137 };
+            let expected = if mode == I4_PRED_DC_128 as usize {
+                0x80
+            } else {
+                137
+            };
             assert!(
                 pred.iter().all(|&b| b == expected),
                 "mode {mode} produced {pred:?}, expected all {expected}"
@@ -1390,13 +1400,21 @@ mod tests {
             if let Some(f) = fl.pfGetChromaPred[mode] {
                 let mut pred = [0u8; 64];
                 f(&mut pred, &rec);
-                let expected = if mode == C_PRED_DC_128 as usize { 0x80 } else { 91 };
+                let expected = if mode == C_PRED_DC_128 as usize {
+                    0x80
+                } else {
+                    91
+                };
                 assert!(pred.iter().all(|&b| b == expected), "chroma mode {mode}");
             }
             if let Some(f) = fl.pfGetLumaI16x16Pred[mode] {
                 let mut pred = [0u8; 256];
                 f(&mut pred, &rec);
-                let expected = if mode == I16_PRED_DC_128 as usize { 0x80 } else { 91 };
+                let expected = if mode == I16_PRED_DC_128 as usize {
+                    0x80
+                } else {
+                    91
+                };
                 assert!(pred.iter().all(|&b| b == expected), "i16x16 mode {mode}");
             }
         }
@@ -1442,8 +1460,14 @@ mod tests {
                 // where a row's live prefix ends. Hence the slice, not a filter.
                 let r = reach_i4x4(mode);
                 i4x4_seen[mode as usize] = true;
-                assert!(r.left == 0 || left, "offset {idx:04b} offers mode {mode}, which reads left");
-                assert!(r.top == 0 || top, "offset {idx:04b} offers mode {mode}, which reads above");
+                assert!(
+                    r.left == 0 || left,
+                    "offset {idx:04b} offers mode {mode}, which reads left"
+                );
+                assert!(
+                    r.top == 0 || top,
+                    "offset {idx:04b} offers mode {mode}, which reads above"
+                );
                 assert!(
                     r.top <= 4 || topright,
                     "offset {idx:04b} offers mode {mode}, which reads {} samples above — past the \
@@ -1456,28 +1480,61 @@ mod tests {
                 );
             }
         }
-        assert!(!i4x4_seen[I4_PRED_DDL_TOP as usize], "DDL_TOP became reachable");
-        assert!(!i4x4_seen[I4_PRED_VL_TOP as usize], "VL_TOP became reachable");
+        assert!(
+            !i4x4_seen[I4_PRED_DDL_TOP as usize],
+            "DDL_TOP became reachable"
+        );
+        assert!(
+            !i4x4_seen[I4_PRED_VL_TOP as usize],
+            "VL_TOP became reachable"
+        );
         for m in [
-            I4_PRED_V, I4_PRED_H, I4_PRED_DC, I4_PRED_DDL, I4_PRED_DDR, I4_PRED_VR, I4_PRED_HD,
-            I4_PRED_VL, I4_PRED_HU, I4_PRED_DC_L, I4_PRED_DC_T, I4_PRED_DC_128,
+            I4_PRED_V,
+            I4_PRED_H,
+            I4_PRED_DC,
+            I4_PRED_DDL,
+            I4_PRED_DDR,
+            I4_PRED_VR,
+            I4_PRED_HD,
+            I4_PRED_VL,
+            I4_PRED_HU,
+            I4_PRED_DC_L,
+            I4_PRED_DC_T,
+            I4_PRED_DC_128,
         ] {
-            assert!(i4x4_seen[m as usize], "mode {m} is offered by no availability offset");
+            assert!(
+                i4x4_seen[m as usize],
+                "mode {m} is offered by no availability offset"
+            );
         }
 
         // --- I16x16 and chroma: index is left | top<<1 | topright<<2 -----------
         // No top-left bit; `corner` is legal exactly when left and top both are.
         for (table, name, reach) in [
-            (&g_kiIntra16AvaliMode, "I16x16", reach_i16x16 as fn(i8) -> Reach),
-            (&g_kiIntraChromaAvailMode, "chroma", reach_chroma as fn(i8) -> Reach),
+            (
+                &g_kiIntra16AvaliMode,
+                "I16x16",
+                reach_i16x16 as fn(i8) -> Reach,
+            ),
+            (
+                &g_kiIntraChromaAvailMode,
+                "chroma",
+                reach_chroma as fn(i8) -> Reach,
+            ),
         ] {
             for (idx, row) in table.iter().enumerate() {
                 let (left, top) = (idx & 1 != 0, idx & 2 != 0);
                 let count = row[4] as usize;
                 for &mode in &row[..count] {
                     let r = reach(mode);
-                    assert!(r.left == 0 || left, "{name} offset {idx:03b} mode {mode} reads left");
-                    assert!(r.top == 0 || top, "{name} offset {idx:03b} mode {mode} reads above");
+                    assert!(
+                        r.left == 0 || left,
+                        "{name} offset {idx:03b} mode {mode} reads left"
+                    );
+                    assert!(
+                        r.top == 0 || top,
+                        "{name} offset {idx:03b} mode {mode} reads above"
+                    );
                     assert!(
                         !r.corner || (left && top),
                         "{name} offset {idx:03b} mode {mode} reads the corner without both \
@@ -1495,10 +1552,22 @@ mod tests {
     fn ref_span_is_tight_at_both_ends() {
         for stride in [4usize, 16, 33, 240] {
             for reach in [
-                REACH_I4X4_TOP, REACH_I4X4_TOP7, REACH_I4X4_TOP8, REACH_I4X4_LEFT,
-                REACH_I4X4_DC, REACH_I4X4_DDR, REACH_I4X4_VR, REACH_I4X4_HD,
-                REACH_CHROMA_TOP, REACH_CHROMA_LEFT, REACH_CHROMA_DC, REACH_CHROMA_PLANE,
-                REACH_I16X16_TOP, REACH_I16X16_LEFT, REACH_I16X16_DC, REACH_I16X16_PLANE,
+                REACH_I4X4_TOP,
+                REACH_I4X4_TOP7,
+                REACH_I4X4_TOP8,
+                REACH_I4X4_LEFT,
+                REACH_I4X4_DC,
+                REACH_I4X4_DDR,
+                REACH_I4X4_VR,
+                REACH_I4X4_HD,
+                REACH_CHROMA_TOP,
+                REACH_CHROMA_LEFT,
+                REACH_CHROMA_DC,
+                REACH_CHROMA_PLANE,
+                REACH_I16X16_TOP,
+                REACH_I16X16_LEFT,
+                REACH_I16X16_DC,
+                REACH_I16X16_PLANE,
             ] {
                 let (len, center) = ref_span(stride, reach);
                 let s = stride as isize;
@@ -1518,7 +1587,11 @@ mod tests {
                 for y in 0..reach.left as isize {
                     note(y * s - 1);
                 }
-                assert_eq!(c + lo, 0, "stride {stride} {reach:?}: span starts before the first read");
+                assert_eq!(
+                    c + lo,
+                    0,
+                    "stride {stride} {reach:?}: span starts before the first read"
+                );
                 assert_eq!(
                     c + hi,
                     len as isize - 1,
@@ -1534,17 +1607,44 @@ mod tests {
         let mut fl = SWelsFuncPtrList::default();
         WelsInitIntraPredFuncs(&mut fl, 0);
 
-        for m in [I16_PRED_V, I16_PRED_H, I16_PRED_DC, I16_PRED_P, I16_PRED_DC_L, I16_PRED_DC_T, I16_PRED_DC_128] {
+        for m in [
+            I16_PRED_V,
+            I16_PRED_H,
+            I16_PRED_DC,
+            I16_PRED_P,
+            I16_PRED_DC_L,
+            I16_PRED_DC_T,
+            I16_PRED_DC_128,
+        ] {
             assert!(fl.pfGetLumaI16x16Pred[m as usize].is_some(), "I16 mode {m}");
         }
         for m in [
-            I4_PRED_V, I4_PRED_H, I4_PRED_DC, I4_PRED_DDL, I4_PRED_DDR, I4_PRED_VR, I4_PRED_HD,
-            I4_PRED_VL, I4_PRED_HU, I4_PRED_DC_L, I4_PRED_DC_T, I4_PRED_DC_128, I4_PRED_DDL_TOP,
+            I4_PRED_V,
+            I4_PRED_H,
+            I4_PRED_DC,
+            I4_PRED_DDL,
+            I4_PRED_DDR,
+            I4_PRED_VR,
+            I4_PRED_HD,
+            I4_PRED_VL,
+            I4_PRED_HU,
+            I4_PRED_DC_L,
+            I4_PRED_DC_T,
+            I4_PRED_DC_128,
+            I4_PRED_DDL_TOP,
             I4_PRED_VL_TOP,
         ] {
             assert!(fl.pfGetLumaI4x4Pred[m as usize].is_some(), "I4 mode {m}");
         }
-        for m in [C_PRED_DC, C_PRED_H, C_PRED_V, C_PRED_P, C_PRED_DC_L, C_PRED_DC_T, C_PRED_DC_128] {
+        for m in [
+            C_PRED_DC,
+            C_PRED_H,
+            C_PRED_V,
+            C_PRED_P,
+            C_PRED_DC_L,
+            C_PRED_DC_T,
+            C_PRED_DC_128,
+        ] {
             assert!(fl.pfGetChromaPred[m as usize].is_some(), "chroma mode {m}");
         }
     }

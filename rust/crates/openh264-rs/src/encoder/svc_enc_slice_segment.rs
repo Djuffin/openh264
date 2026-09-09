@@ -1,28 +1,27 @@
 //! Port of `codec/encoder/core/src/svc_enc_slice_segment.cpp` — the slice-argument
 //! validation group.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
-
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::{AtomicU16, Ordering};
 
+use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::SliceModeEnum::{
     SM_FIXEDSLCNUM_SLICE, SM_RASTER_SLICE, SM_SINGLE_SLICE, SM_SIZELIMITED_SLICE,
 };
-use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
 use crate::api::codec_api::{RC_MODES, SSliceArgument};
+use crate::decoder::decoder_core::WelsCPUFeatureDetect;
 use crate::encoder::encoder_context::SLogContext;
-use crate::encoder::slice_multi_threading::{DEFAULT_MAXPACKETSIZE_CONSTRAINT, fill_mb_map};
-use crate::encoder::svc_encode_slice::SDqLayer;
 use crate::encoder::rc::{
-    WELS_DIV_ROUND, GOM_ROW_MODE0_180P, GOM_ROW_MODE0_360P, GOM_ROW_MODE0_720P, GOM_ROW_MODE0_90P,
-    MB_WIDTH_THRESHOLD_180P, MB_WIDTH_THRESHOLD_360P, MB_WIDTH_THRESHOLD_90P,
+    GOM_ROW_MODE0_90P, GOM_ROW_MODE0_180P, GOM_ROW_MODE0_360P, GOM_ROW_MODE0_720P,
+    MB_WIDTH_THRESHOLD_90P, MB_WIDTH_THRESHOLD_180P, MB_WIDTH_THRESHOLD_360P, WELS_DIV_ROUND,
 };
+use crate::encoder::slice_multi_threading::{DEFAULT_MAXPACKETSIZE_CONSTRAINT, fill_mb_map};
 use crate::encoder::slice_multi_threading::{DynamicDetectCpuCores, INT_MULTIPLY, MAX_SLICES_NUM};
+use crate::encoder::svc_encode_slice::SDqLayer;
 use crate::encoder::wels_encoder_ext::{
     ENC_RETURN_SUCCESS, ENC_RETURN_UNSUPPORTED_PARA, MIN_NUM_MB_PER_SLICE,
 };
-use crate::decoder::decoder_core::WelsCPUFeatureDetect;
 
 /// `AVERSLICENUM_CONSTRAINT` — `svc_enc_slice_segment.h:63`; equal to
 /// `MAX_SLICES_NUM`. Used as the initial slice count in `SM_SIZELIMITED_SLICE`.
@@ -106,10 +105,7 @@ pub fn CheckRowMbMultiSliceSetting(kiMbWidth: i32, pSliceArg: &mut SSliceArgumen
 /// Slice parameter check for `SM_RASTER_SLICE`: walks the caller's per-slice
 /// macroblock counts, then corrects the total to exactly `kiMbNumInFrame` and writes
 /// back the resulting slice count.
-pub fn CheckRasterMultiSliceSetting(
-    kiMbNumInFrame: i32,
-    pSliceArg: &mut SSliceArgument,
-) -> bool {
+pub fn CheckRasterMultiSliceSetting(kiMbNumInFrame: i32, pSliceArg: &mut SSliceArgument) -> bool {
     let mut iActualSliceCount: i32 = 0;
 
     // check mb_num setting
@@ -342,7 +338,9 @@ pub fn AssignMbMapSingleSlice(pMbMap: &[AtomicU16], kiCountMbNum: i32) -> i32 {
 
 /// A zeroed macroblock map of `kiCountMbNum` entries.
 fn new_mb_map(kiCountMbNum: i32) -> Vec<AtomicU16> {
-    (0..kiCountMbNum.max(0) as usize).map(|_| AtomicU16::new(0)).collect()
+    (0..kiCountMbNum.max(0) as usize)
+        .map(|_| AtomicU16::new(0))
+        .collect()
 }
 
 /// `AssignMbMapMultipleSlices` — svc_enc_slice_segment.cpp:70.
@@ -355,10 +353,7 @@ fn new_mb_map(kiCountMbNum: i32) -> Vec<AtomicU16> {
 ///
 /// # Panics
 /// Panics if `sSliceEncCtx.pOverallMbMap` holds fewer than `iMbNumInFrame` entries.
-pub fn AssignMbMapMultipleSlices(
-    pCurDq: &mut SDqLayer,
-    kpSliceArgument: &SSliceArgument,
-) -> i32 {
+pub fn AssignMbMapMultipleSlices(pCurDq: &mut SDqLayer, kpSliceArgument: &SSliceArgument) -> i32 {
     let pSliceSeg = &mut pCurDq.sSliceEncCtx;
     let mut iSliceIdx: i32;
     if pSliceSeg.uiSliceMode == SM_SINGLE_SLICE {
@@ -373,12 +368,7 @@ pub fn AssignMbMapMultipleSlices(
         while iSliceIdx < iSliceNum {
             let kiFirstMb = iSliceIdx * kiMbWidth;
             let map: &[AtomicU16] = &pSliceSeg.pOverallMbMap;
-            fill_mb_map(
-                map,
-                kiFirstMb,
-                kiMbWidth,
-                iSliceIdx as u16,
-            );
+            fill_mb_map(map, kiFirstMb, kiMbWidth, iSliceIdx as u16);
             iSliceIdx += 1;
         }
 
@@ -397,8 +387,7 @@ pub fn AssignMbMapMultipleSlices(
 
         iSliceIdx = 0;
         loop {
-            let kiCurRunLength =
-                kpSliceArgument.uiSliceMbNum[iSliceIdx as usize] as i32;
+            let kiCurRunLength = kpSliceArgument.uiSliceMbNum[iSliceIdx as usize] as i32;
             let mut iRunIdx: i32 = 0;
 
             // the mb_assign_map has to be validated against the input data here, so

@@ -22,7 +22,8 @@ fn test_simple_encode_init_and_encode_param_sets() {
         assert_eq!(init_ret, CM_RESULT_SUCCESS);
 
         let mut bs_info = SFrameBSInfo::default();
-        let enc_param_ret = ISVCEncoder::EncodeParameterSets(p_encoder, &mut bs_info as *mut SFrameBSInfo);
+        let enc_param_ret =
+            ISVCEncoder::EncodeParameterSets(p_encoder, &mut bs_info as *mut SFrameBSInfo);
         assert_eq!(enc_param_ret, CM_RESULT_SUCCESS);
 
         let uninit_ret = ISVCEncoder::Uninitialize(p_encoder);

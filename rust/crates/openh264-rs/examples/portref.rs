@@ -78,14 +78,33 @@ fn decode(label: &str, data: &[u8], raw: bool) {
                 unit.as_ptr()
             };
             let ret = if nodelay_wanted() {
-                ISVCDecoder::DecodeFrameNoDelay(decoder, src, unit.len() as i32, p_dst.as_mut_ptr(), &mut buf_info)
+                ISVCDecoder::DecodeFrameNoDelay(
+                    decoder,
+                    src,
+                    unit.len() as i32,
+                    p_dst.as_mut_ptr(),
+                    &mut buf_info,
+                )
             } else {
-                ISVCDecoder::DecodeFrame2(decoder, src, unit.len() as i32, p_dst.as_mut_ptr(), &mut buf_info)
+                ISVCDecoder::DecodeFrame2(
+                    decoder,
+                    src,
+                    unit.len() as i32,
+                    p_dst.as_mut_ptr(),
+                    &mut buf_info,
+                )
             };
-            eprintln!("--- call len={} -> 0x{:x} bufstatus={}", unit.len(), ret.0, buf_info.iBufferStatus);
+            eprintln!(
+                "--- call len={} -> 0x{:x} bufstatus={}",
+                unit.len(),
+                ret.0,
+                buf_info.iBufferStatus
+            );
             codes.push(ret.0);
             bufs.push(buf_info.iBufferStatus);
-            if buf_info.iBufferStatus == 1 { frame_hashes.push(hash_frame(&buf_info, p_dst)); }
+            if buf_info.iBufferStatus == 1 {
+                frame_hashes.push(hash_frame(&buf_info, p_dst));
+            }
         };
         if raw {
             feed(data);
@@ -112,10 +131,15 @@ fn decode(label: &str, data: &[u8], raw: bool) {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
             let ret = ISVCDecoder::FlushFrame(decoder, p_dst.as_mut_ptr(), &mut buf_info);
-            eprintln!("--- flush -> 0x{:x} bufstatus={}", ret.0, buf_info.iBufferStatus);
+            eprintln!(
+                "--- flush -> 0x{:x} bufstatus={}",
+                ret.0, buf_info.iBufferStatus
+            );
             codes.push(ret.0);
             bufs.push(buf_info.iBufferStatus);
-            if buf_info.iBufferStatus == 1 { frame_hashes.push(format!("{} (flush)", hash_frame(&buf_info, p_dst))); }
+            if buf_info.iBufferStatus == 1 {
+                frame_hashes.push(format!("{} (flush)", hash_frame(&buf_info, p_dst)));
+            }
         }
         ISVCDecoder::Uninitialize(decoder);
         WelsDestroyDecoder(decoder);
@@ -124,7 +148,11 @@ fn decode(label: &str, data: &[u8], raw: bool) {
         }
         eprintln!(
             "PORT {label}: codes {} bufs {:?}",
-            codes.iter().map(|c| format!("0x{c:x}")).collect::<Vec<_>>().join(","),
+            codes
+                .iter()
+                .map(|c| format!("0x{c:x}"))
+                .collect::<Vec<_>>()
+                .join(","),
             bufs
         );
     }

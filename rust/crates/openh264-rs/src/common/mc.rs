@@ -1,10 +1,6 @@
 //! Motion compensation — luma quarter-pel, chroma eighth-pel, and the copy paths.
 #![forbid(unsafe_code)]
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 // CPU feature flags from cpu_core.h
 
@@ -17,14 +13,25 @@ use crate::safe::plane::{BlockRows, PlaneCursor, PlaneCursorMut, RefSamples};
 use crate::simd::kernels;
 
 // Function pointer signatures matching mc.h.
-pub type PWelsMcFunc =
-    fn(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, mv_x: i16, mv_y: i16, width: usize, height: usize);
+pub type PWelsMcFunc = fn(
+    src: &PlaneCursor<'_>,
+    dst: &mut PlaneCursorMut<'_>,
+    mv_x: i16,
+    mv_y: i16,
+    width: usize,
+    height: usize,
+);
 
 pub type PWelsLumaHalfpelMcFunc =
     fn(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
 
-pub type PWelsSampleAveragingFunc =
-    fn(dst: &mut PlaneCursorMut<'_>, a: &PlaneCursor<'_>, b: &PlaneCursor<'_>, width: usize, height: usize);
+pub type PWelsSampleAveragingFunc = fn(
+    dst: &mut PlaneCursorMut<'_>,
+    a: &PlaneCursor<'_>,
+    b: &PlaneCursor<'_>,
+    width: usize,
+    height: usize,
+);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -151,11 +158,7 @@ pub static g_kuiABCD: [[[u8; 4]; 8]; 8] = [
 #[inline(always)]
 pub fn WelsClip1(iX: i32) -> u8 {
     if (iX & !255) != 0 {
-        if iX < 0 {
-            0
-        } else {
-            255
-        }
+        if iX < 0 { 0 } else { 255 }
     } else {
         iX as u8
     }
@@ -192,8 +195,7 @@ pub fn filter_input_8bit(p: &[u8; 6]) -> i32 {
     let kuiPix14 = (p[1] as u32) + (p[4] as u32);
     let kuiPix23 = (p[2] as u32) + (p[3] as u32);
 
-    (kuiPix05 as i32)
-        - (((kuiPix14 << 2) + kuiPix14) as i32)
+    (kuiPix05 as i32) - (((kuiPix14 << 2) + kuiPix14) as i32)
         + (((kuiPix23 << 4) + (kuiPix23 << 2)) as i32)
 }
 
@@ -265,25 +267,41 @@ pub(crate) fn copy_rows<const WIDTH: usize, S: RefSamples + Copy>(
 
 /// C++: `McCopyWidthEq2_c` — chroma only, the one width the copy path narrows to.
 #[inline(always)]
-pub fn mc_copy_width_eq2<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, height: usize) {
+pub fn mc_copy_width_eq2<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    height: usize,
+) {
     copy_rows::<2, _>(src, dst, height);
 }
 
 /// C++: `McCopyWidthEq4_c`.
 #[inline(always)]
-pub fn mc_copy_width_eq4<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, height: usize) {
+pub fn mc_copy_width_eq4<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    height: usize,
+) {
     copy_rows::<4, _>(src, dst, height);
 }
 
 /// C++: `McCopyWidthEq8_c`.
 #[inline(always)]
-pub fn mc_copy_width_eq8<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, height: usize) {
+pub fn mc_copy_width_eq8<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    height: usize,
+) {
     copy_rows::<8, _>(src, dst, height);
 }
 
 /// C++: `McCopyWidthEq16_c`.
 #[inline(always)]
-pub fn mc_copy_width_eq16<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, height: usize) {
+pub fn mc_copy_width_eq16<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    height: usize,
+) {
     copy_rows::<16, _>(src, dst, height);
 }
 
@@ -305,7 +323,12 @@ fn copy_width(width: usize) -> usize {
 
 /// C++: `McCopy_c`.
 #[inline(always)]
-pub fn mc_copy<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+pub fn mc_copy<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
     // Dispatched exactly as the C++ dispatches, and for the same reason it does:
     // each arm is a constant-width copy. See [`copy_rows`].
     match width {
@@ -696,7 +719,13 @@ pub trait McLeaves {
     const FUSED_QPEL: bool = false;
 
     /// `McHorVer20` — the horizontal half-pel filter. Reads `SW = W + 5` per row.
-    fn hor<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const AVG: usize>(
+    fn hor<
+        S: RefSamples + Copy,
+        const W: usize,
+        const SW: usize,
+        const H: usize,
+        const AVG: usize,
+    >(
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     );
@@ -707,7 +736,13 @@ pub trait McLeaves {
         height: usize,
     );
     /// `McHorVer02` — the vertical half-pel filter. Reads `SH = H + 5` rows.
-    fn ver<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+    fn ver<
+        S: RefSamples + Copy,
+        const W: usize,
+        const H: usize,
+        const SH: usize,
+        const AVG: usize,
+    >(
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     );
@@ -722,7 +757,12 @@ pub trait McLeaves {
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     );
-    fn cen_any<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
+    fn cen_any<S: RefSamples + Copy>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+        width: usize,
+        height: usize,
+    );
     /// `McSampleAvg` — the rounded two-source average.
     fn avg<A: RefSamples, B: RefSamples, const W: usize, const H: usize>(
         dst: &mut PlaneCursorMut<'_>,
@@ -738,7 +778,13 @@ pub trait McLeaves {
     );
     /// `McChromaWithFragMv` — the bilinear filter by the four weights `g_kuiABCD`
     /// selects. Reads `SW = W + 1` per row over `SH = H + 1` rows.
-    fn chroma<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    fn chroma<
+        S: RefSamples + Copy,
+        const W: usize,
+        const SW: usize,
+        const H: usize,
+        const SH: usize,
+    >(
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
         w: &[u8; 4],
@@ -759,7 +805,13 @@ pub trait McLeaves {
 /// `McHorVer20_c` over one const-shape block: **one span for the source, one for the
 /// destination**, and `W` six-tap windows per row.
 #[inline(always)]
-fn hor_block_c<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const AVG: usize>(
+fn hor_block_c<
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const AVG: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -803,7 +855,13 @@ fn hor_any_c<S: RefSamples + Copy, const AVG: usize>(
 /// `McHorVer02_c` over one const-shape block: one `SH`-row span, and a six-row
 /// window sliding down it.
 #[inline(always)]
-fn ver_block_c<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+fn ver_block_c<
+    S: RefSamples + Copy,
+    const W: usize,
+    const H: usize,
+    const SH: usize,
+    const AVG: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -854,7 +912,13 @@ fn ver_any_c<S: RefSamples + Copy, const AVG: usize>(
 /// `McHorVer22_c` over one const-shape block. `iTmp` is the C++'s `int16_t[17 + 5]`,
 /// which is what bounds `SW` at 22 and so the width at 17.
 #[inline(always)]
-fn cen_block_c<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn cen_block_c<
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -882,7 +946,12 @@ fn cen_block_c<S: RefSamples + Copy, const W: usize, const SW: usize, const H: u
 }
 
 /// The run-time-shape twin; see [`hor_any_c`].
-fn cen_any_c<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+fn cen_any_c<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
     let n = width + 5;
     let mut iTmp = [0i16; 17 + 5];
     for dy in 0..height as isize {
@@ -936,7 +1005,13 @@ fn avg_any_c<A: RefSamples, B: RefSamples>(
 /// `McChromaWithFragMv_c` over one const-shape block: the `W + 1` by `H + 1` window
 /// the bilinear filter reads, cut once.
 #[inline(always)]
-fn chroma_block_c<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn chroma_block_c<
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     w: &[u8; 4],
@@ -987,7 +1062,13 @@ pub struct ScalarLeaves;
 
 impl McLeaves for ScalarLeaves {
     #[inline(always)]
-    fn hor<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const AVG: usize>(
+    fn hor<
+        S: RefSamples + Copy,
+        const W: usize,
+        const SW: usize,
+        const H: usize,
+        const AVG: usize,
+    >(
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     ) {
@@ -1003,7 +1084,13 @@ impl McLeaves for ScalarLeaves {
         hor_any_c::<S, AVG>(src, dst, width, height)
     }
     #[inline(always)]
-    fn ver<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+    fn ver<
+        S: RefSamples + Copy,
+        const W: usize,
+        const H: usize,
+        const SH: usize,
+        const AVG: usize,
+    >(
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     ) {
@@ -1019,14 +1106,25 @@ impl McLeaves for ScalarLeaves {
         ver_any_c::<S, AVG>(src, dst, width, height)
     }
     #[inline(always)]
-    fn cen<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    fn cen<
+        S: RefSamples + Copy,
+        const W: usize,
+        const SW: usize,
+        const H: usize,
+        const SH: usize,
+    >(
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     ) {
         cen_block_c::<S, W, SW, H, SH>(src, dst)
     }
     #[inline(always)]
-    fn cen_any<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+    fn cen_any<S: RefSamples + Copy>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+        width: usize,
+        height: usize,
+    ) {
         cen_any_c::<S>(src, dst, width, height)
     }
     #[inline(always)]
@@ -1048,7 +1146,13 @@ impl McLeaves for ScalarLeaves {
         avg_any_c::<A, B>(dst, a, b, width, height)
     }
     #[inline(always)]
-    fn chroma<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    fn chroma<
+        S: RefSamples + Copy,
+        const W: usize,
+        const SW: usize,
+        const H: usize,
+        const SH: usize,
+    >(
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
         w: &[u8; 4],
@@ -1079,7 +1183,14 @@ impl McLeaves for ScalarLeaves {
 
 /// C++: `McHorVer01_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver01_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver01_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -1090,7 +1201,14 @@ fn mc_hor_ver01_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW
 
 /// C++: `McHorVer03_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver03_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver03_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -1101,7 +1219,14 @@ fn mc_hor_ver03_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW
 
 /// C++: `McHorVer10_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver10_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver10_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -1112,7 +1237,14 @@ fn mc_hor_ver10_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW
 
 /// C++: `McHorVer11_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver11_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver11_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -1120,12 +1252,23 @@ fn mc_hor_ver11_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW
     let mut ver = scratch();
     L::hor::<_, W, SW, H, 0>(src, &mut PlaneCursorMut::new(&mut hor, 0, 16));
     L::ver::<_, W, H, SH, 0>(src, &mut PlaneCursorMut::new(&mut ver, 0, 16));
-    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ver, 0, 16));
+    L::avg::<_, _, W, H>(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ver, 0, 16),
+    );
 }
 
 /// C++: `McHorVer12_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver12_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver12_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -1133,25 +1276,50 @@ fn mc_hor_ver12_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW
     let mut ctr = scratch();
     L::ver::<_, W, H, SH, 0>(src, &mut PlaneCursorMut::new(&mut ver, 0, 16));
     L::cen::<_, W, SW, H, SH>(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16));
-    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&ver, 0, 16), &PlaneCursor::new(&ctr, 0, 16));
+    L::avg::<_, _, W, H>(
+        dst,
+        &PlaneCursor::new(&ver, 0, 16),
+        &PlaneCursor::new(&ctr, 0, 16),
+    );
 }
 
 /// C++: `McHorVer13_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver13_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver13_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
     let mut hor = scratch();
     let mut ver = scratch();
-    L::hor::<_, W, SW, H, 0>(&src.advance(0, 1), &mut PlaneCursorMut::new(&mut hor, 0, 16));
+    L::hor::<_, W, SW, H, 0>(
+        &src.advance(0, 1),
+        &mut PlaneCursorMut::new(&mut hor, 0, 16),
+    );
     L::ver::<_, W, H, SH, 0>(src, &mut PlaneCursorMut::new(&mut ver, 0, 16));
-    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ver, 0, 16));
+    L::avg::<_, _, W, H>(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ver, 0, 16),
+    );
 }
 
 /// C++: `McHorVer21_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver21_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver21_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -1159,25 +1327,50 @@ fn mc_hor_ver21_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW
     let mut ctr = scratch();
     L::hor::<_, W, SW, H, 0>(src, &mut PlaneCursorMut::new(&mut hor, 0, 16));
     L::cen::<_, W, SW, H, SH>(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16));
-    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ctr, 0, 16));
+    L::avg::<_, _, W, H>(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ctr, 0, 16),
+    );
 }
 
 /// C++: `McHorVer23_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver23_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver23_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
     let mut hor = scratch();
     let mut ctr = scratch();
-    L::hor::<_, W, SW, H, 0>(&src.advance(0, 1), &mut PlaneCursorMut::new(&mut hor, 0, 16));
+    L::hor::<_, W, SW, H, 0>(
+        &src.advance(0, 1),
+        &mut PlaneCursorMut::new(&mut hor, 0, 16),
+    );
     L::cen::<_, W, SW, H, SH>(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16));
-    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ctr, 0, 16));
+    L::avg::<_, _, W, H>(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ctr, 0, 16),
+    );
 }
 
 /// C++: `McHorVer30_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver30_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver30_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -1188,46 +1381,98 @@ fn mc_hor_ver30_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW
 
 /// C++: `McHorVer31_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver31_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver31_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
     let mut hor = scratch();
     let mut ver = scratch();
     L::hor::<_, W, SW, H, 0>(src, &mut PlaneCursorMut::new(&mut hor, 0, 16));
-    L::ver::<_, W, H, SH, 0>(&src.advance(1, 0), &mut PlaneCursorMut::new(&mut ver, 0, 16));
-    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ver, 0, 16));
+    L::ver::<_, W, H, SH, 0>(
+        &src.advance(1, 0),
+        &mut PlaneCursorMut::new(&mut ver, 0, 16),
+    );
+    L::avg::<_, _, W, H>(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ver, 0, 16),
+    );
 }
 
 /// C++: `McHorVer32_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver32_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver32_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
     let mut ver = scratch();
     let mut ctr = scratch();
-    L::ver::<_, W, H, SH, 0>(&src.advance(1, 0), &mut PlaneCursorMut::new(&mut ver, 0, 16));
+    L::ver::<_, W, H, SH, 0>(
+        &src.advance(1, 0),
+        &mut PlaneCursorMut::new(&mut ver, 0, 16),
+    );
     L::cen::<_, W, SW, H, SH>(src, &mut PlaneCursorMut::new(&mut ctr, 0, 16));
-    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&ver, 0, 16), &PlaneCursor::new(&ctr, 0, 16));
+    L::avg::<_, _, W, H>(
+        dst,
+        &PlaneCursor::new(&ver, 0, 16),
+        &PlaneCursor::new(&ctr, 0, 16),
+    );
 }
 
 /// C++: `McHorVer33_c` — the composite, over `L`'s leaves.
 #[inline(never)]
-fn mc_hor_ver33_with<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn mc_hor_ver33_with<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
     let mut hor = scratch();
     let mut ver = scratch();
-    L::hor::<_, W, SW, H, 0>(&src.advance(0, 1), &mut PlaneCursorMut::new(&mut hor, 0, 16));
-    L::ver::<_, W, H, SH, 0>(&src.advance(1, 0), &mut PlaneCursorMut::new(&mut ver, 0, 16));
-    L::avg::<_, _, W, H>(dst, &PlaneCursor::new(&hor, 0, 16), &PlaneCursor::new(&ver, 0, 16));
+    L::hor::<_, W, SW, H, 0>(
+        &src.advance(0, 1),
+        &mut PlaneCursorMut::new(&mut hor, 0, 16),
+    );
+    L::ver::<_, W, H, SH, 0>(
+        &src.advance(1, 0),
+        &mut PlaneCursorMut::new(&mut ver, 0, 16),
+    );
+    L::avg::<_, _, W, H>(
+        dst,
+        &PlaneCursor::new(&hor, 0, 16),
+        &PlaneCursor::new(&ver, 0, 16),
+    );
 }
 
 /// `McLuma_c`'s `switch` on `(mv_x & 3, mv_y & 3)` at a shape fixed by the caller.
 #[inline(always)]
-fn luma_shaped<L: McLeaves, S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn luma_shaped<
+    L: McLeaves,
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     mv_x: i16,
@@ -1786,9 +2031,13 @@ pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, uiCpuFlag: u32) {
     }
 }
 
-
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_3DNOW, WELS_CPU_3DNOWEXT, WELS_CPU_ALTIVEC, WELS_CPU_ARMv7, WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3, WELS_CPU_VFPv3};
+pub use crate::common::cpu_core::{
+    WELS_CPU_3DNOW, WELS_CPU_3DNOWEXT, WELS_CPU_ALTIVEC, WELS_CPU_ARMv7, WELS_CPU_AVX,
+    WELS_CPU_AVX2, WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON,
+    WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3,
+    WELS_CPU_VFPv3,
+};
 
 #[cfg(test)]
 mod tests {
@@ -1870,7 +2119,15 @@ mod tests {
     fn same_picture_chroma_matches_the_two_cursor_kernel_when_the_windows_are_disjoint() {
         let base = filled_plane();
         let (src_c, dst_c) = (8 * STRIDE + 8, 40 * STRIDE + 8);
-        for (width, height) in [(8usize, 8usize), (8, 4), (4, 8), (4, 4), (4, 2), (2, 4), (2, 2)] {
+        for (width, height) in [
+            (8usize, 8usize),
+            (8, 4),
+            (4, 8),
+            (4, 4),
+            (4, 2),
+            (2, 4),
+            (2, 2),
+        ] {
             for mv_x in 0..8i16 {
                 for mv_y in 0..8i16 {
                     let mut one = base.clone();
@@ -2040,8 +2297,20 @@ mod tests {
                 // `pixel_avg`'s two operands are a scratch plane and either another
                 // scratch plane or the reference, so both storages appear as `b`.
                 let a = PlaneCursor::new(&base, src_c, STRIDE);
-                kernels::mc::pixel_avg(&mut PlaneCursorMut::new(&mut dst, dst_c, STRIDE), &a, &src, w, h);
-                kernels::mc::pixel_avg(&mut PlaneCursorMut::new(&mut dst, dst_c, STRIDE), &a, &rec, w, h);
+                kernels::mc::pixel_avg(
+                    &mut PlaneCursorMut::new(&mut dst, dst_c, STRIDE),
+                    &a,
+                    &src,
+                    w,
+                    h,
+                );
+                kernels::mc::pixel_avg(
+                    &mut PlaneCursorMut::new(&mut dst, dst_c, STRIDE),
+                    &a,
+                    &rec,
+                    w,
+                    h,
+                );
                 for qy in 0..4i16 {
                     for qx in 0..4i16 {
                         both!(mc_luma, qx, qy, w, h);
@@ -2064,9 +2333,17 @@ mod tests {
         // moves: 5x4 is a shape no table carries, and it has to reach the fallback.
         let odd = runtime_shapes_during(|| {
             let src = PlaneCursor::new(&base, src_c, STRIDE);
-            kernels::mc::mc_hor_ver20(&src, &mut PlaneCursorMut::new(&mut dst, dst_c, STRIDE), 5, 4);
+            kernels::mc::mc_hor_ver20(
+                &src,
+                &mut PlaneCursorMut::new(&mut dst, dst_c, STRIDE),
+                5,
+                4,
+            );
         });
-        assert_eq!(odd, 1, "a shape outside the tables should reach the run-time fallback");
+        assert_eq!(
+            odd, 1,
+            "a shape outside the tables should reach the run-time fallback"
+        );
     }
 
     /// **The `_AVERAGE_WITH_` forms of the scalar filters agree with the composites
@@ -2085,7 +2362,14 @@ mod tests {
         for (qx, qy) in [(1i16, 0i16), (3, 0), (0, 1), (0, 3)] {
             let mut want = vec![0u8; STRIDE * ROWS];
             let mut got = vec![0u8; STRIDE * ROWS];
-            mc_luma_c(&src, &mut PlaneCursorMut::new(&mut want, dst_c, STRIDE), qx, qy, 16, 16);
+            mc_luma_c(
+                &src,
+                &mut PlaneCursorMut::new(&mut want, dst_c, STRIDE),
+                qx,
+                qy,
+                16,
+                16,
+            );
             {
                 let mut d = PlaneCursorMut::new(&mut got, dst_c, STRIDE);
                 match (qx, qy) {
@@ -2095,7 +2379,10 @@ mod tests {
                     _ => ScalarLeaves::ver::<_, 16, 16, 21, 3>(&src, &mut d),
                 }
             }
-            assert_eq!(want, got, "fused quarter-pel ({qx}, {qy}) differs from the composite");
+            assert_eq!(
+                want, got,
+                "fused quarter-pel ({qx}, {qy}) differs from the composite"
+            );
         }
     }
 
@@ -2106,9 +2393,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn init_mc_func_cpu_flags() {
         use crate::common::cpu_core::*;
-        let scalar_flags: [u32; 5] = [
-            0, WELS_CPU_NEON, WELS_CPU_MMI, WELS_CPU_LSX, WELS_CPU_MMX,
-        ];
+        let scalar_flags: [u32; 5] = [0, WELS_CPU_NEON, WELS_CPU_MMI, WELS_CPU_LSX, WELS_CPU_MMX];
         let mut base = SMcFunc::default();
         InitMcFunc(&mut base, 0);
         let addrs = |t: &SMcFunc| -> [usize; 6] {
@@ -2122,8 +2407,12 @@ mod tests {
             ]
         };
         const NAMES: [&str; 6] = [
-            "pfLumaHalfpelHor", "pfLumaHalfpelVer", "pfLumaHalfpelCen",
-            "pfSampleAveraging", "pMcChromaFunc", "pMcLumaFunc",
+            "pfLumaHalfpelHor",
+            "pfLumaHalfpelVer",
+            "pfLumaHalfpelCen",
+            "pfSampleAveraging",
+            "pMcChromaFunc",
+            "pMcLumaFunc",
         ];
         let scalar_want = addrs(&base);
         for flag in scalar_flags {

@@ -19,30 +19,30 @@
 
 use std::mem::size_of;
 
-use crate::common::wels_common_defs::{SNalUnitHeader, SNalUnitHeaderExt};
-use crate::encoder::encoder_context::{SCropOffset, SDCTCoeff, SMVComponentUnit, SMVUnitXY};
-use crate::encoder::nal_encap::SWelsNalRaw;
-use crate::encoder::param_svc::{SSpsSvcExt, SSubsetSps, SWelsPPS, SWelsSPS};
 use crate::common::mc::SMcFunc;
-use crate::encoder::encoder_context::{sWelsEncCtx, SLTRState, SSpatialPicIndex, SStrideTables};
+use crate::common::wels_common_defs::{SNalUnitHeader, SNalUnitHeaderExt};
+use crate::encoder::encoder_context::SParaSetOffset;
+use crate::encoder::encoder_context::{SCropOffset, SDCTCoeff, SMVComponentUnit, SMVUnitXY};
+use crate::encoder::encoder_context::{SLTRState, SSpatialPicIndex, SStrideTables, sWelsEncCtx};
 use crate::encoder::md::{SMB, SMbCache, SMeRefinePointer, SSampleDealingFunc, SWelsMD};
-use crate::encoder::svc_encode_slice::{SDqLayer, SLayerInfo, SSliceBufferInfo};
-use crate::encoder::picture::{SPicture, SScreenBlockFeatureStorage};
+use crate::encoder::nal_encap::SWelsNalRaw;
 use crate::encoder::param_svc::{SSpatialLayerInternal, SWelsSvcCodingParam};
+use crate::encoder::param_svc::{SSpsSvcExt, SSubsetSps, SWelsPPS, SWelsSPS};
+use crate::encoder::picture::{SPicture, SScreenBlockFeatureStorage};
 use crate::encoder::rc::{SRCSlicing, SWelsSvcRc};
-use crate::encoder::slice_multi_threading::SSliceCtx;
 use crate::encoder::ref_list_mgr_svc::{SLTRMarkingFeedback, SLTRRecoverRequest};
+use crate::encoder::ref_list_mgr_svc::{SRefPicListReorderSyntax, SRefPicMarking};
 use crate::encoder::set_mb_syn_cabac::{SCabacCtx, SStateCtx};
+use crate::encoder::slice_multi_threading::SSliceCtx;
+use crate::encoder::svc_encode_slice::{SDqLayer, SLayerInfo, SSliceBufferInfo};
+use crate::encoder::svc_encode_slice::{SSliceHeader, SSliceHeaderExt};
 use crate::encoder::svc_motion_estimate::SWelsME;
+use crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics;
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 use crate::encoder::wels_preprocess::{
     SAdaptiveQuantizationParam, SComplexityAnalysisParam, SComplexityAnalysisScreenParam,
     SScrollDetectionParam, SVAACalcResult, SVAAFrameInfo, SVAAFrameInfoExt,
 };
-use crate::encoder::ref_list_mgr_svc::{SRefPicListReorderSyntax, SRefPicMarking};
-use crate::encoder::svc_encode_slice::{SSliceHeader, SSliceHeaderExt};
-use crate::encoder::encoder_context::SParaSetOffset;
-use crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics;
 
 macro_rules! assert_size {
     ($t:ty, $n:expr) => {
@@ -79,7 +79,6 @@ macro_rules! assert_ctx_offset_by_profile {
         const _: () = assert!(std::mem::offset_of!(sWelsEncCtx, $field) == $r);
     };
 }
-
 
 // codec/common/inc/wels_common_defs.h
 assert_size!(SNalUnitHeader, 12);
@@ -254,7 +253,6 @@ assert_size!(SSpatialLayerInternal, 68);
 // `codec_app_def.h`'s `SEncParamExt`, which is untouched.
 assert_size!(SWelsSvcCodingParam, 1232);
 
-
 // 360 in the C++, where five raw pointers address one `RcInitLayerMemory` block.
 // Three of the five are owned containers at 24 bytes each here, +32 over the C++'s
 // 360; `pGomCost` and `pGomComplexity` are not carried — allocated, nulled and memset
@@ -264,7 +262,6 @@ assert_size!(SWelsSvcRc, 392);
 // and `repr(C)` comes off with it, so the compiler repacks the four small scalars
 // ahead of it: 48.
 assert_size!(SSliceCtx, 48);
-
 
 // codec/encoder/core/inc/mb_cache.h, svc_enc_macroblock.h, svc_enc_frame.h
 // 576 in the C++. The eight scratch buffers `AllocMbCacheAligned` malloc's per slice
@@ -365,7 +362,6 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 32);
 // `CMemoryAlign` blocks.
 assert_size_by_profile!(sWelsEncCtx, debug 98064, release 97976);
 
-
 // The `sWelsEncCtx` fields the preprocessor touches, pinned at their C++
 // offsets. `wels_preprocess.rs` used to declare its own 15-field `SWelsEncCtx` and
 // alias `sWelsEncCtx` to it, so every one of these reads landed at the wrong offset
@@ -413,12 +409,3 @@ const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, pSrc) == 0);
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 8);
 #[cfg(not(debug_assertions))]
 const _: () = assert!(std::mem::offset_of!(SSpatialPicIndex, iDid) == 4);
-
-
-
-
-
-
-
-
-

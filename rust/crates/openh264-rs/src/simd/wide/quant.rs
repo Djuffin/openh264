@@ -125,8 +125,14 @@ pub fn dequant_four_4x4(res: &mut [i16; 64], mf: &[u16; 8]) {
 /// zero coefficients directly — the intrinsic kernel's byte mask needs a halving.
 #[inline]
 pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
-    let zero_words = load_i16(&level[..8]).simd_eq(i16x8::ZERO).to_bitmask().count_ones()
-        + load_i16(&level[8..]).simd_eq(i16x8::ZERO).to_bitmask().count_ones();
+    let zero_words = load_i16(&level[..8])
+        .simd_eq(i16x8::ZERO)
+        .to_bitmask()
+        .count_ones()
+        + load_i16(&level[8..])
+            .simd_eq(i16x8::ZERO)
+            .to_bitmask()
+            .count_ones();
     16 - zero_words as i32
 }
 
@@ -197,7 +203,18 @@ fn ihadamard_butterfly(a0: i16x8, a1: i16x8, a2: i16x8, a3: i16x8) -> (i16x8, i1
 /// intrinsic kernel's shape, with every op wrapping as the C++'s `int16_t` does.
 #[inline]
 pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
-    let row = |k: usize| i16x8::new([res[4 * k], res[4 * k + 1], res[4 * k + 2], res[4 * k + 3], 0, 0, 0, 0]);
+    let row = |k: usize| {
+        i16x8::new([
+            res[4 * k],
+            res[4 * k + 1],
+            res[4 * k + 2],
+            res[4 * k + 3],
+            0,
+            0,
+            0,
+            0,
+        ])
+    };
     let (c0, c1, c2, c3) = transpose4_lo(row(0), row(1), row(2), row(3));
     let (w0, w1, w2, w3) = ihadamard_butterfly(c0, c1, c2, c3);
     let (x0, x1, x2, x3) = transpose4_lo(w0, w1, w2, w3);
@@ -211,14 +228,16 @@ pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
 
 #[cfg(test)]
 mod tests {
-    use crate::encoder::encode_mb_aux::{
-        get_none_zero_count, quant_4x4, quant_4x4_dc, quant_four_4x4, quant_four_4x4_max,
-        g_kiQuantMF, G_KI_QUANT_INTER_FF,
-    };
     use crate::encoder::decode_mb_aux::{dequant_4x4, dequant_four_4x4, dequant_ihadamard_4x4};
+    use crate::encoder::encode_mb_aux::{
+        G_KI_QUANT_INTER_FF, g_kiQuantMF, get_none_zero_count, quant_4x4, quant_4x4_dc,
+        quant_four_4x4, quant_four_4x4_max,
+    };
 
     fn lcg(seed: &mut u64) -> i16 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((*seed >> 32i32) as i32 % 4000 - 2000) as i16
     }
 
@@ -369,7 +388,9 @@ mod tests {
     // ========================================================================
 
     fn lcg_full_i16(seed: &mut u64) -> i16 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32i32) as u16 as i16
     }
 
@@ -406,7 +427,11 @@ mod tests {
         for pattern in 0u32..(1 << 16i32) {
             let mut dct = [0i16; 241];
             for (n, &idx) in DC_IDX.iter().enumerate() {
-                dct[idx] = if pattern & (1 << n) != 0 { i16::MAX } else { i16::MIN };
+                dct[idx] = if pattern & (1 << n) != 0 {
+                    i16::MAX
+                } else {
+                    i16::MIN
+                };
             }
             let mut want = [0i16; 16];
             let mut got = [0i16; 16];
@@ -423,7 +448,11 @@ mod tests {
         }
         let mut want = [0i16; 16];
         hadamard_t4_dc(&mut want, &dct);
-        assert_eq!(want[0], i16::MAX, "the all-MAX case should saturate the DC output");
+        assert_eq!(
+            want[0],
+            i16::MAX,
+            "the all-MAX case should saturate the DC output"
+        );
     }
 
     #[test]

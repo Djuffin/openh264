@@ -14,9 +14,9 @@
 //! row offset inside a span folds; `G` is sized so the group's walk unrolls.
 #![allow(unsafe_code)]
 
+use crate::safe::plane::{BlockRows, RefSamples};
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
-use crate::safe::plane::{BlockRows, RefSamples};
 
 // ============================================================================
 // Internal SSE2 Kernels
@@ -58,7 +58,12 @@ pub fn sad_16x_avx2<S: RefSamples, const H: usize>(
     // accumulate row `H` — one past the block. Only 16 and 8 are instantiated today;
     // the SSE2 twin (`sad_16x`, `:22`) iterates one row at a time and has no such
     // constraint, and nothing in either signature said so.
-    const { assert!(H % 2 == 0, "sad_16x_avx2 filters two rows per step; H must be even") };
+    const {
+        assert!(
+            H % 2 == 0,
+            "sad_16x_avx2 filters two rows per step; H must be even"
+        )
+    };
     unsafe {
         let (s1, s2) = (sample1.span::<16, H>(0, 0), sample2.span::<16, H>(dy, dx));
         let mut acc = _mm256_setzero_si256();
@@ -140,7 +145,12 @@ pub fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const
 ) {
     unsafe {
         const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
-        const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+        const {
+            assert!(
+                HW == H + 2,
+                "the probe span is two rows taller than the block"
+            )
+        };
         let mut acc0 = _mm_setzero_si128();
         let mut acc1 = _mm_setzero_si128();
         let mut acc2 = _mm_setzero_si128();
@@ -198,7 +208,12 @@ pub fn sample_sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const 
 ) {
     unsafe {
         const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
-        const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+        const {
+            assert!(
+                HW == H + 2,
+                "the probe span is two rows taller than the block"
+            )
+        };
         let mut acc0 = _mm_setzero_si128();
         let mut acc1 = _mm_setzero_si128();
         let mut acc2 = _mm_setzero_si128();
@@ -246,7 +261,12 @@ pub fn sample_sad_four_4x<S: RefSamples, const H: usize, const HW: usize, const 
     sad: &mut [i32; 4],
 ) {
     const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
-    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+    const {
+        assert!(
+            HW == H + 2,
+            "the probe span is two rows taller than the block"
+        )
+    };
     let mut acc0 = _mm_setzero_si128();
     let mut acc1 = _mm_setzero_si128();
     let mut acc2 = _mm_setzero_si128();
@@ -431,7 +451,10 @@ mod tests {
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        assert_eq!(sample_sad_16x16(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
+        assert_eq!(
+            sample_sad_16x16(&c1, &c2),
+            sample_sad::<16, 16, _>(&c1, &c2)
+        );
         assert_eq!(sample_sad_16x8(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
         assert_eq!(sample_sad_8x16(&c1, &c2), sample_sad::<8, 16, _>(&c1, &c2));
         assert_eq!(sample_sad_8x8(&c1, &c2), sample_sad::<8, 8, _>(&c1, &c2));
@@ -449,8 +472,14 @@ mod tests {
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        assert_eq!(sample_sad_16x16_avx2(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
-        assert_eq!(sample_sad_16x8_avx2(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
+        assert_eq!(
+            sample_sad_16x16_avx2(&c1, &c2),
+            sample_sad::<16, 16, _>(&c1, &c2)
+        );
+        assert_eq!(
+            sample_sad_16x8_avx2(&c1, &c2),
+            sample_sad::<16, 8, _>(&c1, &c2)
+        );
     }
 
     #[test]
@@ -506,7 +535,9 @@ mod tests {
 
     /// A 64-bit LCG, so a failing seed is replayable.
     fn lcg(seed: &mut u64) -> u8 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32) as u8
     }
 
@@ -680,8 +711,8 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn init_sample_sad_installs_avx2_only_where_the_cpu_has_it() {
         use crate::common::cpu_core::{WELS_CPU_AVX2, WELS_CPU_SSE2};
-        use crate::encoder::svc_mode_decision::BLOCK_16x16;
         use crate::encoder::sample::WelsInitSampleSadFunc;
+        use crate::encoder::svc_mode_decision::BLOCK_16x16;
         use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
         let slot = |flags: u32| {

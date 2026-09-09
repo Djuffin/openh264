@@ -88,7 +88,11 @@ fn calculate_single_ctr_4x4_sse2_impl(dct: &[i16; 16]) -> i32 {
         // Step past that coefficient, then measure the run of zeros below it.
         idx -= 1;
         let run_start = idx;
-        let below = if idx < 0 { 0 } else { nz & ((1u32 << (idx + 1)) - 1) };
+        let below = if idx < 0 {
+            0
+        } else {
+            nz & ((1u32 << (idx + 1)) - 1)
+        };
         idx = highest_set(below);
         let run = run_start - idx;
         if (run as usize) < KI_TRUN_TABLE.len() {

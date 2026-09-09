@@ -186,7 +186,12 @@ pub(crate) mod lanes {
     /// The intrinsic twin is two `punpcklwd`, two `punpckldq` and two `psrldq`; this
     /// is the same permutation as one array expression, for LLVM to lower.
     #[inline(always)]
-    pub fn transpose4_lo(v0: i16x8, v1: i16x8, v2: i16x8, v3: i16x8) -> (i16x8, i16x8, i16x8, i16x8) {
+    pub fn transpose4_lo(
+        v0: i16x8,
+        v1: i16x8,
+        v2: i16x8,
+        v3: i16x8,
+    ) -> (i16x8, i16x8, i16x8, i16x8) {
         let (a, b, c, d) = (v0.to_array(), v1.to_array(), v2.to_array(), v3.to_array());
         (
             i16x8::new([a[0], b[0], c[0], d[0], 0, 0, 0, 0]),

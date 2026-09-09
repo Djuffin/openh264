@@ -4,11 +4,7 @@
 //! - `codec/decoder/core/inc/decode_mb_aux.h`
 //! - `codec/decoder/core/src/decode_mb_aux.cpp`
 #![deny(unsafe_code)]
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
 /// Pixel clipping / saturation helper function clamping values to [0, 255].
@@ -27,12 +23,12 @@ pub fn WelsClip1(iX: i32) -> u8 {
 
 use crate::safe::plane::PlaneCursorMut;
 
+pub use crate::decoder::decode_slice::g_kuiScan8;
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
 /// site because the kernels share their names with the scalars in this module — which
 /// is the point of the naming, and the reason the module qualifier has to stay.
 use crate::simd::kernels;
-pub use crate::decoder::decode_slice::{g_kuiScan8};
 
 /// 4x4 inverse integer DCT of `rs`, added to the prediction block at `pred` and
 /// saturated to `[0, 255]` in place.
@@ -238,7 +234,7 @@ pub fn i4_luma_ichroma_addr_table(block_offset: &mut [i32; 24], stride_y: i32, s
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_wels_clip1() {
         assert_eq!(WelsClip1(-10), 0);
@@ -285,6 +281,9 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), 16);
-        assert!(seen.iter().all(|&(x, y)| (0..16).contains(&x) && (0..16).contains(&y)));
+        assert!(
+            seen.iter()
+                .all(|&(x, y)| (0..16).contains(&x) && (0..16).contains(&y))
+        );
     }
 }

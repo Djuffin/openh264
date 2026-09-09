@@ -32,9 +32,11 @@
 #![forbid(unsafe_code)]
 
 use crate::api::codec_api::*;
-use core::mem::{align_of, size_of};
 use crate::encoder::ref_list_mgr_svc::{SLTRMarkingFeedback, SLTRRecoverRequest};
-use crate::encoder::wels_encoder_ext::{SDeliveryStatus, SDumpLayer, SLTRConfig, SLevelInfo, SProfileInfo};
+use crate::encoder::wels_encoder_ext::{
+    SDeliveryStatus, SDumpLayer, SLTRConfig, SLevelInfo, SProfileInfo,
+};
+use core::mem::{align_of, size_of};
 
 macro_rules! assert_size {
     ($t:ty, $n:expr) => {

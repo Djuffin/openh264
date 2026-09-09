@@ -7,13 +7,13 @@
 //! - Luma quarter-pel motion compensation (`mc_luma`)
 #![allow(unsafe_code)]
 
-use core::arch::x86_64::*;
+use crate::common::mc::mc_luma_with;
 use crate::common::mc::{
-    avg_shaped, cen_shaped, chroma_shaped, filter_input_8bit, g_kuiABCD, hor_filter_input_16bit, hor_shaped, mc_copy,
-    ver_shaped, McLeaves, WelsClip1,
+    McLeaves, WelsClip1, avg_shaped, cen_shaped, chroma_shaped, filter_input_8bit, g_kuiABCD,
+    hor_filter_input_16bit, hor_shaped, mc_copy, ver_shaped,
 };
 use crate::safe::plane::{BlockRows, PlaneCursorMut, RefSamples};
-use crate::common::mc::mc_luma_with;
+use core::arch::x86_64::*;
 
 // ============================================================================
 // Block shapes and lane moves
@@ -95,15 +95,33 @@ fn w4<R: BlockRows>(r: &R, y: usize, x: usize) -> __m128i {
 fn avg_row<const W: usize>(out: &mut [u8; W], a: &[u8; W], b: &[u8; W]) {
     let mut x = 0;
     while x + 16 <= W {
-        st16(&mut out[x..], _mm_avg_epu8(ld16(a[x..][..16].try_into().unwrap()), ld16(b[x..][..16].try_into().unwrap())));
+        st16(
+            &mut out[x..],
+            _mm_avg_epu8(
+                ld16(a[x..][..16].try_into().unwrap()),
+                ld16(b[x..][..16].try_into().unwrap()),
+            ),
+        );
         x += 16;
     }
     if x + 8 <= W {
-        st8(&mut out[x..], _mm_avg_epu8(ld8(a[x..][..8].try_into().unwrap()), ld8(b[x..][..8].try_into().unwrap())));
+        st8(
+            &mut out[x..],
+            _mm_avg_epu8(
+                ld8(a[x..][..8].try_into().unwrap()),
+                ld8(b[x..][..8].try_into().unwrap()),
+            ),
+        );
         x += 8;
     }
     if x + 4 <= W {
-        st4(&mut out[x..], _mm_avg_epu8(ld4(a[x..][..4].try_into().unwrap()), ld4(b[x..][..4].try_into().unwrap())));
+        st4(
+            &mut out[x..],
+            _mm_avg_epu8(
+                ld4(a[x..][..4].try_into().unwrap()),
+                ld4(b[x..][..4].try_into().unwrap()),
+            ),
+        );
         x += 4;
     }
     while x < W {
@@ -128,7 +146,11 @@ fn avg_block<A: RefSamples, B: RefSamples, const W: usize, const H: usize>(
         let (ga, gb) = (sa.window::<W>(y, ROW_GROUP), sb.window::<W>(y, ROW_GROUP));
         let mut gd = d.window_mut::<W>(y, ROW_GROUP);
         for k in 0..ROW_GROUP {
-            avg_row::<W>(gd.row_mut::<W>(k, 0), &ga.row::<W>(k, 0), &gb.row::<W>(k, 0));
+            avg_row::<W>(
+                gd.row_mut::<W>(k, 0),
+                &ga.row::<W>(k, 0),
+                &gb.row::<W>(k, 0),
+            );
         }
         y += ROW_GROUP;
     }
@@ -202,7 +224,13 @@ fn chroma_row<R: BlockRows, const W: usize>(
 /// The bilinear chroma filter over one const-shape block. Widths 8 and 4 take the
 /// lane path; width 2 is the scalar, as upstream has it.
 #[target_feature(enable = "sse2")]
-fn chroma_block<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn chroma_block<
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     w: &[u8; 4],
@@ -410,7 +438,13 @@ macro_rules! hor_row {
 /// `McHorVer20` over one const-shape block: one span for the source, one for the
 /// destination, and a window per [`ROW_GROUP`] rows.
 #[target_feature(enable = "sse2")]
-fn hor_block<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const AVG: usize>(
+fn hor_block<
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const AVG: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -469,7 +503,13 @@ pub fn mc_hor_ver20<S: RefSamples + Copy>(
 /// The vertical filter at width 16, 8 or 4: the five-row window carried in widened
 /// registers and one new row read per output row.
 #[target_feature(enable = "sse2")]
-fn ver_lanes<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+fn ver_lanes<
+    S: RefSamples + Copy,
+    const W: usize,
+    const H: usize,
+    const SH: usize,
+    const AVG: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -517,7 +557,13 @@ fn ver_lanes<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usi
 
 /// The widths the lane path has no form for: the scalar over the same span.
 #[target_feature(enable = "sse2")]
-fn ver_odd<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+fn ver_odd<
+    S: RefSamples + Copy,
+    const W: usize,
+    const H: usize,
+    const SH: usize,
+    const AVG: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -539,7 +585,13 @@ fn ver_odd<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize
 /// `McHorVer02` over one const-shape block: the width picks the path, and the
 /// `match` folds because `W` is a constant.
 #[target_feature(enable = "sse2")]
-fn ver_block<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+fn ver_block<
+    S: RefSamples + Copy,
+    const W: usize,
+    const H: usize,
+    const SH: usize,
+    const AVG: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
@@ -592,12 +644,23 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
 /// the stack frame rather than panic. [`cen_shaped`] only instantiates the shapes
 /// the codec calls; [`cen_any`] states the bound for everything else.
 #[target_feature(enable = "sse2")]
-fn cen_block<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+fn cen_block<
+    S: RefSamples + Copy,
+    const W: usize,
+    const SW: usize,
+    const H: usize,
+    const SH: usize,
+>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
     unsafe {
-        const { assert!(SW <= 17 + 5, "mc_hor_ver22 width exceeds the 17 iTmp is sized for") };
+        const {
+            assert!(
+                SW <= 17 + 5,
+                "mc_hor_ver22 width exceeds the 17 iTmp is sized for"
+            )
+        };
         let s = src.span::<SW, SH>(-2, -2);
         let mut d = dst.span_mut::<W, H>(0, 0);
         let mut iTmp = [0i16; 17 + 5];
@@ -641,7 +704,9 @@ fn cen_block<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usi
             // Step 2: Horizontal 6-tap filter over 16-bit intermediate iTmp
             let out = d.row_mut::<W>(y, 0);
             for (o, t) in out.iter_mut().zip(iTmp[..SW].windows(6)) {
-                *o = WelsClip1((hor_filter_input_16bit(t.try_into().expect("six taps")) + 512) >> 10);
+                *o = WelsClip1(
+                    (hor_filter_input_16bit(t.try_into().expect("six taps")) + 512) >> 10,
+                );
             }
         }
     }
@@ -649,8 +714,16 @@ fn cen_block<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usi
 
 /// The run-time-shape twin — cold; see [`McLeaves`]. The `width <= 17` contract is
 /// the C++'s and is what sizes `iTmp`.
-fn cen_any<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
-    assert!(width <= 17, "mc_hor_ver22 width {width} exceeds the 17 iTmp is sized for");
+fn cen_any<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    width: usize,
+    height: usize,
+) {
+    assert!(
+        width <= 17,
+        "mc_hor_ver22 width {width} exceeds the 17 iTmp is sized for"
+    );
     let n = width + 5;
     let mut iTmp = [0i16; 17 + 5];
     for dy in 0..height as isize {
@@ -688,7 +761,13 @@ pub struct Sse2Leaves;
 
 impl McLeaves for Sse2Leaves {
     #[inline(always)]
-    fn hor<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const AVG: usize>(
+    fn hor<
+        S: RefSamples + Copy,
+        const W: usize,
+        const SW: usize,
+        const H: usize,
+        const AVG: usize,
+    >(
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     ) {
@@ -705,7 +784,13 @@ impl McLeaves for Sse2Leaves {
         hor_any::<S, AVG>(src, dst, width, height)
     }
     #[inline(always)]
-    fn ver<S: RefSamples + Copy, const W: usize, const H: usize, const SH: usize, const AVG: usize>(
+    fn ver<
+        S: RefSamples + Copy,
+        const W: usize,
+        const H: usize,
+        const SH: usize,
+        const AVG: usize,
+    >(
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     ) {
@@ -722,7 +807,13 @@ impl McLeaves for Sse2Leaves {
         ver_any::<S, AVG>(src, dst, width, height)
     }
     #[inline(always)]
-    fn cen<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    fn cen<
+        S: RefSamples + Copy,
+        const W: usize,
+        const SW: usize,
+        const H: usize,
+        const SH: usize,
+    >(
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     ) {
@@ -730,7 +821,12 @@ impl McLeaves for Sse2Leaves {
         unsafe { cen_block::<S, W, SW, H, SH>(src, dst) }
     }
     #[inline(always)]
-    fn cen_any<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize) {
+    fn cen_any<S: RefSamples + Copy>(
+        src: &S,
+        dst: &mut PlaneCursorMut<'_>,
+        width: usize,
+        height: usize,
+    ) {
         cen_any::<S>(src, dst, width, height)
     }
     #[inline(always)]
@@ -753,7 +849,13 @@ impl McLeaves for Sse2Leaves {
         avg_any::<A, B>(dst, a, b, width, height)
     }
     #[inline(always)]
-    fn chroma<S: RefSamples + Copy, const W: usize, const SW: usize, const H: usize, const SH: usize>(
+    fn chroma<
+        S: RefSamples + Copy,
+        const W: usize,
+        const SW: usize,
+        const H: usize,
+        const SH: usize,
+    >(
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
         w: &[u8; 4],
@@ -791,18 +893,18 @@ pub fn mc_luma<S: RefSamples + Copy>(
 
 #[cfg(test)]
 mod tests {
-    use crate::safe::plane::PlaneCursor;
     use super::*;
+    use crate::safe::plane::PlaneCursor;
     // These MUST be the `_c` scalar kernels, not the same-named dispatchers:
     // the dispatchers route to the very SSE2 kernels under test, which would
     // make every assertion below a tautology.
+    use crate::common::mc::McLeaves;
     use crate::common::mc::{
         mc_chroma_with_frag_mv, mc_hor_ver02_c as scalar_hor_ver02,
         mc_hor_ver20_c as scalar_hor_ver20, mc_hor_ver22_c as scalar_hor_ver22,
         mc_luma_c as scalar_luma, pixel_avg_c as scalar_pixel_avg,
     };
     use crate::encoder::rec_view::RecCursor;
-    use crate::common::mc::McLeaves;
 
     const STRIDE: usize = 64;
     const ROWS: usize = 64;
@@ -828,7 +930,19 @@ mod tests {
         let ca = PlaneCursor::new(&a, 10 * STRIDE + 8, STRIDE);
         let cb = PlaneCursor::new(&b, 12 * STRIDE + 8, STRIDE);
 
-        for (w, h) in [(16, 16), (16, 8), (8, 16), (8, 8), (8, 4), (4, 8), (4, 4), (17, 16), (9, 8), (5, 4), (2, 2)] {
+        for (w, h) in [
+            (16, 16),
+            (16, 8),
+            (8, 16),
+            (8, 8),
+            (8, 4),
+            (4, 8),
+            (4, 4),
+            (17, 16),
+            (9, 8),
+            (5, 4),
+            (2, 2),
+        ] {
             let mut dst_scalar = vec![0u8; STRIDE * ROWS];
             let mut dst_simd = vec![0u8; STRIDE * ROWS];
 
@@ -884,10 +998,21 @@ mod tests {
         let src = PlaneCursor::new(&base, src_c, STRIDE);
 
         let shapes = [
-            (16, 16), (16, 8), (8, 16), (8, 8), (8, 4), (4, 8), (4, 4),
-            (17, 16), (17, 8), (9, 16), (9, 8),
+            (16, 16),
+            (16, 8),
+            (8, 16),
+            (8, 8),
+            (8, 4),
+            (4, 8),
+            (4, 4),
+            (17, 16),
+            (17, 8),
+            (9, 16),
+            (9, 8),
             // Outside the const tables, so these drive the run-time fallback.
-            (5, 8), (5, 4), (17, 17),
+            (5, 8),
+            (5, 4),
+            (17, 17),
         ];
 
         for &(w, h) in &shapes {
@@ -912,10 +1037,21 @@ mod tests {
         let src = PlaneCursor::new(&base, src_c, STRIDE);
 
         let shapes = [
-            (16, 16), (16, 8), (8, 16), (8, 8), (8, 4), (4, 8), (4, 4),
-            (16, 17), (16, 9), (8, 17), (8, 9),
+            (16, 16),
+            (16, 8),
+            (8, 16),
+            (8, 8),
+            (8, 4),
+            (4, 8),
+            (4, 4),
+            (16, 17),
+            (16, 9),
+            (8, 17),
+            (8, 9),
             // Outside the const tables, so these drive the run-time fallback.
-            (8, 5), (4, 5), (17, 17),
+            (8, 5),
+            (4, 5),
+            (17, 17),
         ];
 
         for &(w, h) in &shapes {
@@ -940,10 +1076,21 @@ mod tests {
         let src = PlaneCursor::new(&base, src_c, STRIDE);
 
         let shapes = [
-            (16, 16), (16, 8), (8, 16), (8, 8), (8, 4), (4, 8), (4, 4),
-            (17, 17), (17, 9), (9, 17), (9, 9),
+            (16, 16),
+            (16, 8),
+            (8, 16),
+            (8, 8),
+            (8, 4),
+            (4, 8),
+            (4, 4),
+            (17, 17),
+            (17, 9),
+            (9, 17),
+            (9, 9),
             // Outside the const tables, so these drive the run-time fallback.
-            (9, 5), (5, 5), (17, 16),
+            (9, 5),
+            (5, 5),
+            (17, 16),
         ];
 
         for &(w, h) in &shapes {
@@ -1018,10 +1165,23 @@ mod tests {
                 assert_eq!(want, got);
             }};
         }
-        for (qx, qy) in [(0i16, 0i16), (1, 0), (2, 0), (3, 0), (0, 1), (0, 2), (0, 3), (1, 1), (2, 2), (3, 3)] {
+        for (qx, qy) in [
+            (0i16, 0i16),
+            (1, 0),
+            (2, 0),
+            (3, 0),
+            (0, 1),
+            (0, 2),
+            (0, 3),
+            (1, 1),
+            (2, 2),
+            (3, 3),
+        ] {
             for (w, h) in [(16, 16), (16, 8), (8, 16), (8, 8), (8, 4), (4, 8), (4, 4)] {
                 pair!(
-                    |s: &PlaneCursor<'_>, d: &mut PlaneCursorMut<'_>| scalar_luma(s, d, qx, qy, w, h),
+                    |s: &PlaneCursor<'_>, d: &mut PlaneCursorMut<'_>| scalar_luma(
+                        s, d, qx, qy, w, h
+                    ),
                     |s: &RecCursor<'_>, d: &mut PlaneCursorMut<'_>| mc_luma(s, d, qx, qy, w, h)
                 );
             }
@@ -1068,12 +1228,24 @@ mod tests {
             {
                 let ca = PlaneCursor::new(&a, src_c, STRIDE);
                 let cb = PlaneCursor::new(&base, src_c, STRIDE);
-                scalar_pixel_avg(&mut PlaneCursorMut::new(&mut want, dst_c, STRIDE), &ca, &cb, w, h);
+                scalar_pixel_avg(
+                    &mut PlaneCursorMut::new(&mut want, dst_c, STRIDE),
+                    &ca,
+                    &cb,
+                    w,
+                    h,
+                );
             }
             {
                 let ca = PlaneCursor::new(&a, src_c, STRIDE);
                 let cb = RecCursor::over_owned(&mut base, src_c, STRIDE);
-                pixel_avg(&mut PlaneCursorMut::new(&mut got, dst_c, STRIDE), &ca, &cb, w, h);
+                pixel_avg(
+                    &mut PlaneCursorMut::new(&mut got, dst_c, STRIDE),
+                    &ca,
+                    &cb,
+                    w,
+                    h,
+                );
             }
             assert_eq!(want, got, "pixel_avg via RecCursor at {w}x{h}");
         }
@@ -1096,7 +1268,14 @@ mod tests {
         for (qx, qy, avg) in [(1i16, 0i16, 2usize), (3, 0, 3), (0, 1, 2), (0, 3, 3)] {
             let mut want = vec![0u8; STRIDE * ROWS];
             let mut got = vec![0u8; STRIDE * ROWS];
-            mc_luma(&src, &mut PlaneCursorMut::new(&mut want, dst_c, STRIDE), qx, qy, 16, 16);
+            mc_luma(
+                &src,
+                &mut PlaneCursorMut::new(&mut want, dst_c, STRIDE),
+                qx,
+                qy,
+                16,
+                16,
+            );
             {
                 let mut d = PlaneCursorMut::new(&mut got, dst_c, STRIDE);
                 match avg {
@@ -1106,7 +1285,10 @@ mod tests {
                     _ => Sse2Leaves::ver::<_, 16, 16, 21, 3>(&src, &mut d),
                 }
             }
-            assert_eq!(want, got, "fused quarter-pel ({qx}, {qy}) differs from the composite");
+            assert_eq!(
+                want, got,
+                "fused quarter-pel ({qx}, {qy}) differs from the composite"
+            );
         }
     }
 }

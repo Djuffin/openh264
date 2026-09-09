@@ -79,7 +79,8 @@ fn test_decoder_create_and_destroy_lifecycle() {
         // be true for this API calling!", ors `dsInvalidArgument` into the context's
         // error code and returns it.
         let mut parser_info = SParserBsInfo::default();
-        let parse_state = ISVCDecoder::DecodeParser(p_decoder, std::ptr::null(), 0, &mut parser_info);
+        let parse_state =
+            ISVCDecoder::DecodeParser(p_decoder, std::ptr::null(), 0, &mut parser_info);
         assert_eq!(parse_state, DECODING_STATE::dsInvalidArgument);
 
         // 7. DecodeFrameEx
@@ -157,7 +158,8 @@ fn test_encoder_create_and_destroy_lifecycle() {
 
         // 3. GetDefaultParams
         let mut default_param = SEncParamExt::default();
-        let get_def_ret = ISVCEncoder::GetDefaultParams(p_encoder, &mut default_param as *mut SEncParamExt);
+        let get_def_ret =
+            ISVCEncoder::GetDefaultParams(p_encoder, &mut default_param as *mut SEncParamExt);
         assert_eq!(get_def_ret, CM_RESULT_SUCCESS);
 
         // 4. EncodeFrame
@@ -223,34 +225,30 @@ fn test_encoder_create_and_destroy_lifecycle() {
 /// Returns `(frames emitted, frames the decoder says are still buffered)`. The
 /// second number is `sReoderingStatus.iNumOfPicts`, read back through the public
 /// `DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER`.
-unsafe fn decode_pass(
-    p_decoder: *mut ISVCDecoder,
-    units: &[&[u8]],
-    limit: usize,
-) -> (usize, i32) {
+unsafe fn decode_pass(p_decoder: *mut ISVCDecoder, units: &[&[u8]], limit: usize) -> (usize, i32) {
     unsafe {
-    let mut frames = 0usize;
-    for unit in units.iter().take(limit) {
-        let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
-        let mut buf_info = SBufferInfo::default();
-        ISVCDecoder::DecodeFrame2(
-            p_decoder,
-            unit.as_ptr(),
-            unit.len() as i32,
-            p_dst.as_mut_ptr(),
-            &mut buf_info,
-        );
-        if buf_info.iBufferStatus == 1 {
-            frames += 1;
+        let mut frames = 0usize;
+        for unit in units.iter().take(limit) {
+            let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+            let mut buf_info = SBufferInfo::default();
+            ISVCDecoder::DecodeFrame2(
+                p_decoder,
+                unit.as_ptr(),
+                unit.len() as i32,
+                p_dst.as_mut_ptr(),
+                &mut buf_info,
+            );
+            if buf_info.iBufferStatus == 1 {
+                frames += 1;
+            }
         }
-    }
-    let mut remaining = 0i32;
-    ISVCDecoder::GetOption(
-        p_decoder,
-        DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
-        &mut remaining as *mut i32 as *mut std::ffi::c_void,
-    );
-    (frames, remaining)
+        let mut remaining = 0i32;
+        ISVCDecoder::GetOption(
+            p_decoder,
+            DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+            &mut remaining as *mut i32 as *mut std::ffi::c_void,
+        );
+        (frames, remaining)
     }
 }
 

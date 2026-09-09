@@ -28,7 +28,7 @@
 
 use core::arch::aarch64::*;
 
-use super::lanes::{any_set, ld16, ld4, ld8, ld8_i16, st16, to8};
+use super::lanes::{any_set, ld4, ld8, ld8_i16, ld16, st16, to8};
 use crate::safe::plane::{BlockRows, PlaneSamples, RefSamples};
 
 // ============================================================================
@@ -38,7 +38,14 @@ use crate::safe::plane::{BlockRows, PlaneSamples, RefSamples};
 /// `MASK_MATRIX`: `|p0 - q0| < alpha`, `|p1 - p0| < beta`, `|q1 - q0| < beta`.
 #[inline]
 #[target_feature(enable = "neon")]
-fn mask_matrix(p1: uint8x16_t, p0: uint8x16_t, q0: uint8x16_t, q1: uint8x16_t, alpha: uint8x16_t, beta: uint8x16_t) -> uint8x16_t {
+fn mask_matrix(
+    p1: uint8x16_t,
+    p0: uint8x16_t,
+    q0: uint8x16_t,
+    q1: uint8x16_t,
+    alpha: uint8x16_t,
+    beta: uint8x16_t,
+) -> uint8x16_t {
     let m = vcgtq_u8(alpha, vabdq_u8(p0, q0));
     let m = vandq_u8(m, vcgtq_u8(beta, vabdq_u8(p1, p0)));
     vandq_u8(m, vcgtq_u8(beta, vabdq_u8(q1, q0)))
@@ -64,7 +71,10 @@ fn lt4_p1(
     flag: uint8x16_t,
 ) -> (uint8x16_t, uint8x16_t) {
     let t = vhaddq_u8(p2, vrhaddq_u8(p0, q0));
-    let d_lo = vqmovn_s16(vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(t), vget_low_u8(p1))));
+    let d_lo = vqmovn_s16(vreinterpretq_s16_u16(vsubl_u8(
+        vget_low_u8(t),
+        vget_low_u8(p1),
+    )));
     let d_hi = vqmovn_s16(vreinterpretq_s16_u16(vsubl_high_u8(t, p1)));
     let d = vminq_s8(vmaxq_s8(vcombine_s8(d_lo, d_hi), neg_tc0), tc0);
     let cond = vcgtq_u8(beta, vabdq_u8(p2, p0));
@@ -79,7 +89,10 @@ fn lt4_p1(
 fn lt4_delta(p1: uint8x16_t, p0: uint8x16_t, q0: uint8x16_t, q1: uint8x16_t) -> int8x16_t {
     let lo = vaddq_s16(
         vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(p1), vget_low_u8(q1))),
-        vshlq_n_s16::<2>(vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(q0), vget_low_u8(p0)))),
+        vshlq_n_s16::<2>(vreinterpretq_s16_u16(vsubl_u8(
+            vget_low_u8(q0),
+            vget_low_u8(p0),
+        ))),
     );
     let hi = vaddq_s16(
         vreinterpretq_s16_u16(vsubl_high_u8(p1, q1)),
@@ -152,13 +165,22 @@ fn eq4_side(
         vget_high_u8(q1),
         vget_high_u8(strong),
     );
-    (vcombine_u8(a0, b0), vcombine_u8(a1, b1), vcombine_u8(a2, b2))
+    (
+        vcombine_u8(a0, b0),
+        vcombine_u8(a1, b1),
+        vcombine_u8(a2, b2),
+    )
 }
 
 /// `DIFF_CHROMA_EQ4_P0Q0` on eight lanes: `(2 p1 + p0 + q1 + 2) >> 2` and its mirror.
 #[inline]
 #[target_feature(enable = "neon")]
-fn chroma_eq4_half(p1: uint8x8_t, p0: uint8x8_t, q0: uint8x8_t, q1: uint8x8_t) -> (uint8x8_t, uint8x8_t) {
+fn chroma_eq4_half(
+    p1: uint8x8_t,
+    p0: uint8x8_t,
+    q0: uint8x8_t,
+    q1: uint8x8_t,
+) -> (uint8x8_t, uint8x8_t) {
     let v = vshlq_n_u16::<1>(vaddl_u8(p1, q1));
     (
         vrshrn_n_u16::<2>(vaddq_u16(v, vsubl_u8(p0, q1))),
@@ -236,8 +258,12 @@ fn gather_luma_lines(pix: &impl RefSamples) -> [[u8; 16]; 8] {
     for (i, l) in lines.iter_mut().enumerate() {
         *l = ld8(&s.row::<8>(i, 0));
     }
-    let top = transpose8x8([lines[0], lines[1], lines[2], lines[3], lines[4], lines[5], lines[6], lines[7]]);
-    let bot = transpose8x8([lines[8], lines[9], lines[10], lines[11], lines[12], lines[13], lines[14], lines[15]]);
+    let top = transpose8x8([
+        lines[0], lines[1], lines[2], lines[3], lines[4], lines[5], lines[6], lines[7],
+    ]);
+    let bot = transpose8x8([
+        lines[8], lines[9], lines[10], lines[11], lines[12], lines[13], lines[14], lines[15],
+    ]);
     let mut t = [[0u8; 16]; 8];
     for (x, tap) in t.iter_mut().enumerate() {
         st16(tap, vcombine_u8(top[x], bot[x]));
@@ -249,7 +275,10 @@ fn gather_luma_lines(pix: &impl RefSamples) -> [[u8; 16]; 8] {
 /// ones the filter may have changed — written back at column `FIRST - 4`.
 #[inline]
 #[target_feature(enable = "neon")]
-fn scatter_luma_lines<const FIRST: usize, const N: usize>(pix: &mut impl PlaneSamples, t: &[[u8; 16]; 8]) {
+fn scatter_luma_lines<const FIRST: usize, const N: usize>(
+    pix: &mut impl PlaneSamples,
+    t: &[[u8; 16]; 8],
+) {
     let mut top = [vdup_n_u8(0); 8];
     let mut bot = [vdup_n_u8(0); 8];
     for x in 0..8 {
@@ -302,10 +331,8 @@ fn scatter_chroma_lines(cb: &mut impl PlaneSamples, cr: &mut impl PlaneSamples, 
     }
     let a = transpose8x8(a);
     let b = transpose8x8(b);
-    let out_cb: [[u8; 2]; 8] =
-        std::array::from_fn(|i| to8(a[i])[1..3].try_into().expect("p0, q0"));
-    let out_cr: [[u8; 2]; 8] =
-        std::array::from_fn(|i| to8(b[i])[1..3].try_into().expect("p0, q0"));
+    let out_cb: [[u8; 2]; 8] = std::array::from_fn(|i| to8(a[i])[1..3].try_into().expect("p0, q0"));
+    let out_cr: [[u8; 2]; 8] = std::array::from_fn(|i| to8(b[i])[1..3].try_into().expect("p0, q0"));
     cb.set_block::<2, 8>(0, -1, &out_cb);
     cr.set_block::<2, 8>(0, -1, &out_cr);
 }
@@ -333,7 +360,10 @@ fn luma_lt4_16(
     let (vp2, vp1, vp0) = (ld16(p2), ld16(p1), ld16(p0));
     let (vq0, vq1, vq2) = (ld16(q0), ld16(q1), ld16(q2));
 
-    let flag = vandq_u8(vcgezq_s8(tc0), mask_matrix(vp1, vp0, vq0, vq1, alpha_v, beta_v));
+    let flag = vandq_u8(
+        vcgezq_s8(tc0),
+        mask_matrix(vp1, vp0, vq0, vq1, alpha_v, beta_v),
+    );
     if !any_set(flag) {
         return;
     }
@@ -343,8 +373,14 @@ fn luma_lt4_16(
     let (q1n, cond_q) = lt4_p1(vq2, vq1, vq0, vp0, beta_v, neg_tc0, tc0, flag);
 
     // `abs` of a `0xFF` mask is 1: the scalar's `tc_i += 1` per side.
-    let tc_i = vaddq_s8(vaddq_s8(tc0, vabsq_s8(vreinterpretq_s8_u8(cond_p))), vabsq_s8(vreinterpretq_s8_u8(cond_q)));
-    let d = vminq_s8(vmaxq_s8(lt4_delta(vp1, vp0, vq0, vq1), vnegq_s8(tc_i)), tc_i);
+    let tc_i = vaddq_s8(
+        vaddq_s8(tc0, vabsq_s8(vreinterpretq_s8_u8(cond_p))),
+        vabsq_s8(vreinterpretq_s8_u8(cond_q)),
+    );
+    let d = vminq_s8(
+        vmaxq_s8(lt4_delta(vp1, vp0, vq0, vq1), vnegq_s8(tc_i)),
+        tc_i,
+    );
     let d = vandq_s8(d, vreinterpretq_s8_u8(flag));
     let (pos, neg) = split_delta(d);
 
@@ -398,12 +434,23 @@ fn luma_eq4_16(
 /// in the high eight.
 #[inline]
 #[target_feature(enable = "neon")]
-fn chroma_lt4_16(p1: &[u8; 16], p0: &mut [u8; 16], q0: &mut [u8; 16], q1: &[u8; 16], alpha: i32, beta: i32, tc: &[i8; 4]) {
+fn chroma_lt4_16(
+    p1: &[u8; 16],
+    p0: &mut [u8; 16],
+    q0: &mut [u8; 16],
+    q1: &[u8; 16],
+    alpha: i32,
+    beta: i32,
+    tc: &[i8; 4],
+) {
     let (alpha_v, beta_v) = (vdupq_n_u8(alpha as u8), vdupq_n_u8(beta as u8));
     let tc0 = tc_chroma(tc);
     let (vp1, vp0, vq0, vq1) = (ld16(p1), ld16(p0), ld16(q0), ld16(q1));
 
-    let flag = vandq_u8(vcgtzq_s8(tc0), mask_matrix(vp1, vp0, vq0, vq1, alpha_v, beta_v));
+    let flag = vandq_u8(
+        vcgtzq_s8(tc0),
+        mask_matrix(vp1, vp0, vq0, vq1, alpha_v, beta_v),
+    );
     if !any_set(flag) {
         return;
     }
@@ -418,7 +465,14 @@ fn chroma_lt4_16(p1: &[u8; 16], p0: &mut [u8; 16], q0: &mut [u8; 16], q1: &[u8; 
 /// `DeblockChromaEq4V_AArch64_neon`'s body.
 #[inline]
 #[target_feature(enable = "neon")]
-fn chroma_eq4_16(p1: &[u8; 16], p0: &mut [u8; 16], q0: &mut [u8; 16], q1: &[u8; 16], alpha: i32, beta: i32) {
+fn chroma_eq4_16(
+    p1: &[u8; 16],
+    p0: &mut [u8; 16],
+    q0: &mut [u8; 16],
+    q1: &[u8; 16],
+    alpha: i32,
+    beta: i32,
+) {
     let (alpha_v, beta_v) = (vdupq_n_u8(alpha as u8), vdupq_n_u8(beta as u8));
     let (vp1, vp0, vq0, vq1) = (ld16(p1), ld16(p0), ld16(q0), ld16(q1));
 
@@ -426,8 +480,18 @@ fn chroma_eq4_16(p1: &[u8; 16], p0: &mut [u8; 16], q0: &mut [u8; 16], q1: &[u8; 
     if !any_set(mask) {
         return;
     }
-    let (p0_lo, q0_lo) = chroma_eq4_half(vget_low_u8(vp1), vget_low_u8(vp0), vget_low_u8(vq0), vget_low_u8(vq1));
-    let (p0_hi, q0_hi) = chroma_eq4_half(vget_high_u8(vp1), vget_high_u8(vp0), vget_high_u8(vq0), vget_high_u8(vq1));
+    let (p0_lo, q0_lo) = chroma_eq4_half(
+        vget_low_u8(vp1),
+        vget_low_u8(vp0),
+        vget_low_u8(vq0),
+        vget_low_u8(vq1),
+    );
+    let (p0_hi, q0_hi) = chroma_eq4_half(
+        vget_high_u8(vp1),
+        vget_high_u8(vp0),
+        vget_high_u8(vq0),
+        vget_high_u8(vq1),
+    );
 
     st16(p0, vbslq_u8(mask, vcombine_u8(p0_lo, p0_hi), vp0));
     st16(q0, vbslq_u8(mask, vcombine_u8(q0_lo, q0_hi), vq0));
@@ -446,53 +510,108 @@ fn chroma_eq4_16(p1: &[u8; 16], p0: &mut [u8; 16], q0: &mut [u8; 16], q1: &[u8; 
 // also be the cursor's own stride, which the `debug_assert!`s keep true.
 
 /// `DeblockLumaLt4V_AArch64_neon` / `DeblockLumaLt4H_AArch64_neon`.
-pub fn deblock_luma_lt4(pix: &mut impl PlaneSamples, step_x: isize, step_y: isize, alpha: i32, beta: i32, tc: &[i8; 4]) {
+pub fn deblock_luma_lt4(
+    pix: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+    tc: &[i8; 4],
+) {
     if step_y == 1 {
         debug_assert_eq!(step_x, pix.stride() as isize);
         // Horizontal edge: taps step vertically in y (-3, -2, -1, 0, 1, 2), which is
         // one 16-wide, 6-tall span cut at `dy0 = -3` and indexed from its own row 0.
         let (p2, mut p1, mut p0, mut q0, mut q1, q2) = {
             let s = pix.span::<16, 6>(-3, 0);
-            (s.row::<16>(0, 0), s.row::<16>(1, 0), s.row::<16>(2, 0),
-             s.row::<16>(3, 0), s.row::<16>(4, 0), s.row::<16>(5, 0))
+            (
+                s.row::<16>(0, 0),
+                s.row::<16>(1, 0),
+                s.row::<16>(2, 0),
+                s.row::<16>(3, 0),
+                s.row::<16>(4, 0),
+                s.row::<16>(5, 0),
+            )
         };
 
         // SAFETY: NEON is baseline on aarch64; see the module header.
-        unsafe { luma_lt4_16(&p2, &mut p1, &mut p0, &mut q0, &mut q1, &q2, alpha, beta, tc) };
+        unsafe {
+            luma_lt4_16(
+                &p2, &mut p1, &mut p0, &mut q0, &mut q1, &q2, alpha, beta, tc,
+            )
+        };
 
         pix.set_block::<16, 4>(-2, 0, &[p1, p0, q0, q1]);
     } else if step_x == 1 {
         debug_assert_eq!(step_y, pix.stride() as isize);
         // Vertical edge: line i has its taps at row i, columns -4..4.
         let mut t = unsafe { gather_luma_lines(&*pix) };
-        let [_, ref t1, ref mut t2, ref mut t3, ref mut t4, ref mut t5, ref t6, _] = t;
+        let [
+            _,
+            ref t1,
+            ref mut t2,
+            ref mut t3,
+            ref mut t4,
+            ref mut t5,
+            ref t6,
+            _,
+        ] = t;
         unsafe { luma_lt4_16(t1, t2, t3, t4, t5, t6, alpha, beta, tc) };
         // Write back only the columns the filter can modify — `p1..q1` — since at
         // `iEdge == 0` the outer columns belong to the previous macroblock.
         unsafe { scatter_luma_lines::<2, 4>(pix, &t) };
     } else {
-        crate::common::deblocking_common::deblock_luma_lt4_scalar(pix, step_x, step_y, alpha, beta, tc);
+        crate::common::deblocking_common::deblock_luma_lt4_scalar(
+            pix, step_x, step_y, alpha, beta, tc,
+        );
     }
 }
 
 /// `DeblockLumaEq4V_AArch64_neon` / `DeblockLumaEq4H_AArch64_neon`.
-pub fn deblock_luma_eq4(pix: &mut impl PlaneSamples, step_x: isize, step_y: isize, alpha: i32, beta: i32) {
+pub fn deblock_luma_eq4(
+    pix: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+) {
     if step_y == 1 {
         debug_assert_eq!(step_x, pix.stride() as isize);
         // Taps `-4 .. 3`: one 16-wide, 8-tall span, as in `deblock_luma_lt4`.
         let (p3, mut p2, mut p1, mut p0, mut q0, mut q1, mut q2, q3) = {
             let s = pix.span::<16, 8>(-4, 0);
-            (s.row::<16>(0, 0), s.row::<16>(1, 0), s.row::<16>(2, 0), s.row::<16>(3, 0),
-             s.row::<16>(4, 0), s.row::<16>(5, 0), s.row::<16>(6, 0), s.row::<16>(7, 0))
+            (
+                s.row::<16>(0, 0),
+                s.row::<16>(1, 0),
+                s.row::<16>(2, 0),
+                s.row::<16>(3, 0),
+                s.row::<16>(4, 0),
+                s.row::<16>(5, 0),
+                s.row::<16>(6, 0),
+                s.row::<16>(7, 0),
+            )
         };
 
-        unsafe { luma_eq4_16(&p3, &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, &q3, alpha, beta) };
+        unsafe {
+            luma_eq4_16(
+                &p3, &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, &q3, alpha, beta,
+            )
+        };
 
         pix.set_block::<16, 6>(-3, 0, &[p2, p1, p0, q0, q1, q2]);
     } else if step_x == 1 {
         debug_assert_eq!(step_y, pix.stride() as isize);
         let mut t = unsafe { gather_luma_lines(&*pix) };
-        let [ref t0, ref mut t1, ref mut t2, ref mut t3, ref mut t4, ref mut t5, ref mut t6, ref t7] = t;
+        let [
+            ref t0,
+            ref mut t1,
+            ref mut t2,
+            ref mut t3,
+            ref mut t4,
+            ref mut t5,
+            ref mut t6,
+            ref t7,
+        ] = t;
         unsafe { luma_eq4_16(t0, t1, t2, t3, t4, t5, t6, t7, alpha, beta) };
         // `p2..q2` only, as above.
         unsafe { scatter_luma_lines::<1, 6>(pix, &t) };
@@ -530,14 +649,22 @@ pub fn deblock_chroma_lt4(
 
         unsafe { chroma_lt4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta, tc) };
 
-        cb.set_block::<8, 2>(-1, 0, &[
-            p0[..8].try_into().expect("cb p0"),
-            q0[..8].try_into().expect("cb q0"),
-        ]);
-        cr.set_block::<8, 2>(-1, 0, &[
-            p0[8..].try_into().expect("cr p0"),
-            q0[8..].try_into().expect("cr q0"),
-        ]);
+        cb.set_block::<8, 2>(
+            -1,
+            0,
+            &[
+                p0[..8].try_into().expect("cb p0"),
+                q0[..8].try_into().expect("cb q0"),
+            ],
+        );
+        cr.set_block::<8, 2>(
+            -1,
+            0,
+            &[
+                p0[8..].try_into().expect("cr p0"),
+                q0[8..].try_into().expect("cr q0"),
+            ],
+        );
     } else if step_x == 1 {
         debug_assert_eq!(step_y, cb.stride() as isize);
         debug_assert_eq!(step_y, cr.stride() as isize);
@@ -546,12 +673,21 @@ pub fn deblock_chroma_lt4(
         unsafe { chroma_lt4_16(t0, t1, t2, t3, alpha, beta, tc) };
         unsafe { scatter_chroma_lines(cb, cr, &t) };
     } else {
-        crate::common::deblocking_common::deblock_chroma_lt4_scalar(cb, cr, step_x, step_y, alpha, beta, tc);
+        crate::common::deblocking_common::deblock_chroma_lt4_scalar(
+            cb, cr, step_x, step_y, alpha, beta, tc,
+        );
     }
 }
 
 /// `DeblockChromaEq4V_AArch64_neon` / `DeblockChromaEq4H_AArch64_neon`.
-pub fn deblock_chroma_eq4(cb: &mut impl PlaneSamples, cr: &mut impl PlaneSamples, step_x: isize, step_y: isize, alpha: i32, beta: i32) {
+pub fn deblock_chroma_eq4(
+    cb: &mut impl PlaneSamples,
+    cr: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+) {
     if step_y == 1 {
         debug_assert_eq!(step_x, cb.stride() as isize);
         debug_assert_eq!(step_x, cr.stride() as isize);
@@ -571,14 +707,22 @@ pub fn deblock_chroma_eq4(cb: &mut impl PlaneSamples, cr: &mut impl PlaneSamples
 
         unsafe { chroma_eq4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta) };
 
-        cb.set_block::<8, 2>(-1, 0, &[
-            p0[..8].try_into().expect("cb p0"),
-            q0[..8].try_into().expect("cb q0"),
-        ]);
-        cr.set_block::<8, 2>(-1, 0, &[
-            p0[8..].try_into().expect("cr p0"),
-            q0[8..].try_into().expect("cr q0"),
-        ]);
+        cb.set_block::<8, 2>(
+            -1,
+            0,
+            &[
+                p0[..8].try_into().expect("cb p0"),
+                q0[..8].try_into().expect("cb q0"),
+            ],
+        );
+        cr.set_block::<8, 2>(
+            -1,
+            0,
+            &[
+                p0[8..].try_into().expect("cr p0"),
+                q0[8..].try_into().expect("cr q0"),
+            ],
+        );
     } else if step_x == 1 {
         debug_assert_eq!(step_y, cb.stride() as isize);
         debug_assert_eq!(step_y, cr.stride() as isize);
@@ -587,7 +731,9 @@ pub fn deblock_chroma_eq4(cb: &mut impl PlaneSamples, cr: &mut impl PlaneSamples
         unsafe { chroma_eq4_16(t0, t1, t2, t3, alpha, beta) };
         unsafe { scatter_chroma_lines(cb, cr, &t) };
     } else {
-        crate::common::deblocking_common::deblock_chroma_eq4_scalar(cb, cr, step_x, step_y, alpha, beta);
+        crate::common::deblocking_common::deblock_chroma_eq4_scalar(
+            cb, cr, step_x, step_y, alpha, beta,
+        );
     }
 }
 
@@ -791,28 +937,62 @@ fn bs_calc_neon(
         ld_mv4::<3>(cur_mv),
     );
     let (z0, z1) = (
-        vreinterpretq_s16_u32(vzip1q_u32(vreinterpretq_u32_s16(r0), vreinterpretq_u32_s16(r2))),
-        vreinterpretq_s16_u32(vzip2q_u32(vreinterpretq_u32_s16(r0), vreinterpretq_u32_s16(r2))),
+        vreinterpretq_s16_u32(vzip1q_u32(
+            vreinterpretq_u32_s16(r0),
+            vreinterpretq_u32_s16(r2),
+        )),
+        vreinterpretq_s16_u32(vzip2q_u32(
+            vreinterpretq_u32_s16(r0),
+            vreinterpretq_u32_s16(r2),
+        )),
     );
     let (z2, z3) = (
-        vreinterpretq_s16_u32(vzip1q_u32(vreinterpretq_u32_s16(r1), vreinterpretq_u32_s16(r3))),
-        vreinterpretq_s16_u32(vzip2q_u32(vreinterpretq_u32_s16(r1), vreinterpretq_u32_s16(r3))),
+        vreinterpretq_s16_u32(vzip1q_u32(
+            vreinterpretq_u32_s16(r1),
+            vreinterpretq_u32_s16(r3),
+        )),
+        vreinterpretq_s16_u32(vzip2q_u32(
+            vreinterpretq_u32_s16(r1),
+            vreinterpretq_u32_s16(r3),
+        )),
     );
     let (c0, c1) = (
-        vreinterpretq_s16_u32(vzip1q_u32(vreinterpretq_u32_s16(z0), vreinterpretq_u32_s16(z2))),
-        vreinterpretq_s16_u32(vzip2q_u32(vreinterpretq_u32_s16(z0), vreinterpretq_u32_s16(z2))),
+        vreinterpretq_s16_u32(vzip1q_u32(
+            vreinterpretq_u32_s16(z0),
+            vreinterpretq_u32_s16(z2),
+        )),
+        vreinterpretq_s16_u32(vzip2q_u32(
+            vreinterpretq_u32_s16(z0),
+            vreinterpretq_u32_s16(z2),
+        )),
     );
     let (c2, c3) = (
-        vreinterpretq_s16_u32(vzip1q_u32(vreinterpretq_u32_s16(z1), vreinterpretq_u32_s16(z3))),
-        vreinterpretq_s16_u32(vzip2q_u32(vreinterpretq_u32_s16(z1), vreinterpretq_u32_s16(z3))),
+        vreinterpretq_s16_u32(vzip1q_u32(
+            vreinterpretq_u32_s16(z1),
+            vreinterpretq_u32_s16(z3),
+        )),
+        vreinterpretq_s16_u32(vzip2q_u32(
+            vreinterpretq_u32_s16(z1),
+            vreinterpretq_u32_s16(z3),
+        )),
     );
 
     let zero_mv = vdupq_n_s16(0);
     let prev_r = top.map_or(zero_mv, |(_, m)| ld_mv4::<3>(m));
     let prev_c = left.map_or(zero_mv, |(_, m)| gather_mv4(m, [3, 7, 11, 15]));
 
-    let mv_rows = mv_term([mv_ge4(prev_r, r0), mv_ge4(r0, r1), mv_ge4(r1, r2), mv_ge4(r2, r3)]);
-    let mv_cols = mv_term([mv_ge4(prev_c, c0), mv_ge4(c0, c1), mv_ge4(c1, c2), mv_ge4(c2, c3)]);
+    let mv_rows = mv_term([
+        mv_ge4(prev_r, r0),
+        mv_ge4(r0, r1),
+        mv_ge4(r1, r2),
+        mv_ge4(r2, r3),
+    ]);
+    let mv_cols = mv_term([
+        mv_ge4(prev_c, c0),
+        mv_ge4(c0, c1),
+        mv_ge4(c1, c2),
+        mv_ge4(c2, c3),
+    ]);
 
     // `umax`: the coefficient term is 2 and the vector term 1, so the larger is the
     // scalar's "2 if either block has a coefficient, else 1 if the vectors differ".
@@ -851,14 +1031,23 @@ mod tests {
     }
 
     fn lcg(seed: &mut u64) -> u32 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32) as u32
     }
 
     /// Noise of amplitude `amp` around a slow ramp — what a reconstructed picture looks
     /// like near a block edge that the filter will actually touch. A pure-noise plane
     /// takes the early-out on nearly every line and tests the compare and nothing else.
-    fn smooth_plane(w: usize, h: usize, pad: usize, stride: usize, amp: u32, seed: &mut u64) -> PaddedPlane {
+    fn smooth_plane(
+        w: usize,
+        h: usize,
+        pad: usize,
+        stride: usize,
+        amp: u32,
+        seed: &mut u64,
+    ) -> PaddedPlane {
         let mut p = PaddedPlane::new(w, h, pad, stride);
         for y in -(pad as isize)..(h + pad) as isize {
             for x in -(pad as isize)..(w + pad) as isize {
@@ -877,7 +1066,11 @@ mod tests {
     fn test_deblock_luma_lt4_parity() {
         let stride = 64;
         for is_horiz in [true, false] {
-            let (step_x, step_y) = if is_horiz { (stride as isize, 1) } else { (1, stride as isize) };
+            let (step_x, step_y) = if is_horiz {
+                (stride as isize, 1)
+            } else {
+                (1, stride as isize)
+            };
             let mut a = make_test_plane(32, 32, 16, stride);
             let mut b = a.clone();
             let tc = [2i8, 3, 1, 4];
@@ -891,7 +1084,11 @@ mod tests {
     fn test_deblock_luma_eq4_parity() {
         let stride = 64;
         for is_horiz in [true, false] {
-            let (step_x, step_y) = if is_horiz { (stride as isize, 1) } else { (1, stride as isize) };
+            let (step_x, step_y) = if is_horiz {
+                (stride as isize, 1)
+            } else {
+                (1, stride as isize)
+            };
             let mut a = make_test_plane(32, 32, 16, stride);
             let mut b = a.clone();
             scalar::deblock_luma_eq4_scalar(&mut a.cursor_mut(8, 8), step_x, step_y, 24, 15);
@@ -904,14 +1101,34 @@ mod tests {
     fn test_deblock_chroma_lt4_parity() {
         let stride = 32;
         for is_horiz in [true, false] {
-            let (step_x, step_y) = if is_horiz { (stride as isize, 1) } else { (1, stride as isize) };
+            let (step_x, step_y) = if is_horiz {
+                (stride as isize, 1)
+            } else {
+                (1, stride as isize)
+            };
             let mut cb_a = make_test_plane(16, 16, 8, stride);
             let mut cr_a = make_test_plane(16, 16, 8, stride);
             let mut cb_b = cb_a.clone();
             let mut cr_b = cr_a.clone();
             let tc = [1i8, 2, 0, 3];
-            scalar::deblock_chroma_lt4_scalar(&mut cb_a.cursor_mut(4, 4), &mut cr_a.cursor_mut(4, 4), step_x, step_y, 18, 10, &tc);
-            deblock_chroma_lt4(&mut cb_b.cursor_mut(4, 4), &mut cr_b.cursor_mut(4, 4), step_x, step_y, 18, 10, &tc);
+            scalar::deblock_chroma_lt4_scalar(
+                &mut cb_a.cursor_mut(4, 4),
+                &mut cr_a.cursor_mut(4, 4),
+                step_x,
+                step_y,
+                18,
+                10,
+                &tc,
+            );
+            deblock_chroma_lt4(
+                &mut cb_b.cursor_mut(4, 4),
+                &mut cr_b.cursor_mut(4, 4),
+                step_x,
+                step_y,
+                18,
+                10,
+                &tc,
+            );
             assert_planes_equal(&cb_a, &cb_b, &format!("chroma lt4 cb horiz={is_horiz}"));
             assert_planes_equal(&cr_a, &cr_b, &format!("chroma lt4 cr horiz={is_horiz}"));
         }
@@ -921,13 +1138,31 @@ mod tests {
     fn test_deblock_chroma_eq4_parity() {
         let stride = 32;
         for is_horiz in [true, false] {
-            let (step_x, step_y) = if is_horiz { (stride as isize, 1) } else { (1, stride as isize) };
+            let (step_x, step_y) = if is_horiz {
+                (stride as isize, 1)
+            } else {
+                (1, stride as isize)
+            };
             let mut cb_a = make_test_plane(16, 16, 8, stride);
             let mut cr_a = make_test_plane(16, 16, 8, stride);
             let mut cb_b = cb_a.clone();
             let mut cr_b = cr_a.clone();
-            scalar::deblock_chroma_eq4_scalar(&mut cb_a.cursor_mut(4, 4), &mut cr_a.cursor_mut(4, 4), step_x, step_y, 22, 14);
-            deblock_chroma_eq4(&mut cb_b.cursor_mut(4, 4), &mut cr_b.cursor_mut(4, 4), step_x, step_y, 22, 14);
+            scalar::deblock_chroma_eq4_scalar(
+                &mut cb_a.cursor_mut(4, 4),
+                &mut cr_a.cursor_mut(4, 4),
+                step_x,
+                step_y,
+                22,
+                14,
+            );
+            deblock_chroma_eq4(
+                &mut cb_b.cursor_mut(4, 4),
+                &mut cr_b.cursor_mut(4, 4),
+                step_x,
+                step_y,
+                22,
+                14,
+            );
             assert_planes_equal(&cb_a, &cb_b, &format!("chroma eq4 cb horiz={is_horiz}"));
             assert_planes_equal(&cr_a, &cr_b, &format!("chroma eq4 cr horiz={is_horiz}"));
         }
@@ -943,45 +1178,146 @@ mod tests {
         let mut seed = 0x0DDB_1A5E_5BAD_5EEDu64;
         let alphas = [0, 1, 4, 15, 40, 90, 160, 255];
         let betas = [0, 1, 3, 6, 10, 14, 18];
-        let tcs: [[i8; 4]; 6] = [[0, 0, 0, 0], [-1, 0, 1, 2], [3, 2, 3, 1], [25, 25, 25, 25], [1, -1, 13, 0], [7, 9, 11, 13]];
+        let tcs: [[i8; 4]; 6] = [
+            [0, 0, 0, 0],
+            [-1, 0, 1, 2],
+            [3, 2, 3, 1],
+            [25, 25, 25, 25],
+            [1, -1, 13, 0],
+            [7, 9, 11, 13],
+        ];
         for amp in [2u32, 8, 24, 80] {
             for &alpha in &alphas {
                 for &beta in &betas {
                     for tc in &tcs {
                         for is_horiz in [true, false] {
                             let stride = 64;
-                            let (step_x, step_y) = if is_horiz { (stride as isize, 1) } else { (1, stride as isize) };
+                            let (step_x, step_y) = if is_horiz {
+                                (stride as isize, 1)
+                            } else {
+                                (1, stride as isize)
+                            };
                             let mut a = smooth_plane(32, 32, 16, stride, amp, &mut seed);
                             let mut b = a.clone();
-                            scalar::deblock_luma_lt4_scalar(&mut a.cursor_mut(8, 8), step_x, step_y, alpha, beta, tc);
-                            deblock_luma_lt4(&mut b.cursor_mut(8, 8), step_x, step_y, alpha, beta, tc);
-                            assert_planes_equal(&a, &b, &format!("luma lt4 amp={amp} alpha={alpha} beta={beta} tc={tc:?} horiz={is_horiz}"));
+                            scalar::deblock_luma_lt4_scalar(
+                                &mut a.cursor_mut(8, 8),
+                                step_x,
+                                step_y,
+                                alpha,
+                                beta,
+                                tc,
+                            );
+                            deblock_luma_lt4(
+                                &mut b.cursor_mut(8, 8),
+                                step_x,
+                                step_y,
+                                alpha,
+                                beta,
+                                tc,
+                            );
+                            assert_planes_equal(
+                                &a,
+                                &b,
+                                &format!(
+                                    "luma lt4 amp={amp} alpha={alpha} beta={beta} tc={tc:?} horiz={is_horiz}"
+                                ),
+                            );
 
                             let mut a = smooth_plane(32, 32, 16, stride, amp, &mut seed);
                             let mut b = a.clone();
-                            scalar::deblock_luma_eq4_scalar(&mut a.cursor_mut(8, 8), step_x, step_y, alpha, beta);
+                            scalar::deblock_luma_eq4_scalar(
+                                &mut a.cursor_mut(8, 8),
+                                step_x,
+                                step_y,
+                                alpha,
+                                beta,
+                            );
                             deblock_luma_eq4(&mut b.cursor_mut(8, 8), step_x, step_y, alpha, beta);
-                            assert_planes_equal(&a, &b, &format!("luma eq4 amp={amp} alpha={alpha} beta={beta} horiz={is_horiz}"));
+                            assert_planes_equal(
+                                &a,
+                                &b,
+                                &format!(
+                                    "luma eq4 amp={amp} alpha={alpha} beta={beta} horiz={is_horiz}"
+                                ),
+                            );
 
                             let stride = 32;
-                            let (step_x, step_y) = if is_horiz { (stride as isize, 1) } else { (1, stride as isize) };
+                            let (step_x, step_y) = if is_horiz {
+                                (stride as isize, 1)
+                            } else {
+                                (1, stride as isize)
+                            };
                             let mut cb_a = smooth_plane(16, 16, 8, stride, amp, &mut seed);
                             let mut cr_a = smooth_plane(16, 16, 8, stride, amp, &mut seed);
                             let mut cb_b = cb_a.clone();
                             let mut cr_b = cr_a.clone();
-                            scalar::deblock_chroma_lt4_scalar(&mut cb_a.cursor_mut(4, 4), &mut cr_a.cursor_mut(4, 4), step_x, step_y, alpha, beta, tc);
-                            deblock_chroma_lt4(&mut cb_b.cursor_mut(4, 4), &mut cr_b.cursor_mut(4, 4), step_x, step_y, alpha, beta, tc);
-                            assert_planes_equal(&cb_a, &cb_b, &format!("chroma lt4 cb amp={amp} alpha={alpha} beta={beta} tc={tc:?} horiz={is_horiz}"));
-                            assert_planes_equal(&cr_a, &cr_b, &format!("chroma lt4 cr amp={amp} alpha={alpha} beta={beta} tc={tc:?} horiz={is_horiz}"));
+                            scalar::deblock_chroma_lt4_scalar(
+                                &mut cb_a.cursor_mut(4, 4),
+                                &mut cr_a.cursor_mut(4, 4),
+                                step_x,
+                                step_y,
+                                alpha,
+                                beta,
+                                tc,
+                            );
+                            deblock_chroma_lt4(
+                                &mut cb_b.cursor_mut(4, 4),
+                                &mut cr_b.cursor_mut(4, 4),
+                                step_x,
+                                step_y,
+                                alpha,
+                                beta,
+                                tc,
+                            );
+                            assert_planes_equal(
+                                &cb_a,
+                                &cb_b,
+                                &format!(
+                                    "chroma lt4 cb amp={amp} alpha={alpha} beta={beta} tc={tc:?} horiz={is_horiz}"
+                                ),
+                            );
+                            assert_planes_equal(
+                                &cr_a,
+                                &cr_b,
+                                &format!(
+                                    "chroma lt4 cr amp={amp} alpha={alpha} beta={beta} tc={tc:?} horiz={is_horiz}"
+                                ),
+                            );
 
                             let mut cb_a = smooth_plane(16, 16, 8, stride, amp, &mut seed);
                             let mut cr_a = smooth_plane(16, 16, 8, stride, amp, &mut seed);
                             let mut cb_b = cb_a.clone();
                             let mut cr_b = cr_a.clone();
-                            scalar::deblock_chroma_eq4_scalar(&mut cb_a.cursor_mut(4, 4), &mut cr_a.cursor_mut(4, 4), step_x, step_y, alpha, beta);
-                            deblock_chroma_eq4(&mut cb_b.cursor_mut(4, 4), &mut cr_b.cursor_mut(4, 4), step_x, step_y, alpha, beta);
-                            assert_planes_equal(&cb_a, &cb_b, &format!("chroma eq4 cb amp={amp} alpha={alpha} beta={beta} horiz={is_horiz}"));
-                            assert_planes_equal(&cr_a, &cr_b, &format!("chroma eq4 cr amp={amp} alpha={alpha} beta={beta} horiz={is_horiz}"));
+                            scalar::deblock_chroma_eq4_scalar(
+                                &mut cb_a.cursor_mut(4, 4),
+                                &mut cr_a.cursor_mut(4, 4),
+                                step_x,
+                                step_y,
+                                alpha,
+                                beta,
+                            );
+                            deblock_chroma_eq4(
+                                &mut cb_b.cursor_mut(4, 4),
+                                &mut cr_b.cursor_mut(4, 4),
+                                step_x,
+                                step_y,
+                                alpha,
+                                beta,
+                            );
+                            assert_planes_equal(
+                                &cb_a,
+                                &cb_b,
+                                &format!(
+                                    "chroma eq4 cb amp={amp} alpha={alpha} beta={beta} horiz={is_horiz}"
+                                ),
+                            );
+                            assert_planes_equal(
+                                &cr_a,
+                                &cr_b,
+                                &format!(
+                                    "chroma eq4 cr amp={amp} alpha={alpha} beta={beta} horiz={is_horiz}"
+                                ),
+                            );
                         }
                     }
                 }
@@ -997,7 +1333,11 @@ mod tests {
         let stride = 64;
         for (dark, light) in [(0u8, 255u8), (2, 250), (255, 0), (0, 40)] {
             for is_horiz in [true, false] {
-                let (step_x, step_y) = if is_horiz { (stride as isize, 1) } else { (1, stride as isize) };
+                let (step_x, step_y) = if is_horiz {
+                    (stride as isize, 1)
+                } else {
+                    (1, stride as isize)
+                };
                 let mut a = PaddedPlane::new(32, 32, 16, stride);
                 for y in -16..48isize {
                     for x in -16..48isize {
@@ -1007,15 +1347,30 @@ mod tests {
                 }
                 let mut b = a.clone();
                 let tc = [25i8, 25, 25, 25];
-                scalar::deblock_luma_lt4_scalar(&mut a.cursor_mut(8, 8), step_x, step_y, 255, 18, &tc);
+                scalar::deblock_luma_lt4_scalar(
+                    &mut a.cursor_mut(8, 8),
+                    step_x,
+                    step_y,
+                    255,
+                    18,
+                    &tc,
+                );
                 deblock_luma_lt4(&mut b.cursor_mut(8, 8), step_x, step_y, 255, 18, &tc);
-                assert_planes_equal(&a, &b, &format!("lt4 rails ({dark}, {light}) horiz={is_horiz}"));
+                assert_planes_equal(
+                    &a,
+                    &b,
+                    &format!("lt4 rails ({dark}, {light}) horiz={is_horiz}"),
+                );
 
                 let mut a2 = a.clone();
                 let mut b2 = a.clone();
                 scalar::deblock_luma_eq4_scalar(&mut a2.cursor_mut(8, 8), step_x, step_y, 255, 18);
                 deblock_luma_eq4(&mut b2.cursor_mut(8, 8), step_x, step_y, 255, 18);
-                assert_planes_equal(&a2, &b2, &format!("eq4 rails ({dark}, {light}) horiz={is_horiz}"));
+                assert_planes_equal(
+                    &a2,
+                    &b2,
+                    &format!("eq4 rails ({dark}, {light}) horiz={is_horiz}"),
+                );
             }
         }
     }

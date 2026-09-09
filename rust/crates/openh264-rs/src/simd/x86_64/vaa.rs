@@ -106,7 +106,10 @@ struct HalfStats {
 #[inline]
 #[target_feature(enable = "sse2")]
 fn halves_i32(v: __m128i) -> [i32; 2] {
-    [_mm_cvtsi128_si32(v), _mm_cvtsi128_si32(_mm_srli_si128(v, 8))]
+    [
+        _mm_cvtsi128_si32(v),
+        _mm_cvtsi128_si32(_mm_srli_si128(v, 8)),
+    ]
 }
 
 /// Sum of the four dwords — the asm's `pshufd`/`paddd` pair, twice.
@@ -184,7 +187,10 @@ fn half_mb<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
             }
         }
 
-        let mut out = HalfStats { sad: halves_i32(sad), ..Default::default() };
+        let mut out = HalfStats {
+            sad: halves_i32(sad),
+            ..Default::default()
+        };
         if VAR || BGD {
             let c = halves_i32(cur_sum);
             if VAR {
@@ -472,16 +478,28 @@ mod tests {
         let (mut asq, mut esq) = (z(), z());
         let ga = vaa_calc_sad_var(cur, refp, w, h, stride, &mut a, &mut asum, &mut asq);
         let ge = reference::vaa_calc_sad_var(cur, refp, w, h, stride, &mut e, &mut esum, &mut esq);
-        assert_eq!((ga, &a, &asum, &asq), (ge, &e, &esum, &esq), "vaa_calc_sad_var: {what}");
+        assert_eq!(
+            (ga, &a, &asum, &asq),
+            (ge, &e, &esum, &esq),
+            "vaa_calc_sad_var: {what}"
+        );
 
         // vaa_calc_sad_ssd
         let (mut a, mut e) = (z4(), z4());
         let (mut asum, mut esum) = (z(), z());
         let (mut asq, mut esq) = (z(), z());
         let (mut asd, mut esd) = (z(), z());
-        let ga = vaa_calc_sad_ssd(cur, refp, w, h, stride, &mut a, &mut asum, &mut asq, &mut asd);
-        let ge = reference::vaa_calc_sad_ssd(cur, refp, w, h, stride, &mut e, &mut esum, &mut esq, &mut esd);
-        assert_eq!((ga, &a, &asum, &asq, &asd), (ge, &e, &esum, &esq, &esd), "vaa_calc_sad_ssd: {what}");
+        let ga = vaa_calc_sad_ssd(
+            cur, refp, w, h, stride, &mut a, &mut asum, &mut asq, &mut asd,
+        );
+        let ge = reference::vaa_calc_sad_ssd(
+            cur, refp, w, h, stride, &mut e, &mut esum, &mut esq, &mut esd,
+        );
+        assert_eq!(
+            (ga, &a, &asum, &asq, &asd),
+            (ge, &e, &esum, &esq, &esd),
+            "vaa_calc_sad_ssd: {what}"
+        );
 
         // vaa_calc_sad_bgd
         let (mut a, mut e) = (z4(), z4());
@@ -489,7 +507,11 @@ mod tests {
         let (mut amad, mut emad) = (zm(), zm());
         let ga = vaa_calc_sad_bgd(cur, refp, w, h, stride, &mut a, &mut asd, &mut amad);
         let ge = reference::vaa_calc_sad_bgd(cur, refp, w, h, stride, &mut e, &mut esd, &mut emad);
-        assert_eq!((ga, &a, &asd, &amad), (ge, &e, &esd, &emad), "vaa_calc_sad_bgd: {what}");
+        assert_eq!(
+            (ga, &a, &asd, &amad),
+            (ge, &e, &esd, &emad),
+            "vaa_calc_sad_bgd: {what}"
+        );
 
         // vaa_calc_sad_ssd_bgd
         let (mut a, mut e) = (z4(), z4());
@@ -528,7 +550,14 @@ mod tests {
             (320, 48, 336),
         ] {
             let (cur, refp) = planes(w, h, stride, noise(0xA5A5 ^ w as u64));
-            check(&cur, &refp, w, h, stride, &format!("noise {w}x{h} stride {stride}"));
+            check(
+                &cur,
+                &refp,
+                w,
+                h,
+                stride,
+                &format!("noise {w}x{h} stride {stride}"),
+            );
         }
     }
 
@@ -547,12 +576,26 @@ mod tests {
         let (cur, refp) = planes(w, h, stride, |i| ((i & 0xFF) as u8, (i & 0xFF) as u8));
         check(&cur, &refp, w, h, stride, "identical planes");
 
-        let (cur, refp) = planes(w, h, stride, |i| {
-            if i & 1 == 0 { (255, 0) } else { (0, 255) }
-        });
+        let (cur, refp) = planes(
+            w,
+            h,
+            stride,
+            |i| {
+                if i & 1 == 0 { (255, 0) } else { (0, 255) }
+            },
+        );
         check(&cur, &refp, w, h, stride, "alternating stripes");
 
-        let (cur, refp) = planes(w, h, stride, |i| (if (i / stride as usize) & 1 == 0 { 255 } else { 0 }, 128));
+        let (cur, refp) = planes(w, h, stride, |i| {
+            (
+                if (i / stride as usize) & 1 == 0 {
+                    255
+                } else {
+                    0
+                },
+                128,
+            )
+        });
         check(&cur, &refp, w, h, stride, "alternating rows");
     }
 
@@ -582,7 +625,14 @@ mod tests {
                 }
             }
         }
-        check(&cur, &refp, w, h, stride, "one maximal difference per quadrant");
+        check(
+            &cur,
+            &refp,
+            w,
+            h,
+            stride,
+            "one maximal difference per quadrant",
+        );
     }
 
     /// The step quirk: a width that is not a multiple of 16 shifts every macroblock
@@ -594,7 +644,14 @@ mod tests {
     fn parity_at_a_width_that_is_not_a_multiple_of_16() {
         for &(w, h, stride) in &[(40, 32, 64), (24, 48, 32), (72, 32, 80), (33, 32, 64)] {
             let (cur, refp) = planes(w, h, stride, noise(0x5EED ^ w as u64));
-            check(&cur, &refp, w, h, stride, &format!("ragged {w}x{h} stride {stride}"));
+            check(
+                &cur,
+                &refp,
+                w,
+                h,
+                stride,
+                &format!("ragged {w}x{h} stride {stride}"),
+            );
         }
     }
 

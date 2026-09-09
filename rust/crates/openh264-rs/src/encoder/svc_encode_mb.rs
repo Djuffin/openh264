@@ -36,31 +36,32 @@
 //! early termination, inverse quantization/IDCT, and local reconstruction loops for H.264 / AVC / SVC
 //! macroblock modes (Intra 16x16, Intra 4x4, Inter P/B luma, Chroma UV, and P_SKIP).
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
-use crate::encoder::rec_view::{RecCursor, copy_block_to_view};
-pub use crate::encoder::encoder_context::SMVUnitXY;
+use crate::encoder::decode_mb_aux::{
+    idct_four_t4_rec_to_view, idct_rec_i16x16_dc_to_view, idct_t4_rec_to_view,
+};
+use crate::encoder::encode_mb_aux::{
+    blk_four4x4, blk_four4x4_mut, blk4x4, blk4x4_mut, hadamard_dc_span, hadamard2x2_span,
+    hadamard2x2_span_mut,
+};
 pub use crate::encoder::encoder_context::SDCTCoeff;
+pub use crate::encoder::encoder_context::SMVUnitXY;
 pub use crate::encoder::encoder_context::SPicData;
-pub use crate::encoder::param_svc::SWelsPPS;
 pub use crate::encoder::encoder_context::SStrideTables;
-pub use crate::encoder::svc_encode_slice::SLayerInfo;
-use crate::encoder::encode_mb_aux::{blk4x4, blk4x4_mut, blk_four4x4, blk_four4x4_mut, hadamard2x2_span,
-    hadamard2x2_span_mut, hadamard_dc_span};
+pub use crate::encoder::encoder_context::sWelsEncCtx;
+pub use crate::encoder::md::SMB;
 pub use crate::encoder::md::SMbCache;
 use crate::encoder::md::{best_pred_i4x4_blk4_off, mem_pred_luma_off};
-use crate::encoder::decode_mb_aux::{idct_four_t4_rec_to_view, idct_rec_i16x16_dc_to_view, idct_t4_rec_to_view};
-use crate::encoder::svc_encode_slice::{current_layer_expect, layer_enc_view_expect, layer_pps_ref, layer_rec_view_expect};
-pub use crate::encoder::md::SMB;
+pub use crate::encoder::param_svc::SWelsPPS;
+use crate::encoder::rec_view::{RecCursor, copy_block_to_view};
 pub use crate::encoder::svc_encode_slice::SDqLayer;
+pub use crate::encoder::svc_encode_slice::SLayerInfo;
+use crate::encoder::svc_encode_slice::{
+    current_layer_expect, layer_enc_view_expect, layer_pps_ref, layer_rec_view_expect,
+};
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
-pub use crate::encoder::encoder_context::sWelsEncCtx;
 
 // ============================================================================
 // Constants, Tables, and Bitmasks
@@ -86,8 +87,8 @@ pub static g_kuiMbCountScan4Idx: [u8; 24] = [
 /// Chroma QP mapping table according to H.264 standard Table 8-15
 pub static g_kuiChromaQpTable: [u8; 52] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-    26, 27, 28, 29, 29, 30, 31, 32, 32, 33, 34, 34, 35, 35, 36, 36, 37, 37, 37, 38, 38, 38, 39,
-    39, 39, 39,
+    26, 27, 28, 29, 29, 30, 31, 32, 32, 33, 34, 34, 35, 35, 36, 36, 37, 37, 37, 38, 38, 38, 39, 39,
+    39, 39,
 ];
 
 /// Dead-zone rounding factor table for inter/intra quantization
@@ -277,15 +278,11 @@ pub static g_kuiDequantCoeff: [[u16; 8]; 52] = [
 
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
-
-
-
-
-
-
 // Function pointer signatures for SWelsFuncPtrList
+use crate::encoder::decode_mb_aux::{
+    dequant_ihadamard_2x2_dc, dequant_luma_dc_4x4, ihadamard_4x4_dc,
+};
 pub use crate::encoder::encode_mb_aux::PDctFunc;
-use crate::encoder::decode_mb_aux::{dequant_ihadamard_2x2_dc, dequant_luma_dc_4x4, ihadamard_4x4_dc};
 pub type PTransformHadamard4x4Func = unsafe extern "C" fn(*mut i16, *mut i16);
 pub type PQuantizationFunc = unsafe extern "C" fn(*mut i16, *const i16, *const i16);
 pub type PQuantizationDcFunc = unsafe extern "C" fn(*mut i16, i16, i16);
@@ -345,7 +342,10 @@ pub fn WelsDctMb(
     pBestPred: &RecCursor<'_>,
     pfDctFourT4: PDctFunc,
 ) {
-    for (k, (dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)].into_iter().enumerate() {
+    for (k, (dx, dy)) in [(0isize, 0isize), (8, 0), (0, 8), (8, 8)]
+        .into_iter()
+        .enumerate()
+    {
         pfDctFourT4(
             &mut pRes[k << 6..],
             &pEncMb.advance(dx, dy),
@@ -356,11 +356,7 @@ pub fn WelsDctMb(
 
 /// Full DCT, DC Hadamard, quantization, scanning, inverse quantization, and local reconstruction
 /// for an **Intra 16x16 Luma** macroblock.
-pub fn WelsEncRecI16x16Y(
-    pEncCtx: &sWelsEncCtx,
-    pCurMb: &mut SMB,
-    pMbCache: &mut SMbCache,
-) {
+pub fn WelsEncRecI16x16Y(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     let mut aDctT4Dc = [0i16; 16];
     let pFuncList = pEncCtx.func_list();
     let pCurDqLayer = current_layer_expect(pEncCtx);
@@ -394,7 +390,11 @@ pub fn WelsEncRecI16x16Y(
     let uiCountI16x16Dc = (pFuncList.pfGetNoneZeroCount)(&pMbCache.sDct.iLumaI16x16Dc) as u32;
 
     for i in 0..4 {
-        (pFuncList.pfQuantizationFour4x4)(blk_four4x4_mut(&mut pMbCache.sCoeffLevel, i << 6), pFF, pMF);
+        (pFuncList.pfQuantizationFour4x4)(
+            blk_four4x4_mut(&mut pMbCache.sCoeffLevel, i << 6),
+            pFF,
+            pMF,
+        );
         let func = pFuncList.pfScan4x4Ac;
         for j in 0..4 {
             let k = (i << 2) + j;
@@ -513,11 +513,16 @@ pub fn WelsEncRecI4x4Y(
 
     let did = pEncCtx.uiDependencyId as usize;
     let tid_is_zero = if pEncCtx.uiTemporalId == 0 { 1 } else { 0 };
-    let tab = pEncCtx.pStrideTab.as_ref().expect("the stride tables are built at init");
+    let tab = pEncCtx
+        .pStrideTab
+        .as_ref()
+        .expect("the stride tables are built at init");
     let enc_block_offset =
-        tab.EncBlockOffsets(did).expect("the enc block-offset table is built")[uiI4x4Idx as usize] as isize;
+        tab.EncBlockOffsets(did)
+            .expect("the enc block-offset table is built")[uiI4x4Idx as usize] as isize;
     let dec_block_offset =
-        tab.DecBlockOffsets(did, tid_is_zero).expect("the dec block-offset table is built")[uiI4x4Idx as usize] as isize;
+        tab.DecBlockOffsets(did, tid_is_zero)
+            .expect("the dec block-offset table is built")[uiI4x4Idx as usize] as isize;
 
     let func = pFuncList.pfDctT4;
     // `advance(n, 0)` moves the centre by exactly `n` bytes — the block offset is
@@ -550,7 +555,10 @@ pub fn WelsEncRecI4x4Y(
         // stride 4 (not 16 — this is the 4x4 arena, and its rows are four bytes).
         let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
-        let (dx, dy) = (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
+        let (dx, dy) = (
+            dec_block_offset % iRecStride as isize,
+            dec_block_offset / iRecStride as isize,
+        );
         let kiPredOff = best_pred_i4x4_blk4_off(pMbCache.uiBestPredI4x4Blk4Half);
         idct_t4_rec_to_view(
             &view.plane(0).cursor(lx + dx, ly + dy),
@@ -564,8 +572,10 @@ pub fn WelsEncRecI4x4Y(
         // the prediction is `sMemPredBlk4` at stride 4.
         let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
-        let (dx, dy) =
-            (dec_block_offset % iRecStride as isize, dec_block_offset / iRecStride as isize);
+        let (dx, dy) = (
+            dec_block_offset % iRecStride as isize,
+            dec_block_offset / iRecStride as isize,
+        );
         let kiPredOff = best_pred_i4x4_blk4_off(pMbCache.uiBestPredI4x4Blk4Half);
         copy_block_to_view::<4, 4>(
             &pMbCache.sMemPredBlk4[kiPredOff..kiPredOff + 16],
@@ -576,11 +586,7 @@ pub fn WelsEncRecI4x4Y(
 
 /// Quantization, coefficient zigzag scanning, JVT-O079 fast zero-residual thresholding,
 /// dequantization, and CBP assignment for **Inter Luma (P/B frames)**.
-pub fn WelsEncInterY(
-    pFuncList: &SWelsFuncPtrList,
-    pCurMb: &mut SMB,
-    pMbCache: &mut SMbCache,
-) {
+pub fn WelsEncInterY(pFuncList: &SWelsFuncPtrList, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     let pfQuantizationFour4x4Max = pFuncList.pfQuantizationFour4x4Max;
     let pfScan4x4 = pFuncList.pfScan4x4;
     let pfCalculateSingleCtr4x4 = pFuncList.pfCalculateSingleCtr4x4;
@@ -597,7 +603,12 @@ pub fn WelsEncInterY(
     for i in 0..4 {
         let func = pfQuantizationFour4x4Max;
         let max4: &mut [i16; 4] = (&mut aMax[i << 2..(i << 2) + 4]).try_into().expect("4");
-        func(blk_four4x4_mut(&mut pMbCache.sCoeffLevel, i << 6), pFF, pMF, max4);
+        func(
+            blk_four4x4_mut(&mut pMbCache.sCoeffLevel, i << 6),
+            pFF,
+            pMF,
+            max4,
+        );
         iSingleCtr8x8[i] = 0;
         for j in 0..4 {
             let k = (i << 2) + j;
@@ -634,7 +645,8 @@ pub fn WelsEncInterY(
         for i in 0..4 {
             if iSingleCtr8x8[i] >= 4 {
                 for j in 0..4 {
-                    let iNoneZeroCount = pfGetNoneZeroCount(&pMbCache.sDct.iLumaBlock[(i << 2) + j]);
+                    let iNoneZeroCount =
+                        pfGetNoneZeroCount(&pMbCache.sDct.iLumaBlock[(i << 2) + j]);
                     let offset = g_kuiMbCountScan4Idx[kpNoneZeroCountIdx] as usize;
                     kpNoneZeroCountIdx += 1;
                     pCurMb.iNonZeroCount[offset] = iNoneZeroCount as i8;
@@ -708,7 +720,12 @@ pub fn WelsEncRecUV(
     );
 
     let func = pfQuantizationFour4x4Max;
-    func(blk_four4x4_mut(&mut pMbCache.sCoeffLevel, kiResOff), pFF, pMF, &mut aMax);
+    func(
+        blk_four4x4_mut(&mut pMbCache.sCoeffLevel, kiResOff),
+        pFF,
+        pMF,
+        &mut aMax,
+    );
 
     for j in 0..4 {
         let k = kiChromaBlk + j;
@@ -773,11 +790,7 @@ pub fn WelsEncRecUV(
 /// # Returns
 /// - `true`: Residual is zero or negligible ($iSingleCtrMb < 6$), qualifying for `P_SKIP`.
 /// - `false`: Non-zero significant residual detected.
-pub fn WelsTryPYskip(
-    pEncCtx: &sWelsEncCtx,
-    pCurMb: &mut SMB,
-    pMbCache: &mut SMbCache,
-) -> bool {
+pub fn WelsTryPYskip(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) -> bool {
     let mut iSingleCtrMb = 0i32;
     let kuiQp = pCurMb.uiLumaQp;
     let mut aMax = [0i16; 4];
@@ -785,7 +798,12 @@ pub fn WelsTryPYskip(
     let pFF = &g_kiQuantInterFF[kuiQp as usize];
 
     for i in 0..4 {
-        (pEncCtx.func_list().pfQuantizationFour4x4Max)(blk_four4x4_mut(&mut pMbCache.sCoeffLevel, i << 6), pFF, pMF, &mut aMax);
+        (pEncCtx.func_list().pfQuantizationFour4x4Max)(
+            blk_four4x4_mut(&mut pMbCache.sCoeffLevel, i << 6),
+            pFF,
+            pMF,
+            &mut aMax,
+        );
 
         for j in 0..4 {
             let k = (i << 2) + j;
@@ -820,14 +838,12 @@ pub fn WelsTryPUVskip(
 ) -> bool {
     let kiResOff = if iUV == 1 { 256usize } else { 256 + 64 };
 
-    let chroma_qp_index_offset = if let Some(pps) = layer_pps_ref(
-        pEncCtx,
-        current_layer_expect(pEncCtx),
-    ) {
-        pps.uiChromaQpIndexOffset as i32
-    } else {
-        0
-    };
+    let chroma_qp_index_offset =
+        if let Some(pps) = layer_pps_ref(pEncCtx, current_layer_expect(pEncCtx)) {
+            pps.uiChromaQpIndexOffset as i32
+        } else {
+            0
+        };
     let clipped_qp = (pCurMb.uiLumaQp as i32 + chroma_qp_index_offset).clamp(0, 51);
     let kuiQp = g_kuiChromaQpTable[clipped_qp as usize];
 
@@ -847,7 +863,12 @@ pub fn WelsTryPUVskip(
         let mut iSingleCtrMb = 0i32;
         let kiChromaBlk = ((iUV - 1) << 2) as usize;
 
-        (pEncCtx.func_list().pfQuantizationFour4x4Max)(blk_four4x4_mut(&mut pMbCache.sCoeffLevel, kiResOff), pFF, pMF, &mut aMax);
+        (pEncCtx.func_list().pfQuantizationFour4x4Max)(
+            blk_four4x4_mut(&mut pMbCache.sCoeffLevel, kiResOff),
+            pFF,
+            pMF,
+            &mut aMax,
+        );
 
         for j in 0..4 {
             let k = kiChromaBlk + j;
@@ -876,7 +897,7 @@ pub fn WelsTryPUVskip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_hadamard_4x4_dc_identity() {
         let mut dc_buf = [0i16; 16];

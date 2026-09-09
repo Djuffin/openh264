@@ -1,7 +1,7 @@
 //! Scalar forwards for the `sad` kernels — see the module header.
 
-use crate::safe::plane::RefSamples;
 use crate::common::sad_common::{sample_sad, sample_sad_four};
+use crate::safe::plane::RefSamples;
 
 #[inline(always)]
 pub fn sample_sad_16x16<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {

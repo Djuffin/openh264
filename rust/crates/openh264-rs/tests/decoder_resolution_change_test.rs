@@ -65,7 +65,8 @@ fn resolution_change_stream_matches_the_reference_and_does_not_abort() {
         .join("../../..")
         .join("res")
         .join("Error_I_P.264");
-    let data = std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let data =
+        std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
 
     let mut codes = Vec::new();
     let mut bufs = Vec::new();
@@ -88,9 +89,18 @@ fn resolution_change_stream_matches_the_reference_and_does_not_abort() {
         let mut feed = |unit: &[u8]| {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
-            let src = if unit.is_empty() { std::ptr::null() } else { unit.as_ptr() };
-            let ret =
-                ISVCDecoder::DecodeFrame2(decoder, src, unit.len() as i32, p_dst.as_mut_ptr(), &mut buf_info);
+            let src = if unit.is_empty() {
+                std::ptr::null()
+            } else {
+                unit.as_ptr()
+            };
+            let ret = ISVCDecoder::DecodeFrame2(
+                decoder,
+                src,
+                unit.len() as i32,
+                p_dst.as_mut_ptr(),
+                &mut buf_info,
+            );
             codes.push(ret.0);
             bufs.push(buf_info.iBufferStatus);
             if buf_info.iBufferStatus == 1 {
@@ -112,8 +122,14 @@ fn resolution_change_stream_matches_the_reference_and_does_not_abort() {
         WelsDestroyDecoder(decoder);
     }
 
-    assert_eq!(codes, CPP_CODES, "DecodeFrame2 return codes must match the C++ decoder's");
-    assert_eq!(bufs, CPP_BUFS, "iBufferStatus per call must match the C++ decoder's");
+    assert_eq!(
+        codes, CPP_CODES,
+        "DecodeFrame2 return codes must match the C++ decoder's"
+    );
+    assert_eq!(
+        bufs, CPP_BUFS,
+        "iBufferStatus per call must match the C++ decoder's"
+    );
     assert_eq!(frames.len(), CPP_FRAMES.len(), "emitted frame count");
     for (i, (got, want)) in frames.iter().zip(CPP_FRAMES).enumerate() {
         assert_eq!(

@@ -8,82 +8,117 @@
 //! and `WelsEncoderEncodeExt`.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
-use std::sync::atomic::{AtomicU16, Ordering};
-use crate::encoder::picture::{RecPicId, RecPicPool, SPicture};
 use crate::encoder::md::CostFamily;
+use crate::encoder::picture::{RecPicId, RecPicPool, SPicture};
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use crate::api::codec_api::EUsageType::{CAMERA_VIDEO_REAL_TIME, SCREEN_CONTENT_REAL_TIME};
-use crate::api::codec_api::{ELevelIdc, EParameterSetStrategy, SliceModeEnum};
-use crate::api::codec_api::SliceModeEnum::{SM_SINGLE_SLICE, SM_SIZELIMITED_SLICE};
 use crate::api::codec_api::RC_MODES::RC_OFF_MODE;
+use crate::api::codec_api::SliceModeEnum::{SM_SINGLE_SLICE, SM_SIZELIMITED_SLICE};
+use crate::api::codec_api::{ELevelIdc, EParameterSetStrategy, SliceModeEnum};
 use crate::decoder::nalu::g_ksLevelLimits;
 use crate::encoder::encoder_context::{
-    ctx_dq_idc_map, ctx_ltr_at,
-    sWelsEncCtx, SDqIdc, SLogContext, SRefList, SStrideTables, SSubsetSps,
-    SWelsSPS, BASE_DEPENDENCY_ID,
+    BASE_DEPENDENCY_ID, SDqIdc, SLogContext, SRefList, SStrideTables, SSubsetSps, SWelsSPS,
+    ctx_dq_idc_map, ctx_ltr_at, sWelsEncCtx,
 };
-use crate::encoder::param_svc::{
-    SExistingParasetList, SWelsSvcCodingParam, MB_WIDTH_LUMA,
-};
+use crate::encoder::param_svc::{MB_WIDTH_LUMA, SExistingParasetList, SWelsSvcCodingParam};
 use crate::encoder::param_svc::{PpsId, SpsId, SubsetSpsId};
-use crate::encoder::svc_encode_slice::{FrameBsRealloc, FreeSliceBuffer, GetCurrentSliceNum, InitAllSlicesInThread, LayerSps, ReallocSliceBuffer, SetSliceBoundaryInfo, SliceLayerInfoUpdate, StampLayerIdrFlagForSliceType, UpdateMbNeighbor, WelsCodeOneSlice, ctx_pic_ref, ctx_sps_ref, current_layer_mut, set_current_layer, slice_in_layer_mut};
-use crate::encoder::paraset_strategy::{ParasetStrategy, PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS};
+use crate::encoder::paraset_strategy::{PARA_SET_TYPE_AVCSPS, PARA_SET_TYPE_PPS, ParasetStrategy};
 use crate::encoder::slice_multi_threading::{
     MAX_DEPENDENCY_LAYER, MAX_SLICES_NUM, MAX_THREADS_NUM,
 };
 use crate::encoder::svc_enc_slice_segment::{GetInitialSliceNum, InitSlicePEncCtx};
-use crate::encoder::svc_encode_slice::{InitSliceInLayer, WelsMbToSliceIdc, current_layer_ref};
-use crate::encoder::svc_mode_decision::{
-    LEFT_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS, TOP_MB_POS,
-};
-use crate::encoder::svc_motion_estimate::{FME_DEFAULT_FEATURE_INDEX, ME_DIA_CROSS, ME_DIA_CROSS_FME};
-use crate::encoder::wels_preprocess::{AllocPicture, CWelsPreProcess, EStaticBlockIdc, SVAAFrameInfo, SVAAFrameInfoExt, VaaBlock};
 use crate::encoder::svc_encode_slice::{
-    LayerIdx, SDqLayer, SMB,
+    FrameBsRealloc, FreeSliceBuffer, GetCurrentSliceNum, InitAllSlicesInThread, LayerSps,
+    ReallocSliceBuffer, SetSliceBoundaryInfo, SliceLayerInfoUpdate, StampLayerIdrFlagForSliceType,
+    UpdateMbNeighbor, WelsCodeOneSlice, ctx_pic_ref, ctx_sps_ref, current_layer_mut,
+    set_current_layer, slice_in_layer_mut,
 };
-use crate::safe::mb_grid::{MbArray, MbDims};
+use crate::encoder::svc_encode_slice::{InitSliceInLayer, WelsMbToSliceIdc, current_layer_ref};
+use crate::encoder::svc_encode_slice::{LayerIdx, SDqLayer, SMB};
+use crate::encoder::svc_mode_decision::{LEFT_MB_POS, TOP_MB_POS, TOPLEFT_MB_POS, TOPRIGHT_MB_POS};
 use crate::encoder::svc_motion_estimate::{
-    CAMERA_HIGHLAYER_MVD_RANGE, CAMERA_MVD_RANGE, CAMERA_STARTMV_RANGE, EXPANDED_MVD_RANGE,
-    EXPANDED_MV_RANGE,
+    CAMERA_HIGHLAYER_MVD_RANGE, CAMERA_MVD_RANGE, CAMERA_STARTMV_RANGE, EXPANDED_MV_RANGE,
+    EXPANDED_MVD_RANGE,
+};
+use crate::encoder::svc_motion_estimate::{
+    FME_DEFAULT_FEATURE_INDEX, ME_DIA_CROSS, ME_DIA_CROSS_FME,
 };
 use crate::encoder::wels_encoder_ext::{
     ENC_RETURN_CORRECTED, ENC_RETURN_MEMALLOCERR, ENC_RETURN_SUCCESS, ENC_RETURN_UNEXPECTED,
-    ENC_RETURN_UNSUPPORTED_PARA, LEVEL_NUMBER,
-    MAX_MACROBLOCK_SIZE_IN_BYTE, MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA,
-    MAX_REFERENCE_PICTURE_COUNT_NUM_SCREEN, MIN_REF_PIC_COUNT,
+    ENC_RETURN_UNSUPPORTED_PARA, LEVEL_NUMBER, MAX_MACROBLOCK_SIZE_IN_BYTE,
+    MAX_REFERENCE_PICTURE_COUNT_NUM_CAMERA, MAX_REFERENCE_PICTURE_COUNT_NUM_SCREEN,
+    MIN_REF_PIC_COUNT,
 };
+use crate::encoder::wels_preprocess::{
+    AllocPicture, CWelsPreProcess, EStaticBlockIdc, SVAAFrameInfo, SVAAFrameInfoExt, VaaBlock,
+};
+use crate::safe::mb_grid::{MbArray, MbDims};
 
 // --- used by the encoding half (WelsEncoderEncodeExt and its helpers) ---
-use crate::api::codec_api::{EVideoFrameType, SFrameBSInfo, SLayerBSInfo, SSourcePicture};
-use crate::encoder::wels_encoder_ext::{NON_VIDEO_CODING_LAYER, VIDEO_CODING_LAYER};
-use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType, EWelsSliceType};
-use crate::encoder::param_svc::{SSpatialLayerInternal, INVALID_TEMPORAL_ID};
-use crate::encoder::encoder_context::{DecideFrameType, InitBitStream, InitFrameCoding, LoadBackFrameNum, MAX_PPS_COUNT, ctx_vpp_mut, ctx_vpp_ref, dq_layer_mut, with_vpp};
-use crate::common::wels_common_defs::{SNalUnitHeaderExt, calc_psnr};
-use crate::encoder::wels_encoder_ext::{ENC_RETURN_MEMOVERFLOWFOUND, ForceCodingIDR, WelsWriteOnePPS, WelsWriteOneSPS, WelsWriteParameterSets};
-use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
-use crate::encoder::svc_motion_estimate::{
-    BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4,
-    BLOCK_4x8,
-};
 use crate::api::codec_api::ECOMPLEXITY_MODE::LOW_COMPLEXITY;
-use crate::encoder::ref_list_mgr_svc::{LTR_MARKING_PROCESS_MODE, MAX_TEMPORAL_LAYER_NUM, RefStrategyKind, ResetLtrState, SLTRState, WelsUpdateRefSyntax};
-use crate::encoder::svc_encode_slice::{current_layer_expect, current_layer_expect_mut};
+use crate::api::codec_api::{EVideoFrameType, SFrameBSInfo, SLayerBSInfo, SSourcePicture};
+use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType, EWelsSliceType};
+use crate::common::wels_common_defs::{SNalUnitHeaderExt, calc_psnr};
 use crate::common::wels_trace::{WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING};
 use crate::decoder::decoder_core::WelsCPUFeatureDetect;
-use crate::encoder::deblocking::{DeblockingFilterSliceAvcbase, DeblockingFilterSliceAvcbaseNull, PerformDeblockingFilter};
-use crate::encoder::nal_encap::{SWelsEncoderOutput, WelsEncodeNal, WelsLoadNal, WelsUnloadNal, WelsWriteSVCPrefixNal};
+use crate::encoder::deblocking::{
+    DeblockingFilterSliceAvcbase, DeblockingFilterSliceAvcbaseNull, PerformDeblockingFilter,
+};
+use crate::encoder::encoder_context::{
+    DecideFrameType, InitBitStream, InitFrameCoding, LoadBackFrameNum, MAX_PPS_COUNT, ctx_vpp_mut,
+    ctx_vpp_ref, dq_layer_mut, with_vpp,
+};
+use crate::encoder::nal_encap::{
+    SWelsEncoderOutput, WelsEncodeNal, WelsLoadNal, WelsUnloadNal, WelsWriteSVCPrefixNal,
+};
 use crate::encoder::param_svc::SWelsPPS;
-use crate::encoder::paraset_strategy::{ctx_strategy_and_counts, ctx_strategy_and_param_arrays, ctx_strategy_and_paraset_arrays, ctx_strategy_and_pps};
-use crate::encoder::rc::{GetTimestampForRc, RcTraceFrameBits, WelsRcCheckFrameStatus, WelsRcInitModule, WelsRcPostFrameSkippedUpdate};
+use crate::encoder::param_svc::{INVALID_TEMPORAL_ID, SSpatialLayerInternal};
+use crate::encoder::paraset_strategy::{
+    ctx_strategy_and_counts, ctx_strategy_and_param_arrays, ctx_strategy_and_paraset_arrays,
+    ctx_strategy_and_pps,
+};
+use crate::encoder::rc::{
+    GetTimestampForRc, RcTraceFrameBits, WelsRcCheckFrameStatus, WelsRcInitModule,
+    WelsRcPostFrameSkippedUpdate,
+};
 use crate::encoder::rec_view::{RecPicView, RoPicView};
+use crate::encoder::ref_list_mgr_svc::{
+    LTR_MARKING_PROCESS_MODE, MAX_TEMPORAL_LAYER_NUM, RefStrategyKind, ResetLtrState, SLTRState,
+    WelsUpdateRefSyntax,
+};
 use crate::encoder::set_mb_syn_cabac::WelsCabacInit;
-use crate::encoder::slice_multi_threading::{AppendSliceToFrameBs, DynamicDetectCpuCores, EncodeFixedSlicesForked, EncodeSizeLimitedSlicesForked, RequestMtResource, UpdateMbMapForked, fill_mb_map};
-use crate::encoder::svc_base_layer_md::{WelsMdFirstIntraMode, WelsMdInterFinePartition, WelsMdInterFinePartitionVaa, WelsMdInterMb, WelsMdIntraFinePartition, WelsMdIntraFinePartitionVaa};
-use crate::encoder::svc_enc_slice_segment::{SliceArgumentValidationFixedSliceMode, UninitSlicePEncCtx};
-use crate::encoder::svc_mode_decision::{SetScrollingMvToMd, SetScrollingMvToMdNull, WelsMdInterFinePartitionVaaOnScreen, WelsMdInterMbEnhancelayer};
-use crate::encoder::svc_motion_estimate::{CalcFMESwitchFlag, CalculateSatdCost, FMESWITCH_DEFAULT_GOODFRAME_NUM, FmeKernels, NotCalculateSatdCost, UpdateFMESwitchNull, WelsDiamondSearch, WelsMotionEstimateSearchScrolled, WelsMotionEstimateSearchStatic};
+use crate::encoder::slice_multi_threading::{
+    AppendSliceToFrameBs, DynamicDetectCpuCores, EncodeFixedSlicesForked,
+    EncodeSizeLimitedSlicesForked, RequestMtResource, UpdateMbMapForked, fill_mb_map,
+};
+use crate::encoder::svc_base_layer_md::{
+    WelsMdFirstIntraMode, WelsMdInterFinePartition, WelsMdInterFinePartitionVaa, WelsMdInterMb,
+    WelsMdIntraFinePartition, WelsMdIntraFinePartitionVaa,
+};
+use crate::encoder::svc_enc_slice_segment::{
+    SliceArgumentValidationFixedSliceMode, UninitSlicePEncCtx,
+};
+use crate::encoder::svc_encode_slice::{current_layer_expect, current_layer_expect_mut};
+use crate::encoder::svc_mode_decision::{
+    SetScrollingMvToMd, SetScrollingMvToMdNull, WelsMdInterFinePartitionVaaOnScreen,
+    WelsMdInterMbEnhancelayer,
+};
+use crate::encoder::svc_motion_estimate::{
+    BLOCK_4x4, BLOCK_4x8, BLOCK_8x4, BLOCK_8x8, BLOCK_8x16, BLOCK_16x8, BLOCK_16x16,
+};
+use crate::encoder::svc_motion_estimate::{
+    CalcFMESwitchFlag, CalculateSatdCost, FMESWITCH_DEFAULT_GOODFRAME_NUM, FmeKernels,
+    NotCalculateSatdCost, UpdateFMESwitchNull, WelsDiamondSearch, WelsMotionEstimateSearchScrolled,
+    WelsMotionEstimateSearchStatic,
+};
 use crate::encoder::vlc_encoder::{BsRbspTrailingBits, BsWriteBits, BsWriter};
+use crate::encoder::wels_encoder_ext::{
+    ENC_RETURN_MEMOVERFLOWFOUND, ForceCodingIDR, WelsWriteOnePPS, WelsWriteOneSPS,
+    WelsWriteParameterSets,
+};
+use crate::encoder::wels_encoder_ext::{NON_VIDEO_CODING_LAYER, VIDEO_CODING_LAYER};
+use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 use crate::safe::mb_grid::MbWindow;
 
 /// `SPS_BUFFER_SIZE` — `wels_const.h:82`.
@@ -243,7 +278,11 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
         return 1;
     }
 
-    let iCntTid = if ctx.param().iTemporalLayerNum > 1 { 2 } else { 1 };
+    let iCntTid = if ctx.param().iTemporalLayerNum > 1 {
+        2
+    } else {
+        1
+    };
 
     iSpatialIdx = 0;
     while iSpatialIdx < kiNumSpatialLayers {
@@ -272,8 +311,7 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
 
             let kiWidthPad = WELS_ALIGN(fDlp.iVideoWidth, 16) + (PADDING_LENGTH << 1);
             iLineSizeY[iSpatialIdx as usize][kbBaseTemporalFlag] = WELS_ALIGN(kiWidthPad, 32);
-            iLineSizeUV[iSpatialIdx as usize][kbBaseTemporalFlag] =
-                WELS_ALIGN(kiWidthPad >> 1, 16);
+            iLineSizeUV[iSpatialIdx as usize][kbBaseTemporalFlag] = WELS_ALIGN(kiWidthPad >> 1, 16);
 
             iMapSpatialIdx[iCountLayersNeedCs[kbBaseTemporalFlag] as usize][kbBaseTemporalFlag] =
                 iSpatialIdx;
@@ -286,8 +324,8 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
     // exactly one) and the coordinate tables in `i16`s (`iSizeAllMbAlignCache`
     // is `iCountMbNum * sizeof(int16_t)`, so `iUnit2Size` bytes is
     // `iUnit2Size / 2` entries per table).
-    let kiBlockCount = (iCountLayersNeedCs[0] + iCountLayersNeedCs[1] + kiNumSpatialLayers)
-        .max(0) as usize;
+    let kiBlockCount =
+        (iCountLayersNeedCs[0] + iCountLayersNeedCs[1] + kiNumSpatialLayers).max(0) as usize;
     let kiCoordLen = (iUnit2Size.max(0) as usize / 2) * 2;
 
     ctx.pStrideTab = Some(Box::new(SStrideTables::new(kiBlockCount, kiCoordLen)));
@@ -314,11 +352,7 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
             let kiChromaWidth = iLineSizeUV[kiActualSpatialIdx][kbBaseTemporalFlag];
 
             pPtr.pStrideDecBlockOffset[kiActualSpatialIdx][kbBaseTemporalFlag] = Some(pBaseDec);
-            WelsGetEncBlockStrideOffset(
-                pPtr.i32_block24_mut(pBaseDec),
-                kiLumaWidth,
-                kiChromaWidth,
-            );
+            WelsGetEncBlockStrideOffset(pPtr.i32_block24_mut(pBaseDec), kiLumaWidth, kiChromaWidth);
             pBaseDec += 1;
 
             iSpatialIdx += 1;
@@ -411,8 +445,7 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
         let kiMbWidth = sMbSizeMap[iSpatialIdx as usize].iMbWidth;
         let kiMbHeight = sMbSizeMap[iSpatialIdx as usize].iCountMbNum / kiMbWidth;
         if let Some(off) = pPtr.pMbIndexX[iSpatialIdx as usize] {
-            let kpRegion =
-                pPtr.i16_region_mut(off, (kiMbWidth * kiMbHeight) as usize);
+            let kpRegion = pPtr.i16_region_mut(off, (kiMbWidth * kiMbHeight) as usize);
             for row in kpRegion.chunks_exact_mut(kiMbWidth as usize) {
                 row.copy_from_slice(&sTmpRow[..kiMbWidth as usize]);
             }
@@ -430,8 +463,7 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
             let kiMbHeight = sMbSizeMap[iSpatialIdx as usize].iCountMbNum / kiMbWidth;
             if i < kiMbHeight {
                 if let Some(off) = pPtr.pMbIndexY[iSpatialIdx as usize] {
-                    let kpRegion =
-                        pPtr.i16_region_mut(off, (kiMbWidth * kiMbHeight) as usize);
+                    let kpRegion = pPtr.i16_region_mut(off, (kiMbWidth * kiMbHeight) as usize);
                     kpRegion[(i * kiMbWidth) as usize..][..kiMbWidth as usize]
                         .copy_from_slice(&sTmpRow[..kiMbWidth as usize]);
                 }
@@ -454,11 +486,7 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
 }
 
 /// `GetMvMvdRange` — encoder_ext.cpp:1508.
-pub fn GetMvMvdRange(
-    pParam: &SWelsSvcCodingParam,
-    iMvRange: &mut i32,
-    iMvdRange: &mut i32,
-) {
+pub fn GetMvMvdRange(pParam: &SWelsSvcCodingParam, iMvRange: &mut i32, iMvdRange: &mut i32) {
     let mut iMinLevelIdc = ELevelIdc::LEVEL_5_2;
     let iFixMvRange = if pParam.iUsageType as i32 != 0 {
         EXPANDED_MV_RANGE
@@ -497,22 +525,17 @@ pub fn GetMvMvdRange(
 /// `InitMbInfo` — encoder_ext.cpp:835 (file-static).
 ///
 /// Computes every `SMB`'s position and neighbour-availability mask.
-fn InitMbInfo(
-    kpMbIndexX: &[i16],
-    kpMbIndexY: &[i16],
-    pLayer: &mut SDqLayer,
-) {
+fn InitMbInfo(kpMbIndexX: &[i16], kpMbIndexY: &[i16], pLayer: &mut SDqLayer) {
     let iMbWidth = pLayer.iMbWidth as i32;
     let iMbHeight = pLayer.iMbHeight as i32;
     let iMbNum = iMbWidth * iMbHeight;
-    let SDqLayer { sMbDataP, sSliceEncCtx, .. } = pLayer;
+    let SDqLayer {
+        sMbDataP,
+        sSliceEncCtx,
+        ..
+    } = pLayer;
     let dims = sMbDataP.dims();
-    let mut mbs = MbWindow::new(
-        sMbDataP.as_mut_slice(),
-        0,
-        dims.mb_width(),
-        0,
-    );
+    let mut mbs = MbWindow::new(sMbDataP.as_mut_slice(), 0, dims.mb_width(), 0);
 
     for iIdx in 0..iMbNum as usize {
         let pMb = mbs.at_mut(iIdx);
@@ -530,8 +553,9 @@ fn InitMbInfo(
 
         let bLeft = pMb.iMbX > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(sSliceEncCtx), iLeftXY);
         let bTop = pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(sSliceEncCtx), iTopXY);
-        let bLeftTop =
-            pMb.iMbX > 0 && pMb.iMbY > 0 && uiSliceIdc == WelsMbToSliceIdc(Some(sSliceEncCtx), iLeftTopXY);
+        let bLeftTop = pMb.iMbX > 0
+            && pMb.iMbY > 0
+            && uiSliceIdc == WelsMbToSliceIdc(Some(sSliceEncCtx), iLeftTopXY);
         let bRightTop = (pMb.iMbX as i32) < (iMbWidth - 1)
             && pMb.iMbY > 0
             && uiSliceIdc == WelsMbToSliceIdc(Some(sSliceEncCtx), iRightTopXY);
@@ -569,7 +593,11 @@ pub fn InitMbListD(ctx: &mut sWelsEncCtx) -> i32 {
     for i in 0..iNumDlayer as usize {
         let iMbWidth = (ctx.param().sSpatialLayers[i].iVideoWidth + 15) >> 4;
         let iMbHeight = (ctx.param().sSpatialLayers[i].iVideoHeight + 15) >> 4;
-        let sWelsEncCtx { pStrideTab, ppDqLayerList, .. } = &mut *ctx;
+        let sWelsEncCtx {
+            pStrideTab,
+            ppDqLayerList,
+            ..
+        } = &mut *ctx;
         let Some(pLayer) = ppDqLayerList.get_mut(i).and_then(|l| l.as_deref_mut()) else {
             return 1;
         };
@@ -676,8 +704,7 @@ pub fn InitDqLayers(
         let kiMbH = (ctx.param().sSpatialLayers[iDlayerIndex as usize].iVideoHeight + 0x0f) >> 4;
 
         {
-            let pParamInternal =
-                &mut ctx.param_mut().sDependencyLayers[iDlayerIndex as usize];
+            let pParamInternal = &mut ctx.param_mut().sDependencyLayers[iDlayerIndex as usize];
             pParamInternal.iCodingIndex = 0;
             pParamInternal.iFrameIndex = 0;
             pParamInternal.iFrameNum = 0;
@@ -692,9 +719,8 @@ pub fn InitDqLayers(
         pDqLayerBox.iMbHeight = kiMbH as i16;
 
         let mut iMaxSliceNum: i32 = 1;
-        let kiSliceNum = GetInitialSliceNum(
-            &ctx.param().sSpatialLayers[iDlayerIndex as usize].sSliceArgument,
-        );
+        let kiSliceNum =
+            GetInitialSliceNum(&ctx.param().sSpatialLayers[iDlayerIndex as usize].sSliceArgument);
         if iMaxSliceNum < kiSliceNum {
             iMaxSliceNum = kiSliceNum;
         }
@@ -714,7 +740,9 @@ pub fn InitDqLayers(
 
         // deblocking parameter adjustment
         if SM_SINGLE_SLICE
-            == ctx.param().sSpatialLayers[iDlayerIndex as usize].sSliceArgument.uiSliceMode
+            == ctx.param().sSpatialLayers[iDlayerIndex as usize]
+                .sSliceArgument
+                .uiSliceMode
         {
             // iLoopFilterDisableIdc will be 0 or 1 under single slice
             if 2 == ctx.param().iLoopFilterDisableIdc {
@@ -754,10 +782,7 @@ pub fn InitDqLayers(
     let kiNeededSpsNum = ParasetStrategy(ctx).GetNeededSpsNum() as i32;
     let kiNeededSubsetSpsNum = ParasetStrategy(ctx).GetNeededSubsetSpsNum() as i32;
     ctx.pSpsArray = vec![SWelsSPS::ZERO; kiNeededSpsNum as usize];
-    ctx.pSubsetArray = vec![
-        SSubsetSps::ZERO;
-        kiNeededSubsetSpsNum.max(0) as usize
-    ];
+    ctx.pSubsetArray = vec![SSubsetSps::ZERO; kiNeededSubsetSpsNum.max(0) as usize];
 
     // PPS
     let kiNeededPpsNum = ParasetStrategy(ctx).GetNeededPpsNum() as i32;
@@ -765,12 +790,7 @@ pub fn InitDqLayers(
 
     let (pParasetStrategy, pSpsArray, pSubsetArray, pPpsArray) =
         ctx_strategy_and_paraset_arrays(ctx);
-    pParasetStrategy.LoadPrevious(
-        pExistingParasetList,
-        pSpsArray,
-        pSubsetArray,
-        pPpsArray,
-    );
+    pParasetStrategy.LoadPrevious(pExistingParasetList, pSpsArray, pSubsetArray, pPpsArray);
 
     ctx.pDqIdcMap = vec![SDqIdc::default(); iDlayerCount as usize];
 
@@ -830,7 +850,11 @@ pub fn InitDqLayers(
         };
 
         // FMO is not used in SVC coding so far; come back if FMO is needed
-        let sWelsEncCtx { ppDqLayerList, pSvcParam, .. } = &mut *ctx;
+        let sWelsEncCtx {
+            ppDqLayerList,
+            pSvcParam,
+            ..
+        } = &mut *ctx;
         iResult = InitSlicePEncCtx(
             ppDqLayerList[iDlayerIndex as usize]
                 .as_deref_mut()
@@ -869,8 +893,7 @@ pub fn InitDqLayers(
     }
 
     {
-        let (strategy, pSpsNum, pSubsetSpsNum, pPpsNum) =
-            ctx_strategy_and_counts(ctx);
+        let (strategy, pSpsNum, pSubsetSpsNum, pPpsNum) = ctx_strategy_and_counts(ctx);
         strategy.UpdateParaSetNum(pSpsNum, pSubsetSpsNum, pPpsNum);
     }
     ENC_RETURN_SUCCESS
@@ -900,7 +923,8 @@ pub fn RequestMemorySvc(
     }
 
     if ctx.param().uiGopSize == 0
-        || (ctx.param().uiIntraPeriod != 0 && (ctx.param().uiIntraPeriod % ctx.param().uiGopSize) != 0)
+        || (ctx.param().uiIntraPeriod != 0
+            && (ctx.param().uiIntraPeriod % ctx.param().uiGopSize) != 0)
     {
         return 1;
     }
@@ -937,9 +961,9 @@ pub fn RequestMemorySvc(
 
         let fCompressRatioThr = COMPRESS_RATIO_THR;
 
-        let mut iLayerBsSize = WELS_ROUND_f(
-            (((3 * kiVideoWidth * kiVideoHeight) >> 1) as f32) * fCompressRatioThr,
-        ) + MAX_MACROBLOCK_SIZE_IN_BYTE_x2;
+        let mut iLayerBsSize =
+            WELS_ROUND_f((((3 * kiVideoWidth * kiVideoHeight) >> 1) as f32) * fCompressRatioThr)
+                + MAX_MACROBLOCK_SIZE_IN_BYTE_x2;
         iLayerBsSize = WELS_ALIGN(iLayerBsSize, 4); // 4 bytes aligned
         let mut iMaxLayerBsSize: i32;
         if kuiSliceMode == SM_SIZELIMITED_SLICE {
@@ -948,8 +972,7 @@ pub fn RequestMemorySvc(
                 crate::encoder::svc_enc_slice_segment::AVERSLICENUM_CONSTRAINT as u32,
                 (iLayerBsSize as u32 / kuiSliceSizeConstraint) + 1,
             );
-            ctx.iMaxSliceCount =
-                std::cmp::max(ctx.iMaxSliceCount, uiMaxSliceNumEstimation as i32);
+            ctx.iMaxSliceCount = std::cmp::max(ctx.iMaxSliceCount, uiMaxSliceNumEstimation as i32);
             iSliceBufferSize = ((std::cmp::max(
                 kuiSliceSizeConstraint,
                 iLayerBsSize as u32 / uiMaxSliceNumEstimation,
@@ -958,13 +981,12 @@ pub fn RequestMemorySvc(
                 + MAX_MACROBLOCK_SIZE_IN_BYTE_x2;
             iMaxLayerBsSize = iSliceBufferSize * uiMaxSliceNumEstimation as i32;
         } else {
-            ctx.iMaxSliceCount =
-                std::cmp::max(ctx.iMaxSliceCount, kuiSliceNum as i32);
+            ctx.iMaxSliceCount = std::cmp::max(ctx.iMaxSliceCount, kuiSliceNum as i32);
             if ctx.param().bUseLoadBalancing {
                 iSliceBufferSize = iLayerBsSize + MAX_MACROBLOCK_SIZE_IN_BYTE_x2;
             } else {
-                iSliceBufferSize = ((iLayerBsSize / kuiSliceNum as i32) << 1)
-                    + MAX_MACROBLOCK_SIZE_IN_BYTE_x2;
+                iSliceBufferSize =
+                    ((iLayerBsSize / kuiSliceNum as i32) << 1) + MAX_MACROBLOCK_SIZE_IN_BYTE_x2;
             }
             iMaxLayerBsSize = iSliceBufferSize * kuiSliceNum as i32;
         }
@@ -1016,27 +1038,17 @@ pub fn RequestMemorySvc(
     }
     // for pSlice bs buffers
     if ctx.param().iMultipleThreadIdc > 1
-        && RequestMtResource(
-            ctx,
-            iCountBsLen,
-            iMaxSliceBufferSize,
-            bDynamicSlice,
-        ) != 0
+        && RequestMtResource(ctx, iCountBsLen, iMaxSliceBufferSize, bDynamicSlice) != 0
     {
         return 1;
     }
 
-    ctx.eRefStrategy = RefStrategyKind::Select(
-        ctx.param().iUsageType,
-        ctx.param().bEnableLongTermReference,
-    );
+    ctx.eRefStrategy =
+        RefStrategyKind::Select(ctx.param().iUsageType, ctx.param().bEnableLongTermReference);
 
     ctx.iGlobalQp = 26; // global qp in default
 
-    ctx.pLtr = vec![
-        SLTRState::default();
-        kiNumDependencyLayers as usize
-    ];
+    ctx.pLtr = vec![SLTRState::default(); kiNumDependencyLayers as usize];
     for i in 0..kiNumDependencyLayers as usize {
         ResetLtrState(ctx_ltr_at(&mut *ctx, i));
     }
@@ -1066,18 +1078,16 @@ pub fn RequestMemorySvc(
             .min(crate::encoder::wels_preprocess::SBlockStaticIdcStore::MAX_ROWS);
         let stride = (iCountMaxMbNum.max(0) as usize) << 2;
         let mut ext = SVAAFrameInfoExt {
-            sVaaFrameInfo: *SVAAFrameInfo::new(
-                iCountMaxMbNum,
-                kbBgd,
-            ),
+            sVaaFrameInfo: *SVAAFrameInfo::new(iCountMaxMbNum, kbBgd),
             ..Default::default()
         };
         ext.pVaaBlockStaticIdc.alloc(rows, stride);
         ctx.pVaa = Some(Box::new(VaaBlock::Screen(ext)));
     } else {
-        ctx.pVaa = Some(Box::new(VaaBlock::Base(
-            *SVAAFrameInfo::new(iCountMaxMbNum, kbBgd),
-        )));
+        ctx.pVaa = Some(Box::new(VaaBlock::Base(*SVAAFrameInfo::new(
+            iCountMaxMbNum,
+            kbBgd,
+        ))));
     }
 
     if ctx.param().bEnableAdaptiveQuant {
@@ -1128,10 +1138,7 @@ pub fn RequestMemorySvc(
         (52 * kuiMvdCacheAlignedSize + kuiMvdCostTableOvershoot) as usize
             / size_of::<u16>()
     ];
-    crate::encoder::md::MvdCostInit(
-        ctx.mvd_cost_table_mut(),
-        kuiMvdInterTableStride,
-    );
+    crate::encoder::md::MvdCostInit(ctx.mvd_cost_table_mut(), kuiMvdInterTableStride);
 
     let idDec = match ctx.ref_list(0) {
         Some(pRefList0) if !pRefList0.pRef.is_empty() => Some(pRefList0.pRef.at(0)),
@@ -1168,31 +1175,42 @@ pub fn InitSliceSettings(
 
         match pDlp.sSliceArgument.uiSliceMode {
             SM_SIZELIMITED_SLICE => {
-                iMaxSliceCount = crate::encoder::svc_enc_slice_segment::AVERSLICENUM_CONSTRAINT
-                    as u16;
+                iMaxSliceCount =
+                    crate::encoder::svc_enc_slice_segment::AVERSLICENUM_CONSTRAINT as u16;
             }
             SliceModeEnum::SM_FIXEDSLCNUM_SLICE => {
                 let kiRCMode = pCodingParam.iRCMode;
-                let iReturn =
-                    SliceArgumentValidationFixedSliceMode(
-                        pLogCtx,
-                        &mut pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument,
-                        kiRCMode,
-                        kiVideoWidth,
-                        kiVideoHeight,
-                    );
+                let iReturn = SliceArgumentValidationFixedSliceMode(
+                    pLogCtx,
+                    &mut pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument,
+                    kiRCMode,
+                    kiVideoWidth,
+                    kiVideoHeight,
+                );
                 if iReturn != 0 {
                     return ENC_RETURN_UNSUPPORTED_PARA;
                 }
 
-                if pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16 > iMaxSliceCount {
-                    iMaxSliceCount = pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16;
+                if pCodingParam.sSpatialLayers[iSpatialIdx as usize]
+                    .sSliceArgument
+                    .uiSliceNum as u16
+                    > iMaxSliceCount
+                {
+                    iMaxSliceCount = pCodingParam.sSpatialLayers[iSpatialIdx as usize]
+                        .sSliceArgument
+                        .uiSliceNum as u16;
                 }
             }
             #[allow(clippy::collapsible_match)] // the guard would borrow what the arm mutates
             SM_SINGLE_SLICE | SliceModeEnum::SM_RASTER_SLICE => {
-                if pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16 > iMaxSliceCount {
-                    iMaxSliceCount = pCodingParam.sSpatialLayers[iSpatialIdx as usize].sSliceArgument.uiSliceNum as u16;
+                if pCodingParam.sSpatialLayers[iSpatialIdx as usize]
+                    .sSliceArgument
+                    .uiSliceNum as u16
+                    > iMaxSliceCount
+                {
+                    iMaxSliceCount = pCodingParam.sSpatialLayers[iSpatialIdx as usize]
+                        .sSliceArgument
+                        .uiSliceNum as u16;
                 }
             }
             _ => {}
@@ -1245,11 +1263,8 @@ pub fn GetMultipleThreadIdc(
 
     // So many cpu cores up to MAX_THREADS_NUM means server platforms; for client
     // applications it is constrained to MAX_THREADS_NUM here.
-    pCodingParam.iMultipleThreadIdc = crate::encoder::rc::WELS_CLIP3(
-        pCodingParam.iMultipleThreadIdc,
-        1,
-        MAX_THREADS_NUM as u16,
-    );
+    pCodingParam.iMultipleThreadIdc =
+        crate::encoder::rc::WELS_CLIP3(pCodingParam.iMultipleThreadIdc, 1, MAX_THREADS_NUM as u16);
     uiCpuCores = pCodingParam.iMultipleThreadIdc as i32;
 
     if InitSliceSettings(pLogCtx, pCodingParam, uiCpuCores, iSliceNum) != 0 {
@@ -1304,10 +1319,7 @@ pub fn WelsInitEncoderExt(
     ctxBox.pSvcParam = Some(crate::encoder::param_svc::NewCodingParam());
     *ctxBox.param_mut() = *pCodingParam;
 
-    iRet = crate::encoder::encoder_context::InitFunctionPointers(
-        &mut ctxBox,
-        uiCpuFeatureFlags,
-    );
+    iRet = crate::encoder::encoder_context::InitFunctionPointers(&mut ctxBox, uiCpuFeatureFlags);
     if iRet != ENC_RETURN_SUCCESS {
         WelsUninitEncoderExt(Some(ctxBox));
         return iRet;
@@ -1347,7 +1359,10 @@ pub fn WelsInitEncoderExt(
     crate::common::wels_trace::WelsLog(
         pLogCtx,
         WELS_LOG_INFO,
-        &format!("WelsInitEncoderExt(), pCtx= 0x{:p}.", std::ptr::addr_of!(*ctxBox)),
+        &format!(
+            "WelsInitEncoderExt(), pCtx= 0x{:p}.",
+            std::ptr::addr_of!(*ctxBox)
+        ),
     );
     *ppCtx = Some(ctxBox);
 
@@ -1375,7 +1390,6 @@ pub fn FreeDqLayer(p: &mut SDqLayer) {
     UninitSlicePEncCtx(&mut *p);
     p.iMaxSliceNum = 0;
 }
-
 
 /// `WelsUninitEncoderExt` — encoder_ext.cpp:2246, with `FreeMemorySvc`
 /// (encoder_ext.cpp:1804) folded in.
@@ -1430,11 +1444,7 @@ pub fn WelsUninitEncoderExt(pEncContext: Option<Box<sWelsEncCtx>>) {
 // ============================================================================
 
 /// `encoder_ext.cpp:2393`.
-pub fn GetTemporalLevel(
-    fDlp: &SSpatialLayerInternal,
-    kiFrameNum: i32,
-    kiGopSize: i32,
-) -> i32 {
+pub fn GetTemporalLevel(fDlp: &SSpatialLayerInternal, kiFrameNum: i32, kiGopSize: i32) -> i32 {
     let kiCodingIdx = kiFrameNum & (kiGopSize - 1);
     fDlp.uiCodingIdx2TemporalId[kiCodingIdx as usize] as i32
 }
@@ -1463,7 +1473,9 @@ pub fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) {
     // The outgoing layer's *position*, not its address: `iCurDqLayer` **is** the
     // index. The `expect` cannot fire on a live path — the frame loop makes a
     // layer current before any swap.
-    let kRefIdx = pCtx.iCurDqLayer.expect("WelsSwapDqLayers with no current layer");
+    let kRefIdx = pCtx
+        .iCurDqLayer
+        .expect("WelsSwapDqLayers with no current layer");
     set_current_layer(pCtx, Some(LayerIdx(kiNextDqIdx as u8)));
     if let Some(pCurLayer) = current_layer_mut(pCtx) {
         pCurLayer.pRefLayer = Some(kRefIdx);
@@ -1491,10 +1503,7 @@ pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrame
 
     let mut iIdx = 0;
     while iIdx < kiSliceCount {
-        if let Some(pSlice) = slice_in_layer_mut(
-            current_layer_expect_mut(pCtx),
-            iIdx,
-        ) {
+        if let Some(pSlice) = slice_in_layer_mut(current_layer_expect_mut(pCtx), iIdx) {
             pSlice.sSliceHeaderExt.sSliceHeader.uiRefIndex = uiRefIdx;
         }
         iIdx += 1;
@@ -1572,13 +1581,10 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
     // The layer is stamped with this frame's picture handles here, once a frame,
     // and the per-macroblock mode-decision family resolves them through it.
     let kiCurDid = pCtx.uiDependencyId;
-    let kbUseSubsetSpsFlag =
-        !pCtx.param().bSimulcastAVC && (kiCurDid as i32) > BASE_DEPENDENCY_ID;
-    let iSliceCount =
-        current_layer_expect(pCtx).iMaxSliceNum;
+    let kbUseSubsetSpsFlag = !pCtx.param().bSimulcastAVC && (kiCurDid as i32) > BASE_DEPENDENCY_ID;
+    let iSliceCount = current_layer_expect(pCtx).iMaxSliceNum;
 
-    current_layer_expect_mut(pCtx).pDecPic =
-        pCtx.pDecPic;
+    current_layer_expect_mut(pCtx).pDecPic = pCtx.pDecPic;
 
     debug_assert!(iSliceCount > 0);
 
@@ -1587,8 +1593,7 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
         (pDqIdc.iPpsId as i32, pDqIdc.iSpsId as i32)
     };
 
-    let kiIdrLoop = (pCtx.param().sDependencyLayers[kiCurDid as usize].uiIdrPicId as i32 - 1)
-        .abs()
+    let kiIdrLoop = (pCtx.param().sDependencyLayers[kiCurDid as usize].uiIdrPicId as i32 - 1).abs()
         % MAX_PPS_COUNT as i32;
     iCurPpsId = ParasetStrategy(pCtx).GetCurrentPpsId(iCurPpsId, kiIdrLoop);
 
@@ -1611,9 +1616,7 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
 
     let mut iIdx = 0;
     while iIdx < iSliceCount {
-        if let Some(pSlice) =
-            slice_in_layer_mut(&mut *pCurDq, iIdx)
-        {
+        if let Some(pSlice) = slice_in_layer_mut(&mut *pCurDq, iIdx) {
             pSlice.sSliceHeaderExt.sSliceHeader.iPpsId = iCurPpsId;
             pSlice.sSliceHeaderExt.sSliceHeader.iSpsId = iCurSpsId;
             pSlice.bSliceHeaderExtFlag = kbSliceHeaderExtFlag;
@@ -1644,13 +1647,9 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
     if pCtx.pVpp.is_none() {
         return;
     }
-    current_layer_expect_mut(pCtx).pEncPic =
-        Some(idEnc);
+    current_layer_expect_mut(pCtx).pEncPic = Some(idEnc);
 
-    let pEncPic = ctx_vpp_mut(pCtx)
-        .m_pSpatialPicPool
-        .get_mut(idEnc)
-        .planes();
+    let pEncPic = ctx_vpp_mut(pCtx).m_pSpatialPicPool.get_mut(idEnc).planes();
     let pDecPic = pCtx
         .ref_list_mut(kiCurDid as usize)
         .expect("the layer's reference list is allocated")
@@ -1673,9 +1672,7 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
 
     // The read half of the seam, built beside the write half above and rebuilt
     // every frame for the same reason.
-    let sEncView = RoPicView::build(
-        ctx_vpp_ref(pCtx).m_pSpatialPicPool.get(idEnc),
-    );
+    let sEncView = RoPicView::build(ctx_vpp_ref(pCtx).m_pSpatialPicPool.get(idEnc));
 
     let pCurDq = current_layer_expect_mut(pCtx);
     pCurDq.pRecView = Some(sRecView);
@@ -1751,11 +1748,20 @@ pub fn AddPrefixNal(
         WelsUnloadNal(pCtx.out_mut());
     }
 
-    let kNalHeaderExt =
-        current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
-    let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
+    let kNalHeaderExt = current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
+    let sWelsEncCtx {
+        pOut,
+        pFrameBs,
+        iPosBsBuffer,
+        ..
+    } = &mut *pCtx;
     let SWelsEncoderOutput {
-        sNalList, sBsBuffer, sNalLen, iNalIndex, iNalLenBase, ..
+        sNalList,
+        sBsBuffer,
+        sNalLen,
+        iNalIndex,
+        iNalLenBase,
+        ..
     } = &mut **pOut.as_mut().expect("pOut lives");
     let kiPos = *iPosBsBuffer as usize;
     let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
@@ -1840,8 +1846,7 @@ pub fn WritePadding(pCtx: &mut sWelsEncCtx, iLen: i32, iSize: &mut i32) -> i32 {
 
 /// `encoder_ext.cpp:2624` (`static inline SetFastCodingFunc`).
 fn SetFastCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
-    pFuncList.pfIntraFineMd =
-        Some(WelsMdIntraFinePartitionVaa);
+    pFuncList.pfIntraFineMd = Some(WelsMdIntraFinePartitionVaa);
     let sdf = &mut pFuncList.sSampleDealingFuncs;
     sdf.pfMdCost = CostFamily::Sad;
     // The C++ also aims three `pfIntra*Combined3` slots at their `*Sad` twins here;
@@ -1870,8 +1875,7 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
     let kiCurDid = pCtx.uiDependencyId as usize;
     let kiCurTid = pCtx.uiTemporalId as i32;
     let keNalPriority = pCtx.eNalPriority;
-    let kiHighestTemporalId =
-        pCtx.param().sDependencyLayers[kiCurDid].iHighestTemporalId as i32;
+    let kiHighestTemporalId = pCtx.param().sDependencyLayers[kiCurDid].iHighestTemporalId as i32;
     let kbBaseAvail = pCurLayer.bBaseLayerAvailableFlag;
     let kbHighestSpatial = if pCtx.param_opt().is_some() {
         pCtx.param().iSpatialLayerNum
@@ -1924,7 +1928,9 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
         // no `return` in between: a box left taken out would be a silent behaviour
         // change on the next frame — the features recomputed, or the switch never
         // firing.
-        let mut prep = current_layer_expect_mut(pCtx).pFeatureSearchPreparation.take();
+        let mut prep = current_layer_expect_mut(pCtx)
+            .pFeatureSearchPreparation
+            .take();
         let mut out = (false, false);
         if let Some(p) = prep.as_deref_mut() {
             p.iHighFreMbCount = 0; // :2732
@@ -1952,8 +1958,7 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
             if let Some(st) = storage.as_deref_mut() {
                 if kbSwitch && !st.bRefBlockFeatureCalculated {
                     // `:2744-2749`
-                    let kernels =
-                        FmeKernels::of(pCtx.func_list());
+                    let kernels = FmeKernels::of(pCtx.func_list());
                     // `:2746` — the original frame under LTR, the reconstruction
                     // otherwise. Under LTR `pRefOri[0]` is a *source-pool* picture on
                     // the screen path, whose `iFrameAverageQp` `UpdateOriginalPicInfo`
@@ -1961,8 +1966,7 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
                     // without LTR it is the picture whose storage was just taken out,
                     // which is why the planes are borrowed shared.
                     let pRef: Option<&SPicture> = if kbLtr {
-                        kpRefOri0
-                            .and_then(|r| ctx_pic_ref(pCtx, r))
+                        kpRefOri0.and_then(|r| ctx_pic_ref(pCtx, r))
                     } else {
                         kpRefPicId.and_then(|id| pCtx.ref_list(kiLayerDid).map(|l| l.pic(id)))
                     };
@@ -1999,8 +2003,7 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
                 .as_deref_mut()
             {
                 p.bFMESwitchFlag = true;
-                p.uiFMEGoodFrameCount =
-                    FMESWITCH_DEFAULT_GOODFRAME_NUM;
+                p.uiFMEGoodFrameCount = FMESWITCH_DEFAULT_GOODFRAME_NUM;
             }
         }
         (false, false)
@@ -2025,28 +2028,27 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
                 Some(crate::encoder::svc_motion_estimate::WelsMotionEstimateSearch);
         }
         for b in [
-            BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4, BLOCK_4x8,
+            BLOCK_16x16,
+            BLOCK_16x8,
+            BLOCK_8x16,
+            BLOCK_8x8,
+            BLOCK_4x4,
+            BLOCK_8x4,
+            BLOCK_4x8,
         ] {
-            fl.sMeFuncs.pfSearchMethod[b] =
-                Some(WelsDiamondSearch);
+            fl.sMeFuncs.pfSearchMethod[b] = Some(WelsDiamondSearch);
         }
-        fl.pfFirstIntraMode =
-            Some(WelsMdFirstIntraMode);
+        fl.pfFirstIntraMode = Some(WelsMdFirstIntraMode);
         let sdf = &mut fl.sSampleDealingFuncs;
         sdf.pfMeCost = CostFamily::Satd;
-        fl.pfSetScrollingMv =
-            Some(SetScrollingMvToMdNull);
+        fl.pfSetScrollingMv = Some(SetScrollingMvToMdNull);
 
         if bFastMode {
-            fl.sMeFuncs.pfCalculateSatd =
-                Some(NotCalculateSatdCost);
-            fl.pfInterFineMd =
-                Some(WelsMdInterFinePartitionVaa);
+            fl.sMeFuncs.pfCalculateSatd = Some(NotCalculateSatdCost);
+            fl.pfInterFineMd = Some(WelsMdInterFinePartitionVaa);
         } else {
-            fl.sMeFuncs.pfCalculateSatd =
-                Some(CalculateSatdCost);
-            fl.pfInterFineMd =
-                Some(WelsMdInterFinePartition);
+            fl.sMeFuncs.pfCalculateSatd = Some(CalculateSatdCost);
+            fl.pfInterFineMd = Some(WelsMdInterFinePartition);
         }
     } else {
         fl.sSampleDealingFuncs.pfMeCost = CostFamily::Unset;
@@ -2059,8 +2061,7 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
     if kbScreenP {
         //to init at each frame will be needed when dealing with hybrid content (camera+screen)
         //MD related func pointers
-        fl.pfInterFineMd =
-            Some(WelsMdInterFinePartitionVaaOnScreen);
+        fl.pfInterFineMd = Some(WelsMdInterFinePartitionVaaOnScreen);
 
         //ME related func pointers
         fl.pfSetScrollingMv = Some(if kbScroll && (kiScrollMvX | kiScrollMvY) != 0 {
@@ -2120,8 +2121,7 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
 
     // update some layer-dependent variables to save judgements at MB level
     let sdf = &fl.sSampleDealingFuncs;
-    let kbSatdInMd =
-        sdf.pfMeCost == CostFamily::Satd && sdf.pfMdCost == CostFamily::Satd;
+    let kbSatdInMd = sdf.pfMeCost == CostFamily::Satd && sdf.pfMdCost == CostFamily::Satd;
 
     if kbDeblockingParallelFlag
         && kiLoopFilterDisableIdc != 1
@@ -2129,11 +2129,9 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
         && keNalPriority != EWelsNalRefIdc::NRI_PRI_LOWEST
         && (kiHighestTemporalId == 0 || kiCurTid < kiHighestTemporalId)
     {
-        fl.pfDeblocking.pfDeblockingFilterSlice =
-            Some(DeblockingFilterSliceAvcbase);
+        fl.pfDeblocking.pfDeblockingFilterSlice = Some(DeblockingFilterSliceAvcbase);
     } else {
-        fl.pfDeblocking.pfDeblockingFilterSlice =
-            Some(DeblockingFilterSliceAvcbaseNull);
+        fl.pfDeblocking.pfDeblockingFilterSlice = Some(DeblockingFilterSliceAvcbaseNull);
     }
 
     // The loop-invariant write hoists to the frame level, before anything spawns;
@@ -2144,8 +2142,7 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
         Some(WelsMdInterMb)
     };
 
-    current_layer_expect_mut(pCtx)
-        .bSatdInMdFlag = kbSatdInMd;
+    current_layer_expect_mut(pCtx).bSatdInMdFlag = kbSatdInMd;
 }
 
 /// `encoder_ext.cpp:3131`. Write the parameter sets for (simulcast) SVC.
@@ -2160,11 +2157,7 @@ pub fn WriteSsvcParaset(
     let mut iNonVclSize = 0i32;
     let mut iCountNal = 0i32;
 
-    let iReturn = WelsWriteParameterSets(
-        pCtx,
-        &mut iCountNal,
-        &mut iNonVclSize,
-    );
+    let iReturn = WelsWriteParameterSets(pCtx, &mut iCountNal, &mut iNonVclSize);
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
@@ -2223,8 +2216,7 @@ pub fn WriteSavcParaset(
         pStrategy.Update(iId, PARA_SET_TYPE_AVCSPS as i32);
     }
 
-    let mut iReturn =
-        WelsWriteOneSPS(pCtx, iIdx, &mut iNalSize);
+    let mut iReturn = WelsWriteOneSPS(pCtx, iIdx, &mut iNalSize);
     if iReturn != ENC_RETURN_SUCCESS {
         return iReturn;
     }
@@ -2341,7 +2333,8 @@ pub fn WriteSavcParaset_Listing(
             if iReturn != ENC_RETURN_SUCCESS {
                 return iReturn;
             }
-            pCtx.out().set_nal_len_at(iCountNal.max(0) as usize, iNalSize);
+            pCtx.out()
+                .set_nal_len_at(iCountNal.max(0) as usize, iNalSize);
             iNonVclSize += iNalSize;
             iCountNal += 1;
         }
@@ -2352,7 +2345,8 @@ pub fn WriteSavcParaset_Listing(
         pFbi.sLayerInfo[*iLbi].uiLayerType = NON_VIDEO_CODING_LAYER;
         pFbi.sLayerInfo[*iLbi].iNalCount = iCountNal;
         pFbi.sLayerInfo[*iLbi].eFrameType = EVideoFrameType::videoFrameTypeIDR;
-        pFbi.sLayerInfo[*iLbi].iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
+        pFbi.sLayerInfo[*iLbi].iSubSeqId =
+            GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
         *iLbi += 1;
         pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
@@ -2372,8 +2366,7 @@ pub fn WriteSavcParaset_Listing(
     // `encoder_ext.cpp:3297`. It is a no-op for four of the five kinds and the
     // whole point of `SPS_PPS_LISTING`.
     {
-        let (strategy, pps, pPpsNum) =
-            ctx_strategy_and_pps(pCtx);
+        let (strategy, pps, pPpsNum) = ctx_strategy_and_pps(pCtx);
         strategy.UpdatePpsList(pps, pPpsNum);
     }
 
@@ -2385,7 +2378,8 @@ pub fn WriteSavcParaset_Listing(
             if iReturn != ENC_RETURN_SUCCESS {
                 return iReturn;
             }
-            pCtx.out().set_nal_len_at(iCountNal.max(0) as usize, iNalSize);
+            pCtx.out()
+                .set_nal_len_at(iCountNal.max(0) as usize, iNalSize);
             iNonVclSize += iNalSize;
             iCountNal += 1;
         }
@@ -2396,7 +2390,8 @@ pub fn WriteSavcParaset_Listing(
         pFbi.sLayerInfo[*iLbi].uiLayerType = NON_VIDEO_CODING_LAYER;
         pFbi.sLayerInfo[*iLbi].iNalCount = iCountNal;
         pFbi.sLayerInfo[*iLbi].eFrameType = EVideoFrameType::videoFrameTypeIDR;
-        pFbi.sLayerInfo[*iLbi].iSubSeqId = GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
+        pFbi.sLayerInfo[*iLbi].iSubSeqId =
+            GetSubSequenceId(pCtx, EVideoFrameType::videoFrameTypeIDR);
 
         *iLbi += 1;
         pFbi.sLayerInfo[*iLbi].pBsBuf = pCtx.frame_bs_cur();
@@ -2410,7 +2405,6 @@ pub fn WriteSavcParaset_Listing(
         }
         *iLayerNum += 1;
     }
-
 
     // to check number of layers / nals / slices dependencies
     if *iLayerNum > MAX_LAYER_NUM_OF_FRAME {
@@ -2445,18 +2439,8 @@ pub fn PrepareEncodeFrame(
     let kbSimulcastAVC = pCtx.param().bSimulcastAVC;
     let kuiGopSize = pCtx.param().uiGopSize as i32;
 
-    let bSkipFrameFlag = WelsRcCheckFrameStatus(
-        pCtx,
-        uiTimeStamp,
-        iSpatialNum,
-        *iCurDid as i32,
-    );
-    let eFrameType = DecideFrameType(
-        pCtx,
-        iSpatialNum as i8,
-        *iCurDid as i32,
-        bSkipFrameFlag,
-    );
+    let bSkipFrameFlag = WelsRcCheckFrameStatus(pCtx, uiTimeStamp, iSpatialNum, *iCurDid as i32);
+    let eFrameType = DecideFrameType(pCtx, iSpatialNum as i8, *iCurDid as i32, bSkipFrameFlag);
 
     if eFrameType == EVideoFrameType::videoFrameTypeSkip {
         let pfRc = pCtx.func_list().pfRc;
@@ -2477,19 +2461,12 @@ pub fn PrepareEncodeFrame(
 
         if eFrameType == EVideoFrameType::videoFrameTypeIDR {
             // write parameter sets bitstream or SEI/SSEI (if any) here
-            if (pCtx.param().eSpsPpsIdStrategy as i32
-                & EParameterSetStrategy::SPS_LISTING as i32)
+            if (pCtx.param().eSpsPpsIdStrategy as i32 & EParameterSetStrategy::SPS_LISTING as i32)
                 == 0
             {
                 if kbSimulcastAVC {
-                    pCtx.iEncoderError = WriteSavcParaset(
-                        pCtx,
-                        *iCurDid as i32,
-                        pFbi,
-                        iLbi,
-                        iLayerNum,
-                        iFrameSize,
-                    );
+                    pCtx.iEncoderError =
+                        WriteSavcParaset(pCtx, *iCurDid as i32, pFbi, iLbi, iLayerNum, iFrameSize);
                     pCtx.param_mut().sDependencyLayers[*iCurDid as usize].uiIdrPicId += 1;
                 } else {
                     pCtx.iEncoderError =
@@ -2498,14 +2475,8 @@ pub fn PrepareEncodeFrame(
             } else {
                 // The three listing strategies, all of them: the C's test is
                 // `! (SPS_LISTING & eSpsPpsIdStrategy)`, a bitmask over 0x02/0x03/0x06.
-                pCtx.iEncoderError = WriteSavcParaset_Listing(
-                    pCtx,
-                    iSpatialNum,
-                    pFbi,
-                    iLbi,
-                    iLayerNum,
-                    iFrameSize,
-                );
+                pCtx.iEncoderError =
+                    WriteSavcParaset_Listing(pCtx, iSpatialNum, pFbi, iLbi, iLayerNum, iFrameSize);
             }
         }
     }
@@ -2527,23 +2498,19 @@ pub fn PicPartitionNumDecision(pCtx: &mut sWelsEncCtx) -> i32 {
 /// # Panics
 /// Panics if `sMbDataP` holds fewer macroblocks than `sSliceEncCtx.iMbNumInFrame`.
 pub fn DynslcUpdateMbNeighbourInfoListForAllSlices(pCurDq: &mut SDqLayer) {
-    let SDqLayer { sMbDataP, sSliceEncCtx, .. } = pCurDq;
+    let SDqLayer {
+        sMbDataP,
+        sSliceEncCtx,
+        ..
+    } = pCurDq;
     let kiMbWidth = sSliceEncCtx.iMbWidth as i32;
     let kiEndMbInSlice = sSliceEncCtx.iMbNumInFrame - 1;
     let mut iIdx = 0i32;
     let dims = sMbDataP.dims();
-    let mut mbs = MbWindow::new(
-        sMbDataP.as_mut_slice(),
-        0,
-        dims.mb_width(),
-        0,
-    );
+    let mut mbs = MbWindow::new(sMbDataP.as_mut_slice(), 0, dims.mb_width(), 0);
 
     loop {
-        let uiSliceIdc = WelsMbToSliceIdc(
-            Some(sSliceEncCtx),
-            mbs.at(iIdx as usize).iMbXY,
-        );
+        let uiSliceIdc = WelsMbToSliceIdc(Some(sSliceEncCtx), mbs.at(iIdx as usize).iMbXY);
         UpdateMbNeighbor(
             Some(sSliceEncCtx),
             mbs.at_mut(iIdx as usize),
@@ -2600,7 +2567,9 @@ pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum:
         iPartitionNum = 1;
     }
 
-    pSliceCtx.iSliceNumInFrame.store(iPartitionNum, Ordering::Relaxed);
+    pSliceCtx
+        .iSliceNumInFrame
+        .store(iPartitionNum, Ordering::Relaxed);
 
     i = 0;
     while i < iPartitionNum as usize {
@@ -2617,12 +2586,7 @@ pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum:
 
         {
             let map: &[AtomicU16] = &pCurDq.sSliceEncCtx.pOverallMbMap;
-            fill_mb_map(
-                map,
-                iFirstMbIdx,
-                iCountMbNumInPartition,
-                i as u16,
-            );
+            fill_mb_map(map, iFirstMbIdx, iCountMbNumInPartition, i as u16);
         }
 
         // for next partition (or pSlice)
@@ -2653,10 +2617,7 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
     /// `#define byte_complexIMBat26 (60)`, local to this function in the C++.
     const byte_complexIMBat26: u32 = 60;
 
-    UpdateSlicepEncCtxWithPartition(
-        current_layer_expect_mut(pCtx),
-        iPartitionNum,
-    );
+    UpdateSlicepEncCtxWithPartition(current_layer_expect_mut(pCtx), iPartitionNum);
 
     if pCtx.eSliceType == EWelsSliceType::I_SLICE {
         // check if uiSliceSizeConstraint too small
@@ -2670,8 +2631,7 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
                 >> 3;
         } else {
             // fixed QP case
-            let iTtlMbNumInFrame =
-                current_layer_expect(pCtx).sSliceEncCtx.iMbNumInFrame;
+            let iTtlMbNumInFrame = current_layer_expect(pCtx).sSliceEncCtx.iMbNumInFrame;
             let mut iQDeltaTo26 = 26 - pCtx.param().sSpatialLayers[iCurDid].iDLayerQp;
 
             uiFrmByte = (iTtlMbNumInFrame as u32).wrapping_mul(byte_complexIMBat26);
@@ -2687,7 +2647,9 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
 
         // MINPACKETSIZE_CONSTRAINT: suppose 16 byte per mb at average
         let _uiMiniPacketSize = uiFrmByte
-            / current_layer_expect(pCtx).sSliceEncCtx.iMaxSliceNumConstraint as u32;
+            / current_layer_expect(pCtx)
+                .sSliceEncCtx
+                .iMaxSliceNumConstraint as u32;
         // C++ only WelsLogs a warning here when uiSliceSizeConstraint is smaller.
     }
 
@@ -2698,18 +2660,9 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
 ///
 /// # Panics
 /// Panics if the frame's current DQ layer has not been stamped.
-pub fn DynSliceRealloc(
-    pCtx: &mut sWelsEncCtx,
-    pFbi: &mut SFrameBSInfo,
-    iLbi: usize,
-) -> i32 {
+pub fn DynSliceRealloc(pCtx: &mut sWelsEncCtx, pFbi: &mut SFrameBSInfo, iLbi: usize) -> i32 {
     let iMaxSliceNum = current_layer_expect(pCtx).iMaxSliceNum;
-    let mut iRet = FrameBsRealloc(
-        pCtx,
-        pFbi,
-        iLbi,
-        iMaxSliceNum,
-    );
+    let mut iRet = FrameBsRealloc(pCtx, pFbi, iLbi, iMaxSliceNum);
     if iRet != ENC_RETURN_SUCCESS {
         return iRet;
     }
@@ -2770,7 +2723,8 @@ pub fn WelsCodeOnePicPartition(
         let mut iPayloadSize = 0i32;
 
         if iSliceIdx
-            >= (current_layer_expect(pCtx).sSliceBufferInfo[uSlcBuffIdx].iMaxSliceNum - kiSliceIdxStep)
+            >= (current_layer_expect(pCtx).sSliceBufferInfo[uSlcBuffIdx].iMaxSliceNum
+                - kiSliceIdxStep)
         {
             // insufficient memory in pSliceInLayer[]
             if pCtx.iActiveThreadsNum == 1 {
@@ -2799,9 +2753,8 @@ pub fn WelsCodeOnePicPartition(
         }
 
         WelsLoadNal(pCtx.out_mut(), keNalType as i32, keNalRefIdc as i32);
-        let mut sBank = std::mem::take(
-            &mut current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx],
-        );
+        let mut sBank =
+            std::mem::take(&mut current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx]);
         let kiCurSlot = iSliceIdx as usize;
         if kiCurSlot >= sBank.pSliceBuffer.len() {
             current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx] = sBank;
@@ -2829,8 +2782,11 @@ pub fn WelsCodeOnePicPartition(
         // single-threaded encode names (`kiSliceIdx % iActiveThreadsNum` with one
         // thread). Empty means never allocated for this configuration.
         let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
-        let pRestoreBuf =
-            if vRestoreBuf.is_empty() { None } else { Some(vRestoreBuf.as_mut_slice()) };
+        let pRestoreBuf = if vRestoreBuf.is_empty() {
+            None
+        } else {
+            Some(vRestoreBuf.as_mut_slice())
+        };
         iReturn = WelsCodeOneSlice(
             pCtx,
             &mut *pCurSlice,
@@ -2853,11 +2809,20 @@ pub fn WelsCodeOnePicPartition(
         }
         WelsUnloadNal(pCtx.out_mut());
 
-        let kNalHeaderExt =
-            current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
-        let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
+        let kNalHeaderExt = current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
+        let sWelsEncCtx {
+            pOut,
+            pFrameBs,
+            iPosBsBuffer,
+            ..
+        } = &mut *pCtx;
         let SWelsEncoderOutput {
-            sNalList, sBsBuffer, sNalLen, iNalIndex, iNalLenBase, ..
+            sNalList,
+            sBsBuffer,
+            sNalLen,
+            iNalIndex,
+            iNalLenBase,
+            ..
         } = &mut **pOut.as_mut().expect("pOut lives");
         let kiPos = *iPosBsBuffer as usize;
         let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
@@ -2876,8 +2841,7 @@ pub fn WelsCodeOnePicPartition(
         if iReturn != ENC_RETURN_SUCCESS {
             return iReturn;
         }
-        let iSliceSize = pCtx
-            .out().nal_len_at(iNalIdxInLayer.max(0) as usize);
+        let iSliceSize = pCtx.out().nal_len_at(iNalIdxInLayer.max(0) as usize);
 
         pCtx.iPosBsBuffer += iSliceSize;
         iPartitionBsSize += iSliceSize;
@@ -2885,7 +2849,8 @@ pub fn WelsCodeOnePicPartition(
         iNalIdxInLayer += 1;
         iSliceIdx += kiSliceStep; // iSliceIdx is not contiguous
         iAnyMbLeftInPartition = iEndMbIdxInPartition
-            - current_layer_expect(pCtx).LastCodedMbIdxOfPartition[kiPartitionId].load(Ordering::Relaxed);
+            - current_layer_expect(pCtx).LastCodedMbIdxOfPartition[kiPartitionId]
+                .load(Ordering::Relaxed);
     }
 
     *pLayerSize = iPartitionBsSize;
@@ -2943,11 +2908,8 @@ pub fn WelsEncoderEncodeExt(
     pCtx.bCurFrameMarkedAsSceneLtr = false;
     pFbi.eFrameType = EVideoFrameType::videoFrameTypeSkip;
     pFbi.iLayerNum = 0; // for initialization
-    pFbi.uiTimeStamp = GetTimestampForRc(
-        pSrcPic.uiTimeStamp,
-        pCtx.uiLastTimestamp,
-        fFrameRateHighest,
-    );
+    pFbi.uiTimeStamp =
+        GetTimestampForRc(pSrcPic.uiTimeStamp, pCtx.uiLastTimestamp, fFrameRateHighest);
     for iNalIdx in 0..MAX_LAYER_NUM_OF_FRAME as usize {
         pFbi.sLayerInfo[iNalIdx].eFrameType = EVideoFrameType::videoFrameTypeSkip;
         pFbi.sLayerInfo[iNalIdx].iNalCount = 0;
@@ -2989,7 +2951,8 @@ pub fn WelsEncoderEncodeExt(
     current_layer_expect_mut(pCtx).pRefLayer = None;
 
     if !pCtx.param().bSimulcastAVC {
-        eFrameType = PrepareEncodeFrame(pCtx,
+        eFrameType = PrepareEncodeFrame(
+            pCtx,
             pFbi,
             &mut iLbi,
             iSpatialNum,
@@ -3028,7 +2991,8 @@ pub fn WelsEncoderEncodeExt(
         pCtx.uiDependencyId = iCurDid as u8;
 
         if pCtx.param().bSimulcastAVC {
-            eFrameType = PrepareEncodeFrame(pCtx,
+            eFrameType = PrepareEncodeFrame(
+                pCtx,
                 pFbi,
                 &mut iLbi,
                 iSpatialNum,
@@ -3056,9 +3020,7 @@ pub fn WelsEncoderEncodeExt(
         {
             let kiPictureType = pCtx.eSliceType as i32;
             let kiFramePoc = pCtx.param().sDependencyLayers[iCurDid as usize].iPOC;
-            let p = ctx_vpp_mut(pCtx)
-                .m_pSpatialPicPool
-                .get_mut(idEncPic);
+            let p = ctx_vpp_mut(pCtx).m_pSpatialPicPool.get_mut(idEncPic);
             p.iPictureType = kiPictureType;
             p.iFramePoc = kiFramePoc;
         }
@@ -3066,7 +3028,10 @@ pub fn WelsEncoderEncodeExt(
         iCurWidth = pCtx.param().sSpatialLayers[iCurDid as usize].iVideoWidth;
         iCurHeight = pCtx.param().sSpatialLayers[iCurDid as usize].iVideoHeight;
 
-        match pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode {
+        match pCtx.param().sSpatialLayers[iCurDid as usize]
+            .sSliceArgument
+            .uiSliceMode
+        {
             // **The consumer half of the load-balancing loop.** The producer,
             // `CalcSliceComplexRatio`, runs at the end of this same layer body under
             // the same four-term guard.
@@ -3079,7 +3044,10 @@ pub fn WelsEncoderEncodeExt(
                             .uiSliceNum as u16
                 {
                     if iCurDid > 0 {
-                        crate::encoder::slice_multi_threading::AdjustEnhanceLayer(pCtx, iCurDid as i32);
+                        crate::encoder::slice_multi_threading::AdjustEnhanceLayer(
+                            pCtx,
+                            iCurDid as i32,
+                        );
                     } else {
                         crate::encoder::slice_multi_threading::AdjustBaseLayer(pCtx);
                     }
@@ -3155,7 +3123,11 @@ pub fn WelsEncoderEncodeExt(
 
         let eRefStrategy = pCtx.eRefStrategy;
         eRefStrategy.MarkPic(pCtx);
-        if !eRefStrategy.BuildRefList(pCtx, pCtx.param().sDependencyLayers[iCurDid as usize].iPOC, 0) {
+        if !eRefStrategy.BuildRefList(
+            pCtx,
+            pCtx.param().sDependencyLayers[iCurDid as usize].iPOC,
+            0,
+        ) {
             eFrameType = EVideoFrameType::videoFrameTypeIDR;
             pCtx.iEncoderError = ENC_RETURN_CORRECTED;
             break;
@@ -3178,7 +3150,8 @@ pub fn WelsEncoderEncodeExt(
             });
         }
         // get reordering syntax used for writing the slice header
-        WelsUpdateRefSyntax(pCtx,
+        WelsUpdateRefSyntax(
+            pCtx,
             pCtx.param().sDependencyLayers[iCurDid as usize].iPOC,
             eFrameType as i32,
         );
@@ -3191,19 +3164,22 @@ pub fn WelsEncoderEncodeExt(
         PreprocessSliceCoding(pCtx);
 
         iLayerSize = 0;
-        if pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode == SM_SINGLE_SLICE {
+        if pCtx.param().sSpatialLayers[iCurDid as usize]
+            .sSliceArgument
+            .uiSliceMode
+            == SM_SINGLE_SLICE
+        {
             // only one slice within a quality layer
             let mut iPayloadSize = 0i32;
-            let mut sBank = std::mem::take(
-                &mut current_layer_expect_mut(pCtx).sSliceBufferInfo[0],
-            );
+            let mut sBank = std::mem::take(&mut current_layer_expect_mut(pCtx).sSliceBufferInfo[0]);
             let pCurSlice = sBank
                 .pSliceBuffer
                 .get_mut(0)
                 .expect("the single-slice bank holds slot 0");
 
             if pCtx.bNeedPrefixNalFlag {
-                pCtx.iEncoderError = AddPrefixNal(pCtx,
+                pCtx.iEncoderError = AddPrefixNal(
+                    pCtx,
                     &mut pFbi.sLayerInfo[iLbi],
                     &mut iNalIdxInLayer,
                     eNalType,
@@ -3216,17 +3192,9 @@ pub fn WelsEncoderEncodeExt(
                 iLayerSize += iPayloadSize;
             }
 
-            WelsLoadNal(
-                pCtx.out_mut(),
-                eNalType as i32,
-                eNalRefIdc as i32,
-            );
+            WelsLoadNal(pCtx.out_mut(), eNalType as i32, eNalRefIdc as i32);
             debug_assert_eq!(0, pCurSlice.iSliceIdx);
-            pCtx.iEncoderError = SetSliceBoundaryInfo(
-                current_layer_ref(pCtx),
-                &mut *pCurSlice,
-                0,
-            );
+            pCtx.iEncoderError = SetSliceBoundaryInfo(current_layer_ref(pCtx), &mut *pCurSlice, 0);
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
@@ -3245,11 +3213,22 @@ pub fn WelsEncoderEncodeExt(
             // single-threaded encode names (`kiSliceIdx % iActiveThreadsNum` with
             // one thread). Empty means never allocated for this configuration.
             let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
-            let pRestoreBuf =
-                if vRestoreBuf.is_empty() { None } else { Some(vRestoreBuf.as_mut_slice()) };
+            let pRestoreBuf = if vRestoreBuf.is_empty() {
+                None
+            } else {
+                Some(vRestoreBuf.as_mut_slice())
+            };
             // Single-slice — the dynamic boundary never fires.
-            let iCodeRet =
-                WelsCodeOneSlice(pCtx, &mut *pCurSlice, eNalType as i32, vOutBsBuf.as_mut_slice(), &mut pCtxOutBs, &mut sMbWindow, pRestoreBuf, None);
+            let iCodeRet = WelsCodeOneSlice(
+                pCtx,
+                &mut *pCurSlice,
+                eNalType as i32,
+                vOutBsBuf.as_mut_slice(),
+                &mut pCtxOutBs,
+                &mut sMbWindow,
+                pRestoreBuf,
+                None,
+            );
             pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
             drop(sMbWindow);
             current_layer_expect_mut(pCtx).sMbDataP = sMbData;
@@ -3264,11 +3243,20 @@ pub fn WelsEncoderEncodeExt(
 
             WelsUnloadNal(pCtx.out_mut());
 
-            let kNalHeaderExt =
-                current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
-            let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
+            let kNalHeaderExt = current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
+            let sWelsEncCtx {
+                pOut,
+                pFrameBs,
+                iPosBsBuffer,
+                ..
+            } = &mut *pCtx;
             let SWelsEncoderOutput {
-                sNalList, sBsBuffer, sNalLen, iNalIndex, iNalLenBase, ..
+                sNalList,
+                sBsBuffer,
+                sNalLen,
+                iNalIndex,
+                iNalLenBase,
+                ..
             } = &mut **pOut.as_mut().expect("pOut lives");
             let kiPos = *iPosBsBuffer as usize;
             let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
@@ -3289,8 +3277,7 @@ pub fn WelsEncoderEncodeExt(
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
-            let iSliceSize = pCtx
-                .out().nal_len_at(iNalIdxInLayer.max(0) as usize);
+            let iSliceSize = pCtx.out().nal_len_at(iNalIdxInLayer.max(0) as usize);
 
             iLayerSize += iSliceSize;
             pCtx.iPosBsBuffer += iSliceSize;
@@ -3302,13 +3289,16 @@ pub fn WelsEncoderEncodeExt(
             pFbi.sLayerInfo[iLbi].iNalCount = iNalIdxInLayer;
             pFbi.sLayerInfo[iLbi].eFrameType = eFrameType;
             pFbi.sLayerInfo[iLbi].iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
-        } else if pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode
+        } else if pCtx.param().sSpatialLayers[iCurDid as usize]
+            .sSliceArgument
+            .uiSliceMode
             == SM_SIZELIMITED_SLICE
             && pCtx.param().iMultipleThreadIdc <= 1
         {
             // dynamic slicing, single threading
             let kiLastMbInFrame = current_layer_expect(pCtx).sSliceEncCtx.iMbNumInFrame;
-            pCtx.iEncoderError = WelsCodeOnePicPartition(pCtx,
+            pCtx.iEncoderError = WelsCodeOnePicPartition(
+                pCtx,
                 pFbi,
                 iLbi,
                 &mut iNalIdxInLayer,
@@ -3322,13 +3312,15 @@ pub fn WelsEncoderEncodeExt(
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
-        } else if pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode != SM_SIZELIMITED_SLICE
+        } else if pCtx.param().sSpatialLayers[iCurDid as usize]
+            .sSliceArgument
+            .uiSliceMode
+            != SM_SIZELIMITED_SLICE
             && pCtx.param().iMultipleThreadIdc > 1
         {
             // THREAD_FULLY_FIRE_MODE/THREAD_PICK_UP_MODE for any mode of
             // non-SM_SIZELIMITED_SLICE
-            iSliceCount =
-                GetCurrentSliceNum(current_layer_expect_mut(pCtx));
+            iSliceCount = GetCurrentSliceNum(current_layer_expect_mut(pCtx));
             if iLayerNum + 1 >= MAX_LAYER_NUM_OF_FRAME {
                 // check available layer_bs_info for further writing as followed
                 return ENC_RETURN_UNSUPPORTED_PARA;
@@ -3346,20 +3338,18 @@ pub fn WelsEncoderEncodeExt(
             pFbi.sLayerInfo[iLbi].eFrameType = eFrameType;
             pFbi.sLayerInfo[iLbi].iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
 
-            pCtx.iEncoderError |=
-                EncodeFixedSlicesForked(pCtx, iSliceCount);
+            pCtx.iEncoderError |= EncodeFixedSlicesForked(pCtx, iSliceCount);
             if pCtx.iEncoderError != 0 {
                 return pCtx.iEncoderError;
             }
 
-            iLayerSize = AppendSliceToFrameBs(pCtx,
-                &mut pFbi.sLayerInfo[iLbi],
-                iSliceCount,
-            );
+            iLayerSize = AppendSliceToFrameBs(pCtx, &mut pFbi.sLayerInfo[iLbi], iSliceCount);
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
-        } else if pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode
+        } else if pCtx.param().sSpatialLayers[iCurDid as usize]
+            .sSliceArgument
+            .uiSliceMode
             == SM_SIZELIMITED_SLICE
             && pCtx.param().iMultipleThreadIdc > 1
         {
@@ -3382,33 +3372,22 @@ pub fn WelsEncoderEncodeExt(
             if iRet != 0 {
                 return ENC_RETURN_UNEXPECTED;
             }
-            pCtx.iEncoderError |=
-                EncodeSizeLimitedSlicesForked(pCtx,
-                    kiPartitionCnt,
-                );
+            pCtx.iEncoderError |= EncodeSizeLimitedSlicesForked(pCtx, kiPartitionCnt);
 
             if pCtx.iEncoderError != 0 {
                 return pCtx.iEncoderError;
             }
 
-            let kuiSliceMode =
-                pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode;
-            iRet = SliceLayerInfoUpdate(
-                pCtx,
-                pFbi,
-                iLbi,
-                kuiSliceMode,
-            );
+            let kuiSliceMode = pCtx.param().sSpatialLayers[iCurDid as usize]
+                .sSliceArgument
+                .uiSliceMode;
+            iRet = SliceLayerInfoUpdate(pCtx, pFbi, iLbi, kuiSliceMode);
             if iRet != 0 {
                 return ENC_RETURN_UNEXPECTED;
             }
 
-            iSliceCount =
-                GetCurrentSliceNum(current_layer_expect_mut(pCtx));
-            iLayerSize = AppendSliceToFrameBs(pCtx,
-                &mut pFbi.sLayerInfo[iLbi],
-                iSliceCount,
-            );
+            iSliceCount = GetCurrentSliceNum(current_layer_expect_mut(pCtx));
+            iLayerSize = AppendSliceToFrameBs(pCtx, &mut pFbi.sLayerInfo[iLbi], iSliceCount);
             if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                 return pCtx.iEncoderError;
             }
@@ -3417,13 +3396,13 @@ pub fn WelsEncoderEncodeExt(
             let bNeedPrefix = pCtx.bNeedPrefixNalFlag;
             let mut iSliceIdx = 0i32;
 
-            iSliceCount =
-                GetCurrentSliceNum(current_layer_expect_mut(pCtx));
+            iSliceCount = GetCurrentSliceNum(current_layer_expect_mut(pCtx));
             while iSliceIdx < iSliceCount {
                 let mut iPayloadSize = 0i32;
 
                 if bNeedPrefix {
-                    pCtx.iEncoderError = AddPrefixNal(pCtx,
+                    pCtx.iEncoderError = AddPrefixNal(
+                        pCtx,
                         &mut pFbi.sLayerInfo[iLbi],
                         &mut iNalIdxInLayer,
                         eNalType,
@@ -3436,25 +3415,17 @@ pub fn WelsEncoderEncodeExt(
                     iLayerSize += iPayloadSize;
                 }
 
-                WelsLoadNal(
-                    pCtx.out_mut(),
-                    eNalType as i32,
-                    eNalRefIdc as i32,
-                );
+                WelsLoadNal(pCtx.out_mut(), eNalType as i32, eNalRefIdc as i32);
 
-                let mut sBank = std::mem::take(
-                    &mut current_layer_expect_mut(pCtx).sSliceBufferInfo[0],
-                );
+                let mut sBank =
+                    std::mem::take(&mut current_layer_expect_mut(pCtx).sSliceBufferInfo[0]);
                 let pCurSlice = sBank
                     .pSliceBuffer
                     .get_mut(iSliceIdx as usize)
                     .expect("the fixed-mode bank holds every stamped slice");
                 debug_assert_eq!(iSliceIdx, pCurSlice.iSliceIdx);
-                pCtx.iEncoderError = SetSliceBoundaryInfo(
-                    current_layer_ref(pCtx),
-                    &mut *pCurSlice,
-                    iSliceIdx,
-                );
+                pCtx.iEncoderError =
+                    SetSliceBoundaryInfo(current_layer_ref(pCtx), &mut *pCurSlice, iSliceIdx);
 
                 StampLayerIdrFlagForSliceType(pCtx);
                 let pOutRef = pCtx.out_mut();
@@ -3471,10 +3442,14 @@ pub fn WelsEncoderEncodeExt(
                 // with one thread). Empty means never allocated for this
                 // configuration.
                 let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
-                let pRestoreBuf =
-                    if vRestoreBuf.is_empty() { None } else { Some(vRestoreBuf.as_mut_slice()) };
+                let pRestoreBuf = if vRestoreBuf.is_empty() {
+                    None
+                } else {
+                    Some(vRestoreBuf.as_mut_slice())
+                };
                 // Fixed-mode ST — the dynamic boundary never fires.
-                let iCodeRet = WelsCodeOneSlice(pCtx,
+                let iCodeRet = WelsCodeOneSlice(
+                    pCtx,
                     &mut *pCurSlice,
                     eNalType as i32,
                     vOutBsBuf.as_mut_slice(),
@@ -3497,11 +3472,20 @@ pub fn WelsEncoderEncodeExt(
 
                 WelsUnloadNal(pCtx.out_mut());
 
-                let kNalHeaderExt =
-                    current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
-                let sWelsEncCtx { pOut, pFrameBs, iPosBsBuffer, .. } = &mut *pCtx;
+                let kNalHeaderExt = current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
+                let sWelsEncCtx {
+                    pOut,
+                    pFrameBs,
+                    iPosBsBuffer,
+                    ..
+                } = &mut *pCtx;
                 let SWelsEncoderOutput {
-                    sNalList, sBsBuffer, sNalLen, iNalIndex, iNalLenBase, ..
+                    sNalList,
+                    sBsBuffer,
+                    sNalLen,
+                    iNalIndex,
+                    iNalLenBase,
+                    ..
                 } = &mut **pOut.as_mut().expect("pOut lives");
                 let kiPos = *iPosBsBuffer as usize;
                 let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
@@ -3522,8 +3506,7 @@ pub fn WelsEncoderEncodeExt(
                 if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
                     return pCtx.iEncoderError;
                 }
-                let iSliceSize = pCtx
-                    .out().nal_len_at(iNalIdxInLayer.max(0) as usize);
+                let iSliceSize = pCtx.out().nal_len_at(iNalIdxInLayer.max(0) as usize);
 
                 pCtx.iPosBsBuffer += iSliceSize;
                 iLayerSize += iSliceSize;
@@ -3541,7 +3524,8 @@ pub fn WelsEncoderEncodeExt(
             pFbi.sLayerInfo[iLbi].iSubSeqId = GetSubSequenceId(pCtx, eFrameType);
         }
 
-        if pCtx.func_list()
+        if pCtx
+            .func_list()
             .pfRc
             .WelsRcPostFrameSkipping(pCtx, iCurDid as i32, pFbi.uiTimeStamp)
         {
@@ -3562,7 +3546,8 @@ pub fn WelsEncoderEncodeExt(
         if !current_layer_expect(pCtx).bDeblockingParallelFlag
             && eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST
             && (pCtx.param().sDependencyLayers[iCurDid as usize].iHighestTemporalId == 0
-                || iCurTid < pCtx.param().sDependencyLayers[iCurDid as usize].iHighestTemporalId as i32)
+                || iCurTid
+                    < pCtx.param().sDependencyLayers[iCurDid as usize].iHighestTemporalId as i32)
         {
             PerformDeblockingFilter(pCtx);
         }
@@ -3590,9 +3575,7 @@ pub fn WelsEncoderEncodeExt(
         }
 
         // reference picture list update
-        if eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST
-            && !eRefStrategy.UpdateRefList(pCtx)
-        {
+        if eNalRefIdc != EWelsNalRefIdc::NRI_PRI_LOWEST && !eRefStrategy.UpdateRefList(pCtx) {
             // set the next frame to be IDR
             pCtx.iEncoderError = ENC_RETURN_CORRECTED;
             break;
@@ -3622,12 +3605,7 @@ pub fn WelsEncoderEncodeExt(
                     if tar.is_empty() || src.is_empty() {
                         -1.0
                     } else {
-                        calc_psnr(
-                            &tar.cursor(0, 0),
-                            &src.cursor(0, 0),
-                            w,
-                            h,
-                        )
+                        calc_psnr(&tar.cursor(0, 0), &src.cursor(0, 0), w, h)
                     }
                 };
                 if pCtx.param().bPsnrY || pSrcPic.bPsnrY {
@@ -3725,13 +3703,20 @@ pub fn WelsEncoderEncodeExt(
         // The `MT_DEBUG`-only `TrackSliceComplexities` that follows it in the C++ has
         // no counterpart here and needs none: `MT_DEBUG` is off in every build either
         // project makes.
-        if pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceMode == SliceModeEnum::SM_FIXEDSLCNUM_SLICE
+        if pCtx.param().sSpatialLayers[iCurDid as usize]
+            .sSliceArgument
+            .uiSliceMode
+            == SliceModeEnum::SM_FIXEDSLCNUM_SLICE
             && pCtx.param().bUseLoadBalancing
             && pCtx.param().iMultipleThreadIdc > 1
             && pCtx.param().iMultipleThreadIdc
-                >= pCtx.param().sSpatialLayers[iCurDid as usize].sSliceArgument.uiSliceNum as u16
+                >= pCtx.param().sSpatialLayers[iCurDid as usize]
+                    .sSliceArgument
+                    .uiSliceNum as u16
         {
-            crate::encoder::slice_multi_threading::CalcSliceComplexRatio(current_layer_expect_mut(pCtx));
+            crate::encoder::slice_multi_threading::CalcSliceComplexRatio(current_layer_expect_mut(
+                pCtx,
+            ));
         }
 
         pCtx.eLastNalPriority[iCurDid as usize] = eNalRefIdc;
@@ -3784,7 +3769,10 @@ pub fn WelsEncoderEncodeExt(
         // and `get` returns the same byte it always did. The fifth slot answers
         // `0` — what an unwritten `SSpatialPicIndex` holds, which is what the
         // in-bounds cases read anyway.
-        let iDid = pCtx.sSpatialIndexMap.get(iSpatialIdx as usize).map_or(0, |e| e.iDid);
+        let iDid = pCtx
+            .sSpatialIndexMap
+            .get(iSpatialIdx as usize)
+            .map_or(0, |e| e.iDid);
         with_vpp(pCtx, |pVpp, pCtx| {
             pVpp.UpdateSpatialPictures(pCtx, iCurTid as i8, iDid)
         });
@@ -3817,12 +3805,11 @@ pub fn WelsEncoderEncodeExt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encoder::encoder_context::dq_layer_ref;
-    use crate::encoder::svc_encode_slice::{ctx_pps, ctx_sps};
     use crate::api::codec_api::EProfileIdc;
     use crate::encoder::encoder_context::InitFunctionPointers;
+    use crate::encoder::encoder_context::dq_layer_ref;
     use crate::encoder::param_svc::NewCodingParam;
-    
+    use crate::encoder::svc_encode_slice::{ctx_pps, ctx_sps};
 
     /// Builds the context up to and including `RequestMemorySvc`, which is everything
     /// `WelsInitEncoderExt` does before the preprocessor.
@@ -3863,7 +3850,10 @@ mod tests {
         let mut iCacheLineSize: i32 = 16;
         let mut uiCpuFeatureFlags: u32 = 0;
         assert_eq!(
-            crate::encoder::wels_encoder_ext::ParamValidationExt(SLogContext::default(), &mut param),
+            crate::encoder::wels_encoder_ext::ParamValidationExt(
+                SLogContext::default(),
+                &mut param
+            ),
             ENC_RETURN_SUCCESS
         );
         assert_eq!(param.DetermineTemporalSettings(), ENC_RETURN_SUCCESS);
@@ -3903,7 +3893,10 @@ mod tests {
             assert!(!(*pCtx).pPPSArray.is_empty(), "pPPSArray still unallocated");
             // The configuration needs no subset SPS, and the C++ allocated nothing
             // at all for it.
-            assert!((*pCtx).pSubsetArray.is_empty(), "pSubsetArray was not needed");
+            assert!(
+                (*pCtx).pSubsetArray.is_empty(),
+                "pSubsetArray was not needed"
+            );
             assert!((*pCtx).subset_array().is_empty());
             assert_eq!((*pCtx).iSpsNum, 1);
             assert_eq!((*pCtx).iPpsNum, 1);

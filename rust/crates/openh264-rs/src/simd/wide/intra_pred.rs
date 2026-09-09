@@ -15,7 +15,7 @@
 #![forbid(unsafe_code)]
 
 use wide::bytemuck::cast;
-use wide::{i16x8, u32x4, u8x16};
+use wide::{i16x8, u8x16, u32x4};
 
 use super::lanes::{hsum_i16, load16, low8, narrow, widen_hi, widen_lo};
 use crate::encoder::rec_view::RecCursor;
@@ -69,7 +69,11 @@ fn i16x16_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
         left_sum += (i as i32 + 1) * (src.at(-1, 8 + i) as i32 - src.at(-1, 6 - i) as i32);
     }
     let lt_shift = (src.at(-1, 15) as i32 + src.at(15, -1) as i32) << 4i32;
-    ((5 * top_sum + 32) >> 6i32, (5 * left_sum + 32) >> 6i32, lt_shift)
+    (
+        (5 * top_sum + 32) >> 6i32,
+        (5 * left_sum + 32) >> 6i32,
+        lt_shift,
+    )
 }
 
 /// The 16x16 plane fill from the three coefficients.
@@ -101,7 +105,11 @@ fn i16x16_dc_mean<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
     } else {
         0
     };
-    let sum_left = if use_left { (0..16).map(|y| src.at(-1, y as isize) as i32).sum() } else { 0 };
+    let sum_left = if use_left {
+        (0..16).map(|y| src.at(-1, y as isize) as i32).sum()
+    } else {
+        0
+    };
     match (use_top, use_left) {
         (true, true) => ((16 + sum_top + sum_left) >> 5i32) as u8,
         (true, false) => ((8 + sum_top) >> 4i32) as u8,
@@ -218,7 +226,11 @@ fn chroma_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
         left_sum += (i as i32 + 1) * (src.at(-1, 4 + i) as i32 - src.at(-1, 2 - i) as i32);
     }
     let lt_shift = (src.at(-1, 7) as i32 + src.at(7, -1) as i32) << 4i32;
-    ((17 * top_sum + 16) >> 5i32, (17 * left_sum + 16) >> 5i32, lt_shift)
+    (
+        (17 * top_sum + 16) >> 5i32,
+        (17 * left_sum + 16) >> 5i32,
+        lt_shift,
+    )
 }
 
 /// The chroma plane fill from the three coefficients.
@@ -320,7 +332,9 @@ pub fn dec_i4x4_luma_pred_v(pred: &mut PlaneCursorMut<'_>) {
 pub fn enc_i4x4_luma_pred_h(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let l = |y: isize| rec.at(-1, y);
     let (l0, l1, l2, l3) = (l(0), l(1), l(2), l(3));
-    *pred = [l0, l0, l0, l0, l1, l1, l1, l1, l2, l2, l2, l2, l3, l3, l3, l3];
+    *pred = [
+        l0, l0, l0, l0, l1, l1, l1, l1, l2, l2, l2, l2, l3, l3, l3, l3,
+    ];
 }
 
 #[inline]
@@ -370,7 +384,8 @@ pub fn enc_i4x4_luma_pred_ddl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let ddl5 = ((2 + t(5) + t(7) + (t(6) << 1i32)) >> 2i32) as u8;
     let ddl6 = ((2 + t(6) + t(7) + (t(7) << 1i32)) >> 2i32) as u8;
     *pred = [
-        ddl0, ddl1, ddl2, ddl3, ddl1, ddl2, ddl3, ddl4, ddl2, ddl3, ddl4, ddl5, ddl3, ddl4, ddl5, ddl6,
+        ddl0, ddl1, ddl2, ddl3, ddl1, ddl2, ddl3, ddl4, ddl2, ddl3, ddl4, ddl5, ddl3, ddl4, ddl5,
+        ddl6,
     ];
 }
 
@@ -399,7 +414,8 @@ pub fn enc_i4x4_luma_pred_ddr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let ddr5 = ((l01 + l12) >> 2i32) as u8;
     let ddr6 = ((l12 + l23) >> 2i32) as u8;
     *pred = [
-        ddr0, ddr1, ddr2, ddr3, ddr4, ddr0, ddr1, ddr2, ddr5, ddr4, ddr0, ddr1, ddr6, ddr5, ddr4, ddr0,
+        ddr0, ddr1, ddr2, ddr3, ddr4, ddr0, ddr1, ddr2, ddr5, ddr4, ddr0, ddr1, ddr6, ddr5, ddr4,
+        ddr0,
     ];
 }
 
@@ -421,7 +437,9 @@ pub fn enc_i4x4_luma_pred_vr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let vr7 = ((2 + t1 + (t2 << 1i32) + t3) >> 2i32) as u8;
     let vr8 = ((2 + lt + (l0 << 1i32) + l1) >> 2i32) as u8;
     let vr9 = ((2 + l0 + (l1 << 1i32) + l2) >> 2i32) as u8;
-    *pred = [vr0, vr1, vr2, vr3, vr4, vr5, vr6, vr7, vr8, vr0, vr1, vr2, vr9, vr4, vr5, vr6];
+    *pred = [
+        vr0, vr1, vr2, vr3, vr4, vr5, vr6, vr7, vr8, vr0, vr1, vr2, vr9, vr4, vr5, vr6,
+    ];
 }
 
 #[inline]
@@ -443,7 +461,9 @@ pub fn enc_i4x4_luma_pred_hd(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let hd7 = ((2 + l0 + (lt << 1i32) + t0) >> 2i32) as u8;
     let hd8 = ((2 + lt + (t0 << 1i32) + t1) >> 2i32) as u8;
     let hd9 = ((2 + t0 + (t1 << 1i32) + t2) >> 2i32) as u8;
-    *pred = [hd0, hd7, hd8, hd9, hd2, hd1, hd0, hd7, hd4, hd3, hd2, hd1, hd6, hd5, hd4, hd3];
+    *pred = [
+        hd0, hd7, hd8, hd9, hd2, hd1, hd0, hd7, hd4, hd3, hd2, hd1, hd6, hd5, hd4, hd3,
+    ];
 }
 
 #[inline]
@@ -460,7 +480,9 @@ pub fn enc_i4x4_luma_pred_vl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let vl7 = ((2 + t(2) + (t(3) << 1i32) + t(4)) >> 2i32) as u8;
     let vl8 = ((2 + t(3) + (t(4) << 1i32) + t(5)) >> 2i32) as u8;
     let vl9 = ((2 + t(4) + (t(5) << 1i32) + t(6)) >> 2i32) as u8;
-    *pred = [vl0, vl1, vl2, vl3, vl5, vl6, vl7, vl8, vl1, vl2, vl3, vl4, vl6, vl7, vl8, vl9];
+    *pred = [
+        vl0, vl1, vl2, vl3, vl5, vl6, vl7, vl8, vl1, vl2, vl3, vl4, vl6, vl7, vl8, vl9,
+    ];
 }
 
 #[inline]
@@ -479,7 +501,9 @@ pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let hu4 = (l23 >> 1i32) as u8;
     let hu5 = ((1 + l23 + (l3 << 1i32)) >> 2i32) as u8;
     let l3 = l3 as u8;
-    *pred = [hu0, hu1, hu2, hu3, hu2, hu3, hu4, hu5, hu4, hu5, l3, l3, l3, l3, l3, l3];
+    *pred = [
+        hu0, hu1, hu2, hu3, hu2, hu3, hu4, hu5, hu4, hu5, l3, l3, l3, l3, l3, l3,
+    ];
 }
 
 #[cfg(test)]
@@ -670,7 +694,11 @@ mod tests {
         simd: fn(&mut PlaneCursorMut<'_>),
     ) {
         let (mut pa, mut pb) = twin_pred_planes();
-        assert_eq!(pa.as_slice(), pb.as_slice(), "{name}: twins started out different");
+        assert_eq!(
+            pa.as_slice(),
+            pb.as_slice(),
+            "{name}: twins started out different"
+        );
         scalar(&mut pa.cursor_mut(8, 8));
         simd(&mut pb.cursor_mut(8, 8));
         assert_eq!(
@@ -685,7 +713,11 @@ mod tests {
         use crate::decoder::get_intra_predictor as dec;
         assert_dec_parity("16x16 V", dec::i16x16_luma_pred_v, dec_i16x16_luma_pred_v);
         assert_dec_parity("16x16 H", dec::i16x16_luma_pred_h, dec_i16x16_luma_pred_h);
-        assert_dec_parity("16x16 DC", dec::i16x16_luma_pred_dc, dec_i16x16_luma_pred_dc);
+        assert_dec_parity(
+            "16x16 DC",
+            dec::i16x16_luma_pred_dc,
+            dec_i16x16_luma_pred_dc,
+        );
         assert_dec_parity(
             "16x16 DC top",
             dec::i16x16_luma_pred_dc_top,
@@ -709,7 +741,11 @@ mod tests {
         assert_dec_parity("Chroma V", dec::chroma_pred_v, dec_chroma_pred_v);
         assert_dec_parity("Chroma H", dec::chroma_pred_h, dec_chroma_pred_h);
         assert_dec_parity("Chroma DC", dec::chroma_pred_dc, dec_chroma_pred_dc);
-        assert_dec_parity("Chroma Plane", dec::chroma_pred_plane, dec_chroma_pred_plane);
+        assert_dec_parity(
+            "Chroma Plane",
+            dec::chroma_pred_plane,
+            dec_chroma_pred_plane,
+        );
     }
 
     #[test]
@@ -719,5 +755,4 @@ mod tests {
         assert_dec_parity("4x4 H", dec::i4x4_luma_pred_h, dec_i4x4_luma_pred_h);
         assert_dec_parity("4x4 DC", dec::i4x4_luma_pred_dc, dec_i4x4_luma_pred_dc);
     }
-
 }

@@ -36,12 +36,7 @@
 //! vector and reference index cache propagation.
 
 #![deny(unsafe_code)]
-
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
 use crate::safe::mb_grid::MbArray;
@@ -174,19 +169,14 @@ pub use crate::decoder::picture::SPicture;
 
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
 
+pub use crate::decoder::decoder_core::{DqLayerState, SLayerInfo, SSlice};
 
-pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState};
-
-
-pub use crate::decoder::decoder_context::{SRefPic};
-use crate::decoder::decoder_context::SliceCtx;
-pub use crate::decoder::decoder_context::{
-    SWelsDecoderContext, PicRefs, ref_id,
-};
-pub use crate::decoder::parameter_sets::SSps;
 pub use crate::decoder::decode_slice::{SPartMbInfo, g_ksInterBSubMbTypeInfo};
 pub use crate::decoder::decode_slice::{g_kuiCache30ScanIdx, g_kuiScan4};
-
+pub use crate::decoder::decoder_context::SRefPic;
+use crate::decoder::decoder_context::SliceCtx;
+pub use crate::decoder::decoder_context::{PicRefs, SWelsDecoderContext, ref_id};
+pub use crate::decoder::parameter_sets::SSps;
 
 // ============================================================================
 // Block Fill/Copy Primitives, in the grid's own units
@@ -256,7 +246,10 @@ pub fn WELS_MIN_POSITIVE(a: i8, b: i8) -> i8 {
 /// The macroblock-type array this layer reads, **whole** — the picture's when there
 /// is a picture, the layer's grid otherwise.
 #[inline(always)]
-pub fn GetMbType<'a>(pCurDqLayer: &'a DqLayerState, pDec: Option<&'a SPicture>) -> &'a MbArray<u32> {
+pub fn GetMbType<'a>(
+    pCurDqLayer: &'a DqLayerState,
+    pDec: Option<&'a SPicture>,
+) -> &'a MbArray<u32> {
     match pDec {
         Some(pic) => &pic.pMbType,
         None => &pCurDqLayer.grid.mb_type,
@@ -265,7 +258,12 @@ pub fn GetMbType<'a>(pCurDqLayer: &'a DqLayerState, pDec: Option<&'a SPicture>) 
 
 /// [`GetMbType`]'s write half — the same dual path, one macroblock.
 #[inline(always)]
-pub fn SetMbType(pCurDqLayer: &mut DqLayerState, pDec: Option<&mut SPicture>, mb_xy: usize, val: u32) {
+pub fn SetMbType(
+    pCurDqLayer: &mut DqLayerState,
+    pDec: Option<&mut SPicture>,
+    mb_xy: usize,
+    val: u32,
+) {
     match pDec {
         Some(pic) => *pic.pMbType.get_mut(mb_xy) = val,
         None => *pCurDqLayer.grid.mb_type.get_mut(mb_xy) = val,
@@ -330,10 +328,26 @@ pub fn PredPSkipMvFromNeighbor(
     }
 
     let pMbType = GetMbType(pCurDqLayer, pDec);
-    let iLeftType = if iCurX != 0 && bLeftAvail { *pMbType.get(iLeftXy as usize) } else { 0 };
-    let iTopType = if iCurY != 0 && bTopAvail { *pMbType.get(iTopXy as usize) } else { 0 };
-    let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbType.get(iLeftTopXy as usize) } else { 0 };
-    let iRightTopType = if iCurX != (pCurDqLayer.iMbWidth - 1) && iCurY != 0 && bRightTopAvail { *pMbType.get(iRightTopXy as usize) } else { 0 };
+    let iLeftType = if iCurX != 0 && bLeftAvail {
+        *pMbType.get(iLeftXy as usize)
+    } else {
+        0
+    };
+    let iTopType = if iCurY != 0 && bTopAvail {
+        *pMbType.get(iTopXy as usize)
+    } else {
+        0
+    };
+    let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail {
+        *pMbType.get(iLeftTopXy as usize)
+    } else {
+        0
+    };
+    let iRightTopType = if iCurX != (pCurDqLayer.iMbWidth - 1) && iCurY != 0 && bRightTopAvail {
+        *pMbType.get(iRightTopXy as usize)
+    } else {
+        0
+    };
 
     let iMvA: [i16; 2];
     let iMvB: [i16; 2];
@@ -343,7 +357,6 @@ pub fn PredPSkipMvFromNeighbor(
     let iTopRef: i8;
     let iRightTopRef: i8;
     let iLeftTopRef: i8;
-
 
     // left
     if bLeftAvail && IS_INTER(iLeftType) {
@@ -356,7 +369,11 @@ pub fn PredPSkipMvFromNeighbor(
         }
     } else {
         iMvA = [0, 0];
-        iLeftRef = if !bLeftAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+        iLeftRef = if !bLeftAvail {
+            REF_NOT_AVAIL
+        } else {
+            REF_NOT_IN_LIST
+        };
     }
     if iLeftRef == REF_NOT_AVAIL || (iLeftRef == 0 && (iMvA[0] == 0 && iMvA[1] == 0)) {
         *iMvp = [0, 0];
@@ -374,7 +391,11 @@ pub fn PredPSkipMvFromNeighbor(
         }
     } else {
         iMvB = [0, 0];
-        iTopRef = if !bTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+        iTopRef = if !bTopAvail {
+            REF_NOT_AVAIL
+        } else {
+            REF_NOT_IN_LIST
+        };
     }
     if iTopRef == REF_NOT_AVAIL || (iTopRef == 0 && (iMvB[0] == 0 && iMvB[1] == 0)) {
         *iMvp = [0, 0];
@@ -392,7 +413,11 @@ pub fn PredPSkipMvFromNeighbor(
         }
     } else {
         iMvC = [0, 0];
-        iRightTopRef = if !bRightTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+        iRightTopRef = if !bRightTopAvail {
+            REF_NOT_AVAIL
+        } else {
+            REF_NOT_IN_LIST
+        };
     }
 
     // left_top
@@ -406,7 +431,11 @@ pub fn PredPSkipMvFromNeighbor(
         }
     } else {
         iMvD = [0, 0];
-        iLeftTopRef = if !bLeftTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+        iLeftTopRef = if !bLeftTopAvail {
+            REF_NOT_AVAIL
+        } else {
+            REF_NOT_IN_LIST
+        };
     }
 
     let mut iDiagonalRef = iRightTopRef;
@@ -465,7 +494,8 @@ pub fn PredMv(
         iCMV = iMotionVector[listIdx][kuiLeftTopIdx];
     }
 
-    let iMatchRef = (iRef == kiLeftRef) as i32 + (iRef == kiTopRef) as i32 + (iRef == iDiagonalRef) as i32;
+    let iMatchRef =
+        (iRef == kiLeftRef) as i32 + (iRef == kiTopRef) as i32 + (iRef == iDiagonalRef) as i32;
 
     if REF_NOT_AVAIL == kiTopRef && REF_NOT_AVAIL == iDiagonalRef && kiLeftRef >= REF_NOT_IN_LIST {
         *iMVP = iAMV;
@@ -615,14 +645,18 @@ pub fn GetColocatedMb(
             pCurDqLayer.iColocRefIndex[LIST_0] = *colocPic.pRefIndex[LIST_0].get(iMbXy);
             if IS_TYPE_L1(coloc_mbType) {
                 pCurDqLayer.iColocMv[LIST_1] = *colocPic.pMv[LIST_1].get(iMbXy);
-                pCurDqLayer.iColocRefIndex[LIST_1] =
-                    *colocPic.pRefIndex[LIST_1].get(iMbXy);
+                pCurDqLayer.iColocRefIndex[LIST_1] = *colocPic.pRefIndex[LIST_1].get(iMbXy);
             } else {
                 // The C casts to `uint8_t` here, so this fill is the plain value.
                 pCurDqLayer.iColocRefIndex[LIST_1].fill(REF_NOT_IN_LIST);
             }
         } else {
-            let maxList = 1 + (if (coloc_mbType & MB_TYPE_L1) != 0 { 1 } else { 0 });
+            let maxList = 1
+                + (if (coloc_mbType & MB_TYPE_L1) != 0 {
+                    1
+                } else {
+                    0
+                });
             for listIdx in 0..maxList {
                 let colocMvPtr = *colocPic.pMv[listIdx].get(iMbXy);
                 set_rect_mv(&mut pCurDqLayer.iColocMv[listIdx], 0, colocMvPtr[0]);
@@ -640,7 +674,11 @@ pub fn GetColocatedMb(
                 set_rect_ref(&mut pCurDqLayer.iColocRefIndex[listIdx], 0, colocRefPtr[0]);
                 set_rect_ref(&mut pCurDqLayer.iColocRefIndex[listIdx], 2, colocRefPtr[3]);
                 set_rect_ref(&mut pCurDqLayer.iColocRefIndex[listIdx], 8, colocRefPtr[12]);
-                set_rect_ref(&mut pCurDqLayer.iColocRefIndex[listIdx], 10, colocRefPtr[15]);
+                set_rect_ref(
+                    &mut pCurDqLayer.iColocRefIndex[listIdx],
+                    10,
+                    colocRefPtr[15],
+                );
             }
             if (coloc_mbType & MB_TYPE_L1) == 0 {
                 pCurDqLayer.iColocRefIndex[1].fill(REF_NOT_IN_LIST);
@@ -668,7 +706,14 @@ pub fn PredMvBDirectSpatial(
 
     let mut mbType: MbType = 0;
     let colocPic = pRefs.resolve(pCtx.ref_id(LIST_1, 0), Some(&*pDec));
-    let ret = GetColocatedMb(pCtx, pCurDqLayer, Some(&*pDec), colocPic, &mut mbType, subMbType);
+    let ret = GetColocatedMb(
+        pCtx,
+        pCurDqLayer,
+        Some(&*pDec),
+        colocPic,
+        &mut mbType,
+        subMbType,
+    );
     if ret != ERR_NONE {
         return ret;
     }
@@ -711,10 +756,26 @@ pub fn PredMvBDirectSpatial(
     }
 
     let pMbTypePtr = GetMbType(pCurDqLayer, Some(&*pDec));
-    let iLeftType = if iCurX != 0 && bLeftAvail { *pMbTypePtr.get(iLeftXy as usize) } else { 0 };
-    let iTopType = if iCurY != 0 && bTopAvail { *pMbTypePtr.get(iTopXy as usize) } else { 0 };
-    let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail { *pMbTypePtr.get(iLeftTopXy as usize) } else { 0 };
-    let iRightTopType = if iCurX != (pCurDqLayer.iMbWidth - 1) && iCurY != 0 && bRightTopAvail { *pMbTypePtr.get(iRightTopXy as usize) } else { 0 };
+    let iLeftType = if iCurX != 0 && bLeftAvail {
+        *pMbTypePtr.get(iLeftXy as usize)
+    } else {
+        0
+    };
+    let iTopType = if iCurY != 0 && bTopAvail {
+        *pMbTypePtr.get(iTopXy as usize)
+    } else {
+        0
+    };
+    let iLeftTopType = if iCurX != 0 && iCurY != 0 && bLeftTopAvail {
+        *pMbTypePtr.get(iLeftTopXy as usize)
+    } else {
+        0
+    };
+    let iRightTopType = if iCurX != (pCurDqLayer.iMbWidth - 1) && iCurY != 0 && bRightTopAvail {
+        *pMbTypePtr.get(iRightTopXy as usize)
+    } else {
+        0
+    };
 
     let mut iLeftRef = [0i8; 2];
     let mut iTopRef = [0i8; 2];
@@ -732,7 +793,11 @@ pub fn PredMvBDirectSpatial(
             iLeftRef[listIdx] = pDec.pRefIndex[listIdx].get(iLeftXy as usize)[3];
         } else {
             iMvA[listIdx] = [0, 0];
-            iLeftRef[listIdx] = if !bLeftAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+            iLeftRef[listIdx] = if !bLeftAvail {
+                REF_NOT_AVAIL
+            } else {
+                REF_NOT_IN_LIST
+            };
         }
 
         if bTopAvail && IS_INTER(iTopType) {
@@ -740,7 +805,11 @@ pub fn PredMvBDirectSpatial(
             iTopRef[listIdx] = pDec.pRefIndex[listIdx].get(iTopXy as usize)[12];
         } else {
             iMvB[listIdx] = [0, 0];
-            iTopRef[listIdx] = if !bTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+            iTopRef[listIdx] = if !bTopAvail {
+                REF_NOT_AVAIL
+            } else {
+                REF_NOT_IN_LIST
+            };
         }
 
         if bRightTopAvail && IS_INTER(iRightTopType) {
@@ -748,7 +817,11 @@ pub fn PredMvBDirectSpatial(
             iRightTopRef[listIdx] = pDec.pRefIndex[listIdx].get(iRightTopXy as usize)[12];
         } else {
             iMvC[listIdx] = [0, 0];
-            iRightTopRef[listIdx] = if !bRightTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+            iRightTopRef[listIdx] = if !bRightTopAvail {
+                REF_NOT_AVAIL
+            } else {
+                REF_NOT_IN_LIST
+            };
         }
 
         if bLeftTopAvail && IS_INTER(iLeftTopType) {
@@ -756,7 +829,11 @@ pub fn PredMvBDirectSpatial(
             iLeftTopRef[listIdx] = pDec.pRefIndex[listIdx].get(iLeftTopXy as usize)[15];
         } else {
             iMvD[listIdx] = [0, 0];
-            iLeftTopRef[listIdx] = if !bLeftTopAvail { REF_NOT_AVAIL } else { REF_NOT_IN_LIST };
+            iLeftTopRef[listIdx] = if !bLeftTopAvail {
+                REF_NOT_AVAIL
+            } else {
+                REF_NOT_IN_LIST
+            };
         }
 
         iDiagonalRef[listIdx] = iRightTopRef[listIdx];
@@ -830,7 +907,13 @@ pub fn PredMvBDirectSpatial(
         }
         UpdateP16x16DirectCabac(pCurDqLayer);
         for listIdx in 0..2 {
-            UpdateP16x16MotionInfo(pCurDqLayer, Some(&mut *pDec), listIdx, ref_idx[listIdx], &iMvp[listIdx]);
+            UpdateP16x16MotionInfo(
+                pCurDqLayer,
+                Some(&mut *pDec),
+                listIdx,
+                ref_idx[listIdx],
+                &iMvp[listIdx],
+            );
             UpdateP16x16MvdCabac(pCurDqLayer, &pMvd, listIdx as i32);
         }
     } else {
@@ -840,8 +923,20 @@ pub fn PredMvBDirectSpatial(
             for i in 0..4 {
                 let iIdx8 = (i << 2) as i16;
                 pCurDqLayer.grid.sub_mb_type.get_mut(iMbXy)[i as usize] = *subMbType;
-                UpdateP8x8RefIdxCabac(pCurDqLayer, &mut *pDec, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
-                UpdateP8x8RefIdxCabac(pCurDqLayer, &mut *pDec, iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
+                UpdateP8x8RefIdxCabac(
+                    pCurDqLayer,
+                    &mut *pDec,
+                    iIdx8 as i32,
+                    ref_idx[LIST_0],
+                    LIST_0 as i8,
+                );
+                UpdateP8x8RefIdxCabac(
+                    pCurDqLayer,
+                    &mut *pDec,
+                    iIdx8 as i32,
+                    ref_idx[LIST_1],
+                    LIST_1 as i8,
+                );
                 UpdateP8x8DirectCabac(pCurDqLayer, iIdx8 as i32);
 
                 pSubPartCount[i as usize] = g_ksInterBSubMbTypeInfo[0].iPartCount;
@@ -888,7 +983,14 @@ pub fn PredBDirectTemporal(
 
     let mut mbType: MbType = 0;
     let colocPicForMb = pRefs.resolve(pCtx.ref_id(LIST_1, 0), Some(&*pDec));
-    let ret = GetColocatedMb(pCtx, pCurDqLayer, Some(&*pDec), colocPicForMb, &mut mbType, subMbType);
+    let ret = GetColocatedMb(
+        pCtx,
+        pCurDqLayer,
+        Some(&*pDec),
+        colocPicForMb,
+        &mut mbType,
+        subMbType,
+    );
     if ret != ERR_NONE {
         return ret;
     }
@@ -896,7 +998,12 @@ pub fn PredBDirectTemporal(
     SetMbType(pCurDqLayer, Some(&mut *pDec), iMbXy, mbType);
     let pMvd = [0i16; 2];
     let ref0Count = std::cmp::min(
-        pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount[LIST_0],
+        pCurDqLayer
+            .sLayerInfo
+            .sSliceInLayer
+            .sSliceHeaderExt
+            .sSliceHeader
+            .uiRefCount[LIST_0],
         pCtx.sRefPic.uiRefCount[LIST_0] as i32,
     );
 
@@ -904,23 +1011,39 @@ pub fn PredBDirectTemporal(
         ref_idx[LIST_0] = 0;
         ref_idx[LIST_1] = 0;
         UpdateP16x16DirectCabac(pCurDqLayer);
-        UpdateP16x16RefIdx(pCurDqLayer, Some(&mut *pDec), LIST_1 as i32, ref_idx[LIST_1]);
+        UpdateP16x16RefIdx(
+            pCurDqLayer,
+            Some(&mut *pDec),
+            LIST_1 as i32,
+            ref_idx[LIST_1],
+        );
         *iMvp = [[0, 0]; 2];
         if pCurDqLayer.iColocIntra[0] != 0 {
             UpdateP16x16MotionOnly(pCurDqLayer, Some(&mut *pDec), LIST_0 as i32, &iMvp[LIST_0]);
             UpdateP16x16MotionOnly(pCurDqLayer, Some(&mut *pDec), LIST_1 as i32, &iMvp[LIST_1]);
-            UpdateP16x16RefIdx(pCurDqLayer, Some(&mut *pDec), LIST_0 as i32, ref_idx[LIST_0]);
+            UpdateP16x16RefIdx(
+                pCurDqLayer,
+                Some(&mut *pDec),
+                LIST_0 as i32,
+                ref_idx[LIST_0],
+            );
         } else {
             ref_idx[LIST_0] = 0;
             let colocRefIndexL0 = pCurDqLayer.iColocRefIndex[LIST_0][0];
             let colocList = if colocRefIndexL0 >= 0 {
-                ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, Some(&*pDec), colocRefIndexL0, ref0Count);
+                ref_idx[LIST_0] =
+                    MapColToList0(pCtx, pRefs, Some(&*pDec), colocRefIndexL0, ref0Count);
                 LIST_0
             } else {
                 LIST_1
             };
             let mv = pCurDqLayer.iColocMv[colocList][0];
-            UpdateP16x16RefIdx(pCurDqLayer, Some(&mut *pDec), LIST_0 as i32, ref_idx[LIST_0]);
+            UpdateP16x16RefIdx(
+                pCurDqLayer,
+                Some(&mut *pDec),
+                LIST_0 as i32,
+                ref_idx[LIST_0],
+            );
 
             let scale = pCurDqLayer.sLayerInfo.sSliceInLayer.iMvScale[LIST_0]
                 [ref_idx[LIST_0] as usize] as i32;
@@ -944,20 +1067,39 @@ pub fn PredBDirectTemporal(
                 let mut colocList = LIST_0;
 
                 ref_idx[LIST_1] = 0;
-                UpdateP8x8RefIdxCabac(pCurDqLayer, &mut *pDec, iIdx8 as i32, ref_idx[LIST_1], LIST_1 as i8);
+                UpdateP8x8RefIdxCabac(
+                    pCurDqLayer,
+                    &mut *pDec,
+                    iIdx8 as i32,
+                    ref_idx[LIST_1],
+                    LIST_1 as i8,
+                );
                 if pCurDqLayer.iColocIntra[iScan4Idx] != 0 {
                     ref_idx[LIST_0] = 0;
-                    UpdateP8x8RefIdxCabac(pCurDqLayer, &mut *pDec, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
+                    UpdateP8x8RefIdxCabac(
+                        pCurDqLayer,
+                        &mut *pDec,
+                        iIdx8 as i32,
+                        ref_idx[LIST_0],
+                        LIST_0 as i8,
+                    );
                     *iMvp = [[0, 0]; 2];
                 } else {
                     ref_idx[LIST_0] = 0;
                     let colocRefIndexL0 = pCurDqLayer.iColocRefIndex[LIST_0][iScan4Idx];
                     if colocRefIndexL0 >= 0 {
-                        ref_idx[LIST_0] = MapColToList0(pCtx, pRefs, Some(&*pDec), colocRefIndexL0, ref0Count);
+                        ref_idx[LIST_0] =
+                            MapColToList0(pCtx, pRefs, Some(&*pDec), colocRefIndexL0, ref0Count);
                     } else {
                         colocList = LIST_1;
                     }
-                    UpdateP8x8RefIdxCabac(pCurDqLayer, &mut *pDec, iIdx8 as i32, ref_idx[LIST_0], LIST_0 as i8);
+                    UpdateP8x8RefIdxCabac(
+                        pCurDqLayer,
+                        &mut *pDec,
+                        iIdx8 as i32,
+                        ref_idx[LIST_0],
+                        LIST_0 as i8,
+                    );
                 }
                 UpdateP8x8DirectCabac(pCurDqLayer, iIdx8 as i32);
 
@@ -1438,9 +1580,11 @@ pub fn FillSpatialDirect8x8Mv(
         }
 
         if pMvDirect[LIST_0] != [0, 0] || pMvDirect[LIST_1] != [0, 0] {
-            let uiColZeroFlag = (0 == pCurDqLayer.iColocIntra[iColocIdx]) && !bIsLongRef &&
-                (pCurDqLayer.iColocRefIndex[LIST_0][iColocIdx] == 0 ||
-                 (pCurDqLayer.iColocRefIndex[LIST_0][iColocIdx] < 0 && pCurDqLayer.iColocRefIndex[LIST_1][iColocIdx] == 0));
+            let uiColZeroFlag = (0 == pCurDqLayer.iColocIntra[iColocIdx])
+                && !bIsLongRef
+                && (pCurDqLayer.iColocRefIndex[LIST_0][iColocIdx] == 0
+                    || (pCurDqLayer.iColocRefIndex[LIST_0][iColocIdx] < 0
+                        && pCurDqLayer.iColocRefIndex[LIST_1][iColocIdx] == 0));
 
             let colocList = if 0 == pCurDqLayer.iColocRefIndex[LIST_0][iColocIdx] {
                 LIST_0

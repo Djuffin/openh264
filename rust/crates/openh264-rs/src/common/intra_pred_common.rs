@@ -33,11 +33,7 @@
 //! Provides vertical and horizontal 16x16 luma spatial intra-frame prediction
 //! kernels for both C reference fallbacks and SIMD hardware acceleration (SSE2, NEON, AArch64, MMI, LSX).
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
@@ -99,7 +95,7 @@ pub fn i16x16_luma_pred_h(pred: &mut [u8; 256], reference: &impl RefSamples) {
 mod tests {
     use super::*;
     use crate::safe::plane::PaddedPlane;
-    
+
     #[test]
     fn test_i16x16_luma_pred_v() {
         let mut plane = PaddedPlane::new(16, 16, 8, 32);

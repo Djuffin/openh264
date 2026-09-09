@@ -7,8 +7,7 @@
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
 
 use crate::{
-    EUsageType, SSourcePicture, VideoFormat,
-    MAX_QUALITY_LAYER_NUM, MAX_TEMPORAL_LAYER_NUM,
+    EUsageType, MAX_QUALITY_LAYER_NUM, MAX_TEMPORAL_LAYER_NUM, SSourcePicture, VideoFormat,
 };
 
 // ============================================================================
@@ -60,7 +59,7 @@ pub const PARA_SET_TYPE: usize = 3;
 /// Calculates 4-byte (32-bit DWORD) aligned row stride for bitmap image buffers.
 #[inline(always)]
 pub fn CALC_BI_STRIDE(width: i32, bitcount: i32) -> i32 {
-    ((width * bitcount + 31) & !31) >> 3 
+    ((width * bitcount + 31) & !31) >> 3
 }
 
 // ============================================================================
@@ -68,7 +67,6 @@ pub fn CALC_BI_STRIDE(width: i32, bitcount: i32) -> i32 {
 // ============================================================================
 
 pub use crate::common::wels_common_defs::EWelsSliceType;
-
 
 // Re-export EVideoFrameType from crate root
 pub use crate::EVideoFrameType;
@@ -180,7 +178,11 @@ impl SPicData {
         view: &'a crate::encoder::rec_view::RoPicView,
         plane: usize,
     ) -> crate::encoder::rec_view::RecCursor<'a> {
-        let (x, y) = if plane == 0 { self.luma_origin() } else { self.chroma_origin() };
+        let (x, y) = if plane == 0 {
+            self.luma_origin()
+        } else {
+            self.chroma_origin()
+        };
         view.plane(plane).cursor(x, y)
     }
 
@@ -192,7 +194,11 @@ impl SPicData {
         view: &'a RecPicView,
         plane: usize,
     ) -> crate::encoder::rec_view::RecCursor<'a> {
-        let (x, y) = if plane == 0 { self.luma_origin() } else { self.chroma_origin() };
+        let (x, y) = if plane == 0 {
+            self.luma_origin()
+        } else {
+            self.chroma_origin()
+        };
         view.plane(plane).cursor(x, y)
     }
 
@@ -233,19 +239,11 @@ impl Default for SMVComponentUnit {
     }
 }
 
-
-
-
-
-
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 
 pub use crate::encoder::wels_encoder_ext::{SSpatialLayerInternal, SWelsSvcCodingParam};
 
-
-
 pub use crate::encoder::nal_encap::SWelsEncoderOutput;
-
 
 /// `TagParaSetOffsetVariable` — `codec/encoder/core/inc/wels_common_basis.h:72`.
 /// 80 bytes. Note `iParaSetIdDelta` is `[MAX_DQ_LAYER_NUM]`; the `+1` in the header
@@ -319,8 +317,6 @@ pub struct SDqIdc {
 
 pub use crate::encoder::svc_encode_slice::{SMB, SSlice};
 
-
-
 pub use crate::encoder::svc_encode_slice::SWelsSvcRc;
 
 // The real ports (svc_mode_decision.cpp:236 and :257) live in svc_mode_decision.rs.
@@ -329,28 +325,26 @@ use crate::encoder::svc_mode_decision::{
     WelsMdUpdateBGDInfoNULL,
 };
 
-
 pub use crate::encoder::deblocking::DeblockingFunc as SDeblockingFunc;
 
-pub use crate::encoder::rc::SWelsRcFunc;
-pub use crate::encoder::nal_encap::EWelsNalUnitType;
+pub use crate::encoder::md::SMcFunc;
 pub use crate::encoder::nal_encap::EWelsNalRefIdc;
+pub use crate::encoder::nal_encap::EWelsNalUnitType;
+pub use crate::encoder::param_svc::SSubsetSps;
+pub use crate::encoder::param_svc::SWelsPPS;
+pub use crate::encoder::param_svc::SWelsSPS;
+pub use crate::encoder::param_svc::{PpsId, SpsId, SubsetSpsId};
 pub use crate::encoder::picture::SPicture;
 pub use crate::encoder::picture::{RecPicId, RecPicPool, SrcPicId, SrcPicPool};
-pub use crate::encoder::param_svc::SWelsSPS;
-pub use crate::encoder::param_svc::SWelsPPS;
-pub use crate::encoder::param_svc::SSubsetSps;
-pub use crate::encoder::param_svc::{PpsId, SpsId, SubsetSpsId};
-pub use crate::encoder::wels_preprocess::ESceneChangeIdc;
+pub use crate::encoder::rc::SWelsRcFunc;
 pub use crate::encoder::set_mb_syn_cabac::SStateCtx;
-pub use crate::encoder::md::SMcFunc;
 pub use crate::encoder::slice_multi_threading::SSliceThreading;
+pub use crate::encoder::svc_encode_slice::SLayerInfo;
+pub use crate::encoder::wels_func_ptr_def::{EntropyCoder, SWelsFuncPtrList};
+pub use crate::encoder::wels_preprocess::ESceneChangeIdc;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfo;
 pub use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
 pub use crate::encoder::wels_preprocess::VaaBlock;
-pub use crate::encoder::svc_encode_slice::SLayerInfo;
-pub use crate::encoder::wels_func_ptr_def::{EntropyCoder, SWelsFuncPtrList};
-
 
 // ============================================================================
 // Primary Encoder Context Data Structures (encoder_context.h)
@@ -401,7 +395,6 @@ impl SRefList {
         self.pRef.get_mut(id)
     }
 }
-
 
 /// Long-Term Reference (LTR) State Machine.
 #[repr(C)]
@@ -531,7 +524,8 @@ impl SStrideTables {
     /// `kiTid0` is the C++'s `kbBaseTemporalFlag` — 1 for the base temporal layer.
     #[inline]
     pub fn DecBlockOffsets(&self, kiDid: usize, kiTid0: usize) -> Option<&[i32; 24]> {
-        self.blocks.get(self.pStrideDecBlockOffset[kiDid][kiTid0]? as usize)
+        self.blocks
+            .get(self.pStrideDecBlockOffset[kiDid][kiTid0]? as usize)
     }
 
     /// The macroblock X/Y coordinate tables of layer `kiDid` **as slices** — one
@@ -539,7 +533,10 @@ impl SStrideTables {
     /// `iMbWidth * iMbHeight` the caller passes.
     #[inline]
     pub fn MbIndexXY(&self, kiDid: usize, kiMbNum: usize) -> Option<(&[i16], &[i16])> {
-        let (x, y) = (self.pMbIndexX[kiDid]? as usize, self.pMbIndexY[kiDid]? as usize);
+        let (x, y) = (
+            self.pMbIndexX[kiDid]? as usize,
+            self.pMbIndexY[kiDid]? as usize,
+        );
         Some((&self.coords[x..][..kiMbNum], &self.coords[y..][..kiMbNum]))
     }
 }
@@ -547,9 +544,7 @@ impl SStrideTables {
 /// The preprocess object as a **shared** reference — the only route an
 /// **in-fork** body may take, and the reader half of the pair.
 #[inline]
-pub fn ctx_vpp_ref(
-    pCtx: &sWelsEncCtx,
-) -> &crate::encoder::wels_preprocess::CWelsPreProcess {
+pub fn ctx_vpp_ref(pCtx: &sWelsEncCtx) -> &crate::encoder::wels_preprocess::CWelsPreProcess {
     pCtx.pVpp
         .as_deref()
         .expect("the preprocessor is built by WelsInitEncoderExt")
@@ -630,7 +625,11 @@ pub fn ctx_dq_idc_map(pCtx: &mut sWelsEncCtx) -> &mut [SDqIdc] {
 pub fn ctx_paraset_arrays(
     pCtx: &mut sWelsEncCtx,
 ) -> (&mut [SWelsSPS], &mut [SSubsetSps], &mut [SWelsPPS]) {
-    (&mut pCtx.pSpsArray, &mut pCtx.pSubsetArray, &mut pCtx.pPPSArray)
+    (
+        &mut pCtx.pSpsArray,
+        &mut pCtx.pSubsetArray,
+        &mut pCtx.pPPSArray,
+    )
 }
 
 /// The five disjoint borrows [`sWelsEncCtx::ltr_family_mut`] hands out.
@@ -740,9 +739,15 @@ impl sWelsEncCtx {
         &mut self,
         kiDid: usize,
     ) -> (Option<&mut SRefList>, &mut SLTRState) {
-        let sWelsEncCtx { ppRefPicListExt, pLtr, .. } = self;
+        let sWelsEncCtx {
+            ppRefPicListExt,
+            pLtr,
+            ..
+        } = self;
         (
-            ppRefPicListExt.get_mut(kiDid).and_then(|s| s.as_deref_mut()),
+            ppRefPicListExt
+                .get_mut(kiDid)
+                .and_then(|s| s.as_deref_mut()),
             &mut pLtr[kiDid],
         )
     }
@@ -764,7 +769,11 @@ impl sWelsEncCtx {
         Option<&mut crate::encoder::wels_preprocess::CWelsPreProcess>,
         Option<&SRefList>,
     ) {
-        let sWelsEncCtx { pVpp, ppRefPicListExt, .. } = self;
+        let sWelsEncCtx {
+            pVpp,
+            ppRefPicListExt,
+            ..
+        } = self;
         (
             pVpp.as_deref_mut(),
             ppRefPicListExt.get(kiDid).and_then(|s| s.as_deref()),
@@ -783,8 +792,17 @@ impl sWelsEncCtx {
     pub fn vaa_rc_and_ref_list_mut(
         &mut self,
         kiDid: usize,
-    ) -> (Option<&mut SVAAFrameInfo>, &mut SWelsSvcRc, Option<&SRefList>) {
-        let sWelsEncCtx { pVaa, pWelsSvcRc, ppRefPicListExt, .. } = self;
+    ) -> (
+        Option<&mut SVAAFrameInfo>,
+        &mut SWelsSvcRc,
+        Option<&SRefList>,
+    ) {
+        let sWelsEncCtx {
+            pVaa,
+            pWelsSvcRc,
+            ppRefPicListExt,
+            ..
+        } = self;
         (
             pVaa.as_deref_mut().map(VaaBlock::base_mut),
             &mut pWelsSvcRc[kiDid],
@@ -806,7 +824,11 @@ impl sWelsEncCtx {
         &mut self,
         kiDid: usize,
     ) -> (Option<&mut SVAAFrameInfoExt>, Option<&SRefList>) {
-        let sWelsEncCtx { pVaa, ppRefPicListExt, .. } = self;
+        let sWelsEncCtx {
+            pVaa,
+            ppRefPicListExt,
+            ..
+        } = self;
         (
             pVaa.as_deref_mut().and_then(VaaBlock::ext_mut),
             ppRefPicListExt.get(kiDid).and_then(|s| s.as_deref()),
@@ -825,7 +847,12 @@ impl sWelsEncCtx {
     #[inline]
     pub fn ltr_family_mut(&mut self, kiDid: usize) -> LtrFamilyMut<'_> {
         let sWelsEncCtx {
-            pSvcParam, pVaa, ppRefPicListExt, pLtr, bRefOfCurTidIsLtr, ..
+            pSvcParam,
+            pVaa,
+            ppRefPicListExt,
+            pLtr,
+            bRefOfCurTidIsLtr,
+            ..
         } = self;
         LtrFamilyMut {
             param_layer: &mut pSvcParam
@@ -833,7 +860,9 @@ impl sWelsEncCtx {
                 .expect("the coding parameters are built by WelsInitEncoderExt")
                 .sDependencyLayers[kiDid],
             vaa: pVaa.as_deref_mut().map(VaaBlock::base_mut),
-            ref_list: ppRefPicListExt.get_mut(kiDid).and_then(|s| s.as_deref_mut()),
+            ref_list: ppRefPicListExt
+                .get_mut(kiDid)
+                .and_then(|s| s.as_deref_mut()),
             ltr: &mut pLtr[kiDid],
             ref_of_cur_tid_is_ltr: bRefOfCurTidIsLtr,
         }
@@ -850,11 +879,22 @@ impl sWelsEncCtx {
     pub fn vaa_ref_list_and_ltr_mut(
         &mut self,
         kiDid: usize,
-    ) -> (Option<&mut SVAAFrameInfo>, Option<&mut SRefList>, &mut SLTRState) {
-        let sWelsEncCtx { pVaa, ppRefPicListExt, pLtr, .. } = self;
+    ) -> (
+        Option<&mut SVAAFrameInfo>,
+        Option<&mut SRefList>,
+        &mut SLTRState,
+    ) {
+        let sWelsEncCtx {
+            pVaa,
+            ppRefPicListExt,
+            pLtr,
+            ..
+        } = self;
         (
             pVaa.as_deref_mut().map(VaaBlock::base_mut),
-            ppRefPicListExt.get_mut(kiDid).and_then(|s| s.as_deref_mut()),
+            ppRefPicListExt
+                .get_mut(kiDid)
+                .and_then(|s| s.as_deref_mut()),
             &mut pLtr[kiDid],
         )
     }
@@ -869,8 +909,19 @@ impl sWelsEncCtx {
     #[inline]
     pub fn param_and_paraset_arrays_mut(
         &mut self,
-    ) -> (&mut SWelsSvcCodingParam, &mut [SWelsSPS], &mut [SSubsetSps], &mut [SWelsPPS]) {
-        let sWelsEncCtx { pSvcParam, pSpsArray, pSubsetArray, pPPSArray, .. } = self;
+    ) -> (
+        &mut SWelsSvcCodingParam,
+        &mut [SWelsSPS],
+        &mut [SSubsetSps],
+        &mut [SWelsPPS],
+    ) {
+        let sWelsEncCtx {
+            pSvcParam,
+            pSpsArray,
+            pSubsetArray,
+            pPPSArray,
+            ..
+        } = self;
         (
             pSvcParam
                 .as_deref_mut()
@@ -888,11 +939,12 @@ impl sWelsEncCtx {
     /// `sSpatialLayers[did]` / `sDependencyLayers[did]` config, then write the
     /// layer's rate-control state from it.
     #[inline]
-    pub fn param_and_rc_at_mut(
-        &mut self,
-        kiDid: usize,
-    ) -> (&SWelsSvcCodingParam, &mut SWelsSvcRc) {
-        let sWelsEncCtx { pSvcParam, pWelsSvcRc, .. } = self;
+    pub fn param_and_rc_at_mut(&mut self, kiDid: usize) -> (&SWelsSvcCodingParam, &mut SWelsSvcRc) {
+        let sWelsEncCtx {
+            pSvcParam,
+            pWelsSvcRc,
+            ..
+        } = self;
         (
             pSvcParam
                 .as_deref()
@@ -912,8 +964,13 @@ impl sWelsEncCtx {
         &mut self,
         kiDid: usize,
     ) -> (Option<&mut SVAAFrameInfo>, &mut SWelsSvcRc) {
-        let sWelsEncCtx { pVaa, pWelsSvcRc, .. } = self;
-        (pVaa.as_deref_mut().map(VaaBlock::base_mut), &mut pWelsSvcRc[kiDid])
+        let sWelsEncCtx {
+            pVaa, pWelsSvcRc, ..
+        } = self;
+        (
+            pVaa.as_deref_mut().map(VaaBlock::base_mut),
+            &mut pWelsSvcRc[kiDid],
+        )
     }
 
     /// The rate-control state of spatial layer `kiDid` — `pWelsSvcRc[did]`.
@@ -946,7 +1003,12 @@ impl sWelsEncCtx {
         &mut self,
         kiDid: usize,
     ) -> (&mut SWelsSvcRc, Option<&mut SDqLayer>) {
-        let sWelsEncCtx { pWelsSvcRc, iCurDqLayer, ppDqLayerList, .. } = self;
+        let sWelsEncCtx {
+            pWelsSvcRc,
+            iCurDqLayer,
+            ppDqLayerList,
+            ..
+        } = self;
         let layer = iCurDqLayer
             .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
             .and_then(|l| l.as_deref_mut());
@@ -1169,7 +1231,6 @@ impl sWelsEncCtx {
         }
     }
 
-
     /// The screen-content frame complexity.
     ///
     /// Under `SCREEN_CONTENT_REAL_TIME` the block is the `Screen` arm and this
@@ -1180,7 +1241,6 @@ impl sWelsEncCtx {
         self.vaa_ext_ref()
             .map_or(0, |ext| ext.sComplexityScreenParam.iFrameComplexity)
     }
-
 
     /// The screen-content extension of the video-analysis block, answering the
     /// [`VaaBlock::Screen`] arm.
@@ -1348,7 +1408,8 @@ pub struct sWelsEncCtx {
     /// vector.
     pub sPSOVector: SParaSetOffset,
     pub uiStartTimestamp: i64,
-    pub sEncoderStatistics: [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics; MAX_DEPENDENCY_LAYER],
+    pub sEncoderStatistics:
+        [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics; MAX_DEPENDENCY_LAYER],
     pub iStatisticsLogInterval: i32,
     pub iLastStatisticsLogTs: i64,
     pub iEncoderError: i32,
@@ -1384,9 +1445,9 @@ impl sWelsEncCtx {
 
             // ---- allocated by RequestMemorySvc; null == not allocated yet -------
             pSvcParam: None,
-            iMvRange: 0,                    // set by InitMvRange from the level limit
+            iMvRange: 0, // set by InitMvRange from the level limit
             pMvdCostTable: Vec::new(),
-            iMvdCostTableSize: 0,           // paired with the table above
+            iMvdCostTableSize: 0, // paired with the table above
             iMvdCostTableStride: 0,
             pStrideTab: None,
             pFuncList: Box::new(SWelsFuncPtrList::default()),
@@ -1425,9 +1486,9 @@ impl sWelsEncCtx {
             // Per-dependency-layer memory of the last NAL's priority, read back by
             // `LoadBackFrameNum` when a frame is dropped. Lowest == nothing sent yet.
             eLastNalPriority: [EWelsNalRefIdc::NRI_PRI_LOWEST; MAX_DEPENDENCY_LAYER],
-            iNumRef0: 0,                    // the live length of pRefList0
-            uiDependencyId: 0,              // the base layer, and a real starting value
-            uiTemporalId: 0,                // likewise: T0
+            iNumRef0: 0,       // the live length of pRefList0
+            uiDependencyId: 0, // the base layer, and a real starting value
+            uiTemporalId: 0,   // likewise: T0
             bNeedPrefixNalFlag: false,
 
             // ---- rate control ---------------------------------------------------
@@ -1440,7 +1501,7 @@ impl sWelsEncCtx {
             iCheckWindowInterval: 0,
             iCheckWindowIntervalShift: 0,
             bCheckWindowShiftResetFlag: false,
-            iGlobalQp: 0,                   // overwritten by WelsRcPictureInitGom etc.
+            iGlobalQp: 0, // overwritten by WelsRcPictureInitGom etc.
 
             // ---- preprocessing --------------------------------------------------
             pVaa: None,
@@ -1463,8 +1524,8 @@ impl sWelsEncCtx {
             // ---- output bitstream ------------------------------------------------
             pOut: None,
             pFrameBs: Vec::new(),
-            iFrameBsSize: 0,                // paired with pFrameBs
-            iPosBsBuffer: 0,                // the write cursor into it, rewound per AU
+            iFrameBsSize: 0, // paired with pFrameBs
+            iPosBsBuffer: 0, // the write cursor into it, rewound per AU
 
             // The spatial pool's per-layer index map. `SSpatialPicIndex::default()`
             // is `{ pSrc: None, iDid: 0 }`.
@@ -1474,7 +1535,7 @@ impl sWelsEncCtx {
             // reference exists at all.
             bRefOfCurTidIsLtr: [[false; MAX_TEMPORAL_LEVEL]; MAX_DEPENDENCY_LAYER],
             iMaxSliceCount: 0,
-            iActiveThreadsNum: 0,           // set from iMultipleThreadIdc
+            iActiveThreadsNum: 0, // set from iMultipleThreadIdc
 
             pDqIdcMap: Vec::new(),
 
@@ -1484,16 +1545,16 @@ impl sWelsEncCtx {
             // out yet".
             sPSOVector: SParaSetOffset::default(),
 
-
             // ---- statistics and timestamps ---------------------------------------
             // Timestamps are absolute and in the caller's clock, so zero is a real
             // "not yet stamped" and every consumer compares against the previous one.
             uiStartTimestamp: 0,
             sEncoderStatistics:
-                [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics::default(); MAX_DEPENDENCY_LAYER],
-            iStatisticsLogInterval: 0,      // set from the param's log interval
+                [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics::default();
+                    MAX_DEPENDENCY_LAYER],
+            iStatisticsLogInterval: 0, // set from the param's log interval
             iLastStatisticsLogTs: 0,
-            iEncoderError: 0,               // == ENC_RETURN_SUCCESS, and that matters
+            iEncoderError: 0, // == ENC_RETURN_SUCCESS, and that matters
             bDeliveryFlag: false,
 
             // The CABAC probability tables. Zero is `{ MPS = 0, state = 0 }`, which is
@@ -1528,7 +1589,6 @@ pub fn InitPic(
     kiWidth: i32,
     kiHeight: i32,
 ) -> i32 {
-
     if kiWidth == 0 || kiHeight == 0 {
         return 1;
     }
@@ -1613,10 +1673,7 @@ pub fn InitPic(
 }
 
 /// Wires background detection function pointers into the encoder function table.
-pub fn WelsInitBGDFunc(
-    pFuncList: &mut SWelsFuncPtrList,
-    kbEnableBackgroundDetection: bool,
-) {
+pub fn WelsInitBGDFunc(pFuncList: &mut SWelsFuncPtrList, kbEnableBackgroundDetection: bool) {
     if kbEnableBackgroundDetection {
         pFuncList.pfInterMdBackgroundDecision = WelsMdInterJudgeBGDPskip;
         pFuncList.pfMdBackgroundInfoUpdate = WelsMdUpdateBGDInfo;
@@ -1627,10 +1684,7 @@ pub fn WelsInitBGDFunc(
 }
 
 /// Initializes encoder compute kernel function pointers.
-pub fn InitFunctionPointers(
-    pEncCtx: &mut sWelsEncCtx,
-    _uiCpuFlag: u32,
-) -> i32 {
+pub fn InitFunctionPointers(pEncCtx: &mut sWelsEncCtx, _uiCpuFlag: u32) -> i32 {
     if pEncCtx.param_opt().is_none() {
         return ENC_RETURN_SUCCESS;
     }
@@ -1642,8 +1696,7 @@ pub fn InitFunctionPointers(
     let keSpsPpsIdStrategy = pEncCtx.param().eSpsPpsIdStrategy;
     let kbSimulcastAVC = pEncCtx.param().bSimulcastAVC;
     let kiSpatialLayerNum = pEncCtx.param().iSpatialLayerNum;
-    let bScreenContent = pEncCtx.param().iUsageType
-        == EUsageType::SCREEN_CONTENT_REAL_TIME;
+    let bScreenContent = pEncCtx.param().iUsageType == EUsageType::SCREEN_CONTENT_REAL_TIME;
     let fl: &mut SWelsFuncPtrList = pEncCtx.func_list_mut();
 
     // `encoder.cpp:193` installed `sExpandPicFunc` here. The call it fed now names
@@ -1663,8 +1716,7 @@ pub fn InitFunctionPointers(
         &mut *fl,
         bScreenContent
             && kbEnableSceneChangeDetect
-            && kiComplexityMode
-                < (crate::api::codec_api::ECOMPLEXITY_MODE::HIGH_COMPLEXITY as i32),
+            && kiComplexityMode < (crate::api::codec_api::ECOMPLEXITY_MODE::HIGH_COMPLEXITY as i32),
     );
 
     // for pfGetVarianceFromIntraVaa function ptr adaptive by CPU features
@@ -1683,15 +1735,9 @@ pub fn InitFunctionPointers(
 
     DeblockingInit(&mut fl.pfDeblocking, _uiCpuFlag as i32);
 
-    crate::encoder::rc::WelsRcInitFuncPointers(
-        &mut fl.pfRc,
-        kiRCMode,
-    );
+    crate::encoder::rc::WelsRcInitFuncPointers(&mut fl.pfRc, kiRCMode);
 
-    InitFillNeighborCacheInterFunc(
-        &mut *fl,
-        kbEnableBackgroundDetection as i32,
-    );
+    InitFillNeighborCacheInterFunc(&mut *fl, kbEnableBackgroundDetection as i32);
 
     // encoder.cpp:227. Only CONSTANT_ID and INCREASING_ID are ported, so this returns
     // `None` — and hence ENC_RETURN_MEMALLOCERR — for the three listing strategies
@@ -1701,12 +1747,11 @@ pub fn InitFunctionPointers(
     // The assignment drops whatever was installed before, which is the only way this
     // can be reached twice: `WelsUninitEncoderExt` runs between two inits and takes
     // the field.
-    fl.pParametersetStrategy =
-        crate::encoder::paraset_strategy::CreateParametersetStrategy(
-            keSpsPpsIdStrategy,
-            kbSimulcastAVC,
-            kiSpatialLayerNum,
-        );
+    fl.pParametersetStrategy = crate::encoder::paraset_strategy::CreateParametersetStrategy(
+        keSpsPpsIdStrategy,
+        kbSimulcastAVC,
+        kiSpatialLayerNum,
+    );
     if fl.pParametersetStrategy.is_none() {
         return ENC_RETURN_MEMALLOCERR;
     }
@@ -1720,11 +1765,7 @@ pub fn InitFunctionPointers(
 /// The SSE2/SSE4.2 `CavlcParamCal` variants are x86-only and this target reports
 /// no CPU features (`WelsCPUFeatureDetect` returns 0), so only the `_c` kernel is
 /// ever assigned.
-fn InitCoeffFunc(
-    pFuncList: &mut SWelsFuncPtrList,
-    _uiCpuFlag: u32,
-    iEntropyCodingModeFlag: i32,
-) {
+fn InitCoeffFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32, iEntropyCodingModeFlag: i32) {
     pFuncList.pfCavlcParamCal = CavlcParamCal_c;
     pFuncList.eEntropyCoder = EntropyCoder::from_flag(iEntropyCodingModeFlag);
 }
@@ -1800,11 +1841,7 @@ pub fn InitBitStream(pEncCtx: &mut sWelsEncCtx) {
 }
 
 /// Configures slice types, NAL headers, and Picture Order Count (POC) for the frame.
-pub fn InitFrameCoding(
-    pEncCtx: &mut sWelsEncCtx,
-    keFrameType: EVideoFrameType,
-    kiDidx: i32,
-) {
+pub fn InitFrameCoding(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFrameType, kiDidx: i32) {
     if pEncCtx.param_opt().is_none() {
         return;
     }
@@ -1880,18 +1917,13 @@ pub fn DecideFrameType(
         let pVaa = pEncCtx.vaa();
         let vaa_idr = pVaa.is_some_and(|v| v.bIdrPeriodFlag);
 
-        if !kbSceneChangeDetect
-            || vaa_idr
-            || ((kiSpatialNum as i32) < kiSpatialLayerNum)
-        {
+        if !kbSceneChangeDetect || vaa_idr || ((kiSpatialNum as i32) < kiSpatialLayerNum) {
             bSceneChangeFlag = false;
         } else if let Some(pVaa) = pVaa {
             bSceneChangeFlag = pVaa.bSceneChangeFlag;
         }
 
-        if vaa_idr
-            || kbEncCurFrmAsIdrFlag
-            || (!kbEnableLtr && bSceneChangeFlag && !bSkipFrameFlag)
+        if vaa_idr || kbEncCurFrmAsIdrFlag || (!kbEnableLtr && bSceneChangeFlag && !bSkipFrameFlag)
         {
             iFrameType = EVideoFrameType::videoFrameTypeIDR;
         } else if kbEnableLtr
@@ -1983,7 +2015,10 @@ mod tests {
         tab.i16_region_mut(0, 32)[0] = 3;
         tab.i16_region_mut(32, 32)[0] = 4;
 
-        assert_eq!(tab.DecBlockOffsets(0, 1).expect("layer 0's dec table")[0], 0x3C3C);
+        assert_eq!(
+            tab.DecBlockOffsets(0, 1).expect("layer 0's dec table")[0],
+            0x3C3C
+        );
         assert_eq!(tab.EncBlockOffsets(0).expect("layer 0's enc table")[0], 7);
         let (x, y) = tab.MbIndexXY(0, 32).expect("layer 0's coordinate tables");
         assert_eq!((x[0], y[0]), (3, 4));
@@ -1993,7 +2028,10 @@ mod tests {
             0x3C3C,
             "two layers, one region"
         );
-        assert!(tab.MbIndexXY(3, 32).is_none(), "None answers the null the field used to hold");
+        assert!(
+            tab.MbIndexXY(3, 32).is_none(),
+            "None answers the null the field used to hold"
+        );
         assert!(tab.EncBlockOffsets(3).is_none());
     }
 
@@ -2014,9 +2052,7 @@ mod tests {
         ctx.pVaa = Some(Box::new(VaaBlock::Base(SVAAFrameInfo::default())));
         ctx.pSvcParam = Some(Box::new(SWelsSvcCodingParam::default()));
         ctx.ppRefPicListExt = vec![Some(SRefList::new())];
-        ctx.ppDqLayerList = vec![Some(Box::new(
-            SDqLayer::default(),
-        ))];
+        ctx.ppDqLayerList = vec![Some(Box::new(SDqLayer::default()))];
 
         let p: *mut sWelsEncCtx = &mut *ctx;
 
@@ -2028,11 +2064,7 @@ mod tests {
         // And the whole set once more, interleaved: every cursor taken first, then
         // every one used — which is the frame loop's actual shape, and the case a
         // per-accessor test cannot reach.
-        let held: Vec<*mut u8> = unsafe {
-            vec![
-                (*p).vaa_ptr().cast(), (*p).frame_bs().cast(),
-            ]
-        };
+        let held: Vec<*mut u8> = unsafe { vec![(*p).vaa_ptr().cast(), (*p).frame_bs().cast()] };
         // `frame_bs` is null here (no bitstream in this fixture), which is itself
         // the assertion that empty still answers null after everything above. It is
         // the **last** entry, and the two counts below are derived from the vector
@@ -2088,13 +2120,14 @@ mod tests {
         assert_eq!(ctx.pFrameBs.len(), ctx.iFrameBsSize as usize);
     }
 
-    
-
     /// The context-level read path, before and after the tables exist.
     #[test]
     fn ctx_stride_tables_answer_none_before_alloc_and_share_regions_after() {
         let mut ctx = Box::new(sWelsEncCtx::new());
-        assert!(ctx.pStrideTab.is_none(), "no tables before AllocStrideTables");
+        assert!(
+            ctx.pStrideTab.is_none(),
+            "no tables before AllocStrideTables"
+        );
 
         let mut tab = SStrideTables::new(2, 0);
         tab.pStrideEncBlockOffset[0] = Some(0);
@@ -2107,7 +2140,11 @@ mod tests {
         let (first, other) = (kpTab.EncBlockOffsets(0), kpTab.EncBlockOffsets(1));
         let again = kpTab.EncBlockOffsets(0);
         assert_eq!(
-            (first.expect("layer 0")[0], other.expect("layer 1")[0], again.expect("layer 0")[0]),
+            (
+                first.expect("layer 0")[0],
+                other.expect("layer 1")[0],
+                again.expect("layer 0")[0]
+            ),
             (11, 22, 11),
             "three reads, two regions, and the first answer still live at the third"
         );
@@ -2124,12 +2161,7 @@ mod tests {
     #[test]
     fn test_init_pic() {
         let mut src_pic = SSourcePicture::default();
-        let ret = InitPic(
-            &mut src_pic,
-            VideoFormat::videoFormatI420 as i32,
-            640,
-            480,
-        );
+        let ret = InitPic(&mut src_pic, VideoFormat::videoFormatI420 as i32, 640, 480);
         assert_eq!(ret, 0);
         assert_eq!(src_pic.iPicWidth, 640);
         assert_eq!(src_pic.iPicHeight, 480);
@@ -2137,7 +2169,6 @@ mod tests {
         assert_eq!(src_pic.iStride[1], 320);
         assert_eq!(src_pic.iStride[2], 320);
     }
-
 
     /// `sWelsEncCtx::new()` reproduces the zeroed shell it replaces, byte for
     /// byte, and every difference is attributed to a *named field* before it is
@@ -2235,26 +2266,77 @@ mod tests {
             };
         }
         let extents: Vec<(&str, usize, usize)> = extents![
-        sLogCtx, pSvcParam, iMvRange, pMvdCostTable,
-        iMvdCostTableSize, iMvdCostTableStride, pStrideTab, pFuncList,
-        pSliceThreading, eRefStrategy, pEncPic,
-        pDecPic, pRefPic, iCurDqLayer, ppDqLayerList,
-        ppRefPicListExt, pRefList0, pLtr, bCurFrameMarkedAsSceneLtr,
-        eSliceType, eNalType, eNalPriority, eLastNalPriority,
-        iNumRef0, uiDependencyId, uiTemporalId, bNeedPrefixNalFlag,
-        pWelsSvcRc, bCheckWindowStatusRefreshFlag, iCheckWindowStartTs, iCheckWindowCurrentTs,
-        iCheckWindowInterval, iCheckWindowIntervalShift, bCheckWindowShiftResetFlag, iGlobalQp,
-        pVaa, pVpp, pSpsArray, iSps,
-        pPPSArray, iPps, pSubsetArray, iSpsNum,
-        iSubsetSpsNum, iPpsNum, pOut,
-        pFrameBs, iFrameBsSize, iPosBsBuffer, sSpatialIndexMap,
-        iSliceBufferSize, bRefOfCurTidIsLtr, iMaxSliceCount, iActiveThreadsNum,
-        pDqIdcMap, sPSOVector,
-        uiStartTimestamp, sEncoderStatistics, iStatisticsLogInterval, iLastStatisticsLogTs,
-        iEncoderError, bDeliveryFlag, sWelsCabacContexts,
-        uiLastTimestamp, pDynamicBsBuffer,
+            sLogCtx,
+            pSvcParam,
+            iMvRange,
+            pMvdCostTable,
+            iMvdCostTableSize,
+            iMvdCostTableStride,
+            pStrideTab,
+            pFuncList,
+            pSliceThreading,
+            eRefStrategy,
+            pEncPic,
+            pDecPic,
+            pRefPic,
+            iCurDqLayer,
+            ppDqLayerList,
+            ppRefPicListExt,
+            pRefList0,
+            pLtr,
+            bCurFrameMarkedAsSceneLtr,
+            eSliceType,
+            eNalType,
+            eNalPriority,
+            eLastNalPriority,
+            iNumRef0,
+            uiDependencyId,
+            uiTemporalId,
+            bNeedPrefixNalFlag,
+            pWelsSvcRc,
+            bCheckWindowStatusRefreshFlag,
+            iCheckWindowStartTs,
+            iCheckWindowCurrentTs,
+            iCheckWindowInterval,
+            iCheckWindowIntervalShift,
+            bCheckWindowShiftResetFlag,
+            iGlobalQp,
+            pVaa,
+            pVpp,
+            pSpsArray,
+            iSps,
+            pPPSArray,
+            iPps,
+            pSubsetArray,
+            iSpsNum,
+            iSubsetSpsNum,
+            iPpsNum,
+            pOut,
+            pFrameBs,
+            iFrameBsSize,
+            iPosBsBuffer,
+            sSpatialIndexMap,
+            iSliceBufferSize,
+            bRefOfCurTidIsLtr,
+            iMaxSliceCount,
+            iActiveThreadsNum,
+            pDqIdcMap,
+            sPSOVector,
+            uiStartTimestamp,
+            sEncoderStatistics,
+            iStatisticsLogInterval,
+            iLastStatisticsLogTs,
+            iEncoderError,
+            bDeliveryFlag,
+            sWelsCabacContexts,
+            uiLastTimestamp,
+            pDynamicBsBuffer,
         ];
-        assert_eq!(extents.len(), 65, "a field was added or removed without updating this list");
+        assert_eq!(
+            extents.len(),
+            65,
+            "a field was added or removed without updating this list"
+        );
 
         let b = shell.as_ptr().cast::<u8>();
 
@@ -2273,8 +2355,16 @@ mod tests {
         // The zeroed shell has no image of these; `new()` builds the empty
         // container.
         const OWNED: [&str; 12] = [
-            "pSpsArray", "pSubsetArray", "pPPSArray", "pDqIdcMap", "pFrameBs", "pLtr",
-            "pWelsSvcRc", "ppRefPicListExt", "ppDqLayerList", "pMvdCostTable",
+            "pSpsArray",
+            "pSubsetArray",
+            "pPPSArray",
+            "pDqIdcMap",
+            "pFrameBs",
+            "pLtr",
+            "pWelsSvcRc",
+            "ppRefPicListExt",
+            "ppDqLayerList",
+            "pMvdCostTable",
             // `pDynamicBsBuffer` is the only member here that is an *array* of
             // owned containers, so the claim below is per element: four empty
             // `Vec`s.
@@ -2287,16 +2377,46 @@ mod tests {
         ];
         // `pVaa` is `Option<Box<_>>`: its `None` is the null pointer and defines all
         // eight of its bytes, so it stays in tier 1 with `pStrideTab`.
-        assert!(built.pSpsArray.is_empty(), "new(): no SPS array is allocated yet");
-        assert!(built.pSubsetArray.is_empty(), "new(): no subset SPS array is allocated yet");
-        assert!(built.pPPSArray.is_empty(), "new(): no PPS array is allocated yet");
-        assert!(built.pDqIdcMap.is_empty(), "new(): no dq-idc map is allocated yet");
-        assert!(built.pFrameBs.is_empty(), "new(): no frame bitstream is allocated yet");
-        assert!(built.pLtr.is_empty(), "new(): no LTR state array is allocated yet");
-        assert!(built.pWelsSvcRc.is_empty(), "new(): no rate-control state is allocated yet");
-        assert!(built.ppRefPicListExt.is_empty(), "new(): no reference lists are allocated yet");
-        assert!(built.ppDqLayerList.is_empty(), "new(): no DQ layers are allocated yet");
-        assert!(built.pMvdCostTable.is_empty(), "new(): no MVD cost table is allocated yet");
+        assert!(
+            built.pSpsArray.is_empty(),
+            "new(): no SPS array is allocated yet"
+        );
+        assert!(
+            built.pSubsetArray.is_empty(),
+            "new(): no subset SPS array is allocated yet"
+        );
+        assert!(
+            built.pPPSArray.is_empty(),
+            "new(): no PPS array is allocated yet"
+        );
+        assert!(
+            built.pDqIdcMap.is_empty(),
+            "new(): no dq-idc map is allocated yet"
+        );
+        assert!(
+            built.pFrameBs.is_empty(),
+            "new(): no frame bitstream is allocated yet"
+        );
+        assert!(
+            built.pLtr.is_empty(),
+            "new(): no LTR state array is allocated yet"
+        );
+        assert!(
+            built.pWelsSvcRc.is_empty(),
+            "new(): no rate-control state is allocated yet"
+        );
+        assert!(
+            built.ppRefPicListExt.is_empty(),
+            "new(): no reference lists are allocated yet"
+        );
+        assert!(
+            built.ppDqLayerList.is_empty(),
+            "new(): no DQ layers are allocated yet"
+        );
+        assert!(
+            built.pMvdCostTable.is_empty(),
+            "new(): no MVD cost table is allocated yet"
+        );
         assert!(
             built.pDynamicBsBuffer.iter().all(Vec::is_empty),
             "new(): no dynamic-slice CABAC restore buffers are allocated yet"
@@ -2310,13 +2430,31 @@ mod tests {
         // Field for field the claim is `SWelsFuncPtrList::default()`'s own
         // definition.
         let fl = &*built.pFuncList;
-        assert!(fl.pfGetLumaI16x16Pred.iter().all(Option::is_none), "new(): no I16x16 predictors");
-        assert!(fl.pfGetLumaI4x4Pred.iter().all(Option::is_none), "new(): no I4x4 predictors");
-        assert!(fl.pfGetChromaPred.iter().all(Option::is_none), "new(): no chroma predictors");
-        assert!(fl.pfMotionSearch.iter().all(Option::is_none), "new(): no motion search");
-        assert!(fl.sMeFuncs.pfSearchMethod.iter().all(Option::is_none), "new(): no search method");
         assert!(
-            fl.sSampleDealingFuncs.pfSampleSad.iter().all(Option::is_none)
+            fl.pfGetLumaI16x16Pred.iter().all(Option::is_none),
+            "new(): no I16x16 predictors"
+        );
+        assert!(
+            fl.pfGetLumaI4x4Pred.iter().all(Option::is_none),
+            "new(): no I4x4 predictors"
+        );
+        assert!(
+            fl.pfGetChromaPred.iter().all(Option::is_none),
+            "new(): no chroma predictors"
+        );
+        assert!(
+            fl.pfMotionSearch.iter().all(Option::is_none),
+            "new(): no motion search"
+        );
+        assert!(
+            fl.sMeFuncs.pfSearchMethod.iter().all(Option::is_none),
+            "new(): no search method"
+        );
+        assert!(
+            fl.sSampleDealingFuncs
+                .pfSampleSad
+                .iter()
+                .all(Option::is_none)
                 && fl.sSampleDealingFuncs.pfMdCost == crate::encoder::md::CostFamily::Unset
                 && fl.sSampleDealingFuncs.pfMeCost == crate::encoder::md::CostFamily::Unset,
             "new(): no sample-dealing kernels, and neither cost family is selected"
@@ -2326,22 +2464,36 @@ mod tests {
             "new(): no deblocking kernels"
         );
         // The two discriminants whose zero *is* a declared variant.
-        assert_eq!(fl.eEntropyCoder, EntropyCoder::Cavlc, "new(): the memset's entropy coder");
+        assert_eq!(
+            fl.eEntropyCoder,
+            EntropyCoder::Cavlc,
+            "new(): the memset's entropy coder"
+        );
         assert_eq!(
             fl.pfRc.eInstalledMode,
             crate::api::codec_api::RC_MODES::RC_QUALITY_MODE,
             "new(): the memset's rate-control mode"
         );
-        assert!(fl.pParametersetStrategy.is_none(), "new(): no paraset strategy is installed yet");
+        assert!(
+            fl.pParametersetStrategy.is_none(),
+            "new(): no paraset strategy is installed yet"
+        );
 
         // ---- tier 2: excluded by name and asserted by value --------------------
         const BY_VALUE: [&str; 10] = [
             // `Option` with a niche: `None` leaves pool::Id's generation half undefined
-            "pEncPic", "pDecPic", "pRefPic", "pRefList0", "sSpatialIndexMap",
+            "pEncPic",
+            "pDecPic",
+            "pRefPic",
+            "pRefList0",
+            "sSpatialIndexMap",
             // `Option` without one: `None` writes the tag and leaves the payload byte
-            "iCurDqLayer", "iSps", "iPps",
+            "iCurDqLayer",
+            "iSps",
+            "iPps",
             // interior repr(C) padding a struct literal does not write
-            "sPSOVector", "sEncoderStatistics",
+            "sPSOVector",
+            "sEncoderStatistics",
         ];
 
         let paraset_is_zero = |p: &SParaSetOffset| {
@@ -2356,9 +2508,16 @@ mod tests {
         };
         let stats_are_zero = |s: &crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics| {
             (s.uiWidth, s.uiHeight, s.uiBitRate, s.uiAverageFrameQP) == (0, 0, 0, 0)
-                && (s.fAverageFrameSpeedInMs, s.fAverageFrameRate, s.fLatestFrameRate)
-                    == (0.0, 0.0, 0.0)
-                && (s.uiInputFrameCount, s.uiSkippedFrameCount, s.uiResolutionChangeTimes) == (0, 0, 0)
+                && (
+                    s.fAverageFrameSpeedInMs,
+                    s.fAverageFrameRate,
+                    s.fLatestFrameRate,
+                ) == (0.0, 0.0, 0.0)
+                && (
+                    s.uiInputFrameCount,
+                    s.uiSkippedFrameCount,
+                    s.uiResolutionChangeTimes,
+                ) == (0, 0, 0)
                 && (s.uiIDRReqNum, s.uiIDRSentNum, s.uiLTRSentNum) == (0, 0, 0)
                 && (s.iStatisticsTs, s.iTotalEncodedBytes) == (0, 0)
                 && (s.iLastStatisticsBytes, s.iLastStatisticsFrameCount) == (0, 0)
@@ -2385,7 +2544,10 @@ mod tests {
             }),
             (
                 "sSpatialIndexMap",
-                built.sSpatialIndexMap.iter().all(|e| e.pSrc.is_none() && e.iDid == 0),
+                built
+                    .sSpatialIndexMap
+                    .iter()
+                    .all(|e| e.pSrc.is_none() && e.iDid == 0),
                 {
                     let v: [SSpatialPicIndex; MAX_DEPENDENCY_LAYER] =
                         shell_field!(sSpatialIndexMap);
@@ -2393,8 +2555,7 @@ mod tests {
                 },
             ),
             ("iCurDqLayer", built.iCurDqLayer.is_none(), {
-                let v: Option<LayerIdx> =
-                    shell_field!(iCurDqLayer);
+                let v: Option<LayerIdx> = shell_field!(iCurDqLayer);
                 v.is_none()
             }),
             ("iSps", built.iSps.is_none(), {
@@ -2420,7 +2581,10 @@ mod tests {
             ),
         ];
         for (name, in_new, in_shell) in pairs {
-            assert!(in_new, "new(): {name} is not the value the memset image holds");
+            assert!(
+                in_new,
+                "new(): {name} is not the value the memset image holds"
+            );
             assert!(in_shell, "shell: {name} is not what this test claims it is");
         }
 
@@ -2501,7 +2665,8 @@ mod tests {
         ctx.iSps = Some(SpsId(0));
         ctx.eLastNalPriority[0] = EWelsNalRefIdc::NRI_PRI_HIGH;
 
-        let frame_num = |c: &sWelsEncCtx| c.pSvcParam.as_ref().unwrap().sDependencyLayers[0].iFrameNum;
+        let frame_num =
+            |c: &sWelsEncCtx| c.pSvcParam.as_ref().unwrap().sDependencyLayers[0].iFrameNum;
 
         UpdateFrameNum(&mut ctx, 0);
         assert_eq!(frame_num(&ctx), 1);
@@ -2543,7 +2708,10 @@ mod tests {
         // `new()` asserts it is all-`None` above, and `WelsInitIntraPredFuncs` is
         // the first call in the chain.
         assert!(
-            ctx.pFuncList.pfGetLumaI16x16Pred.iter().any(Option::is_some),
+            ctx.pFuncList
+                .pfGetLumaI16x16Pred
+                .iter()
+                .any(Option::is_some),
             "InitFunctionPointers must walk its installer chain"
         );
         // pfInterMd is deliberately NOT asserted: C++ InitFunctionPointers
@@ -2563,7 +2731,10 @@ mod tests {
 }
 
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3};
+pub use crate::common::cpu_core::{
+    WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON,
+    WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3,
+};
 use crate::common::mc::InitMcFunc;
 use crate::encoder::deblocking::DeblockingInit;
 use crate::encoder::decode_mb_aux::WelsInitReconstructionFuncs;
@@ -2576,14 +2747,6 @@ use crate::encoder::svc_mode_decision::WelsInitSCDPskipFunc;
 use crate::encoder::svc_motion_estimate::WelsInitMeFunc;
 use crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c;
 use crate::encoder::vlc_encoder::BsWriter;
-
-
-
-
-
-
-
-
 
 #[cfg(test)]
 mod with_vpp_provenance {
@@ -2624,16 +2787,27 @@ mod with_vpp_provenance {
             .next()
             .expect("one slot");
         let view = RoPicView::build(
-            ctx.pVpp.as_ref().expect("just installed").m_pSpatialPicPool.get(id),
+            ctx.pVpp
+                .as_ref()
+                .expect("just installed")
+                .m_pSpatialPicPool
+                .get(id),
         );
 
         // The take-and-restore. If this retag popped the view's captured
         // pointers, the reads below are through a dead tag.
         with_vpp(&mut ctx, |pVpp, _pCtx| {
-            assert!(!pVpp.m_pSpatialPicPool.ids().next().is_none(), "the pool survives the move");
+            assert!(
+                !pVpp.m_pSpatialPicPool.ids().next().is_none(),
+                "the pool survives the move"
+            );
         });
 
-        assert_eq!(view.plane(0).at(0, 0), 0x5A, "the view still reads its own plane");
+        assert_eq!(
+            view.plane(0).at(0, 0),
+            0x5A,
+            "the view still reads its own plane"
+        );
         assert_eq!(view.plane(0).at(3, 2), 0xC3);
 
         // And the slot is restored, which is the property the closure form exists
@@ -2669,9 +2843,7 @@ mod with_vpp_provenance {
         // then `addr_of_mut!` of the pool field — a pointer *inside* the
         // `CWelsPreProcess` allocation rather than into a plane's own `Vec`.
         let pPool: *mut SrcPicPool = unsafe {
-            let pVpp = std::ptr::read(
-                std::ptr::addr_of!(ctx.pVpp) as *const *mut CWelsPreProcess,
-            );
+            let pVpp = std::ptr::read(std::ptr::addr_of!(ctx.pVpp) as *const *mut CWelsPreProcess);
             std::ptr::addr_of_mut!((*pVpp).m_pSpatialPicPool)
         };
 
@@ -2680,6 +2852,9 @@ mod with_vpp_provenance {
         // The read Miri must refuse: the move above retagged the allocation this
         // pointer names, so its tag is gone from that stack.
         let n = unsafe { (*pPool).ids().count() };
-        assert_eq!(n, 1, "reached only if the tag survived — under Miri it must not");
+        assert_eq!(
+            n, 1,
+            "reached only if the tag survived — under Miri it must not"
+        );
     }
 }

@@ -12,11 +12,7 @@
 
 #[inline(always)]
 pub fn WELS_ABS(iX: i32) -> i32 {
-    if iX > 0 {
-        iX
-    } else {
-        -iX
-    }
+    if iX > 0 { iX } else { -iX }
 }
 
 #[inline(always)]
@@ -173,17 +169,33 @@ pub fn deblock_luma_eq4_scalar(
                 let deta_q2q0 = (q2 - q0).abs() < beta;
                 if deta_p2p0 {
                     let p3 = pix.at(b - 4 * step_x, 0) as i32;
-                    pix.set(b - step_x, 0, ((p2 + (p1 * 2) + (p0 * 2) + (q0 * 2) + q1 + 4) >> 3) as u8);
+                    pix.set(
+                        b - step_x,
+                        0,
+                        ((p2 + (p1 * 2) + (p0 * 2) + (q0 * 2) + q1 + 4) >> 3) as u8,
+                    );
                     pix.set(b - 2 * step_x, 0, ((p2 + p1 + p0 + q0 + 2) >> 2) as u8);
-                    pix.set(b - 3 * step_x, 0, (((p3 * 2) + p2 + (p2 * 2) + p1 + p0 + q0 + 4) >> 3) as u8);
+                    pix.set(
+                        b - 3 * step_x,
+                        0,
+                        (((p3 * 2) + p2 + (p2 * 2) + p1 + p0 + q0 + 4) >> 3) as u8,
+                    );
                 } else {
                     pix.set(b - step_x, 0, (((p1 * 2) + p0 + q1 + 2) >> 2) as u8);
                 }
                 if deta_q2q0 {
                     let q3 = pix.at(b + 3 * step_x, 0) as i32;
-                    pix.set(b, 0, ((p1 + (p0 * 2) + (q0 * 2) + (q1 * 2) + q2 + 4) >> 3) as u8);
+                    pix.set(
+                        b,
+                        0,
+                        ((p1 + (p0 * 2) + (q0 * 2) + (q1 * 2) + q2 + 4) >> 3) as u8,
+                    );
                     pix.set(b + step_x, 0, ((p0 + q0 + q1 + q2 + 2) >> 2) as u8);
-                    pix.set(b + 2 * step_x, 0, (((q3 * 2) + q2 + (q2 * 2) + q1 + q0 + p0 + 4) >> 3) as u8);
+                    pix.set(
+                        b + 2 * step_x,
+                        0,
+                        (((q3 * 2) + q2 + (q2 * 2) + q1 + q0 + p0 + 4) >> 3) as u8,
+                    );
                 } else {
                     pix.set(b, 0, (((q1 * 2) + q0 + p1 + 2) >> 2) as u8);
                 }
@@ -198,7 +210,14 @@ pub fn deblock_luma_eq4_scalar(
 /// One line of the weak chroma filter, shared by the two-plane and single-plane
 /// (`*2_c`) variants — the body the C++ repeats verbatim for Cb, Cr and CbCr.
 #[inline(always)]
-fn chroma_lt4_line(pix: &mut impl PlaneSamples, b: isize, step_x: isize, alpha: i32, beta: i32, tc0: i32) {
+fn chroma_lt4_line(
+    pix: &mut impl PlaneSamples,
+    b: isize,
+    step_x: isize,
+    alpha: i32,
+    beta: i32,
+    tc0: i32,
+) {
     let p0 = pix.at(b - step_x, 0) as i32;
     let p1 = pix.at(b - 2 * step_x, 0) as i32;
     let q0 = pix.at(b, 0) as i32;
@@ -356,12 +375,7 @@ mod tests {
         assert_eq!(WelsClip1(255), 255);
         assert_eq!(WelsClip1(300), 255);
     }
-
 }
 
 #[cfg(test)]
-mod dispatch_tests {
-    
-
-
-}
+mod dispatch_tests {}

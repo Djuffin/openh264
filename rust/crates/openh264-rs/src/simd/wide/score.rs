@@ -9,7 +9,7 @@
 #![forbid(unsafe_code)]
 
 use wide::bytemuck::cast;
-use wide::{i16x16, i16x8, i8x16};
+use wide::{i8x16, i16x8, i16x16};
 
 use crate::encoder::encode_mb_aux::KI_TRUN_TABLE;
 
@@ -40,7 +40,11 @@ pub fn calculate_single_ctr_4x4(dct: &[i16; 16]) -> i32 {
     while idx >= 0 {
         idx -= 1;
         let run_start = idx;
-        let below = if idx < 0 { 0 } else { nz & ((1u32 << (idx + 1)) - 1) };
+        let below = if idx < 0 {
+            0
+        } else {
+            nz & ((1u32 << (idx + 1)) - 1)
+        };
         idx = highest_set(below);
         let run = run_start - idx;
         if (run as usize) < KI_TRUN_TABLE.len() {

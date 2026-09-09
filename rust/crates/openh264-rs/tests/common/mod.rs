@@ -61,13 +61,18 @@ pub mod dylib {
     #[cfg(windows)]
     unsafe extern "system" {
         fn LoadLibraryW(lpLibFileName: *const u16) -> *mut c_void;
-        fn GetProcAddress(hModule: *mut c_void, lpProcName: *const std::ffi::c_char) -> *mut c_void;
+        fn GetProcAddress(hModule: *mut c_void, lpProcName: *const std::ffi::c_char)
+        -> *mut c_void;
     }
 
     #[cfg(windows)]
     pub fn open(path: &Path) -> *mut c_void {
         use std::os::windows::ffi::OsStrExt;
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
         unsafe { LoadLibraryW(wide.as_ptr()) }
     }
 

@@ -82,7 +82,6 @@ const PREFIX_BOUNDARIES: usize = 8;
 /// forbidden bit, and a referenced-IDR header on a non-IDR NAL.
 const HEADER_BYTES: &[u8] = &[0x00, 0x05, 0x07, 0x08, 0x1F, 0x65, 0x80];
 
-
 /// The base streams. Diversity, not breadth: CAVLC and CABAC, PCM, B-frames, VUI
 /// and subset-SPS parsing, an already-damaged pair, and one stream with a NAL count
 /// two orders of magnitude above the others.
@@ -228,9 +227,24 @@ fn build_corpus(data: &[u8], offsets: &[usize]) -> Vec<Case> {
     // (3) Emulation-prevention edges: cut between `00 00` and the `03`, right after
     //     the `03`, and one byte past it.
     for (n, &s) in epb_sites(data).iter().enumerate() {
-        push_trunc(&mut cases, &mut seen_len, format!("epb{n}.zz"), s as i64 + 2);
-        push_trunc(&mut cases, &mut seen_len, format!("epb{n}.at03"), s as i64 + 3);
-        push_trunc(&mut cases, &mut seen_len, format!("epb{n}.after"), s as i64 + 4);
+        push_trunc(
+            &mut cases,
+            &mut seen_len,
+            format!("epb{n}.zz"),
+            s as i64 + 2,
+        );
+        push_trunc(
+            &mut cases,
+            &mut seen_len,
+            format!("epb{n}.at03"),
+            s as i64 + 3,
+        );
+        push_trunc(
+            &mut cases,
+            &mut seen_len,
+            format!("epb{n}.after"),
+            s as i64 + 4,
+        );
     }
 
     // (4) Synthetic tails on a bounded prefix: a stream ending in `00 00`, in
@@ -296,7 +310,11 @@ fn build_corpus(data: &[u8], offsets: &[usize]) -> Vec<Case> {
 }
 
 fn start_code_len(data: &[u8], offset: usize) -> usize {
-    if data.get(offset + 2) == Some(&1) { 3 } else { 4 }
+    if data.get(offset + 2) == Some(&1) {
+        3
+    } else {
+        4
+    }
 }
 
 fn header_byte(data: &[u8], offset: usize) -> Option<u8> {
@@ -387,12 +405,7 @@ struct Run {
 /// raw value is recorded in the table either way rather than silently clamped.
 const MAX_DRAIN: i32 = 24;
 
-unsafe fn feed(
-    decoder: *mut ISVCDecoder,
-    unit: &[u8],
-    run: &mut Run,
-    hasher: &mut Sha1Hasher,
-) {
+unsafe fn feed(decoder: *mut ISVCDecoder, unit: &[u8], run: &mut Run, hasher: &mut Sha1Hasher) {
     unsafe {
         let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
         let mut buf_info = SBufferInfo::default();
@@ -559,7 +572,12 @@ enum Outcome {
 fn row(case: &Case, outcome: &Outcome) -> String {
     match outcome {
         Outcome::Aborted(message) => {
-            format!("{:<24} {:>8}  ABORT     {}", case.name, case.data.len(), message)
+            format!(
+                "{:<24} {:>8}  ABORT     {}",
+                case.name,
+                case.data.len(),
+                message
+            )
         }
         Outcome::Ran(run, digest) => {
             let rets: Vec<i32> = run.calls.iter().map(|c| c.0).collect();
@@ -584,8 +602,7 @@ fn row(case: &Case, outcome: &Outcome) -> String {
     }
 }
 
-const COLUMN_HEADER: &str =
-    "# columns: variant | bytes | calls | drain | frames | dims | planes_sha1 | ret_rle | bufstatus_rle";
+const COLUMN_HEADER: &str = "# columns: variant | bytes | calls | drain | frames | dims | planes_sha1 | ret_rle | bufstatus_rle";
 
 /// Emitted into every table so a reader knows these rows have an external
 /// referee and how to re-run it. The note says how to check, not what the check
@@ -676,7 +693,9 @@ fn collect_rows(cases: &[Case], test_name: &str) -> Vec<String> {
         }
     }
     let _ = std::fs::remove_file(&out);
-    rows.into_iter().map(|r| r.expect("every row filled")).collect()
+    rows.into_iter()
+        .map(|r| r.expect("every row filled"))
+        .collect()
 }
 
 /// `thread '…' panicked at src/x.rs:1:2:\nmessage` → `src/x.rs:1:2: message`.
@@ -792,7 +811,11 @@ fn dump_corpus(stem: &str, cases: &[Case]) -> bool {
         let _ = writeln!(manifest, "{}\t{}\t{}", case.name, feed, case.data.len());
     }
     std::fs::write(dir.join(format!("{stem}.manifest")), manifest).expect("dump manifest");
-    eprintln!("dumped {} corpus entries to {}", cases.len(), bins.display());
+    eprintln!(
+        "dumped {} corpus entries to {}",
+        cases.len(),
+        bins.display()
+    );
     true
 }
 
@@ -856,7 +879,8 @@ fn check_table(stem: &str, actual: &str) {
     // under `core.autocrlf=true` hands `read_to_string` a CRLF file for a golden written
     // with LF, and all fifteen of these failed on Windows with an empty per-line diff,
     // because the renderer below already splits on `lines()` and found nothing to show.
-    let (want, got): (Vec<&str>, Vec<&str>) = (expected.lines().collect(), actual.lines().collect());
+    let (want, got): (Vec<&str>, Vec<&str>) =
+        (expected.lines().collect(), actual.lines().collect());
     if want == got {
         return;
     }
@@ -873,7 +897,13 @@ fn check_table(stem: &str, actual: &str) {
             let _ = writeln!(diff, "  … and more");
             break;
         }
-        let _ = writeln!(diff, "  line {}:\n    -{}\n    +{}", i + 1, w.unwrap_or("<missing>"), g.unwrap_or("<missing>"));
+        let _ = writeln!(
+            diff,
+            "  line {}:\n    -{}\n    +{}",
+            i + 1,
+            w.unwrap_or("<missing>"),
+            g.unwrap_or("<missing>")
+        );
     }
     panic!(
         "malformed-stream parity changed for {stem} ({} expected lines, {} produced):\n{diff}\n\

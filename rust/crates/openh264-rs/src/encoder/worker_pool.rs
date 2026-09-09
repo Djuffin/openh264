@@ -103,7 +103,7 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::fmt;
 use std::marker::PhantomData;
-use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, Thread};
@@ -221,7 +221,8 @@ impl Shared {
     /// A worker's idle wait: spin within the budget, then park until a producer
     /// claims this slot, `stop` is raised, or work shows up.
     fn wait_for_work(&self, slot: &WorkerSlot) {
-        let has_work = || self.pending.load(Ordering::SeqCst) > 0 || self.stop.load(Ordering::SeqCst);
+        let has_work =
+            || self.pending.load(Ordering::SeqCst) > 0 || self.stop.load(Ordering::SeqCst);
         if let Some((bound, _)) = self.spin
             && spin_until(bound, has_work)
         {
@@ -324,18 +325,27 @@ impl WorkerPool {
         Self::try_new_with_spin(workers, spin).expect("failed to spawn a worker thread")
     }
 
-    fn try_new_with_spin(workers: usize, spin: Option<(Duration, Duration)>) -> std::io::Result<Self> {
+    fn try_new_with_spin(
+        workers: usize,
+        spin: Option<(Duration, Duration)>,
+    ) -> std::io::Result<Self> {
         let shared = Arc::new(Shared {
             queue: Mutex::new(VecDeque::with_capacity(workers.max(1) * 2)),
             pending: AtomicUsize::new(0),
             stop: AtomicBool::new(false),
             workers: (0..workers)
-                .map(|_| WorkerSlot { thread: OnceLock::new(), parked: AtomicBool::new(false) })
+                .map(|_| WorkerSlot {
+                    thread: OnceLock::new(),
+                    parked: AtomicBool::new(false),
+                })
                 .collect(),
             spin,
             live: AtomicUsize::new(workers),
         });
-        let mut pool = Self { shared, threads: Vec::with_capacity(workers) };
+        let mut pool = Self {
+            shared,
+            threads: Vec::with_capacity(workers),
+        };
         for k in 0..workers {
             let shared = Arc::clone(&pool.shared);
             let spawned = thread::Builder::new()
@@ -490,7 +500,10 @@ impl<'scope, 'env> Scope<'scope, 'env> {
         F: FnOnce() -> T + Send + 'scope,
         T: Send + 'scope,
     {
-        let packet = Arc::new(Packet { result: Mutex::new(None), done: AtomicBool::new(false) });
+        let packet = Arc::new(Packet {
+            result: Mutex::new(None),
+            done: AtomicBool::new(false),
+        });
         let their_packet = Arc::clone(&packet);
         let data = Arc::clone(&self.data);
         self.data.running.fetch_add(1, Ordering::SeqCst);
@@ -504,7 +517,10 @@ impl<'scope, 'env> Scope<'scope, 'env> {
                 // this count already raised.
                 data.unhandled_panics.fetch_add(1, Ordering::Relaxed);
             }
-            *their_packet.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+            *their_packet
+                .result
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(result);
             their_packet.done.store(true, Ordering::Release);
             // The result may borrow `'scope`; if the handle is already gone this
             // drops it, and it happens before the decrement (module header,
@@ -526,7 +542,12 @@ impl<'scope, 'env> Scope<'scope, 'env> {
         let job: Job = unsafe { std::mem::transmute::<ScopedJob<'scope>, Job>(boxed) };
         self.shared.push(job);
 
-        JobHandle { packet, shared: self.shared, data: &self.data, not_send: PhantomData }
+        JobHandle {
+            packet,
+            shared: self.shared,
+            data: &self.data,
+            not_send: PhantomData,
+        }
     }
 
     /// Waits until every job of this scope has completed, running queued ones on
@@ -550,7 +571,10 @@ impl fmt::Debug for Scope<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Scope")
             .field("running", &self.data.running.load(Ordering::Relaxed))
-            .field("unhandled_panics", &self.data.unhandled_panics.load(Ordering::Relaxed))
+            .field(
+                "unhandled_panics",
+                &self.data.unhandled_panics.load(Ordering::Relaxed),
+            )
             .finish()
     }
 }
@@ -608,7 +632,9 @@ impl<T> JobHandle<'_, T> {
 
 impl<T> fmt::Debug for JobHandle<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("JobHandle").field("done", &self.is_finished()).finish()
+        f.debug_struct("JobHandle")
+            .field("done", &self.is_finished())
+            .finish()
     }
 }
 
@@ -619,8 +645,8 @@ impl<T> fmt::Debug for JobHandle<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Barrier;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     /// Jobs borrow the frame's locals — a `Vec` and a counter — and their writes
     /// are visible after the scope. Repeated so that under Miri the drop of the
@@ -737,7 +763,10 @@ mod tests {
             });
         }));
         assert!(r.is_err());
-        assert!(finished.load(Ordering::Acquire), "scope unwound before its job completed");
+        assert!(
+            finished.load(Ordering::Acquire),
+            "scope unwound before its job completed"
+        );
     }
 
     /// A job's result with a destructor that touches the frame: when the handle
@@ -859,7 +888,9 @@ mod tests {
         let me = thread::current().id();
         let ids = pool.scope(|s| {
             let hs: Vec<_> = (0..3).map(|_| s.spawn(|| thread::current().id())).collect();
-            hs.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>()
+            hs.into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>()
         });
         assert!(ids.iter().all(|id| *id == me));
     }
@@ -874,7 +905,10 @@ mod tests {
         for frame in 0..frames as u64 {
             let bufs: Vec<Vec<u64>> = (0..4).map(|k| vec![frame + k; 8]).collect();
             let sum: u64 = pool.scope(|s| {
-                let hs: Vec<_> = bufs.iter().map(|b| s.spawn(move || b.iter().sum::<u64>())).collect();
+                let hs: Vec<_> = bufs
+                    .iter()
+                    .map(|b| s.spawn(move || b.iter().sum::<u64>()))
+                    .collect();
                 hs.into_iter().map(|h| h.join().unwrap()).sum()
             });
             assert_eq!(sum, (0..4).map(|k| (frame + k) * 8).sum::<u64>());
@@ -958,7 +992,10 @@ mod tests {
         let variants: [(&str, Option<(Duration, Duration)>); 3] = [
             ("park only", None),
             ("default spin", spin_budget(4)),
-            ("spin 100/50 us", Some((Duration::from_micros(100), Duration::from_micros(50)))),
+            (
+                "spin 100/50 us",
+                Some((Duration::from_micros(100), Duration::from_micros(50))),
+            ),
         ];
         for &workers in &[2usize, 4, 8] {
             for (name, spin) in &variants {
@@ -968,7 +1005,8 @@ mod tests {
                 }
                 for gap_us in [0u64, 60, 300] {
                     let gap = Duration::from_micros(gap_us);
-                    let samples: Vec<u64> = (0..iters).map(|_| frame(&pool, workers, gap)).collect();
+                    let samples: Vec<u64> =
+                        (0..iters).map(|_| frame(&pool, workers, gap)).collect();
                     println!(
                         "WorkerPool({workers}, {name}) x{workers} trivial jobs, gap {gap_us:>3} us, {iters} iters: {}",
                         stats(samples)
@@ -991,7 +1029,10 @@ mod tests {
                 });
                 samples.push(t.elapsed().as_nanos() as u64);
             }
-            println!("std::thread::scope x{workers} trivial spawns, {iters} iters: {}", stats(samples));
+            println!(
+                "std::thread::scope x{workers} trivial spawns, {iters} iters: {}",
+                stats(samples)
+            );
         }
     }
 }

@@ -11,7 +11,6 @@
 //! the reference leaves all five NULL — matching this port, which has no SIMD.
 
 #![allow(non_snake_case, non_upper_case_globals)]
-
 // ---------------------------------------------------------------------------
 // Arithmetic parity: the whole butterfly is `i32`, exactly as the C++
 // (`int32_t pSampleMix[4][4]`) — total over all `u8` inputs
@@ -19,13 +18,12 @@
 // per-sub-block rounding makes the composition order part of the contract,
 // mirrored below).
 // ---------------------------------------------------------------------------
-
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
-use crate::safe::plane::RefSamples;
 #[cfg(test)]
 use crate::safe::plane::PlaneCursor;
+use crate::safe::plane::RefSamples;
 
 /// Hadamard 4x4 sum of absolute transformed differences of two 4x4 blocks.
 ///
@@ -104,18 +102,17 @@ pub fn satd_16x16<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) ->
 
 use crate::common::sad_common::{sample_sad, sample_sad_four};
 use crate::encoder::svc_mode_decision::{
-    BLOCK_16x16, BLOCK_16x8, BLOCK_4x4, BLOCK_4x8, BLOCK_8x16, BLOCK_8x4, BLOCK_8x8,
+    BLOCK_4x4, BLOCK_4x8, BLOCK_8x4, BLOCK_8x8, BLOCK_8x16, BLOCK_16x8, BLOCK_16x16,
 };
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
+use crate::common::cpu_core::{WELS_CPU_AVX2, WELS_CPU_SSE2};
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
 /// `simd::wide` under `--features wide`, and `simd::scalar` on a target with neither.
 /// Imported rather than spelled in full at each site because the kernels share their
 /// names with the scalars in this module — which is the point of the naming, and the
 /// reason the module qualifier has to stay.
 use crate::simd::kernels;
-use crate::common::cpu_core::{WELS_CPU_AVX2, WELS_CPU_SSE2};
-
 
 /// `sample.cpp:336`. Installs the scalar SAD/SATD/4-SAD tables and clears the five
 /// `Combined3` slots. The SIMD overrides that follow in the C++ are all behind
@@ -174,14 +171,21 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
         sdf.pfSampleSad[BLOCK_8x4] = Some(|a, b| kernels::sad::sample_sad_8x4(a, b));
         sdf.pfSampleSad[BLOCK_4x8] = Some(|a, b| kernels::sad::sample_sad_4x8(a, b));
 
-        sdf.pfSample4Sad[BLOCK_16x16] = Some(|a, b, sad| kernels::sad::sample_sad_four_16x16(a, b, sad));
-        sdf.pfSample4Sad[BLOCK_16x8] = Some(|a, b, sad| kernels::sad::sample_sad_four_16x8(a, b, sad));
-        sdf.pfSample4Sad[BLOCK_8x16] = Some(|a, b, sad| kernels::sad::sample_sad_four_8x16(a, b, sad));
-        sdf.pfSample4Sad[BLOCK_8x8] = Some(|a, b, sad| kernels::sad::sample_sad_four_8x8(a, b, sad));
-        sdf.pfSample4Sad[BLOCK_4x4] = Some(|a, b, sad| kernels::sad::sample_sad_four_4x4(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_16x16] =
+            Some(|a, b, sad| kernels::sad::sample_sad_four_16x16(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_16x8] =
+            Some(|a, b, sad| kernels::sad::sample_sad_four_16x8(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_8x16] =
+            Some(|a, b, sad| kernels::sad::sample_sad_four_8x16(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_8x8] =
+            Some(|a, b, sad| kernels::sad::sample_sad_four_8x8(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_4x4] =
+            Some(|a, b, sad| kernels::sad::sample_sad_four_4x4(a, b, sad));
         // No upstream x86 kernel for these two shapes either; see the note above.
-        sdf.pfSample4Sad[BLOCK_8x4] = Some(|a, b, sad| kernels::sad::sample_sad_four_8x4(a, b, sad));
-        sdf.pfSample4Sad[BLOCK_4x8] = Some(|a, b, sad| kernels::sad::sample_sad_four_4x8(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_8x4] =
+            Some(|a, b, sad| kernels::sad::sample_sad_four_8x4(a, b, sad));
+        sdf.pfSample4Sad[BLOCK_4x8] =
+            Some(|a, b, sad| kernels::sad::sample_sad_four_4x8(a, b, sad));
 
         sdf.pfSampleSatd[BLOCK_4x4] = Some(|a, b| kernels::satd::satd_4x4(a, b));
         sdf.pfSampleSatd[BLOCK_8x8] = Some(|a, b| kernels::satd::satd_8x8(a, b));
@@ -241,7 +245,10 @@ mod tests {
         let stride = 16usize;
         let a = vec![100u8; stride * 8];
         let b = vec![107u8; stride * 8];
-        let got = satd_4x4(&PlaneCursor::new(&a, 0, stride), &PlaneCursor::new(&b, 0, stride));
+        let got = satd_4x4(
+            &PlaneCursor::new(&a, 0, stride),
+            &PlaneCursor::new(&b, 0, stride),
+        );
         // difference -7 everywhere -> DC = 16 * -7, all AC zero -> (112 + 1) >> 1
         assert_eq!(got, (16 * 7 + 1) >> 1);
     }
@@ -250,8 +257,12 @@ mod tests {
     #[test]
     fn satd_composes_from_4x4_subblocks() {
         let stride = 32usize;
-        let a: Vec<u8> = (0..stride * 20).map(|i| ((i * 91 + 13) % 256) as u8).collect();
-        let b: Vec<u8> = (0..stride * 20).map(|i| ((i * 17 + 200) % 256) as u8).collect();
+        let a: Vec<u8> = (0..stride * 20)
+            .map(|i| ((i * 91 + 13) % 256) as u8)
+            .collect();
+        let b: Vec<u8> = (0..stride * 20)
+            .map(|i| ((i * 17 + 200) % 256) as u8)
+            .collect();
         let ca = PlaneCursor::new(&a, 0, stride);
         let cb = PlaneCursor::new(&b, 0, stride);
 
@@ -268,23 +279,35 @@ mod tests {
         assert_eq!(satd_16x16(&ca, &cb), sum16x16);
     }
 
-
     /// Every slot the mode-decision layer indexes must be filled, and the five
     /// `Combined3` slots must be left NULL — `svc_base_layer_md` asserts on that.
     #[test]
     fn init_fills_sad_and_satd_and_clears_combined3() {
-        for flags in [
-            0,
-            WELS_CPU_SSE2,
-            WELS_CPU_SSE2 | WELS_CPU_AVX2,
-        ] {
+        for flags in [0, WELS_CPU_SSE2, WELS_CPU_SSE2 | WELS_CPU_AVX2] {
             let mut fl = SWelsFuncPtrList::default();
             WelsInitSampleSadFunc(&mut fl, flags);
 
-            for b in [BLOCK_16x16, BLOCK_16x8, BLOCK_8x16, BLOCK_8x8, BLOCK_4x4, BLOCK_8x4, BLOCK_4x8] {
-                assert!(fl.sSampleDealingFuncs.pfSampleSad[b].is_some(), "sad[{b}] flags={flags:#x}");
-                assert!(fl.sSampleDealingFuncs.pfSampleSatd[b].is_some(), "satd[{b}] flags={flags:#x}");
-                assert!(fl.sSampleDealingFuncs.pfSample4Sad[b].is_some(), "sad4[{b}] flags={flags:#x}");
+            for b in [
+                BLOCK_16x16,
+                BLOCK_16x8,
+                BLOCK_8x16,
+                BLOCK_8x8,
+                BLOCK_4x4,
+                BLOCK_8x4,
+                BLOCK_4x8,
+            ] {
+                assert!(
+                    fl.sSampleDealingFuncs.pfSampleSad[b].is_some(),
+                    "sad[{b}] flags={flags:#x}"
+                );
+                assert!(
+                    fl.sSampleDealingFuncs.pfSampleSatd[b].is_some(),
+                    "satd[{b}] flags={flags:#x}"
+                );
+                assert!(
+                    fl.sSampleDealingFuncs.pfSample4Sad[b].is_some(),
+                    "sad4[{b}] flags={flags:#x}"
+                );
             }
         }
     }

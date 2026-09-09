@@ -21,20 +21,16 @@ mod common;
 use common::prng::Prng;
 
 use openh264_rs::decoder::dec_golomb::{
-    BsGetBits, BsGetOneBit, BsGetSe, BsGetTrailingBits, BsGetUe, GetLeadingZeroBits, ERR_NONE,
+    BsGetBits, BsGetOneBit, BsGetSe, BsGetTrailingBits, BsGetUe, ERR_NONE, GetLeadingZeroBits,
 };
 use openh264_rs::encoder::vlc_encoder::{BsSizeSE, BsSizeUE};
-use openh264_rs::safe::bits::{size_se, size_ue, trailing_bits, BsCursor, BsWriter};
+use openh264_rs::safe::bits::{BsCursor, BsWriter, size_se, size_ue, trailing_bits};
 
 /// Sample sizes are cut hard under Miri, which runs ~100x slower. The *shapes* tested
 /// are identical — every bit phase, every boundary, every operation kind — only the
 /// randomised round counts shrink, and the full-size run happens on every `cargo test`.
 fn scale(n: usize) -> usize {
-    if cfg!(miri) {
-        (n / 25).max(2)
-    } else {
-        n
-    }
+    if cfg!(miri) { (n / 25).max(2) } else { n }
 }
 
 /// The RBSP plus the slack the C++ reader relies on.
@@ -214,7 +210,9 @@ fn cavlc_mode_matches_at_every_bit_phase() {
     // than sampled. Every starting phase crossed with every `iUsedBits` phase, so
     // both the `>> 3` reseat and the `-16 + (idx & 7)` bias are exercised at all 64
     // combinations.
-    let payload: Vec<u8> = (0..64u8).map(|i| i.wrapping_mul(37).wrapping_add(11)).collect();
+    let payload: Vec<u8> = (0..64u8)
+        .map(|i| i.wrapping_mul(37).wrapping_add(11))
+        .collect();
     let buf = rbsp_with_slack(&payload);
     let size_bits = payload.len() as i32 * 8;
 
@@ -226,7 +224,13 @@ fn cavlc_mode_matches_at_every_bit_phase() {
                 assert_eq!(BsGetBits(&buf, &mut c, skip, &mut code), 0);
             }
             let mut raw = raw_of(&c);
-            assert_cavlc_cycle_matches(&mut raw, &mut c, &buf, used, &format!("skip {skip} used {used}"));
+            assert_cavlc_cycle_matches(
+                &mut raw,
+                &mut c,
+                &buf,
+                used,
+                &format!("skip {skip} used {used}"),
+            );
 
             // …and the cursor reads on from where the raw pair left it, which is what
             // the mode is for. 16 bits is the widest read the codec makes.
@@ -242,7 +246,11 @@ fn cavlc_mode_matches_at_every_bit_phase() {
                 let (mut a, mut b) = (0u32, 0u32);
                 let ra = BsGetBits(&buf, &mut c, 16, &mut a);
                 let rb = BsGetBits(&buf, &mut plain, 16, &mut b);
-                assert_eq!((ra, a), (rb, b), "reads after the cycle, skip {skip} used {used}");
+                assert_eq!(
+                    (ra, a),
+                    (rb, b),
+                    "reads after the cycle, skip {skip} used {used}"
+                );
             }
         }
     }

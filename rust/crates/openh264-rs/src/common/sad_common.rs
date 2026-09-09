@@ -1,9 +1,4 @@
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
@@ -43,9 +38,9 @@ pub fn WELS_ABS(iX: i32) -> i32 {
 // regrouping could change the result is overflow; the largest shape sums 16 x 16 terms
 // of at most 255, i.e. 65 280, four orders of magnitude inside `i32`.
 
-use crate::safe::plane::RefSamples;
 #[cfg(test)]
 use crate::safe::plane::PlaneCursor;
+use crate::safe::plane::RefSamples;
 
 /// Sum of absolute differences between a `W` x `H` block at `sample1` and one at
 /// `sample2` displaced by `(dx, dy)`.
@@ -90,10 +85,7 @@ fn sad_at<const W: usize, const H: usize, S: RefSamples>(
 ///
 /// Reads `x` in `0 .. W` and `y` in `0 .. H` from both cursors, and nothing else.
 #[inline(always)]
-pub fn sample_sad<const W: usize, const H: usize, S: RefSamples>(
-    sample1: &S,
-    sample2: &S,
-) -> i32 {
+pub fn sample_sad<const W: usize, const H: usize, S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     sad_at::<W, H, S>(sample1, sample2, 0, 0)
 }
 
@@ -121,7 +113,7 @@ pub fn sample_sad_four<const W: usize, const H: usize, S: RefSamples>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_wels_abs() {
         assert_eq!(WELS_ABS(-10), 10);
@@ -140,7 +132,10 @@ mod tests {
     fn test_sample_sad_4x4_diff() {
         let buf1 = [10u8; 16];
         let buf2 = [20u8; 16];
-        let sad = sample_sad::<4, 4, _>(&PlaneCursor::new(&buf1, 0, 4), &PlaneCursor::new(&buf2, 0, 4));
+        let sad = sample_sad::<4, 4, _>(
+            &PlaneCursor::new(&buf1, 0, 4),
+            &PlaneCursor::new(&buf2, 0, 4),
+        );
         assert_eq!(sad, 16 * 10);
     }
 
@@ -148,7 +143,10 @@ mod tests {
     fn test_sample_sad_8x8_diff() {
         let buf1 = [5u8; 64];
         let buf2 = [15u8; 64];
-        let sad = sample_sad::<8, 8, _>(&PlaneCursor::new(&buf1, 0, 8), &PlaneCursor::new(&buf2, 0, 8));
+        let sad = sample_sad::<8, 8, _>(
+            &PlaneCursor::new(&buf1, 0, 8),
+            &PlaneCursor::new(&buf2, 0, 8),
+        );
         assert_eq!(sad, 64 * 10);
     }
 
@@ -156,8 +154,10 @@ mod tests {
     fn test_sample_sad_16x16_diff() {
         let buf1 = [0u8; 16 * 16];
         let buf2 = [2u8; 16 * 16];
-        let sad =
-            sample_sad::<16, 16, _>(&PlaneCursor::new(&buf1, 0, 16), &PlaneCursor::new(&buf2, 0, 16));
+        let sad = sample_sad::<16, 16, _>(
+            &PlaneCursor::new(&buf1, 0, 16),
+            &PlaneCursor::new(&buf2, 0, 16),
+        );
         assert_eq!(sad, 256 * 2);
     }
 

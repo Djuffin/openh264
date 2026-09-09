@@ -30,8 +30,10 @@ pub extern "C" fn WelsGetCodecVersion() -> OpenH264Version {
 /// the guard is a real state rather than an unreachable one.
 #[unsafe(no_mangle)]
 #[allow(unsafe_code)]
-pub unsafe extern "C" fn WelsGetCodecVersionEx(pVersion: *mut OpenH264Version) { unsafe {
-    if !pVersion.is_null() {
-        *pVersion = G_ST_CODEC_VERSION;
+pub unsafe extern "C" fn WelsGetCodecVersionEx(pVersion: *mut OpenH264Version) {
+    unsafe {
+        if !pVersion.is_null() {
+            *pVersion = G_ST_CODEC_VERSION;
+        }
     }
-}}
+}

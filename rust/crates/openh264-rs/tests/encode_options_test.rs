@@ -132,7 +132,8 @@ fn test_set_get_option_matches_cxx_for_every_option() {
                 (*bi).iLayer = LAYER_NUM::SPATIAL_LAYER_ALL;
             }
             let e: ENCODER_OPTION = std::mem::transmute(id);
-            let got = ISVCEncoder::GetOption(p_encoder, e, buf.as_mut_ptr() as *mut std::ffi::c_void);
+            let got =
+                ISVCEncoder::GetOption(p_encoder, e, buf.as_mut_ptr() as *mut std::ffi::c_void);
             assert_eq!(
                 got, GET_EXPECTED[id as usize],
                 "GetOption(id={id}) returned {got}, C++ returns {}",
@@ -141,7 +142,8 @@ fn test_set_get_option_matches_cxx_for_every_option() {
         }
 
         // ---- SetOption --------------------------------------------------------
-        let set = |e: ENCODER_OPTION, p: *mut std::ffi::c_void| ISVCEncoder::SetOption(p_encoder, e, p);
+        let set =
+            |e: ENCODER_OPTION, p: *mut std::ffi::c_void| ISVCEncoder::SetOption(p_encoder, e, p);
         macro_rules! setopt {
             ($id:ident, $val:expr) => {{
                 let mut v = $val;

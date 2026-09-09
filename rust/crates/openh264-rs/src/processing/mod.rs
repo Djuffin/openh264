@@ -18,10 +18,10 @@
 #![deny(unsafe_code)]
 
 pub mod adaptive_quantization;
-pub mod denoise;
-pub mod downsample;
 pub mod background_detection;
 pub mod complexity_analysis;
+pub mod denoise;
+pub mod downsample;
 pub mod scene_change_detection;
 pub mod scroll_detection;
 pub mod vaacalc;

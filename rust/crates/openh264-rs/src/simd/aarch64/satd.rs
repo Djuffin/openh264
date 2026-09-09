@@ -26,7 +26,7 @@
 
 use core::arch::aarch64::*;
 
-use super::lanes::{ld16, ld8};
+use super::lanes::{ld8, ld16};
 use crate::safe::plane::{BlockRows, RefSamples};
 
 /// Rows `0..4` of a 4-wide block as `([row0 | row1], [row2 | row3])`.
@@ -124,7 +124,8 @@ fn satd_8w<A: RefSamples + Copy, B: RefSamples + Copy, const H: usize>(c1: &A, c
         let (w1, w2) = (s1.window::<8>(4 * g, 4), s2.window::<8>(4 * g, 4));
         let mut d = [vdupq_n_s16(0); 4];
         for (i, row) in d.iter_mut().enumerate() {
-            *row = vreinterpretq_s16_u16(vsubl_u8(ld8(&w1.row::<8>(i, 0)), ld8(&w2.row::<8>(i, 0))));
+            *row =
+                vreinterpretq_s16_u16(vsubl_u8(ld8(&w1.row::<8>(i, 0)), ld8(&w2.row::<8>(i, 0))));
         }
         acc = vaddq_s16(acc, group8(d[0], d[1], d[2], d[3]));
     }
@@ -239,13 +240,41 @@ mod tests {
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        assert_eq!(satd_4x4(&c1, &c2), scalar::satd_4x4(&c1, &c2), "satd_4x4 mismatch");
-        assert_eq!(satd_8x4(&c1, &c2), scalar::satd_8x4(&c1, &c2), "satd_8x4 mismatch");
-        assert_eq!(satd_4x8(&c1, &c2), scalar::satd_4x8(&c1, &c2), "satd_4x8 mismatch");
-        assert_eq!(satd_8x8(&c1, &c2), scalar::satd_8x8(&c1, &c2), "satd_8x8 mismatch");
-        assert_eq!(satd_16x8(&c1, &c2), scalar::satd_16x8(&c1, &c2), "satd_16x8 mismatch");
-        assert_eq!(satd_8x16(&c1, &c2), scalar::satd_8x16(&c1, &c2), "satd_8x16 mismatch");
-        assert_eq!(satd_16x16(&c1, &c2), scalar::satd_16x16(&c1, &c2), "satd_16x16 mismatch");
+        assert_eq!(
+            satd_4x4(&c1, &c2),
+            scalar::satd_4x4(&c1, &c2),
+            "satd_4x4 mismatch"
+        );
+        assert_eq!(
+            satd_8x4(&c1, &c2),
+            scalar::satd_8x4(&c1, &c2),
+            "satd_8x4 mismatch"
+        );
+        assert_eq!(
+            satd_4x8(&c1, &c2),
+            scalar::satd_4x8(&c1, &c2),
+            "satd_4x8 mismatch"
+        );
+        assert_eq!(
+            satd_8x8(&c1, &c2),
+            scalar::satd_8x8(&c1, &c2),
+            "satd_8x8 mismatch"
+        );
+        assert_eq!(
+            satd_16x8(&c1, &c2),
+            scalar::satd_16x8(&c1, &c2),
+            "satd_16x8 mismatch"
+        );
+        assert_eq!(
+            satd_8x16(&c1, &c2),
+            scalar::satd_8x16(&c1, &c2),
+            "satd_8x16 mismatch"
+        );
+        assert_eq!(
+            satd_16x16(&c1, &c2),
+            scalar::satd_16x16(&c1, &c2),
+            "satd_16x16 mismatch"
+        );
     }
 
     #[test]
@@ -259,13 +288,19 @@ mod tests {
             }
             let c1 = PlaneCursor::new(&p1, 0, 4);
             let c2 = PlaneCursor::new(&p2, 0, 4);
-            assert_eq!(satd_4x4(&c1, &c2), scalar::satd_4x4(&c1, &c2), "mismatch at seed {seed}");
+            assert_eq!(
+                satd_4x4(&c1, &c2),
+                scalar::satd_4x4(&c1, &c2),
+                "mismatch at seed {seed}"
+            );
         }
     }
 
     /// A 64-bit LCG, so a failing seed is replayable.
     fn lcg(seed: &mut u64) -> u8 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32) as u8
     }
 
@@ -296,9 +331,21 @@ mod tests {
                 assert_eq!(satd_8x4(&c1, &c2), scalar::satd_8x4(&c1, &c2), "8x4 {at}");
                 assert_eq!(satd_4x8(&c1, &c2), scalar::satd_4x8(&c1, &c2), "4x8 {at}");
                 assert_eq!(satd_8x8(&c1, &c2), scalar::satd_8x8(&c1, &c2), "8x8 {at}");
-                assert_eq!(satd_16x8(&c1, &c2), scalar::satd_16x8(&c1, &c2), "16x8 {at}");
-                assert_eq!(satd_8x16(&c1, &c2), scalar::satd_8x16(&c1, &c2), "8x16 {at}");
-                assert_eq!(satd_16x16(&c1, &c2), scalar::satd_16x16(&c1, &c2), "16x16 {at}");
+                assert_eq!(
+                    satd_16x8(&c1, &c2),
+                    scalar::satd_16x8(&c1, &c2),
+                    "16x8 {at}"
+                );
+                assert_eq!(
+                    satd_8x16(&c1, &c2),
+                    scalar::satd_8x16(&c1, &c2),
+                    "8x16 {at}"
+                );
+                assert_eq!(
+                    satd_16x16(&c1, &c2),
+                    scalar::satd_16x16(&c1, &c2),
+                    "16x16 {at}"
+                );
             }
         }
     }

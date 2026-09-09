@@ -341,7 +341,12 @@ impl<'a, T> MbWindow<'a, T> {
             "current mb {cur} outside window [{base}..{}) (stride {stride})",
             base + mbs.len()
         );
-        Self { mbs, base, stride, cur }
+        Self {
+            mbs,
+            base,
+            stride,
+            cur,
+        }
     }
 
     /// The whole of `arr` as one window, current macroblock at `cur` — the
@@ -777,7 +782,10 @@ mod mb_window_tests {
     fn a_whole_window_answers_every_neighbour_the_grid_has() {
         let mut a = grid();
         let mut w = MbWindow::whole(&mut a, 6); // row 1, col 2: all four present
-        assert_eq!((*w.cur(), *w.left(), *w.top(), *w.top_left(), *w.top_right()), (6, 5, 2, 1, 3));
+        assert_eq!(
+            (*w.cur(), *w.left(), *w.top(), *w.top_left(), *w.top_right()),
+            (6, 5, 2, 1, 3)
+        );
         w.set_cur(9);
         assert_eq!((*w.cur(), *w.top_right()), (9, 6));
         *w.cur_mut() = 99;
@@ -956,7 +964,10 @@ mod tests {
         assert_eq!(col.top(4), Some(3));
 
         let one = MbDims::new(1, 1);
-        assert_eq!((one.left(0), one.top(0), one.top_left(0), one.top_right(0)), (None, None, None, None));
+        assert_eq!(
+            (one.left(0), one.top(0), one.top_left(0), one.top_right(0)),
+            (None, None, None, None)
+        );
     }
 
     #[test]
@@ -968,7 +979,11 @@ mod tests {
             for xy in 0..d.count() {
                 let (x, y) = (xy % w, xy / w);
                 let want = |cond: bool, v: isize| cond.then_some(v as usize);
-                assert_eq!(d.left(xy), want(x > 0, xy as isize - 1), "left of {xy} in {w}x{h}");
+                assert_eq!(
+                    d.left(xy),
+                    want(x > 0, xy as isize - 1),
+                    "left of {xy} in {w}x{h}"
+                );
                 assert_eq!(
                     d.top(xy),
                     want(y > 0, xy as isize - w as isize),
@@ -1073,8 +1088,18 @@ mod tests {
     #[test]
     fn a_fresh_grid_is_zero_everywhere() {
         let g = MbGrid::new(MbDims::new(3, 2));
-        assert!(g.scaled_tcoeff.as_slice().iter().all(|mb| mb.iter().all(|&c| c == 0)));
-        assert!(g.mv[0].as_slice().iter().all(|mb| mb.iter().all(|v| v == &[0, 0])));
+        assert!(
+            g.scaled_tcoeff
+                .as_slice()
+                .iter()
+                .all(|mb| mb.iter().all(|&c| c == 0))
+        );
+        assert!(
+            g.mv[0]
+                .as_slice()
+                .iter()
+                .all(|mb| mb.iter().all(|v| v == &[0, 0]))
+        );
         assert!(g.mb_correctly_decoded_flag.as_slice().iter().all(|&f| !f));
         assert!(g.luma_qp.as_slice().iter().all(|&q| q == 0));
         assert_eq!(g.intra_pred_mode.get(5), &[0i8; 8]);
@@ -1088,7 +1113,10 @@ mod tests {
         let dims = MbDims::new(4, 4);
         let mut g = MbGrid::new(dims);
         assert_eq!(size_of_val(g.intra_pred_mode.as_slice()), dims.count() * 8);
-        assert_eq!(size_of_val(g.intra4x4_final_mode.as_slice()), dims.count() * 16);
+        assert_eq!(
+            size_of_val(g.intra4x4_final_mode.as_slice()),
+            dims.count() * 16
+        );
         // slot 7 is the I16x16 mode, slots 0..4 the next macroblock's left cache
         g.intra_pred_mode.get_mut(dims.count() - 1)[7] = 3;
         assert_eq!(g.intra_pred_mode.get(dims.count() - 1)[7], 3);

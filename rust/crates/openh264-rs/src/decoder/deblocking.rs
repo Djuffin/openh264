@@ -35,14 +35,8 @@
 //! macroblock edge availability masks, and SIMD dispatch table initialization.
 
 #![deny(unsafe_code)]
-
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
-
 
 // ============================================================================
 // Constants & Configuration Flags
@@ -103,59 +97,105 @@ pub fn IS_INTER_16x16(mb_type: u32) -> bool {
 // See the note in `encoder/deblocking.rs`: these three tables are file-local in the
 // C++ and the decoder's are `[52 + 24]` where the encoder's are `[52 + 12]`.
 pub static g_kuiAlphaTable: [u8; 52 + 24] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 4, 4, 5, 6,
-    7, 8, 9, 10, 12, 13, 15, 17, 20, 22,
-    25, 28, 32, 36, 40, 45, 50, 56, 63, 71,
-    80, 90, 101, 113, 127, 144, 162, 182, 203, 226,
-    255, 255,
-    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6,
+    7, 8, 9, 10, 12, 13, 15, 17, 20, 22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 71, 80, 90, 101, 113,
+    127, 144, 162, 182, 203, 226, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255,
 ];
 
 /// Table 8-16: Beta table with +12 index offset padding
 pub static g_kiBetaTable: [i8; 52 + 24] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 2, 2, 2, 3,
-    3, 3, 3, 4, 4, 4, 6, 6, 7, 7,
-    8, 8, 9, 9, 10, 10, 11, 11, 12, 12,
-    13, 13, 14, 14, 15, 15, 16, 16, 17, 17,
-    18, 18,
-    18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 3,
+    3, 3, 3, 4, 4, 4, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16,
+    16, 17, 17, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
 ];
 
 /// Table 8-17: Tc0 table indexed by (IndexA + 12) and bS (0..3)
 pub static g_kiTc0Table: [[i8; 4]; 52 + 24] = [
-    [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0],
-    [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0],
-    [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0],
-    [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0],
-    [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 0], [-1, 0, 0, 1],
-    [-1, 0, 0, 1], [-1, 0, 0, 1], [-1, 0, 0, 1], [-1, 0, 1, 1], [-1, 0, 1, 1], [-1, 1, 1, 1],
-    [-1, 1, 1, 1], [-1, 1, 1, 1], [-1, 1, 1, 1], [-1, 1, 1, 2], [-1, 1, 1, 2], [-1, 1, 1, 2],
-    [-1, 1, 1, 2], [-1, 1, 2, 3], [-1, 1, 2, 3], [-1, 2, 2, 3], [-1, 2, 2, 4], [-1, 2, 3, 4],
-    [-1, 2, 3, 4], [-1, 3, 3, 5], [-1, 3, 4, 6], [-1, 3, 4, 6], [-1, 4, 5, 7], [-1, 4, 5, 8],
-    [-1, 4, 6, 9], [-1, 5, 7, 10], [-1, 6, 8, 11], [-1, 6, 8, 13], [-1, 7, 10, 14], [-1, 8, 11, 16],
-    [-1, 9, 12, 18], [-1, 10, 13, 20], [-1, 11, 15, 23], [-1, 13, 17, 25],
-    [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25],
-    [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25], [-1, 13, 17, 25],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 1],
+    [-1, 0, 0, 1],
+    [-1, 0, 0, 1],
+    [-1, 0, 0, 1],
+    [-1, 0, 1, 1],
+    [-1, 0, 1, 1],
+    [-1, 1, 1, 1],
+    [-1, 1, 1, 1],
+    [-1, 1, 1, 1],
+    [-1, 1, 1, 1],
+    [-1, 1, 1, 2],
+    [-1, 1, 1, 2],
+    [-1, 1, 1, 2],
+    [-1, 1, 1, 2],
+    [-1, 1, 2, 3],
+    [-1, 1, 2, 3],
+    [-1, 2, 2, 3],
+    [-1, 2, 2, 4],
+    [-1, 2, 3, 4],
+    [-1, 2, 3, 4],
+    [-1, 3, 3, 5],
+    [-1, 3, 4, 6],
+    [-1, 3, 4, 6],
+    [-1, 4, 5, 7],
+    [-1, 4, 5, 8],
+    [-1, 4, 6, 9],
+    [-1, 5, 7, 10],
+    [-1, 6, 8, 11],
+    [-1, 6, 8, 13],
+    [-1, 7, 10, 14],
+    [-1, 8, 11, 16],
+    [-1, 9, 12, 18],
+    [-1, 10, 13, 20],
+    [-1, 11, 15, 23],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
 ];
 
-pub static g_kuiTableBIdx: [[u8; 8]; 2] = [
-    [0, 4, 8, 12, 3, 7, 11, 15],
-    [0, 1, 2, 3, 12, 13, 14, 15],
-];
+pub static g_kuiTableBIdx: [[u8; 8]; 2] =
+    [[0, 4, 8, 12, 3, 7, 11, 15], [0, 1, 2, 3, 12, 13, 14, 15]];
 
 pub static g_kuiTableB8x8Idx: [[u8; 16]; 2] = [
-    [
-        0, 1, 4, 5, 8, 9, 12, 13,
-        2, 3, 6, 7, 10, 11, 14, 15,
-    ],
-    [
-        0, 1, 4, 5, 2, 3, 6, 7,
-        8, 9, 12, 13, 10, 11, 14, 15,
-    ],
+    [0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15],
+    [0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15],
 ];
 
 #[inline(always)]
@@ -189,16 +229,13 @@ pub fn tc0_table(x: i32) -> &'static [i8; 4] {
 }
 
 pub use crate::common::deblocking_common::*;
-use crate::safe::mb_grid::MbArray;
-pub use crate::decoder::slice::EWelsSliceType;
+pub use crate::decoder::decoder_context::{MAX_DPB_COUNT, PicId, SDeblockingFilter, SRefPic};
+pub use crate::decoder::decoder_core::{DqLayerState, SLayerInfo, SSlice};
+pub use crate::decoder::parameter_sets::{SPps, SSps};
 pub use crate::decoder::picture::SPicture;
-pub use crate::decoder::parameter_sets::{SSps, SPps};
+pub use crate::decoder::slice::EWelsSliceType;
 pub use crate::decoder::slice::{SSliceHeader, SSliceHeaderExt};
-pub use crate::decoder::decoder_core::{SSlice, SLayerInfo, DqLayerState};
-pub use crate::decoder::decoder_context::{
-    SRefPic, SDeblockingFilter, PicId,
-    MAX_DPB_COUNT,
-};
+use crate::safe::mb_grid::MbArray;
 
 pub type PDeblockingFilterMbFunc = fn(
     pCurDqLayer: &mut DqLayerState,
@@ -208,9 +245,8 @@ pub type PDeblockingFilterMbFunc = fn(
 );
 
 pub use crate::decoder::decoder_context::SWelsDecoderContext;
-use crate::decoder::decoder_context::{active_fmo, SliceCtx};
+use crate::decoder::decoder_context::{SliceCtx, active_fmo};
 use crate::safe::plane::PlaneCursorMut;
-
 
 // ============================================================================
 // Boundary Strength Evaluation Macros & Helper Primitives
@@ -792,7 +828,10 @@ pub fn DeblockingBsMarginalMBAvcbase(
     let pRefIdxArr = &pDec.pRefIndex[LIST_0];
 
     let is_8x8_curr = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXy as usize);
-    let is_8x8_neigh = *pCurDqLayer.grid.transform_size8x8_flag.get(iNeighMb as usize);
+    let is_8x8_neigh = *pCurDqLayer
+        .grid
+        .transform_size8x8_flag
+        .get(iNeighMb as usize);
 
     let pMvArr = &pDec.pMv[LIST_0];
 
@@ -981,7 +1020,10 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
     let pNzcNeigh = GetPNzc(pCurDqLayer, iNeighMb);
 
     let is_8x8_curr = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXy as usize);
-    let is_8x8_neigh = *pCurDqLayer.grid.transform_size8x8_flag.get(iNeighMb as usize);
+    let is_8x8_neigh = *pCurDqLayer
+        .grid
+        .transform_size8x8_flag
+        .get(iNeighMb as usize);
 
     if is_8x8_curr && is_8x8_neigh {
         for i in 0..2 {
@@ -1251,7 +1293,8 @@ pub fn DeblockingAvailableNoInterlayer(pCurDqLayer: &DqLayerState, iFilterIdc: i
 
     if 2 == iFilterIdc {
         let pSliceIdc = &pCurDqLayer.grid.slice_idc;
-        bLeftFlag = (iMbX > 0) && (*pSliceIdc.get(iMbXy as usize) == *pSliceIdc.get((iMbXy - 1) as usize));
+        bLeftFlag =
+            (iMbX > 0) && (*pSliceIdc.get(iMbXy as usize) == *pSliceIdc.get((iMbXy - 1) as usize));
         bTopFlag = (iMbY > 0)
             && (*pSliceIdc.get(iMbXy as usize)
                 == *pSliceIdc.get((iMbXy - pCurDqLayer.iMbWidth) as usize));
@@ -1583,7 +1626,12 @@ fn DeblockingInterMb(
         } else {
             let bs_word = u32::from_ne_bytes(nBS[0][0]);
             if bs_word != 0 {
-                FilteringEdgeLumaV(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize, &nBS[0][0]);
+                FilteringEdgeLumaV(
+                    pFilter,
+                    &mut planeY.cursor_mut(xY, yY),
+                    iLineSize,
+                    &nBS[0][0],
+                );
                 FilteringEdgeChromaV(
                     pFilter,
                     &mut planeCb.cursor_mut(xC, yC),
@@ -1599,16 +1647,29 @@ fn DeblockingInterMb(
     pFilter.iChromaQP[0] = pCurChromaQp[0];
     pFilter.iChromaQP[1] = pCurChromaQp[1];
 
-    let is_8x8 = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXyIndex as usize);
+    let is_8x8 = *pCurDqLayer
+        .grid
+        .transform_size8x8_flag
+        .get(iMbXyIndex as usize);
 
     let bs_01 = u32::from_ne_bytes(nBS[0][1]);
     if bs_01 != 0 && !is_8x8 {
-        FilteringEdgeLumaV(pFilter, &mut planeY.cursor_mut(xY + 4, yY), iLineSize, &nBS[0][1]);
+        FilteringEdgeLumaV(
+            pFilter,
+            &mut planeY.cursor_mut(xY + 4, yY),
+            iLineSize,
+            &nBS[0][1],
+        );
     }
 
     let bs_02 = u32::from_ne_bytes(nBS[0][2]);
     if bs_02 != 0 {
-        FilteringEdgeLumaV(pFilter, &mut planeY.cursor_mut(xY + 8, yY), iLineSize, &nBS[0][2]);
+        FilteringEdgeLumaV(
+            pFilter,
+            &mut planeY.cursor_mut(xY + 8, yY),
+            iLineSize,
+            &nBS[0][2],
+        );
         FilteringEdgeChromaV(
             pFilter,
             &mut planeCb.cursor_mut(xC + 4, yC),
@@ -1620,7 +1681,12 @@ fn DeblockingInterMb(
 
     let bs_03 = u32::from_ne_bytes(nBS[0][3]);
     if bs_03 != 0 && !is_8x8 {
-        FilteringEdgeLumaV(pFilter, &mut planeY.cursor_mut(xY + 12, yY), iLineSize, &nBS[0][3]);
+        FilteringEdgeLumaV(
+            pFilter,
+            &mut planeY.cursor_mut(xY + 12, yY),
+            iLineSize,
+            &nBS[0][3],
+        );
     }
 
     // Horizontal margin
@@ -1646,7 +1712,12 @@ fn DeblockingInterMb(
         } else {
             let bs_word = u32::from_ne_bytes(nBS[1][0]);
             if bs_word != 0 {
-                FilteringEdgeLumaH(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize, &nBS[1][0]);
+                FilteringEdgeLumaH(
+                    pFilter,
+                    &mut planeY.cursor_mut(xY, yY),
+                    iLineSize,
+                    &nBS[1][0],
+                );
                 FilteringEdgeChromaH(
                     pFilter,
                     &mut planeCb.cursor_mut(xC, yC),
@@ -1664,12 +1735,22 @@ fn DeblockingInterMb(
 
     let bs_11 = u32::from_ne_bytes(nBS[1][1]);
     if bs_11 != 0 && !is_8x8 {
-        FilteringEdgeLumaH(pFilter, &mut planeY.cursor_mut(xY, yY + 4), iLineSize, &nBS[1][1]);
+        FilteringEdgeLumaH(
+            pFilter,
+            &mut planeY.cursor_mut(xY, yY + 4),
+            iLineSize,
+            &nBS[1][1],
+        );
     }
 
     let bs_12 = u32::from_ne_bytes(nBS[1][2]);
     if bs_12 != 0 {
-        FilteringEdgeLumaH(pFilter, &mut planeY.cursor_mut(xY, yY + 8), iLineSize, &nBS[1][2]);
+        FilteringEdgeLumaH(
+            pFilter,
+            &mut planeY.cursor_mut(xY, yY + 8),
+            iLineSize,
+            &nBS[1][2],
+        );
         FilteringEdgeChromaH(
             pFilter,
             &mut planeCb.cursor_mut(xC, yC + 4),
@@ -1681,7 +1762,12 @@ fn DeblockingInterMb(
 
     let bs_13 = u32::from_ne_bytes(nBS[1][3]);
     if bs_13 != 0 && !is_8x8 {
-        FilteringEdgeLumaH(pFilter, &mut planeY.cursor_mut(xY, yY + 12), iLineSize, &nBS[1][3]);
+        FilteringEdgeLumaH(
+            pFilter,
+            &mut planeY.cursor_mut(xY, yY + 12),
+            iLineSize,
+            &nBS[1][3],
+        );
     }
 }
 
@@ -1711,10 +1797,9 @@ pub fn FilteringEdgeLumaHV(
 
     // Luma V
     if (iBoundryFlag & LEFT_FLAG_MASK) != 0 {
-        pFilter.iLumaQP = ((iCurQp
-            + *pCurDqLayer.grid.luma_qp.get((iMbXyIndex - 1) as usize) as i32
-            + 1)
-            >> 1) as i8;
+        pFilter.iLumaQP =
+            ((iCurQp + *pCurDqLayer.grid.luma_qp.get((iMbXyIndex - 1) as usize) as i32 + 1) >> 1)
+                as i8;
         FilteringEdgeLumaIntraV(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize);
     }
 
@@ -1732,26 +1817,53 @@ pub fn FilteringEdgeLumaHV(
         &mut iBeta,
     );
 
-    let is_8x8 = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXyIndex as usize);
+    let is_8x8 = *pCurDqLayer
+        .grid
+        .transform_size8x8_flag
+        .get(iMbXyIndex as usize);
 
     if (iAlpha | iBeta) != 0 {
         TC0_TBL_LOOKUP(&mut iTc, iIndexA, &uiBSx4, 0);
 
         if !is_8x8 {
-            deblock_luma_lt4(&mut planeY.cursor_mut(xY + 4, yY), 1, iLineSize as isize, iAlpha, iBeta, &iTc);
+            deblock_luma_lt4(
+                &mut planeY.cursor_mut(xY + 4, yY),
+                1,
+                iLineSize as isize,
+                iAlpha,
+                iBeta,
+                &iTc,
+            );
         }
 
-        deblock_luma_lt4(&mut planeY.cursor_mut(xY + 8, yY), 1, iLineSize as isize, iAlpha, iBeta, &iTc);
+        deblock_luma_lt4(
+            &mut planeY.cursor_mut(xY + 8, yY),
+            1,
+            iLineSize as isize,
+            iAlpha,
+            iBeta,
+            &iTc,
+        );
 
         if !is_8x8 {
-            deblock_luma_lt4(&mut planeY.cursor_mut(xY + 12, yY), 1, iLineSize as isize, iAlpha, iBeta, &iTc);
+            deblock_luma_lt4(
+                &mut planeY.cursor_mut(xY + 12, yY),
+                1,
+                iLineSize as isize,
+                iAlpha,
+                iBeta,
+                &iTc,
+            );
         }
     }
 
     // Luma H
     if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
         pFilter.iLumaQP = ((iCurQp
-            + *pCurDqLayer.grid.luma_qp.get((iMbXyIndex - iMbWidth) as usize) as i32
+            + *pCurDqLayer
+                .grid
+                .luma_qp
+                .get((iMbXyIndex - iMbWidth) as usize) as i32
             + 1)
             >> 1) as i8;
         FilteringEdgeLumaIntraH(pFilter, &mut planeY.cursor_mut(xY, yY), iLineSize);
@@ -1760,13 +1872,34 @@ pub fn FilteringEdgeLumaHV(
     pFilter.iLumaQP = iCurQp as i8;
     if (iAlpha | iBeta) != 0 {
         if !is_8x8 {
-            deblock_luma_lt4(&mut planeY.cursor_mut(xY, yY + 4), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
+            deblock_luma_lt4(
+                &mut planeY.cursor_mut(xY, yY + 4),
+                iLineSize as isize,
+                1,
+                iAlpha,
+                iBeta,
+                &iTc,
+            );
         }
 
-        deblock_luma_lt4(&mut planeY.cursor_mut(xY, yY + 8), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
+        deblock_luma_lt4(
+            &mut planeY.cursor_mut(xY, yY + 8),
+            iLineSize as isize,
+            1,
+            iAlpha,
+            iBeta,
+            &iTc,
+        );
 
         if !is_8x8 {
-            deblock_luma_lt4(&mut planeY.cursor_mut(xY, yY + 12), iLineSize as isize, 1, iAlpha, iBeta, &iTc);
+            deblock_luma_lt4(
+                &mut planeY.cursor_mut(xY, yY + 12),
+                iLineSize as isize,
+                1,
+                iAlpha,
+                iBeta,
+                &iTc,
+            );
         }
     }
 }
@@ -1860,7 +1993,10 @@ pub fn FilteringEdgeChromaHV(
     if (iBoundryFlag & TOP_FLAG_MASK) != 0 {
         for i in 0..2 {
             pFilter.iChromaQP[i] = ((pCurQp[i] as i32
-                + pCurDqLayer.grid.chroma_qp.get((iMbXyIndex - iMbWidth) as usize)[i] as i32
+                + pCurDqLayer
+                    .grid
+                    .chroma_qp
+                    .get((iMbXyIndex - iMbWidth) as usize)[i] as i32
                 + 1)
                 >> 1) as i8;
         }
@@ -1945,7 +2081,11 @@ pub fn WelsDeblockingMb(
     let iMbXyIndex = pCurDqLayer.iMbXyIndex;
     let iCurMbType = *pDec.pMbType.get(iMbXyIndex as usize);
 
-    let pSliceHeader = &pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader;
+    let pSliceHeader = &pCurDqLayer
+        .sLayerInfo
+        .sSliceInLayer
+        .sSliceHeaderExt
+        .sSliceHeader;
     let bBSlice = pSliceHeader.eSliceType == EWelsSliceType::B_SLICE;
 
     match iCurMbType {
@@ -1960,7 +2100,14 @@ pub fn WelsDeblockingMb(
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
                 } else if bBSlice {
-                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
+                    DeblockingBSliceBsMarginalMBAvcbase(
+                        pFilter,
+                        pCurDqLayer,
+                        pDec,
+                        0,
+                        iMbNb,
+                        iMbXyIndex,
+                    )
                 } else {
                     DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
                 };
@@ -1976,7 +2123,14 @@ pub fn WelsDeblockingMb(
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
                 } else if bBSlice {
-                    DeblockingBSliceBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
+                    DeblockingBSliceBsMarginalMBAvcbase(
+                        pFilter,
+                        pCurDqLayer,
+                        pDec,
+                        1,
+                        iMbNb,
+                        iMbXyIndex,
+                    )
                 } else {
                     DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
                 };
@@ -1993,7 +2147,10 @@ pub fn WelsDeblockingMb(
                 nBS[1][2] = [0u8; 4];
                 nBS[1][3] = [0u8; 4];
             } else if IS_INTER_16x16(iCurMbType) {
-                let is_8x8 = *pCurDqLayer.grid.transform_size8x8_flag.get(pCurDqLayer.iMbXyIndex as usize);
+                let is_8x8 = *pCurDqLayer
+                    .grid
+                    .transform_size8x8_flag
+                    .get(pCurDqLayer.iMbXyIndex as usize);
                 if !is_8x8 {
                     DeblockingBSInsideMBAvsbase(GetPNzc(pCurDqLayer, iMbXyIndex), &mut nBS, 1);
                 } else {
@@ -2083,12 +2240,12 @@ pub fn WelsDeblockingFilterSlice(
                 break;
             }
 
-            if pCtx.pps_of(pps_id).is_some_and(|pps| pps.uiNumSliceGroups > 1) {
+            if pCtx
+                .pps_of(pps_id)
+                .is_some_and(|pps| pps.uiNumSliceGroups > 1)
+            {
                 // Flexible Macroblock Ordering slice group transition
-                iNextMbXyIndex = FmoNextMb(
-                    active_fmo(pCtx.sFmoList, fmo_id),
-                    iNextMbXyIndex,
-                );
+                iNextMbXyIndex = FmoNextMb(active_fmo(pCtx.sFmoList, fmo_id), iNextMbXyIndex);
             } else {
                 iNextMbXyIndex += 1;
             }
@@ -2123,10 +2280,11 @@ pub fn WelsDeblockingInitFilter(
     pFilter.ref_ids = snapshot_ref_ids(pCtx.sRefPic);
 }
 
-
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSSE3};
-pub use crate::decoder::decode_slice::{g_kuiMbCountScan4Idx};
+pub use crate::common::cpu_core::{
+    WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MSA, WELS_CPU_NEON, WELS_CPU_SSSE3,
+};
+pub use crate::decoder::decode_slice::g_kuiMbCountScan4Idx;
 use crate::decoder::fmo::FmoNextMb;
 
 #[cfg(test)]
@@ -2227,5 +2385,4 @@ mod tests {
             assert_eq!(distinct, 1, "a second slot is a different reference");
         }
     }
-
 }

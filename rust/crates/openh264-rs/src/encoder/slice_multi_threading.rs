@@ -37,38 +37,33 @@
 //! Error (RMSE) dynamic load balancing, thread-local bitstream buffer binding, and
 //! Annex B NAL bitstream aggregation.
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 use std::sync::atomic::{AtomicI32, AtomicU16, Ordering};
 
+use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType};
 use crate::encoder::nal_encap::{
     WelsEncodeNal, WelsLoadNalForSlice, WelsUnloadNalForSlice, WelsWriteSVCPrefixNal,
 };
-use crate::common::wels_common_defs::{EWelsNalRefIdc, EWelsNalUnitType};
 use crate::encoder::svc_encode_slice::{
-    current_layer_ref, InitOneSliceInThread,
-    SetSliceBoundaryInfo,
-    WelsCodeOneSlice,
+    InitOneSliceInThread, SetSliceBoundaryInfo, WelsCodeOneSlice, current_layer_ref,
 };
 use crate::encoder::vlc_encoder::BsWriter;
 use crate::encoder::wels_encoder_ext::WelsTime;
 pub const ENC_RETURN_UNEXPECTED: i32 = 0x04;
-use crate::encoder::svc_encode_slice::{set_current_layer, LayerIdx};
-use crate::{
-    RCMode, SLayerBSInfo, SliceMode, MAX_SPATIAL_LAYER_NUM,
-};
+pub use crate::encoder::encoder_context::sWelsEncCtx;
+pub use crate::encoder::md::SMB;
 pub use crate::encoder::nal_encap::SWelsSliceBs;
 pub use crate::encoder::rc::SWelsSvcRc;
-pub use crate::encoder::svc_encode_slice::SLayerInfo;
-pub use crate::encoder::md::SMB;
-pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::svc_encode_slice::SDqLayer;
-pub use crate::encoder::encoder_context::sWelsEncCtx;
-use crate::encoder::svc_encode_slice::{ReallocateSliceInThread, SSliceBufferInfo, UpdateMbNeighbor, current_layer_expect, current_layer_expect_mut, layer_rec_view, slice_in_layer_mut};
+pub use crate::encoder::svc_encode_slice::SLayerInfo;
+pub use crate::encoder::svc_encode_slice::SSlice;
+use crate::encoder::svc_encode_slice::{LayerIdx, set_current_layer};
+use crate::encoder::svc_encode_slice::{
+    ReallocateSliceInThread, SSliceBufferInfo, UpdateMbNeighbor, current_layer_expect,
+    current_layer_expect_mut, layer_rec_view, slice_in_layer_mut,
+};
+use crate::{MAX_SPATIAL_LAYER_NUM, RCMode, SLayerBSInfo, SliceMode};
 
 // ============================================================================
 // Constants and Thresholds
@@ -81,11 +76,11 @@ pub const EPSN: f32 = 0.000001;
 pub const INT_MULTIPLY: i32 = 100;
 pub const SEM_NAME_MAX: usize = 32;
 pub const MAX_THREADS_NUM: usize = 4;
-/// One definition, in `wels_encoder_ext` — `svc_enc_slice_segment.h:62`.
-pub use crate::encoder::wels_encoder_ext::MAX_SLICES_NUM;
 use crate::encoder::encoder_context::{dq_layer_mut, dq_layer_ref};
 use crate::encoder::nal_encap::SWelsEncoderOutput;
 use crate::encoder::param_svc::SWelsSvcCodingParam;
+/// One definition, in `wels_encoder_ext` — `svc_enc_slice_segment.h:62`.
+pub use crate::encoder::wels_encoder_ext::MAX_SLICES_NUM;
 use crate::encoder::worker_pool::WorkerPool;
 use crate::safe::mb_grid::MbArray;
 pub const MAX_DEPENDENCY_LAYER: usize = 4;
@@ -113,7 +108,6 @@ pub fn fill_mb_map(map: &[AtomicU16], kiFirstMb: i32, kiCount: i32, uiValue: u16
         }
     }
 }
-
 
 // ============================================================================
 // Data Structures
@@ -155,7 +149,6 @@ impl Default for SSliceThreading {
 pub type TagSliceThreading = SSliceThreading;
 
 pub type TagWelsSliceBs = SWelsSliceBs;
-
 
 pub type TagSlice = SSlice;
 
@@ -200,12 +193,7 @@ impl Default for SSliceCtx {
 }
 pub type SlicepEncCtx_s = SSliceCtx;
 
-
-
-
 pub type TagDqLayer = SDqLayer;
-
-
 
 pub type SWelsEncCtx = sWelsEncCtx;
 
@@ -215,20 +203,12 @@ pub type SWelsEncCtx = sWelsEncCtx;
 
 #[inline]
 pub fn WelsDivRound(x: i32, y: i32) -> i32 {
-    if y == 0 {
-        x / (y + 1)
-    } else {
-        (y / 2 + x) / y
-    }
+    if y == 0 { x / (y + 1) } else { (y / 2 + x) / y }
 }
 
 #[inline]
 pub fn WelsDivRound64(x: i64, y: i64) -> i64 {
-    if y == 0 {
-        x / (y + 1)
-    } else {
-        (y / 2 + x) / y
-    }
+    if y == 0 { x / (y + 1) } else { (y / 2 + x) / y }
 }
 
 // ============================================================================
@@ -334,8 +314,7 @@ pub fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
     let mut iNeedAdj: i32 = 0;
 
     while iSliceIdx < iSliceNum {
-        let Some(pSlice) = slice_in_layer_mut(pCurDq, iSliceIdx)
-        else {
+        let Some(pSlice) = slice_in_layer_mut(pCurDq, iSliceIdx) else {
             return 0;
         };
         uiTotalConsume += pSlice.uiSliceConsumeTime;
@@ -432,10 +411,8 @@ pub fn DynamicAdjustSlicing(
         let Some(pSlice) = slice_in_layer_mut(pCurDqLayer, iSliceIdx) else {
             return;
         };
-        let mut iNumMbAssigning = WelsDivRound(
-            kiCountNumMb * pSlice.iSliceComplexRatio,
-            INT_MULTIPLY,
-        );
+        let mut iNumMbAssigning =
+            WelsDivRound(kiCountNumMb * pSlice.iSliceComplexRatio, INT_MULTIPLY);
 
         if rc_mode != RCMode::RC_OFF_MODE {
             iNumMbAssigning = iNumMbAssigning / iNumMbInEachGom * iNumMbInEachGom;
@@ -575,12 +552,22 @@ pub fn AppendSliceToFrameBs(
     }
 
     let sWelsEncCtx {
-        ppDqLayerList, iCurDqLayer, pFrameBs, iPosBsBuffer, iFrameBsSize, iEncoderError, pOut, ..
+        ppDqLayerList,
+        iCurDqLayer,
+        pFrameBs,
+        iPosBsBuffer,
+        iFrameBsSize,
+        iEncoderError,
+        pOut,
+        ..
     } = &mut *pCtx;
     // The NAL lengths this walk distributes are entries of `pOut.sNalLen`, and
     // the C-ABI pointer on the record is the reslice of it the application reads.
-    let SWelsEncoderOutput { sNalLen, iNalLenBase, .. } =
-        &mut **pOut.as_mut().expect("pOut lives");
+    let SWelsEncoderOutput {
+        sNalLen,
+        iNalLenBase,
+        ..
+    } = &mut **pOut.as_mut().expect("pOut lives");
     let Some(pCurDq) = iCurDqLayer
         .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
         .and_then(|l| l.as_deref_mut())
@@ -602,9 +589,7 @@ pub fn AppendSliceToFrameBs(
             if pSliceBs.uiBsPos > 0 {
                 let iCountNal = pSliceBs.iNalIndex;
 
-                if (*iPosBsBuffer as u64) + (pSliceBs.uiBsPos as u64)
-                    > (*iFrameBsSize as u64)
-                {
+                if (*iPosBsBuffer as u64) + (pSliceBs.uiBsPos as u64) > (*iFrameBsSize as u64) {
                     *iEncoderError |= ENC_RETURN_MEMALLOCERR;
                     return 0;
                 }
@@ -613,8 +598,7 @@ pub fn AppendSliceToFrameBs(
                     if let Some(src) = pSliceBs.pBs.as_ref() {
                         let kiPos = *iPosBsBuffer as usize;
                         let kiLen = pSliceBs.uiBsPos as usize;
-                        pFrameBs[kiPos..kiPos + kiLen]
-                            .copy_from_slice(&src[..kiLen]);
+                        pFrameBs[kiPos..kiPos + kiLen].copy_from_slice(&src[..kiLen]);
                     }
                 }
 
@@ -735,7 +719,12 @@ pub fn AdjustBaseLayer(pCtx: &mut sWelsEncCtx) -> i32 {
     let iNeedAdj = NeedDynamicAdjust(pCurDq, kiSliceNumInFrame);
 
     if iNeedAdj != 0 {
-        let sWelsEncCtx { pSvcParam, pWelsSvcRc, ppDqLayerList, .. } = &mut *pCtx;
+        let sWelsEncCtx {
+            pSvcParam,
+            pWelsSvcRc,
+            ppDqLayerList,
+            ..
+        } = &mut *pCtx;
         let Some(pSvcParam) = pSvcParam.as_deref() else {
             return iNeedAdj;
         };
@@ -778,14 +767,22 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
     if kbModelingFromSpatial {
         // The two names can be the same layer (base == current when `iCurDid`
         // is the base), so the load is hoisted above the exclusive borrow.
-        let kiSliceNumInFrame =
-            current_layer_expect(pCtx).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
+        let kiSliceNumInFrame = current_layer_expect(pCtx)
+            .sSliceEncCtx
+            .iSliceNumInFrame
+            .load(Ordering::Relaxed);
         let Some(pBaseLayer) = dq_layer_mut(pCtx, iCurDid as usize - 1) else {
             return 0;
         };
         iNeedAdj = NeedDynamicAdjust(pBaseLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
-            let sWelsEncCtx { pSvcParam, pWelsSvcRc, ppDqLayerList, iCurDqLayer, .. } = &mut *pCtx;
+            let sWelsEncCtx {
+                pSvcParam,
+                pWelsSvcRc,
+                ppDqLayerList,
+                iCurDqLayer,
+                ..
+            } = &mut *pCtx;
             let Some(pSvcParam) = pSvcParam.as_deref() else {
                 return iNeedAdj;
             };
@@ -798,13 +795,21 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
             DynamicAdjustSlicing(pSvcParam, pWelsSvcRc, pCurLayer, iCurDid);
         }
     } else {
-        let kiSliceNumInFrame =
-            current_layer_expect(pCtx).sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed);
-        let pCurLayer = dq_layer_mut(pCtx, iCurDid as usize)
-            .expect("the dependency layer is built");
+        let kiSliceNumInFrame = current_layer_expect(pCtx)
+            .sSliceEncCtx
+            .iSliceNumInFrame
+            .load(Ordering::Relaxed);
+        let pCurLayer =
+            dq_layer_mut(pCtx, iCurDid as usize).expect("the dependency layer is built");
         iNeedAdj = NeedDynamicAdjust(pCurLayer, kiSliceNumInFrame);
         if iNeedAdj != 0 {
-            let sWelsEncCtx { pSvcParam, pWelsSvcRc, ppDqLayerList, iCurDqLayer, .. } = &mut *pCtx;
+            let sWelsEncCtx {
+                pSvcParam,
+                pWelsSvcRc,
+                ppDqLayerList,
+                iCurDqLayer,
+                ..
+            } = &mut *pCtx;
             let Some(pSvcParam) = pSvcParam.as_deref() else {
                 return iNeedAdj;
             };
@@ -824,7 +829,6 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
 // ============================================================================
 // Unit Tests
 // ============================================================================
-
 
 /// One worker's share of a frame's slices, and the one value in this crate that
 /// crosses a spawn.
@@ -899,7 +903,19 @@ impl<'a> SliceJobHandle<'a> {
             iBsSlot,
             pSmt.uiThreadBsBufferNum
         );
-        Self { pCtx, pBsBuf, pSlices, pMbs, pDynBsBuf, pBank, iBsSlot, iFirstSlice, iSliceStep, iSliceCount, bRecordsTime }
+        Self {
+            pCtx,
+            pBsBuf,
+            pSlices,
+            pMbs,
+            pDynBsBuf,
+            pBank,
+            iBsSlot,
+            iFirstSlice,
+            iSliceStep,
+            iSliceCount,
+            bRecordsTime,
+        }
     }
 }
 
@@ -975,12 +991,18 @@ fn EncodeOneSliceInJob(
     // position `(iSliceIdx - iFirstSlice) / iSliceStep` in its list.
     let kiLocal = ((iSliceIdx - iFirstSlice) / iSliceStep) as usize;
     let Some(pSlice) = pSlices.get_mut(kiLocal) else {
-        return SliceJobResult { iResult: ENC_RETURN_UNEXPECTED, bInitFailed: true };
+        return SliceJobResult {
+            iResult: ENC_RETURN_UNEXPECTED,
+            bInitFailed: true,
+        };
     };
     InitOneSliceInThread(pCtx, pSlice, iBsSlot, iSliceIdx);
     let iReturn = SetSliceBoundaryInfo(current_layer_ref(pCtx), pSlice, iSliceIdx);
     if iReturn != ENC_RETURN_SUCCESS {
-        return SliceJobResult { iResult: iReturn, bInitFailed: true };
+        return SliceJobResult {
+            iResult: iReturn,
+            bInitFailed: true,
+        };
     }
     pSlice.sSliceBs.sBsWrite = BsWriter::new();
     let iSliceStart = if bRecordsTime { WelsTime() } else { 0 };
@@ -991,7 +1013,10 @@ fn EncodeOneSliceInJob(
     // `iCountBsLen`, single writer).
     // The `pOut` writer option is `None` on this side: every slice of a forked
     // layer has its own writer.
-    debug_assert_eq!(pSlice.uiBufferIdx as i32, iBsSlot, "the slice's claimed slot is this job's");
+    debug_assert_eq!(
+        pSlice.uiBufferIdx as i32, iBsSlot,
+        "the slice's claimed slot is this job's"
+    );
     let kuiSize = pSlice.sSliceBs.uiSize;
     let pSliceBsBuf = &mut pSlotBuf[..kuiSize as usize];
     let mut pCtxOutBs: Option<&mut BsWriter> = None;
@@ -1007,7 +1032,16 @@ fn EncodeOneSliceInJob(
         // `None` restore scratch: the fixed loops never use it. `None`
         // next-slice too — the fixed modes never hit the dynamic boundary, so
         // `AddSliceBoundary` never fires here.
-        let mut iReturn = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, pMbRun, None, None);
+        let mut iReturn = WelsCodeOneSlice(
+            pCtx,
+            pSlice,
+            eNalType as i32,
+            &mut *pSliceBsBuf,
+            &mut pCtxOutBs,
+            pMbRun,
+            None,
+            None,
+        );
         if ENC_RETURN_SUCCESS != iReturn {
             return iReturn;
         }
@@ -1019,8 +1053,11 @@ fn EncodeOneSliceInJob(
             return iReturn;
         }
 
-        let pfDeblockingFilterSlice =
-            pCtx.func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
+        let pfDeblockingFilterSlice = pCtx
+            .func_list()
+            .pfDeblocking
+            .pfDeblockingFilterSlice
+            .unwrap();
         {
             // The walker's window is the worker's own carved run, the same one
             // the coding chain just wrote through. `uiFilterIdc == 1` (MT
@@ -1045,7 +1082,10 @@ fn EncodeOneSliceInJob(
         pSlice.uiSliceConsumeTime = (WelsTime() - iSliceStart) as u32;
     }
 
-    SliceJobResult { iResult, bInitFailed: false }
+    SliceJobResult {
+        iResult,
+        bInitFailed: false,
+    }
 }
 
 /// How many workers a fork gets: never more than there are slices to encode, and
@@ -1172,11 +1212,26 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
         }
 
         let mut jobs: Vec<SliceJobHandle<'_>> = Vec::with_capacity(iWidth as usize);
-        for (((k, buf), slices), mbs) in
-            vTakenBsBufs.iter_mut().enumerate().zip(vPerWorker).zip(vMbPerWorker)
+        for (((k, buf), slices), mbs) in vTakenBsBufs
+            .iter_mut()
+            .enumerate()
+            .zip(vPerWorker)
+            .zip(vMbPerWorker)
         {
             let k = k as i32;
-            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), slices, mbs, None, None, k, k, iWidth, kiSliceCount, bRecordsTime));
+            jobs.push(SliceJobHandle::new(
+                pCtx,
+                buf.as_mut_slice(),
+                slices,
+                mbs,
+                None,
+                None,
+                k,
+                k,
+                iWidth,
+                kiSliceCount,
+                bRecordsTime,
+            ));
         }
 
         // The persistent workers, borrowed through the shared context like
@@ -1261,15 +1316,18 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
 /// Panics if the slices' macroblock ranges are not disjoint, as in
 /// [`EncodeFixedSlicesForked`]. Short per-slice tables are tolerated here.
 pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
-    if kiTaskCount <= 0 || current_layer_ref(pCtx).is_none()
-        || pCtx.pSliceThreading.is_none()
-    {
+    if kiTaskCount <= 0 || current_layer_ref(pCtx).is_none() || pCtx.pSliceThreading.is_none() {
         return;
     }
     let iWidth = ForkWidth(pCtx, kiTaskCount);
     // The layer and the pool are disjoint fields of the context, so the layer's
     // `&mut` and the pool's `&` coexist — `current_layer_mut`, spelled out.
-    let sWelsEncCtx { ppDqLayerList, iCurDqLayer, pSliceThreading, .. } = &mut *pCtx;
+    let sWelsEncCtx {
+        ppDqLayerList,
+        iCurDqLayer,
+        pSliceThreading,
+        ..
+    } = &mut *pCtx;
     let pool = &pSliceThreading.as_deref().expect("guarded above").pool;
     let Some(pCurDq) = iCurDqLayer
         .and_then(|idx| ppDqLayerList.get_mut(idx.get()))
@@ -1284,8 +1342,13 @@ pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
     // here, on the calling thread, while the layer is `&mut` — the borrow that
     // cannot coexist with the fork — and each worker is handed its own chunks.
     // Nothing crosses the spawn but `&mut [SMB]` and a shared `&SSliceCtx`.
-    let SDqLayer { sMbDataP, sSliceEncCtx, pFirstMbIdxOfSlice, pCountMbNumInSlice, .. } =
-        pCurDq;
+    let SDqLayer {
+        sMbDataP,
+        sSliceEncCtx,
+        pFirstMbIdxOfSlice,
+        pCountMbNumInSlice,
+        ..
+    } = pCurDq;
     let kiMbWidth = sSliceEncCtx.iMbWidth as i32;
     let kiGridWidth = sMbDataP.dims().mb_width();
 
@@ -1330,9 +1393,7 @@ pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
                         kiGridWidth,
                         first as usize,
                     );
-                    UpdateMbListNeighborParallel(
-                        &mut mbs, pSliceCtx, kiMbWidth, idc, first, count,
-                    );
+                    UpdateMbListNeighborParallel(&mut mbs, pSliceCtx, kiMbWidth, idc, first, count);
                 }
             });
         }
@@ -1393,12 +1454,18 @@ fn EncodeOnePartitionSizeLimited(
     {
         let kiCur = pBank.iCodedSliceNum as usize;
         let Some(pSlice) = pBank.pSliceBuffer.get_mut(kiCur) else {
-            return SliceJobResult { iResult: ENC_RETURN_UNEXPECTED, bInitFailed: true };
+            return SliceJobResult {
+                iResult: ENC_RETURN_UNEXPECTED,
+                bInitFailed: true,
+            };
         };
         InitOneSliceInThread(pCtx, pSlice, iBsSlot, iPartitionIdx);
         let iReturn = SetSliceBoundaryInfo(current_layer_ref(pCtx), pSlice, iPartitionIdx);
         if iReturn != ENC_RETURN_SUCCESS {
-            return SliceJobResult { iResult: iReturn, bInitFailed: true };
+            return SliceJobResult {
+                iResult: iReturn,
+                bInitFailed: true,
+            };
         }
         pSlice.sSliceBs.sBsWrite = BsWriter::new();
     }
@@ -1434,11 +1501,7 @@ fn EncodeOnePartitionSizeLimited(
         while iAnyMbLeftInPartition > 0 {
             let bNeedReallocate = pBank.iCodedSliceNum >= pBank.iMaxSliceNum - 1;
             if bNeedReallocate {
-                let iRet = ReallocateSliceInThread(
-                    pCtx,
-                    pCtx.uiDependencyId as i32,
-                    pBank,
-                );
+                let iRet = ReallocateSliceInThread(pCtx, pCtx.uiDependencyId as i32, pBank);
                 if ENC_RETURN_SUCCESS != iRet {
                     return iRet;
                 }
@@ -1463,7 +1526,10 @@ fn EncodeOnePartitionSizeLimited(
             // iteration because `InitOneSliceInThread` re-resolves the slice
             // (and with it the claimed size) after every reallocation. See
             // `EncodeOneSliceInJob` for the slot/size invariants.
-            debug_assert_eq!(pSlice.uiBufferIdx as i32, iBsSlot, "the slice's claimed slot is this job's");
+            debug_assert_eq!(
+                pSlice.uiBufferIdx as i32, iBsSlot,
+                "the slice's claimed slot is this job's"
+            );
             let kuiSize = pSlice.sSliceBs.uiSize;
             let pSliceBsBuf = &mut pSlotBuf[..kuiSize as usize];
             let mut pCtxOutBs: Option<&mut BsWriter> = None;
@@ -1476,7 +1542,16 @@ fn EncodeOnePartitionSizeLimited(
             debug_assert_eq!(iLocalSliceIdx, pSlice.iSliceIdx);
             // The forward slot is the split's other half; `iCodedSliceNum + 1`
             // is the split point by construction.
-            let mut iRet = WelsCodeOneSlice(pCtx, pSlice, eNalType as i32, &mut *pSliceBsBuf, &mut pCtxOutBs, &mut pMbs[0], pRestoreBuf.as_deref_mut(), pNextSlice);
+            let mut iRet = WelsCodeOneSlice(
+                pCtx,
+                pSlice,
+                eNalType as i32,
+                &mut *pSliceBsBuf,
+                &mut pCtxOutBs,
+                &mut pMbs[0],
+                pRestoreBuf.as_deref_mut(),
+                pNextSlice,
+            );
             if ENC_RETURN_SUCCESS != iRet {
                 return iRet;
             }
@@ -1487,8 +1562,11 @@ fn EncodeOnePartitionSizeLimited(
             if ENC_RETURN_SUCCESS != iRet {
                 return iRet;
             }
-            let pfDeblockingFilterSlice =
-                pCtx.func_list().pfDeblocking.pfDeblockingFilterSlice.unwrap();
+            let pfDeblockingFilterSlice = pCtx
+                .func_list()
+                .pfDeblocking
+                .pfDeblockingFilterSlice
+                .unwrap();
             // The walker reuses the partition run the coding chain just wrote
             // through, carved before the fork. `uiFilterIdc == 1` keeps the walk
             // and the neighbour reads inside the slice, hence inside the run.
@@ -1515,7 +1593,10 @@ fn EncodeOnePartitionSizeLimited(
         pBank.pSliceBuffer[kiSlot].uiSliceConsumeTime = (WelsTime() - iSliceStart) as u32;
     }
 
-    SliceJobResult { iResult, bInitFailed: false }
+    SliceJobResult {
+        iResult,
+        bInitFailed: false,
+    }
 }
 
 /// **The fork/join for `SM_SIZELIMITED_SLICE`** — what
@@ -1659,8 +1740,24 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
             // instead, owned, because it grows in-fork — plus the partition's one
             // macroblock window and the restore scratch, `None` where the buffer
             // was never allocated.
-            let dynbuf = if dynbuf.is_empty() { None } else { Some(dynbuf.as_mut_slice()) };
-            jobs.push(SliceJobHandle::new(pCtx, buf.as_mut_slice(), Vec::new(), mbs, dynbuf, Some(bank), k, k, iWidth, kiPartitionCnt, true));
+            let dynbuf = if dynbuf.is_empty() {
+                None
+            } else {
+                Some(dynbuf.as_mut_slice())
+            };
+            jobs.push(SliceJobHandle::new(
+                pCtx,
+                buf.as_mut_slice(),
+                Vec::new(),
+                mbs,
+                dynbuf,
+                Some(bank),
+                k,
+                k,
+                iWidth,
+                kiPartitionCnt,
+                true,
+            ));
         }
 
         let pool = &pCtx.pSliceThreading.as_deref().expect("guarded above").pool;
@@ -1676,7 +1773,9 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
                         &mut *job.pBsBuf,
                         &mut job.pMbs[..],
                         job.pDynBsBuf.take(),
-                        job.pBank.take().expect("the size-limited job carries its bank"),
+                        job.pBank
+                            .take()
+                            .expect("the size-limited job carries its bank"),
                     );
                     if !r.bInitFailed && r.iResult != ENC_RETURN_SUCCESS {
                         r.iResult
@@ -1723,7 +1822,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_div_round() {
         assert_eq!(WelsDivRound(100, 10), 10);
@@ -1801,7 +1900,10 @@ mod tests {
         dq_layer.sSliceBufferInfo[0].pSliceBuffer = (0..n).map(|_| SSlice::new()).collect();
         dq_layer.sSliceBufferInfo[0].iMaxSliceNum = n as i32;
         dq_layer.ppSliceInLayer = (0..n)
-            .map(|i| crate::encoder::svc_encode_slice::SliceIdx { bank: 0, offset: i as i32 })
+            .map(|i| crate::encoder::svc_encode_slice::SliceIdx {
+                bank: 0,
+                offset: i as i32,
+            })
             .collect();
         dq_layer
     }
@@ -1820,12 +1922,21 @@ mod tests {
             slice.iCountMbNumInSlice = 100;
             slice.uiSliceConsumeTime = 1000;
         }
-        dq_layer.sSliceEncCtx.iSliceNumInFrame.store(2, Ordering::Relaxed);
+        dq_layer
+            .sSliceEncCtx
+            .iSliceNumInFrame
+            .store(2, Ordering::Relaxed);
 
         CalcSliceComplexRatio(&mut dq_layer);
 
-        assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[0].iSliceComplexRatio, 50);
-        assert_eq!(dq_layer.sSliceBufferInfo[0].pSliceBuffer[1].iSliceComplexRatio, 50);
+        assert_eq!(
+            dq_layer.sSliceBufferInfo[0].pSliceBuffer[0].iSliceComplexRatio,
+            50
+        );
+        assert_eq!(
+            dq_layer.sSliceBufferInfo[0].pSliceBuffer[1].iSliceComplexRatio,
+            50
+        );
     }
 
     /// Runs the whole encoder with `bUseLoadBalancing` on, four threads and four
@@ -1867,7 +1978,11 @@ mod tests {
             },
         );
 
-        assert_eq!(dims, (256, 192), "the encoder must be configured for a 16x12 grid");
+        assert_eq!(
+            dims,
+            (256, 192),
+            "the encoder must be configured for a 16x12 grid"
+        );
         assert_eq!(frames.len(), 4, "the encode loop did not run to the end");
         assert!(
             frames.iter().all(|f| f.bytes > 0),
@@ -1883,7 +1998,10 @@ mod tests {
             frames.iter().all(|f| f.vcl_nals == 4),
             "a frame did not carry four VCL NALs, so the slice count moved under the \
              rebalance or the mode was rewritten: {:?}",
-            frames.iter().map(|f| (f.kind, f.vcl_nals)).collect::<Vec<_>>()
+            frames
+                .iter()
+                .map(|f| (f.kind, f.vcl_nals))
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             frames[0].kind,

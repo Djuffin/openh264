@@ -24,7 +24,9 @@
 
 #![forbid(unsafe_code)]
 
-use crate::encoder::wels_preprocess::{SAdaptiveQuantizationParam, SMotionTextureUnit, SPixMap, SVAACalcResult};
+use crate::encoder::wels_preprocess::{
+    SAdaptiveQuantizationParam, SMotionTextureUnit, SPixMap, SVAACalcResult,
+};
 
 use super::vaacalc::RET_SUCCESS;
 use crate::processing::vaacalc::VaaCalcPlanes;
@@ -140,7 +142,8 @@ impl CAdaptiveQuantization {
 
     /// `CAdaptiveQuantization::Get` — writes back only the frame average.
     pub fn Get(&self, param: &mut SAdaptiveQuantizationParam) -> i32 {
-        param.iAverMotionTextureIndexToDeltaQp = self.m_sAdaptiveQuantParam.iAverMotionTextureIndexToDeltaQp;
+        param.iAverMotionTextureIndexToDeltaQp =
+            self.m_sAdaptiveQuantParam.iAverMotionTextureIndexToDeltaQp;
         RET_SUCCESS
     }
 
@@ -173,8 +176,7 @@ impl CAdaptiveQuantization {
         // Reuse the VAA statistics when they were computed over exactly this pair
         // of pictures; otherwise recompute per macroblock. The comparison is
         // between addresses.
-        if calc.pRefY == planes.refp.as_ptr() as usize
-            && calc.pCurY == planes.cur.as_ptr() as usize
+        if calc.pRefY == planes.refp.as_ptr() as usize && calc.pCurY == planes.cur.as_ptr() as usize
         {
             let mut iMbIndex = 0isize;
             for _j in 0..iMbHeight {
@@ -323,7 +325,10 @@ mod tests {
                 let refy = vec![d; mb_span(ref_stride)];
                 let srcy = vec![0u8; mb_span(src_stride)];
                 let got = sample_variance_16x16(&refy, ref_stride, &srcy, src_stride);
-                assert_eq!(got.uiMotionIndex, 0, "difference {d}, strides {ref_stride}/{src_stride}");
+                assert_eq!(
+                    got.uiMotionIndex, 0,
+                    "difference {d}, strides {ref_stride}/{src_stride}"
+                );
                 assert_eq!(got.uiTextureIndex, 0, "strides {ref_stride}/{src_stride}");
             }
         }
@@ -351,7 +356,10 @@ mod tests {
             }
         }
         let got = sample_variance_16x16(&refy, ref_stride, &srcy, src_stride);
-        assert_eq!(got.uiTextureIndex, 0, "the source walk picked up the row gap");
+        assert_eq!(
+            got.uiTextureIndex, 0,
+            "the source walk picked up the row gap"
+        );
         assert_eq!(got.uiMotionIndex, 0);
     }
 

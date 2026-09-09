@@ -41,7 +41,7 @@
 
 use core::arch::aarch64::*;
 
-use super::lanes::{ld16, ld4, ld8};
+use super::lanes::{ld4, ld8, ld16};
 use crate::safe::plane::{BlockRows, RefSamples};
 
 // ============================================================================
@@ -65,7 +65,10 @@ fn sad_16x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, d
         acc[3] = vabal_high_u8(acc[3], a, b);
         y += 2;
     }
-    vaddlvq_u16(vaddq_u16(vaddq_u16(acc[0], acc[1]), vaddq_u16(acc[2], acc[3]))) as i32
+    vaddlvq_u16(vaddq_u16(
+        vaddq_u16(acc[0], acc[1]),
+        vaddq_u16(acc[2], acc[3]),
+    )) as i32
 }
 
 /// Two rows per step into two accumulators.
@@ -78,7 +81,11 @@ fn sad_8x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, dy
     let mut y = 0usize;
     while y < H {
         acc[0] = vabal_u8(acc[0], ld8(&s1.row::<8>(y, 0)), ld8(&s2.row::<8>(y, 0)));
-        acc[1] = vabal_u8(acc[1], ld8(&s1.row::<8>(y + 1, 0)), ld8(&s2.row::<8>(y + 1, 0)));
+        acc[1] = vabal_u8(
+            acc[1],
+            ld8(&s1.row::<8>(y + 1, 0)),
+            ld8(&s2.row::<8>(y + 1, 0)),
+        );
         y += 2;
     }
     vaddlvq_u16(vaddq_u16(acc[0], acc[1])) as i32
@@ -95,7 +102,11 @@ fn sad_4x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, dy
     let mut y = 0usize;
     while y < H {
         acc[0] = vabal_u8(acc[0], ld4(&s1.row::<4>(y, 0)), ld4(&s2.row::<4>(y, 0)));
-        acc[1] = vabal_u8(acc[1], ld4(&s1.row::<4>(y + 1, 0)), ld4(&s2.row::<4>(y + 1, 0)));
+        acc[1] = vabal_u8(
+            acc[1],
+            ld4(&s1.row::<4>(y + 1, 0)),
+            ld4(&s2.row::<4>(y + 1, 0)),
+        );
         y += 2;
     }
     vaddlvq_u16(vaddq_u16(acc[0], acc[1])) as i32
@@ -132,8 +143,18 @@ fn sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sample2: &S,
     sad: &mut [i32; 4],
 ) {
-    const { assert!(G % 2 == 0 && H % G == 0, "the block is a whole number of G-row cuts") };
-    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+    const {
+        assert!(
+            G % 2 == 0 && H % G == 0,
+            "the block is a whole number of G-row cuts"
+        )
+    };
+    const {
+        assert!(
+            HW == H + 2,
+            "the probe span is two rows taller than the block"
+        )
+    };
     let mut acc = [[vdupq_n_u16(0); 2]; 4];
     let s1 = sample1.span::<16, H>(0, 0);
     let s2 = sample2.span::<18, HW>(-1, -1);
@@ -173,8 +194,18 @@ fn sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sample2: &S,
     sad: &mut [i32; 4],
 ) {
-    const { assert!(G % 2 == 0 && H % G == 0, "the block is a whole number of G-row cuts") };
-    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+    const {
+        assert!(
+            G % 2 == 0 && H % G == 0,
+            "the block is a whole number of G-row cuts"
+        )
+    };
+    const {
+        assert!(
+            HW == H + 2,
+            "the probe span is two rows taller than the block"
+        )
+    };
     let mut acc = [[vdupq_n_u16(0); 2]; 4];
     let s1 = sample1.span::<8, H>(0, 0);
     let s2 = sample2.span::<10, HW>(-1, -1);
@@ -218,8 +249,18 @@ fn sad_four_4x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sample2: &S,
     sad: &mut [i32; 4],
 ) {
-    const { assert!(G % 2 == 0 && H % G == 0, "the block is a whole number of G-row cuts") };
-    const { assert!(HW == H + 2, "the probe span is two rows taller than the block") };
+    const {
+        assert!(
+            G % 2 == 0 && H % G == 0,
+            "the block is a whole number of G-row cuts"
+        )
+    };
+    const {
+        assert!(
+            HW == H + 2,
+            "the probe span is two rows taller than the block"
+        )
+    };
     let mut acc = [[vdupq_n_u16(0); 2]; 4];
     let s1 = sample1.span::<4, H>(0, 0);
     let s2 = sample2.span::<6, HW>(-1, -1);
@@ -391,7 +432,10 @@ mod tests {
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        assert_eq!(sample_sad_16x16(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
+        assert_eq!(
+            sample_sad_16x16(&c1, &c2),
+            sample_sad::<16, 16, _>(&c1, &c2)
+        );
         assert_eq!(sample_sad_16x8(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
         assert_eq!(sample_sad_8x16(&c1, &c2), sample_sad::<8, 16, _>(&c1, &c2));
         assert_eq!(sample_sad_8x8(&c1, &c2), sample_sad::<8, 8, _>(&c1, &c2));
@@ -408,8 +452,14 @@ mod tests {
         let c1 = PlaneCursor::new(&p1, 64 * 8 + 8, 64);
         let c2 = PlaneCursor::new(&p2, 64 * 8 + 8, 64);
 
-        assert_eq!(sample_sad_16x16_avx2(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2));
-        assert_eq!(sample_sad_16x8_avx2(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2));
+        assert_eq!(
+            sample_sad_16x16_avx2(&c1, &c2),
+            sample_sad::<16, 16, _>(&c1, &c2)
+        );
+        assert_eq!(
+            sample_sad_16x8_avx2(&c1, &c2),
+            sample_sad::<16, 8, _>(&c1, &c2)
+        );
     }
 
     #[test]
@@ -461,7 +511,9 @@ mod tests {
 
     /// A 64-bit LCG, so a failing seed is replayable.
     fn lcg(seed: &mut u64) -> u8 {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*seed >> 32) as u8
     }
 
@@ -502,13 +554,41 @@ mod tests {
                 let c2 = PlaneCursor::new(&p2, anchor, 64);
                 let at = format!("{name} @ {anchor}");
 
-                assert_eq!(sample_sad_16x16(&c1, &c2), sample_sad::<16, 16, _>(&c1, &c2), "16x16 {at}");
-                assert_eq!(sample_sad_16x8(&c1, &c2), sample_sad::<16, 8, _>(&c1, &c2), "16x8 {at}");
-                assert_eq!(sample_sad_8x16(&c1, &c2), sample_sad::<8, 16, _>(&c1, &c2), "8x16 {at}");
-                assert_eq!(sample_sad_8x8(&c1, &c2), sample_sad::<8, 8, _>(&c1, &c2), "8x8 {at}");
-                assert_eq!(sample_sad_4x4(&c1, &c2), sample_sad::<4, 4, _>(&c1, &c2), "4x4 {at}");
-                assert_eq!(sample_sad_8x4(&c1, &c2), sample_sad::<8, 4, _>(&c1, &c2), "8x4 {at}");
-                assert_eq!(sample_sad_4x8(&c1, &c2), sample_sad::<4, 8, _>(&c1, &c2), "4x8 {at}");
+                assert_eq!(
+                    sample_sad_16x16(&c1, &c2),
+                    sample_sad::<16, 16, _>(&c1, &c2),
+                    "16x16 {at}"
+                );
+                assert_eq!(
+                    sample_sad_16x8(&c1, &c2),
+                    sample_sad::<16, 8, _>(&c1, &c2),
+                    "16x8 {at}"
+                );
+                assert_eq!(
+                    sample_sad_8x16(&c1, &c2),
+                    sample_sad::<8, 16, _>(&c1, &c2),
+                    "8x16 {at}"
+                );
+                assert_eq!(
+                    sample_sad_8x8(&c1, &c2),
+                    sample_sad::<8, 8, _>(&c1, &c2),
+                    "8x8 {at}"
+                );
+                assert_eq!(
+                    sample_sad_4x4(&c1, &c2),
+                    sample_sad::<4, 4, _>(&c1, &c2),
+                    "4x4 {at}"
+                );
+                assert_eq!(
+                    sample_sad_8x4(&c1, &c2),
+                    sample_sad::<8, 4, _>(&c1, &c2),
+                    "8x4 {at}"
+                );
+                assert_eq!(
+                    sample_sad_4x8(&c1, &c2),
+                    sample_sad::<4, 8, _>(&c1, &c2),
+                    "4x8 {at}"
+                );
             }
         }
     }
@@ -569,10 +649,17 @@ mod tests {
                 };
                 let c1 = RecCursor::over_owned(&mut p1, anchor, 64);
                 let c2 = RecCursor::over_owned(&mut p2, anchor, 64);
-                assert_eq!(sample_sad_16x16(&c1, &c2), want, "16x16 via RecCursor, {name} @ {anchor}");
+                assert_eq!(
+                    sample_sad_16x16(&c1, &c2),
+                    want,
+                    "16x16 via RecCursor, {name} @ {anchor}"
+                );
                 let mut got = [0i32; 4];
                 sample_sad_four_16x16(&c1, &c2, &mut got);
-                assert_eq!(got, want4, "16x16 four-point via RecCursor, {name} @ {anchor}");
+                assert_eq!(
+                    got, want4,
+                    "16x16 four-point via RecCursor, {name} @ {anchor}"
+                );
             }
         }
     }
@@ -583,8 +670,8 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn init_sample_sad_installs_avx2_only_where_the_cpu_has_it() {
         use crate::common::cpu_core::{WELS_CPU_AVX2, WELS_CPU_SSE2};
-        use crate::encoder::svc_mode_decision::BLOCK_16x16;
         use crate::encoder::sample::WelsInitSampleSadFunc;
+        use crate::encoder::svc_mode_decision::BLOCK_16x16;
         use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
         let slot = |flags: u32| {
@@ -596,7 +683,13 @@ mod tests {
         let baseline = slot(WELS_CPU_SSE2);
         let asked_for_avx2 = slot(WELS_CPU_SSE2 | WELS_CPU_AVX2);
         assert!(baseline.is_some() && asked_for_avx2.is_some());
-        assert!(!crate::simd::has_avx2(), "no aarch64 build can answer true here");
-        assert_eq!(asked_for_avx2, baseline, "the flag alone must not install an AVX2 kernel");
+        assert!(
+            !crate::simd::has_avx2(),
+            "no aarch64 build can answer true here"
+        );
+        assert_eq!(
+            asked_for_avx2, baseline,
+            "the flag alone must not install an AVX2 kernel"
+        );
     }
 }

@@ -101,7 +101,12 @@ fn stream_cache_dir() -> PathBuf {
 /// Everything that changes the bitstream is in the filename, so bumping
 /// `BENCH_FRAMES` or `BENCH_PATTERN` regenerates rather than reusing a stale
 /// file.
-fn ensure_stream(ffmpeg: Option<&PathBuf>, spec: &StreamSpec, pattern: &str, frames: usize) -> Option<PathBuf> {
+fn ensure_stream(
+    ffmpeg: Option<&PathBuf>,
+    spec: &StreamSpec,
+    pattern: &str,
+    frames: usize,
+) -> Option<PathBuf> {
     let path = stream_cache_dir().join(format!(
         "{}_{}_{}x{}_{}f.264",
         pattern, spec.slug, WIDTH, HEIGHT, frames
@@ -112,7 +117,10 @@ fn ensure_stream(ffmpeg: Option<&PathBuf>, spec: &StreamSpec, pattern: &str, fra
 
     let ffmpeg = ffmpeg?;
     let source = format!("{}=size={}x{}:rate=30", pattern, WIDTH, HEIGHT);
-    println!("  generating {} ...", path.file_name().unwrap().to_string_lossy());
+    println!(
+        "  generating {} ...",
+        path.file_name().unwrap().to_string_lossy()
+    );
     let out = Command::new(ffmpeg)
         .args([
             "-y",
@@ -158,7 +166,13 @@ fn ensure_stream(ffmpeg: Option<&PathBuf>, spec: &StreamSpec, pattern: &str, fra
 /// through this so the decode loop itself is shared code, not two copies that
 /// could drift apart.
 trait Decoder {
-    unsafe fn decode(&mut self, src: *const u8, len: i32, dst: *mut *mut u8, info: *mut SBufferInfo) -> i32;
+    unsafe fn decode(
+        &mut self,
+        src: *const u8,
+        len: i32,
+        dst: *mut *mut u8,
+        info: *mut SBufferInfo,
+    ) -> i32;
     unsafe fn flush(&mut self, dst: *mut *mut u8, info: *mut SBufferInfo) -> i32;
     unsafe fn signal_end_of_stream(&mut self);
     unsafe fn frames_remaining(&mut self) -> i32;
@@ -181,18 +195,30 @@ impl RustDecoder {
         unsafe {
             let mut dec: *mut ISVCDecoder = ptr::null_mut();
             let ret = WelsCreateDecoder(&mut dec);
-            assert_eq!(ret as i64, CM_RESULT_SUCCESS as i64, "WelsCreateDecoder failed");
+            assert_eq!(
+                ret as i64, CM_RESULT_SUCCESS as i64,
+                "WelsCreateDecoder failed"
+            );
             assert!(!dec.is_null());
             let param = decoding_param();
             let init = ISVCDecoder::Initialize(dec, &param);
-            assert_eq!(init as i64, CM_RESULT_SUCCESS as i64, "Rust decoder Initialize failed");
+            assert_eq!(
+                init as i64, CM_RESULT_SUCCESS as i64,
+                "Rust decoder Initialize failed"
+            );
             Self { dec }
         }
     }
 }
 
 impl Decoder for RustDecoder {
-    unsafe fn decode(&mut self, src: *const u8, len: i32, dst: *mut *mut u8, info: *mut SBufferInfo) -> i32 {
+    unsafe fn decode(
+        &mut self,
+        src: *const u8,
+        len: i32,
+        dst: *mut *mut u8,
+        info: *mut SBufferInfo,
+    ) -> i32 {
         unsafe { ISVCDecoder::DecodeFrame2(self.dec, src, len, dst, info).0 }
     }
     unsafe fn flush(&mut self, dst: *mut *mut u8, info: *mut SBufferInfo) -> i32 {
@@ -240,7 +266,8 @@ const WELS_CPU_NEON: u32 = 0x000004;
 const WELS_CPU_SSE2: u32 = 0x000080;
 type CppInitializeFn = unsafe extern "C" fn(*mut c_void, *const SDecodingParam) -> c_long;
 type CppUninitializeFn = unsafe extern "C" fn(*mut c_void) -> c_long;
-type CppDecodeFrame2Fn = unsafe extern "C" fn(*mut c_void, *const u8, i32, *mut *mut u8, *mut SBufferInfo) -> i32;
+type CppDecodeFrame2Fn =
+    unsafe extern "C" fn(*mut c_void, *const u8, i32, *mut *mut u8, *mut SBufferInfo) -> i32;
 type CppFlushFrameFn = unsafe extern "C" fn(*mut c_void, *mut *mut u8, *mut SBufferInfo) -> i32;
 type CppOptionFn = unsafe extern "C" fn(*mut c_void, i32, *mut c_void) -> c_long;
 
@@ -300,8 +327,7 @@ impl CppLibrary {
                 }
                 let detect = dylib::sym(handle, c"WelsCPUFeatureDetect");
                 let cpu_flags = (!detect.is_null()).then(|| {
-                    let detect =
-                        std::mem::transmute::<*mut c_void, CppCpuFeatureDetectFn>(detect);
+                    let detect = std::mem::transmute::<*mut c_void, CppCpuFeatureDetectFn>(detect);
                     let mut cores = 0i32;
                     detect(&mut cores)
                 });
@@ -337,15 +363,26 @@ impl<'a> CppDecoder<'a> {
             assert!(!dec.is_null());
 
             let vtable = *(dec as *mut *mut *const ());
-            let initialize = std::mem::transmute::<*const (), CppInitializeFn>(*vtable.add(VT_INITIALIZE));
+            let initialize =
+                std::mem::transmute::<*const (), CppInitializeFn>(*vtable.add(VT_INITIALIZE));
             let this = Self {
                 lib,
                 dec,
-                uninitialize: std::mem::transmute::<*const (), CppUninitializeFn>(*vtable.add(VT_UNINITIALIZE)),
-                decode_frame2: std::mem::transmute::<*const (), CppDecodeFrame2Fn>(*vtable.add(VT_DECODE_FRAME2)),
-                flush_frame: std::mem::transmute::<*const (), CppFlushFrameFn>(*vtable.add(VT_FLUSH_FRAME)),
-                set_option: std::mem::transmute::<*const (), CppOptionFn>(*vtable.add(VT_SET_OPTION)),
-                get_option: std::mem::transmute::<*const (), CppOptionFn>(*vtable.add(VT_GET_OPTION)),
+                uninitialize: std::mem::transmute::<*const (), CppUninitializeFn>(
+                    *vtable.add(VT_UNINITIALIZE),
+                ),
+                decode_frame2: std::mem::transmute::<*const (), CppDecodeFrame2Fn>(
+                    *vtable.add(VT_DECODE_FRAME2),
+                ),
+                flush_frame: std::mem::transmute::<*const (), CppFlushFrameFn>(
+                    *vtable.add(VT_FLUSH_FRAME),
+                ),
+                set_option: std::mem::transmute::<*const (), CppOptionFn>(
+                    *vtable.add(VT_SET_OPTION),
+                ),
+                get_option: std::mem::transmute::<*const (), CppOptionFn>(
+                    *vtable.add(VT_GET_OPTION),
+                ),
             };
 
             let param = decoding_param();
@@ -357,7 +394,13 @@ impl<'a> CppDecoder<'a> {
 }
 
 impl Decoder for CppDecoder<'_> {
-    unsafe fn decode(&mut self, src: *const u8, len: i32, dst: *mut *mut u8, info: *mut SBufferInfo) -> i32 {
+    unsafe fn decode(
+        &mut self,
+        src: *const u8,
+        len: i32,
+        dst: *mut *mut u8,
+        info: *mut SBufferInfo,
+    ) -> i32 {
         unsafe { (self.decode_frame2)(self.dec, src, len, dst, info) }
     }
     unsafe fn flush(&mut self, dst: *mut *mut u8, info: *mut SBufferInfo) -> i32 {
@@ -401,7 +444,13 @@ impl Drop for CppDecoder<'_> {
 
 const DS_ERROR_FREE: i32 = DECODING_STATE::dsErrorFree.0;
 
-fn hash_plane(hasher: &mut Sha1Hasher, plane: *const u8, width: usize, height: usize, stride: usize) {
+fn hash_plane(
+    hasher: &mut Sha1Hasher,
+    plane: *const u8,
+    width: usize,
+    height: usize,
+    stride: usize,
+) {
     if plane.is_null() || width == 0 || height == 0 || stride == 0 {
         return;
     }
@@ -597,9 +646,9 @@ fn main() {
         Some(lib) => {
             println!(" C++ library: {}", lib.path.display());
             match lib.cpu_flags {
-                Some(flags) if flags & (WELS_CPU_NEON | WELS_CPU_SSE2) != 0 => println!(
-                    " C++ SIMD   : ACTIVE (WelsCPUFeatureDetect = 0x{flags:06x})"
-                ),
+                Some(flags) if flags & (WELS_CPU_NEON | WELS_CPU_SSE2) != 0 => {
+                    println!(" C++ SIMD   : ACTIVE (WelsCPUFeatureDetect = 0x{flags:06x})")
+                }
                 Some(flags) => {
                     println!(" C++ SIMD   : INACTIVE (WelsCPUFeatureDetect = 0x{flags:06x})");
                     println!(
@@ -612,7 +661,9 @@ fn main() {
                 None => println!(" C++ SIMD   : UNKNOWN (WelsCPUFeatureDetect not exported)"),
             }
         }
-        None => println!(" C++ library: NOT FOUND -- build it with `make` in the repo root (Rust-only run)"),
+        None => println!(
+            " C++ library: NOT FOUND -- build it with `make` in the repo root (Rust-only run)"
+        ),
     }
     println!(" timing     : best of {iters} interleaved passes, decode calls only (no hashing)");
 
@@ -656,7 +707,10 @@ fn main() {
             mismatches += 1;
             println!("   OUTPUT MISMATCH -- the timings below are not comparable");
             if cpp.frames != rust.frames {
-                println!("     frame count: C++ {} vs Rust {}", cpp.frames, rust.frames);
+                println!(
+                    "     frame count: C++ {} vs Rust {}",
+                    cpp.frames, rust.frames
+                );
             }
             if cpp.hash != rust.hash {
                 println!("     SHA-1 C++  : {}", cpp.hash);
@@ -679,9 +733,7 @@ fn main() {
 
     println!("{rule}");
     if !any_stream {
-        eprintln!(
-            "No streams to decode. Install ffmpeg, or point FFMPEG at it, then re-run."
-        );
+        eprintln!("No streams to decode. Install ffmpeg, or point FFMPEG at it, then re-run.");
         std::process::exit(1);
     }
     if mismatches > 0 {

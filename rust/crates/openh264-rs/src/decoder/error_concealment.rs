@@ -35,18 +35,11 @@
 //! selective collocated slice macroblock copy, and motion-compensated vector extrapolation)
 //! to restore video continuity and decodability during network packet loss.
 
-#![allow(
-    non_snake_case,
-    non_camel_case_types,
-    non_upper_case_globals
-)]
-
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
-use crate::decoder::decoder_context::{
-    active_sps, dec_pic, prev_dpb_id,
-};
+use crate::decoder::decoder_context::{active_sps, dec_pic, prev_dpb_id};
 
 // ============================================================================
 // Constants and Error Concealment Modes
@@ -137,23 +130,23 @@ impl Default for SCopyFunc {
     }
 }
 
-pub use crate::common::copy_mb::{copy_16x16, copy_8x8};
+pub use crate::common::copy_mb::{copy_8x8, copy_16x16};
 pub use crate::common::mc::SMcFunc;
 
 // ============================================================================
 // Core Decoder Context Structs
 // ============================================================================
 
-pub use crate::decoder::decoder_context::{Picture, SPicture, SDecodingParam};
-pub use crate::decoder::decoder_context::pic_and_refs_mut;
 use crate::decoder::decoder_context::ec_active_idc;
+pub use crate::decoder::decoder_context::pic_and_refs_mut;
+pub use crate::decoder::decoder_context::{Picture, SDecodingParam, SPicture};
 pub use crate::decoder::pic_queue::{PicId, RefSlot};
-pub use crate::decoder::picture::{same_picture, pic_slot};
+pub use crate::decoder::picture::{pic_slot, same_picture};
 pub use crate::safe::plane::PaddedPlane;
 
-pub use crate::decoder::parameter_sets::{SSps, SPosOffset as SFrameCrop};
-pub use crate::decoder::decoder_core::{DqLayerState, SLayerInfo, MbDims};
-pub use crate::decoder::decoder_context::{SWelsDecoderContext, SRefPic};
+pub use crate::decoder::decoder_context::{SRefPic, SWelsDecoderContext};
+pub use crate::decoder::decoder_core::{DqLayerState, MbDims, SLayerInfo};
+pub use crate::decoder::parameter_sets::{SPosOffset as SFrameCrop, SSps};
 
 // ============================================================================
 // Core Error Concealment Functions
@@ -179,7 +172,10 @@ pub extern "C" fn InitErrorCon(pCtx: &mut SWelsDecoderContext) {
 }
 
 /// Evaluates if error concealment is required by inspecting the macroblock decoding flags.
-pub extern "C" fn NeedErrorCon(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> bool {
+pub extern "C" fn NeedErrorCon(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+) -> bool {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return false;
     };
@@ -198,7 +194,10 @@ pub extern "C" fn NeedErrorCon(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Opti
 }
 
 /// Performs full-frame error concealment by copying pixel planes from the previous reference picture.
-pub extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+pub extern "C" fn DoErrorConFrameCopy(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+) {
     if pCtx.pDec.is_none() {
         return;
     }
@@ -259,7 +258,10 @@ pub extern "C" fn DoErrorConFrameCopy(pCtx: &mut SWelsDecoderContext, pCurDqLaye
 }
 
 /// Performs macroblock-level error concealment by copying collocated undamaged macroblocks.
-pub extern "C" fn DoErrorConSliceCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+pub extern "C" fn DoErrorConSliceCopy(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
@@ -480,7 +482,10 @@ fn DoMbECMvCopy(
 }
 
 /// Gathers motion vector statistics from correctly decoded macroblocks in the current picture.
-pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+pub extern "C" fn GetAvilInfoFromCorrectMb(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
@@ -506,12 +511,15 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
         for iMbX in 0..iMbWidth {
             let iMbXyIndex = (iMbY * iMbWidth + iMbX) as usize;
             if *pCurDqLayer.grid.mb_correctly_decoded_flag.get(iMbXyIndex)
-                && !pDec.pMbType.as_slice().is_empty() {
+                && !pDec.pMbType.as_slice().is_empty()
+            {
                 let iMBType = *pDec.pMbType.get(iMbXyIndex);
                 if IS_INTER(iMBType) {
                     match iMBType {
                         MB_TYPE_SKIP | MB_TYPE_16x16 => {
-                            if !pDec.pRefIndex[0].as_slice().is_empty() && !pDec.pMv[0].as_slice().is_empty() {
+                            if !pDec.pRefIndex[0].as_slice().is_empty()
+                                && !pDec.pMv[0].as_slice().is_empty()
+                            {
                                 let ref_row = *pDec.pRefIndex[0].get(iMbXyIndex);
                                 let mv_row = *pDec.pMv[0].get(iMbXyIndex);
                                 let iRefIdx = ref_row[0] as usize;
@@ -519,13 +527,16 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
                                     let mv = mv_row[0];
                                     pCtx.iECMVs[iRefIdx][0] += mv[0] as i32;
                                     pCtx.iECMVs[iRefIdx][1] += mv[1] as i32;
-                                    pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
+                                    pCtx.pECRefPic[iRefIdx] =
+                                        pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
                         }
                         MB_TYPE_16x8 => {
-                            if !pDec.pRefIndex[0].as_slice().is_empty() && !pDec.pMv[0].as_slice().is_empty() {
+                            if !pDec.pRefIndex[0].as_slice().is_empty()
+                                && !pDec.pMv[0].as_slice().is_empty()
+                            {
                                 let ref_row = *pDec.pRefIndex[0].get(iMbXyIndex);
                                 let mv_row = *pDec.pMv[0].get(iMbXyIndex);
                                 // Partition 0
@@ -534,7 +545,8 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
                                     let mv0 = mv_row[0];
                                     pCtx.iECMVs[iRefIdx][0] += mv0[0] as i32;
                                     pCtx.iECMVs[iRefIdx][1] += mv0[1] as i32;
-                                    pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
+                                    pCtx.pECRefPic[iRefIdx] =
+                                        pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                                 // Partition 1
@@ -543,13 +555,16 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
                                     let mv8 = mv_row[8];
                                     pCtx.iECMVs[iRefIdx][0] += mv8[0] as i32;
                                     pCtx.iECMVs[iRefIdx][1] += mv8[1] as i32;
-                                    pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
+                                    pCtx.pECRefPic[iRefIdx] =
+                                        pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
                         }
                         MB_TYPE_8x16 => {
-                            if !pDec.pRefIndex[0].as_slice().is_empty() && !pDec.pMv[0].as_slice().is_empty() {
+                            if !pDec.pRefIndex[0].as_slice().is_empty()
+                                && !pDec.pMv[0].as_slice().is_empty()
+                            {
                                 let ref_row = *pDec.pRefIndex[0].get(iMbXyIndex);
                                 let mv_row = *pDec.pMv[0].get(iMbXyIndex);
                                 // Partition 0
@@ -558,7 +573,8 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
                                     let mv0 = mv_row[0];
                                     pCtx.iECMVs[iRefIdx][0] += mv0[0] as i32;
                                     pCtx.iECMVs[iRefIdx][1] += mv0[1] as i32;
-                                    pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
+                                    pCtx.pECRefPic[iRefIdx] =
+                                        pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                                 // Partition 1
@@ -567,59 +583,65 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
                                     let mv2 = mv_row[2];
                                     pCtx.iECMVs[iRefIdx][0] += mv2[0] as i32;
                                     pCtx.iECMVs[iRefIdx][1] += mv2[1] as i32;
-                                    pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
+                                    pCtx.pECRefPic[iRefIdx] =
+                                        pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
                                     iInterMbCorrectNum[iRefIdx] += 1;
                                 }
                             }
                         }
                         MB_TYPE_8x8 | MB_TYPE_8x8_REF0
                             if !pDec.pRefIndex[0].as_slice().is_empty()
-                                && !pDec.pMv[0].as_slice().is_empty()
-                            => {
-                                let sub_types = *pCurDqLayer.grid.sub_mb_type.get(iMbXyIndex);
-                                let ref_row = *pDec.pRefIndex[0].get(iMbXyIndex);
-                                let mv_row = *pDec.pMv[0].get(iMbXyIndex);
-                                for i in 0..4 {
-                                    let iSubMBType = sub_types[i];
-                                    let iIIdx = ((i >> 1) << 3) + ((i & 1) << 1);
-                                    let iRefIdx = ref_row[iIIdx] as usize;
-                                    if iRefIdx < 16 {
-                                        pCtx.pECRefPic[iRefIdx] = pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
-                                        match iSubMBType {
-                                            SUB_MB_TYPE_8x8 => {
-                                                let mv = mv_row[iIIdx];
+                                && !pDec.pMv[0].as_slice().is_empty() =>
+                        {
+                            let sub_types = *pCurDqLayer.grid.sub_mb_type.get(iMbXyIndex);
+                            let ref_row = *pDec.pRefIndex[0].get(iMbXyIndex);
+                            let mv_row = *pDec.pMv[0].get(iMbXyIndex);
+                            for i in 0..4 {
+                                let iSubMBType = sub_types[i];
+                                let iIIdx = ((i >> 1) << 3) + ((i & 1) << 1);
+                                let iRefIdx = ref_row[iIIdx] as usize;
+                                if iRefIdx < 16 {
+                                    pCtx.pECRefPic[iRefIdx] =
+                                        pCtx.sRefPic.pRefList[LIST_0][iRefIdx];
+                                    match iSubMBType {
+                                        SUB_MB_TYPE_8x8 => {
+                                            let mv = mv_row[iIIdx];
+                                            pCtx.iECMVs[iRefIdx][0] += mv[0] as i32;
+                                            pCtx.iECMVs[iRefIdx][1] += mv[1] as i32;
+                                            iInterMbCorrectNum[iRefIdx] += 1;
+                                        }
+                                        SUB_MB_TYPE_8x4 => {
+                                            let mv0 = mv_row[iIIdx];
+                                            let mv4 = mv_row[iIIdx + 4];
+                                            pCtx.iECMVs[iRefIdx][0] +=
+                                                (mv0[0] as i32) + (mv4[0] as i32);
+                                            pCtx.iECMVs[iRefIdx][1] +=
+                                                (mv0[1] as i32) + (mv4[1] as i32);
+                                            iInterMbCorrectNum[iRefIdx] += 2;
+                                        }
+                                        SUB_MB_TYPE_4x8 => {
+                                            let mv0 = mv_row[iIIdx];
+                                            let mv1 = mv_row[iIIdx + 1];
+                                            pCtx.iECMVs[iRefIdx][0] +=
+                                                (mv0[0] as i32) + (mv1[0] as i32);
+                                            pCtx.iECMVs[iRefIdx][1] +=
+                                                (mv0[1] as i32) + (mv1[1] as i32);
+                                            iInterMbCorrectNum[iRefIdx] += 2;
+                                        }
+                                        SUB_MB_TYPE_4x4 => {
+                                            for j in 0..4 {
+                                                let iJIdx = ((j >> 1) << 2) + (j & 1);
+                                                let mv = mv_row[iIIdx + iJIdx];
                                                 pCtx.iECMVs[iRefIdx][0] += mv[0] as i32;
                                                 pCtx.iECMVs[iRefIdx][1] += mv[1] as i32;
-                                                iInterMbCorrectNum[iRefIdx] += 1;
                                             }
-                                            SUB_MB_TYPE_8x4 => {
-                                                let mv0 = mv_row[iIIdx];
-                                                let mv4 = mv_row[iIIdx + 4];
-                                                pCtx.iECMVs[iRefIdx][0] += (mv0[0] as i32) + (mv4[0] as i32);
-                                                pCtx.iECMVs[iRefIdx][1] += (mv0[1] as i32) + (mv4[1] as i32);
-                                                iInterMbCorrectNum[iRefIdx] += 2;
-                                            }
-                                            SUB_MB_TYPE_4x8 => {
-                                                let mv0 = mv_row[iIIdx];
-                                                let mv1 = mv_row[iIIdx + 1];
-                                                pCtx.iECMVs[iRefIdx][0] += (mv0[0] as i32) + (mv1[0] as i32);
-                                                pCtx.iECMVs[iRefIdx][1] += (mv0[1] as i32) + (mv1[1] as i32);
-                                                iInterMbCorrectNum[iRefIdx] += 2;
-                                            }
-                                            SUB_MB_TYPE_4x4 => {
-                                                for j in 0..4 {
-                                                    let iJIdx = ((j >> 1) << 2) + (j & 1);
-                                                    let mv = mv_row[iIIdx + iJIdx];
-                                                    pCtx.iECMVs[iRefIdx][0] += mv[0] as i32;
-                                                    pCtx.iECMVs[iRefIdx][1] += mv[1] as i32;
-                                                }
-                                                iInterMbCorrectNum[iRefIdx] += 4;
-                                            }
-                                            _ => {}
+                                            iInterMbCorrectNum[iRefIdx] += 4;
                                         }
+                                        _ => {}
                                     }
                                 }
                             }
+                        }
                         _ => {}
                     }
                 }
@@ -636,7 +658,10 @@ pub extern "C" fn GetAvilInfoFromCorrectMb(pCtx: &mut SWelsDecoderContext, pCurD
 }
 
 /// Driver for motion-compensated slice error concealment across all corrupted macroblocks.
-pub fn DoErrorConSliceMVCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) {
+pub fn DoErrorConSliceMVCopy(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+) {
     let Some(pCurDqLayer) = pCurDqLayer else {
         return;
     };
@@ -712,12 +737,18 @@ pub fn DoErrorConSliceMVCopy(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option
 }
 
 /// Fallback DPB reference marking routine.
-pub extern "C" fn WelsMarkAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
+pub extern "C" fn WelsMarkAsRef(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+) -> i32 {
     crate::decoder::manage_dec_ref::WelsMarkAsRef(pCtx, pCurDqLayer, None)
 }
 
 /// Marks an error-concealed frame as a reference picture in the DPB and expands its borders.
-pub extern "C" fn MarkECFrameAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: Option<&mut DqLayerState>) -> i32 {
+pub extern "C" fn MarkECFrameAsRef(
+    pCtx: &mut SWelsDecoderContext,
+    pCurDqLayer: Option<&mut DqLayerState>,
+) -> i32 {
     let iRet = WelsMarkAsRef(pCtx, pCurDqLayer);
     if iRet != ERR_NONE {
         return iRet;
@@ -733,7 +764,10 @@ pub extern "C" fn MarkECFrameAsRef(pCtx: &mut SWelsDecoderContext, pCurDqLayer: 
 }
 
 /// Top-level error concealment dispatcher.
-pub extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLayer: Option<&mut DqLayerState>) {
+pub extern "C" fn ImplementErrorCon(
+    pCtx: &mut SWelsDecoderContext,
+    mut pCurDqLayer: Option<&mut DqLayerState>,
+) {
     let ec_mode = pCtx.pParam.eEcActiveIdc;
 
     if ec_mode == ERROR_CON_IDC::ERROR_CON_DISABLE {
@@ -767,7 +801,6 @@ pub extern "C" fn ImplementErrorCon(pCtx: &mut SWelsDecoderContext, mut pCurDqLa
 // Unit Tests
 // ============================================================================
 
-
 // WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE2};
 
@@ -775,7 +808,7 @@ pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMXEXT, WELS_CPU_NEON, 
 mod tests {
     use super::*;
     use crate::decoder::decoder_context::SpsRef;
-    
+
     #[test]
     fn test_need_error_con() {
         let sps = SSps {
@@ -784,11 +817,18 @@ mod tests {
             ..Default::default()
         };
         let mut dq_layer = { DqLayerState::for_grid(MbDims::new(2, 2)) };
-        dq_layer.grid.mb_correctly_decoded_flag.as_mut_slice().fill(true);
+        dq_layer
+            .grid
+            .mb_correctly_decoded_flag
+            .as_mut_slice()
+            .fill(true);
         let mut ctx = SWelsDecoderContext::new_boxed();
 
         ctx.sSpsPpsCtx.sSpsBuffer[0] = sps;
-        ctx.active_sps = Some(SpsRef { id: 0, subset: false });
+        ctx.active_sps = Some(SpsRef {
+            id: 0,
+            subset: false,
+        });
 
         {
             assert!(!NeedErrorCon(&mut ctx, Some(&mut dq_layer)));
@@ -831,7 +871,11 @@ mod tests {
             let mut src = SPicture::with_planes(planes(0x11), MbDims::none());
             src.iFramePoc = 7; // duplicate POC on purpose
 
-            let sps = SSps { iMbWidth: W as u32, iMbHeight: H as u32, ..Default::default() };
+            let sps = SSps {
+                iMbWidth: W as u32,
+                iMbHeight: H as u32,
+                ..Default::default()
+            };
             // every MB lost, so EC has work to do.
             let mut dq_layer = { DqLayerState::for_grid(MbDims::new(W, H)) };
             let mut last = crate::decoder::decoder_context::SWelsLastDecPicInfo::default();
@@ -847,10 +891,12 @@ mod tests {
                 ]);
                 let dst_id = pool.id(0);
                 let src_id = pool.id(1);
-                last.pPreviousDecodedPictureInDpb =
-                    Some(if same_object { dst_id } else { src_id });
-        ctx.sSpsPpsCtx.sSpsBuffer[0] = sps;
-        ctx.active_sps = Some(SpsRef { id: 0, subset: false });
+                last.pPreviousDecodedPictureInDpb = Some(if same_object { dst_id } else { src_id });
+                ctx.sSpsPpsCtx.sSpsBuffer[0] = sps;
+                ctx.active_sps = Some(SpsRef {
+                    id: 0,
+                    subset: false,
+                });
                 ctx.pPicBuff = Some(pool);
                 ctx.pDec = Some(dst_id);
                 ctx.pLastDecPicInfo = last;
@@ -862,7 +908,10 @@ mod tests {
                 // The destination is the pool's, so the marker is read back out
                 // of the slot.
                 let pool = ctx.pPicBuff.as_deref().expect("the fixture's pool");
-                pool.slot(dst_id).expect("the fixture's slot").plane(0).at(0, 0)
+                pool.slot(dst_id)
+                    .expect("the fixture's slot")
+                    .plane(0)
+                    .at(0, 0)
             }
         };
 
@@ -899,7 +948,11 @@ mod tests {
             let mut src = SPicture::with_planes(planes(0x11), MbDims::none());
             src.iFramePoc = 7; // duplicate POC on purpose
 
-            let sps = SSps { iMbWidth: W as u32, iMbHeight: H as u32, ..Default::default() };
+            let sps = SSps {
+                iMbWidth: W as u32,
+                iMbHeight: H as u32,
+                ..Default::default()
+            };
             let mut dq_layer = { DqLayerState::for_grid(MbDims::new(W, H)) };
             let mut last = crate::decoder::decoder_context::SWelsLastDecPicInfo::default();
             let mut ctx = SWelsDecoderContext::new_boxed();
@@ -911,10 +964,12 @@ mod tests {
                 ]);
                 let dst_id = pool.id(0);
                 let src_id = pool.id(1);
-                last.pPreviousDecodedPictureInDpb =
-                    Some(if same_object { dst_id } else { src_id });
+                last.pPreviousDecodedPictureInDpb = Some(if same_object { dst_id } else { src_id });
                 ctx.sSpsPpsCtx.sSpsBuffer[0] = sps;
-                ctx.active_sps = Some(SpsRef { id: 0, subset: false });
+                ctx.active_sps = Some(SpsRef {
+                    id: 0,
+                    subset: false,
+                });
                 // `new_boxed` zeroes the context, so `bInstalled` starts `false`.
                 // `Initialize` sets it; without this line the copy arm below would
                 // pass for the wrong reason.
