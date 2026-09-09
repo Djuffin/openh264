@@ -199,34 +199,36 @@ unsafe fn widen_lo_i16_to_i32(v: __m128i) -> __m128i {
 /// every architecture.
 #[target_feature(enable = "sse2")]
 unsafe fn compute_idct_residuals(dct: &[i16; 16]) -> (__m128i, __m128i, __m128i, __m128i) {
-    let s0 = widen_lo_i16_to_i32(idct_row(dct[0], dct[1], dct[2], dct[3]));
-    let s4 = widen_lo_i16_to_i32(idct_row(dct[4], dct[5], dct[6], dct[7]));
-    let s8 = widen_lo_i16_to_i32(idct_row(dct[8], dct[9], dct[10], dct[11]));
-    let s12 = widen_lo_i16_to_i32(idct_row(dct[12], dct[13], dct[14], dct[15]));
+    unsafe {
+        let s0 = widen_lo_i16_to_i32(idct_row(dct[0], dct[1], dct[2], dct[3]));
+        let s4 = widen_lo_i16_to_i32(idct_row(dct[4], dct[5], dct[6], dct[7]));
+        let s8 = widen_lo_i16_to_i32(idct_row(dct[8], dct[9], dct[10], dct[11]));
+        let s12 = widen_lo_i16_to_i32(idct_row(dct[12], dct[13], dct[14], dct[15]));
 
-    let c32 = _mm_set1_epi32(32);
+        let c32 = _mm_set1_epi32(32);
 
-    let t1_a = _mm_add_epi32(s0, s8);
-    let t2_a = _mm_add_epi32(s4, _mm_srai_epi32(s12, 1));
-    let res0 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_a, t2_a), c32), 6);
-    let res3 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_a, t2_a), c32), 6);
+        let t1_a = _mm_add_epi32(s0, s8);
+        let t2_a = _mm_add_epi32(s4, _mm_srai_epi32(s12, 1));
+        let res0 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_a, t2_a), c32), 6);
+        let res3 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_a, t2_a), c32), 6);
 
-    let t1_b = _mm_sub_epi32(s0, s8);
-    let t2_b = _mm_sub_epi32(_mm_srai_epi32(s4, 1), s12);
-    let res1 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_b, t2_b), c32), 6);
-    let res2 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_b, t2_b), c32), 6);
+        let t1_b = _mm_sub_epi32(s0, s8);
+        let t2_b = _mm_sub_epi32(_mm_srai_epi32(s4, 1), s12);
+        let res1 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_b, t2_b), c32), 6);
+        let res2 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_b, t2_b), c32), 6);
 
-    // Back to the `i16` lanes `add_res_and_clip` adds the prediction in. The
-    // signed saturation `packs` applies is unreachable and so exact: `|s*| <= 32768`
-    // bounds `|t1| <= 65536` and `|t2| <= 49152`, giving `|32 + t1 ± t2| <= 114720`
-    // and `|result| <= 1792` after the `>> 6`.
-    let zero = _mm_setzero_si128();
-    (
-        _mm_packs_epi32(res0, zero),
-        _mm_packs_epi32(res1, zero),
-        _mm_packs_epi32(res2, zero),
-        _mm_packs_epi32(res3, zero),
-    )
+        // Back to the `i16` lanes `add_res_and_clip` adds the prediction in. The
+        // signed saturation `packs` applies is unreachable and so exact: `|s*| <= 32768`
+        // bounds `|t1| <= 65536` and `|t2| <= 49152`, giving `|32 + t1 ± t2| <= 114720`
+        // and `|result| <= 1792` after the `>> 6`.
+        let zero = _mm_setzero_si128();
+        (
+            _mm_packs_epi32(res0, zero),
+            _mm_packs_epi32(res1, zero),
+            _mm_packs_epi32(res2, zero),
+            _mm_packs_epi32(res3, zero),
+        )
+    }
 }
 
 #[target_feature(enable = "sse2")]
