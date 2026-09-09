@@ -706,7 +706,7 @@ fn test_ffmpeg_high_cabac_8x8() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression; the port ALSO diverges from h264dec, one frame earlier"]
+#[ignore = "openh264's C++ h264dec diverges from ffmpeg's decode at the same byte; upstream gap, not a port regression"]
 fn test_ffmpeg_high_custom_scaling_matrix() -> Result<(), String> {
     // High profile + CABAC + 8x8 transform + custom scaling matrices.
     // cqm=jvt tells x264 to emit the JVT default scaling matrices (non-flat),
