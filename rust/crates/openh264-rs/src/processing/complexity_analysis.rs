@@ -1,4 +1,4 @@
-#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 //! Port of `codec/processing/src/complexityanalysis/ComplexityAnalysis.cpp` — the
 //! plugin reached through `METHOD_COMPLEXITY_ANALYSIS`.
@@ -276,7 +276,7 @@ impl CComplexityAnalysis {
         _pRefPixMap: &SPixMap,
         calc: &SVAACalcResult,
         pGomComplexity: &mut [i32],
-        pGomForegroundBlockNum: &mut [i32],
+        _pGomForegroundBlockNum: &mut [i32],
     ) {
         let iWidth = pSrcPixMap.sRect.iRectWidth;
         let iHeight = pSrcPixMap.sRect.iRectHeight;

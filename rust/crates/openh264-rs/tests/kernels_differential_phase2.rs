@@ -76,50 +76,16 @@ fn idct_four_res_add_pred_transforms_a_dc_only_block_with_zero_nzc() {
 }
 
 // ===========================================================================
-// `common/mc.rs`, motion compensation
+// Shared sweep helpers
 // ===========================================================================
-
-/// `(left, top, right, bottom)`: the kernel reads `x` in `-left .. width + right`
-/// and `y` in `-top .. height + bottom`, relative to `pSrc`. An independent
-/// restatement of `mc.rs`'s private `Reach` — if the two ever disagree, this test
-/// fails, which is the point of restating it rather than exporting it.
-type Reach = (usize, usize, usize, usize);
-
-const R_COPY: Reach = (0, 0, 0, 0);
-const R_HOR: Reach = (2, 0, 3, 0);
-const R_VER: Reach = (0, 2, 0, 3);
-const R_CEN: Reach = (2, 2, 3, 3);
-const R_CHROMA: Reach = (0, 0, 1, 1);
-
-/// Luma MC block shapes, plus the encoder's `+1` half-pel refinement shapes
-/// (`encoder/md.rs:1196,1229,1289`).
-const HALFPEL_SIZES: &[(usize, usize)] = &[(16, 16), (16, 8), (8, 4), (4, 4), (17, 17), (2, 2)];
-
-/// The quarter-pel composites interpolate through a `[u8; 256]` at stride 16, so 16
-/// is the ceiling in both dimensions — the same ceiling the C++ has.
-const QPEL_SIZES: &[(usize, usize)] = &[(16, 16), (16, 8), (8, 16), (8, 4), (4, 4), (2, 2)];
-
-const CHROMA_SIZES: &[(usize, usize)] = &[(8, 8), (8, 4), (4, 2), (2, 2)];
-
-/// `McCopy_c` copies two bytes for any width that is not 16, 8 or 4, so the list has
-/// to contain widths that are none of those — the span must narrow with it.
-const COPY_SIZES: &[(usize, usize)] = &[(16, 16), (8, 8), (4, 4), (2, 2), (6, 4), (3, 2)];
-
-/// The width `McCopy_c` actually touches — `mc.rs`'s `copy_width`, restated.
-fn copy_width(width: usize) -> usize {
-    match width {
-        16 => 16,
-        8 => 8,
-        4 => 4,
-        _ => 2,
-    }
-}
 
 /// Strides worth driving: the minimum legal one, where an off-by-one in the span
 /// arithmetic shows up first, and two larger ones.
 ///
-/// Under Miri only the minimum survives — see [`sizes`] for why the cut falls here
-/// and not on the selector sweeps.
+/// Under Miri only the minimum survives. Miri is ~100x slower, so something has to
+/// go, and the cut falls on the stride sweep rather than the selector sweeps: a
+/// selector chooses which span a kernel declares, so those stay exhaustive either
+/// way, where a stride only re-runs the same span arithmetic with other numbers.
 fn strides(min: usize) -> Vec<usize> {
     let min = min.max(1);
     if cfg!(miri) {
@@ -131,75 +97,6 @@ fn strides(min: usize) -> Vec<usize> {
     v
 }
 
-/// Block shapes, cut to two under Miri.
-///
-/// Miri is the only instrument that sees the *over*-reach half of [`probe_span`], so
-/// it has to run — but at ~100x it cannot run everything. The cut falls on the stride
-/// and shape sweeps and **not** on the selector sweeps: an MV chooses which reach a
-/// shim declares, so those stay exhaustive under Miri too. Shapes and strides only
-/// re-run the same span arithmetic with different numbers.
-fn sizes(all: &'static [(usize, usize)]) -> &'static [(usize, usize)] {
-    if cfg!(miri) { &all[..2] } else { all }
-}
-
-/// `(slice length, offset of `pSrc` within it)` — `mc.rs`'s `src_span`, restated.
-fn src_span(stride: usize, width: usize, height: usize, r: Reach) -> (usize, usize) {
-    let (left, top, right, bottom) = r;
-    let center = top * stride + left;
-    (center + (height + bottom - 1) * stride + width + right, center)
-}
-
-/// Bytes spanned by a `width` x `height` block at `stride` — `mc.rs`'s `block_span`.
-fn block_span(stride: usize, width: usize, height: usize) -> usize {
-    (height - 1) * stride + width
-}
-
-/// Runs one shim against source and destination allocations sized to **exactly** the
-/// span its contract declares, and asserts two things at once.
-///
-/// * **The declared span is not too large.** The source buffer is `src_span` bytes
-///   and not one more, so a shim that materialises a longer slice from a pointer into
-///   it is constructing a reference to memory it does not own — undefined behaviour,
-///   which Miri reports at the `from_raw_parts` rather than as a wrong pixel. This is
-///   the direction no output comparison can see, because reading a byte past the end
-///   of a generously-sized test buffer produces perfectly plausible pixels.
-/// * **The declared span is not too small.** If it is, the safe kernel indexes past
-///   its slice and panics, in any build, on the first call.
-///
-/// The assertion on top is a property worth keeping in its own right: running the
-/// same call into two differently-noised destinations must produce identical blocks,
-/// i.e. the kernel **writes every byte of its block and reads none of them**. A
-/// kernel that skipped a sample would leave the two destinations' noise showing.
-fn probe_span(
-    name: &str,
-    rng: &mut Prng,
-    reach: Reach,
-    span_width: usize,
-    h: usize,
-    ss: usize,
-    ds: usize,
-    run: impl Fn(*const u8, i32, *mut u8, i32),
-) {
-    let (slen, sc) = src_span(ss, span_width, h, reach);
-    let src = rng.bytes(slen);
-    let mut d1 = rng.bytes(block_span(ds, span_width, h));
-    let mut d2 = rng.bytes(block_span(ds, span_width, h));
-    unsafe {
-        run(src.as_ptr().add(sc), ss as i32, d1.as_mut_ptr(), ds as i32);
-        run(src.as_ptr().add(sc), ss as i32, d2.as_mut_ptr(), ds as i32);
-    }
-    for y in 0..h {
-        assert_eq!(
-            &d1[y * ds..][..span_width],
-            &d2[y * ds..][..span_width],
-            "{name}: row {y} of the destination block still shows what was there \
-             before the call — the kernel did not write every byte of its block \
-             (src_stride {ss}, dst_stride {ds}, seed {:#x})",
-            rng.seed()
-        );
-    }
-}
-
 // ===========================================================================
 // `common/sad_common.rs` + `common/intra_pred_common.rs`
 // ===========================================================================
@@ -207,25 +104,6 @@ fn probe_span(
 use openh264_rs::common::sad_common as sad;
 use openh264_rs::safe::plane::PlaneCursor;
 use openh264_rs::encoder::rec_view::RecCursor;
-
-/// A noise surface with at least `pad` rows and columns of margin around a `w` x `h`
-/// block, and a random legal anchor for it. The anchor is random so the block lands
-/// unaligned: these kernels run on every partition of every macroblock at every search
-/// position, so alignment is not something a caller can promise.
-fn sad_surface(
-    rng: &mut Prng,
-    stride: usize,
-    w: usize,
-    h: usize,
-    pad: usize,
-) -> (Vec<u8>, usize) {
-    assert!(stride >= w + 2 * pad);
-    let rows = h + 2 * pad + 2;
-    let buf = rng.bytes(rows * stride);
-    let y = pad + rng.below((rows - h - 2 * pad) as u32) as usize;
-    let x = pad + rng.below((stride - w - 2 * pad) as u32 + 1) as usize;
-    (buf, y * stride + x)
-}
 
 /// Dispatches the const-generic safe kernel for a runtime shape, so the tables below
 /// can stay tables. Every arm is also the assertion that the instantiation is wired to
@@ -919,7 +797,6 @@ fn encoder_recon_shims_stay_inside_the_spans_they_declare() {
     // over-claim is UB Miri reports), golden direct run pinning the anchor,
     // prediction and coefficients untouched, bytes outside the block
     // untouched.
-    type RawRec = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32, *mut i16);
     fn probe_rec<const N: usize>(
         name: &str,
         rng: &mut Prng,
@@ -1026,61 +903,6 @@ fn satd_kernels_stay_inside_the_spans_they_declare() {
 // ===========================================================================
 // `encoder/deblocking.rs`'s duplicate deblocking kernels
 // ===========================================================================
-
-/// Alpha values from the ends and middle of `g_kuiAlphaTable` (0..=255), beta
-/// values from `g_kiBetaTable` (0..=18).
-const ALPHAS: &[i32] = &[0, 1, 4, 20, 128, 255];
-const BETAS: &[i32] = &[0, 2, 6, 18];
-
-/// A noised surface of `rows * stride` with a per-call amplitude tier:
-/// full-range, or narrow noise around a random base so the filter's conditions
-/// actually pass. Deblocking is *conditional* — any alpha <= 255 is exceeded by
-/// most random deltas, so full-range noise alone exercises only the skip path.
-fn deblock_surface(rng: &mut Prng, rows: usize, stride: usize) -> Vec<u8> {
-    match rng.below(3) {
-        0 => rng.bytes(rows * stride),
-        tier => {
-            let amp = if tier == 1 { 16i32 } else { 3 };
-            let base = rng.range_i32(amp, 255 - amp);
-            (0..rows * stride).map(|_| (base + rng.range_i32(-amp, amp)) as u8).collect()
-        }
-    }
-}
-
-/// A random 4-entry tc0 group, biased to include the gate-closing values —
-/// luma skips a line at `iTc0 < 0`, chroma at `iTc0 <= 0`, and that distinction
-/// is exactly what a conversion gets wrong.
-fn tc_group(rng: &mut Prng) -> [i8; 4] {
-    let pool: &[i8] = &[-1, 0, 1, 2, 4, 9, 25];
-    std::array::from_fn(|_| pool[rng.below(pool.len() as u32) as usize])
-}
-
-/// Anchor for an edge whose taps span `[-rb, rf]` along the tap axis and whose
-/// `lines` lines run along the other. `vertical_taps` is the V-wrapper shape:
-/// taps step by the stride, lines by one byte.
-fn deblock_anchor(
-    rng: &mut Prng,
-    rows: usize,
-    stride: usize,
-    rb: usize,
-    rf: usize,
-    lines: usize,
-    vertical_taps: bool,
-) -> usize {
-    let (row, col) = if vertical_taps {
-        (rb + rng.below((rows - rb - rf) as u32) as usize,
-         rng.below((stride - lines + 1) as u32) as usize)
-    } else {
-        (rng.below((rows - lines + 1) as u32) as usize,
-         rb + rng.below((stride - rb - rf) as u32) as usize)
-    };
-    row * stride + col
-}
-
-/// Steps in bytes for one direction: V = `(stride, 1)`, H = `(1, stride)`.
-fn steps(stride: usize, vertical_taps: bool) -> (isize, isize) {
-    if vertical_taps { (stride as isize, 1) } else { (1, stride as isize) }
-}
 
 use openh264_rs::encoder::deblocking as encdeb;
 

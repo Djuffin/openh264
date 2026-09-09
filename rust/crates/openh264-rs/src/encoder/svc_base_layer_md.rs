@@ -20,7 +20,7 @@
 //! NULL here too. The scalar branches below are therefore the ones that decide
 //! output bytes.
 
-#![allow(non_snake_case, non_upper_case_globals, non_camel_case_types, dead_code)]
+#![allow(non_snake_case, non_upper_case_globals, non_camel_case_types)]
 
 #![forbid(unsafe_code)]
 use crate::encoder::rec_view::RecCursor;
@@ -63,11 +63,6 @@ use crate::encoder::picture::SScreenBlockFeatureStorage;
 use crate::encoder::svc_encode_slice::{current_layer_expect, layer_rec_view_expect, layer_ref_pic_expect, layer_ref_view_expect};
 use crate::encoder::svc_encode_slice::layer_enc_view_expect;
 use crate::simd::kernels;
-
-/// `wels_const.h:112` — `MB_WIDTH_LUMA`/`MB_WIDTH_CHROMA`, the per-macroblock advance
-/// applied to the cached plane pointers when walking right along a macroblock row.
-const MB_WIDTH_LUMA: usize = 16;
-const MB_WIDTH_CHROMA: usize = 8;
 
 // ============================================================================
 // Intra prediction mode ids — `wels_common_defs.h:329-370`
@@ -1700,13 +1695,7 @@ pub fn WelsMdInterEncode(
     pSlice: &mut SSlice,
     pCurMb: &mut SMB,
 ) {
-    let pMbCache = &mut pSlice.sMbCacheInfo;
-    let pFunc = pEncCtx.func_list();
     let pCurDqLayer = current_layer_expect(pEncCtx);
-
-    //add pEnc&rec to MD--2010.3.15
-    let kiCsStrideY = pCurDqLayer.iCsStride[0];
-    let kiCsStrideUV = pCurDqLayer.iCsStride[1];
 
     //add pEnc&rec to MD--2010.3.15
     pCurMb.uiCbp = 0;

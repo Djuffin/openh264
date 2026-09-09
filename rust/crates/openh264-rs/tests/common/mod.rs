@@ -1,5 +1,12 @@
 //! Common test helper utilities for integration tests.
 
+// **`dead_code` stays allowed here, and only here.** This file is `#[path]`-included
+// into ~14 test binaries, both benches and an example, and each of them is its own
+// crate that sees only the helpers it happens to call — so every helper is "never
+// used" from the point of view of most of them. The lint has nothing to report that
+// is true of the module as a whole, and there is no way to scope it per-consumer
+// short of duplicating the helpers. It covers the `#[path]`-included `prng` too,
+// which is live code in `src/safe/prng.rs`.
 #![allow(dead_code, unused_imports)]
 
 pub mod sha1;

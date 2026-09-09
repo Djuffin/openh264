@@ -1,9 +1,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 //! Reference picture buffer management, list construction, reordering, and DPB lifecycle.
@@ -1436,7 +1434,6 @@ mod tests {
             let mut ctx = SWelsDecoderContext::new_boxed();
             ctx.pPicBuff = Some(pool);
             let pCtx = &mut *ctx;
-            let pRefPic = &mut pCtx.sRefPic;
 
             let res1 = AddShortTermToList(pCtx, false, s1);
             assert_eq!(res1, ERR_NONE);
@@ -1470,7 +1467,6 @@ mod tests {
             let mut ctx = SWelsDecoderContext::new_boxed();
             ctx.pPicBuff = Some(pool);
             let pCtx = &mut *ctx;
-            let pRefPic = &mut pCtx.sRefPic;
 
             AddLongTermToList(pCtx, false, s1, 5, 5);
             AddLongTermToList(pCtx, false, s2, 2, 2);

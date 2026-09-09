@@ -10,7 +10,7 @@
 //! Only the `_c` scalar variants exist. The SIMD overrides in the C++ are behind
 //! `uiCpuFlag` tests that do not fire on any target this port builds for.
 
-#![allow(non_snake_case, dead_code)]
+#![allow(non_snake_case)]
 
 #![forbid(unsafe_code)]
 

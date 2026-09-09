@@ -30,7 +30,7 @@
 //! a 16-byte fat pointer that would mis-size the struct.
 //! `Option<Box<CWelsParametersetIdStrategyObj>>` is 8 bytes by the null-pointer
 //! niche, so the size is kept without the indirection.
-#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 #![forbid(unsafe_code)]
 
@@ -581,7 +581,7 @@ impl CWelsParametersetIdStrategyObj {
         pParam: &mut crate::encoder::param_svc::SWelsSvcCodingParam,
         pSpsArray: &mut [SWelsSPS],
         pSubsetArray: &mut [SSubsetSps],
-        pPpsArray: &mut [SWelsPPS],
+        _pPpsArray: &mut [SWelsPPS],
         kbUseSubsetSps: bool,
         iDlayerIndex: i32,
         iDlayerCount: i32,
@@ -782,7 +782,6 @@ pub fn WelsGenerateNewSps(
     let kiMaxNumRefFrame = pParam.iMaxNumRefFrame;
     let kbEnableFrameCropping = pParam.bEnableFrameCroppingFlag;
     let kbEnableRc = pParam.iRCMode != RC_OFF_MODE;
-    let kiSpatialLayerNum = pParam.iSpatialLayerNum;
     let SWelsSvcCodingParam { sSpatialLayers, sDependencyLayers, .. } = &mut *pParam;
     let pDlayerParam = &mut sSpatialLayers[iDlayerIndex as usize];
     let pDlayerInternal = &sDependencyLayers[iDlayerIndex as usize];
@@ -1141,7 +1140,6 @@ pub fn FindExistingSps(
     let kiMaxNumRefFrame = pParam.iMaxNumRefFrame;
     let kbEnableFrameCropping = pParam.bEnableFrameCroppingFlag;
     let kbEnableRc = pParam.iRCMode != RC_OFF_MODE;
-    let kiSpatialLayerNum = pParam.iSpatialLayerNum;
     let SWelsSvcCodingParam { sSpatialLayers, sDependencyLayers, .. } = &mut *pParam;
     let pDlayerParam = &mut sSpatialLayers[iDlayerIndex as usize];
     let pDlayerInternal = &sDependencyLayers[iDlayerIndex as usize];

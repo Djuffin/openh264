@@ -31,9 +31,7 @@
 //! Environment knobs: `BENCH_REPEATS` (default 7), `BENCH_BLOCK_MS` (default 20),
 //! `BENCH_FILTER=<substring>` to run only matching rows.
 
-// `unused_mut`: each row owns one input set per column, so the columns this build
-// does not have leave their `let mut` bindings unread.
-#![allow(non_snake_case, unused_variables, unused_mut)]
+#![allow(non_snake_case)]
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -222,9 +220,6 @@ impl Planes {
     fn cb(&self) -> PlaneCursor<'_> {
         PlaneCursor::new(&self.b, ANCHOR, STRIDE)
     }
-    fn dst(&mut self) -> PlaneCursorMut<'_> {
-        PlaneCursorMut::new(&mut self.out, ANCHOR, STRIDE)
-    }
 }
 
 /// Field-level cursors, so one closure can borrow `a`/`b` and `out` at once.
@@ -328,7 +323,9 @@ fn vaa_rows(rows: &mut Vec<Row>) {
     // One output set per column, allocated **once**: `Out::new` is six `Vec`s, and
     // inside the timed closure those six allocations were most of what the row
     // measured. The kernels overwrite every entry they touch, so reuse is exact.
-    let (mut o0, mut o1, mut o2) = (Out::new(mbs), Out::new(mbs), Out::new(mbs));
+    let (mut o0, mut o1) = (Out::new(mbs), Out::new(mbs));
+    #[cfg(feature = "wide")]
+    let mut o2 = Out::new(mbs);
 
     macro_rules! vaa_row {
         ($name:expr, $call:ident, $($arg:ident),*) => {
@@ -367,7 +364,9 @@ fn satd_rows(rows: &mut Vec<Row>) {
 }
 
 fn mc_rows(rows: &mut Vec<Row>) {
-    let (mut s0, mut s1, mut s2) = (Planes::new(), Planes::new(), Planes::new());
+    let (mut s0, mut s1) = (Planes::new(), Planes::new());
+    #[cfg(feature = "wide")]
+    let mut s2 = Planes::new();
     row!(*rows, "mc pixel_avg 16x16",
         |c| { let (a, b) = (cur(black_box(&s0.a)), cur(black_box(&s0.b))); mc::pixel_avg_c(&mut cur_mut(&mut s0.out), &black_box(a), &black_box(b), 16, 16); out_sum(&s0.out, c) },
         |c| { let (a, b) = (cur(black_box(&s1.a)), cur(black_box(&s1.b))); isa::mc::pixel_avg(&mut cur_mut(&mut s1.out), &black_box(a), &black_box(b), 16, 16); out_sum(&s1.out, c) },
@@ -468,7 +467,9 @@ fn dct_rows(rows: &mut Vec<Row>) {
 
     // Residuals over the decoder's real range, on a fresh prediction per call.
     let res: [i16; 16] = coeffs(7, 2000);
-    let (mut r0, mut r1, mut r2) = (Planes::new(), Planes::new(), Planes::new());
+    let (mut r0, mut r1) = (Planes::new(), Planes::new());
+    #[cfg(feature = "wide")]
+    let mut r2 = Planes::new();
     row!(*rows, "idct t4 in place",
         |c| { dec_aux::idct_t4_rec_in_place_c(&mut cur_mut(&mut r0.out), black_box(&res)); out_sum(&r0.out, c) },
         |c| { isa::dct::idct_t4_rec_in_place(&mut cur_mut(&mut r1.out), black_box(&res)); out_sum(&r1.out, c) },
@@ -530,9 +531,12 @@ fn quant_rows(rows: &mut Vec<Row>) {
 
 fn copy_rows(rows: &mut Vec<Row>) {
     let src = noise(STRIDE * ROWS, 21);
-    let (mut d0, mut d1, mut d2) = (vec![0u8; STRIDE * ROWS], vec![0u8; STRIDE * ROWS], vec![0u8; STRIDE * ROWS]);
+    let (mut d0, mut d1) = (vec![0u8; STRIDE * ROWS], vec![0u8; STRIDE * ROWS]);
+    #[cfg(feature = "wide")]
+    let mut d2 = vec![0u8; STRIDE * ROWS];
     let mut s0 = src.clone();
     let mut s1 = src.clone();
+    #[cfg(feature = "wide")]
     let mut s2 = src.clone();
     let sum = |d: &[u8], c: bool| if c { fnv(d) } else { d[ANCHOR] as u64 };
     row!(*rows, "copy 16x16",
@@ -585,7 +589,9 @@ fn deblock_rows(rows: &mut Vec<Row>) {
     let st = STRIDE as isize;
 
     for (label, sx, sy) in [("horizontal edge", st, 1isize), ("vertical edge", 1isize, st)] {
-        let (mut p0, mut p1, mut p2) = (plane(41), plane(41), plane(41));
+        let (mut p0, mut p1) = (plane(41), plane(41));
+        #[cfg(feature = "wide")]
+        let mut p2 = plane(41);
         let name: &'static str = match (label, "luma lt4") {
             ("horizontal edge", _) => "deblock luma lt4, horizontal edge",
             _ => "deblock luma lt4, vertical edge",
@@ -595,7 +601,9 @@ fn deblock_rows(rows: &mut Vec<Row>) {
             |c| { isa::deblock::deblock_luma_lt4(&mut p1.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&p1, c) },
             |c| { wd::deblock::deblock_luma_lt4(&mut p2.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta), black_box(&tc)); sum(&p2, c) });
 
-        let (mut p0, mut p1, mut p2) = (plane(43), plane(43), plane(43));
+        let (mut p0, mut p1) = (plane(43), plane(43));
+        #[cfg(feature = "wide")]
+        let mut p2 = plane(43);
         let name: &'static str = if label == "horizontal edge" {
             "deblock luma eq4, horizontal edge"
         } else {
@@ -606,8 +614,10 @@ fn deblock_rows(rows: &mut Vec<Row>) {
             |c| { isa::deblock::deblock_luma_eq4(&mut p1.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta)); sum(&p1, c) },
             |c| { wd::deblock::deblock_luma_eq4(&mut p2.cursor_mut(8, 8), sx, sy, black_box(alpha), black_box(beta)); sum(&p2, c) });
 
-        let (mut b0, mut r0, mut b1, mut r1, mut b2, mut r2) =
-            (plane(45), plane(46), plane(45), plane(46), plane(45), plane(46));
+        let (mut b0, mut r0, mut b1, mut r1) =
+            (plane(45), plane(46), plane(45), plane(46));
+        #[cfg(feature = "wide")]
+        let (mut b2, mut r2) = (plane(45), plane(46));
         let name: &'static str = if label == "horizontal edge" {
             "deblock chroma lt4, horizontal edge"
         } else {

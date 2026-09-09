@@ -1,4 +1,4 @@
-#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code, unused_variables)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
 //! H.264 / AVC In-Loop Adaptive Deblocking Filter Primitives.
@@ -338,25 +338,6 @@ pub fn nonzero_count(nzc: &mut [i8; 24]) {
     for v in nzc.iter_mut() {
         *v = (*v != 0) as i8;
     }
-}
-
-// ============================================================================
-// Shim span arithmetic
-// ============================================================================
-
-/// The one place that turns a deblocking kernel's reach into a slice span.
-///
-/// A kernel anchored at `pPix` touches byte offsets `j*step_x + i*step_y` for
-/// taps `j ∈ [-reach_back, reach_fwd]` and lines `i ∈ [0, lines)`. Both steps
-/// are positive at every call site (`(iStride, 1)` or `(1, iStride)`), so the
-/// minimum offset is `-reach_back*step_x` and the maximum
-/// `reach_fwd*step_x + (lines-1)*step_y`. Returns `(back, len)`: the slice is
-/// anchored at `pPix - back` and holds `len` bytes, with the kernel's anchor at
-/// index `back`.
-#[inline]
-fn shim_span(step_x: usize, step_y: usize, reach_back: usize, reach_fwd: usize, lines: usize) -> (usize, usize) {
-    let back = reach_back * step_x;
-    (back, back + reach_fwd * step_x + (lines - 1) * step_y + 1)
 }
 
 // ============================================================================

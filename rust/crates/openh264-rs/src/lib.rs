@@ -6,9 +6,13 @@
     non_snake_case,
     non_camel_case_types,
     non_upper_case_globals,
-    unused_imports,
-    unused_variables
+    unused_imports
 )]
+// Both are warn-by-default; naming them here is the record that the crate is meant
+// to be built with them on. They were blanket-allowed per module while the port was
+// landing files that only later gained callers — that phase is over, so a body with
+// no caller and a parameter with no reader are findings again, not noise.
+#![warn(dead_code, unused_variables)]
 #![deny(
     unused_assignments,
     unused_mut,

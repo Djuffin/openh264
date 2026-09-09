@@ -1,9 +1,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 //! Reference picture list management and Long-Term Reference (LTR) control.
@@ -999,8 +997,8 @@ pub fn FilterLTRMarkingFeedback(
 /// Builds active reference picture list pRefList0 for motion estimation.
 pub fn WelsBuildRefList(
     pCtx: &mut sWelsEncCtx,
-    kiPOC: i32,
-    iBestLtrRefIdx: i32,
+    _kiPOC: i32,
+    _iBestLtrRefIdx: i32,
 ) -> bool {
     if pCtx.param_opt().is_none() || current_layer_ref(pCtx).is_none() {
         return false;
@@ -1207,7 +1205,7 @@ pub fn WelsUpdateSliceHeaderSyntax(
 }
 
 /// Updates reference picture syntax and picture number delta in slice headers.
-pub fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, kiPOC: i32, kiFrameType: i32) {
+pub fn WelsUpdateRefSyntax(pCtx: &mut sWelsEncCtx, _kiPOC: i32, kiFrameType: i32) {
     if pCtx.param_opt().is_none() || current_layer_ref(pCtx).is_none() {
         return;
     }
@@ -1362,7 +1360,6 @@ pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
         };
         // The reconstruction picture, resolved once.
         let pDecPic: &mut SPicture = pRefList.pic_mut(idDec);
-        let sDec = pDecPic.planes();
         if kiHighestTid == 0 || (kuiTid as i32) < kiHighestTid as i32 {
             // `ref_list_mgr_svc.cpp:779`.
             pDecPic.expand_as_reference();
@@ -1403,7 +1400,7 @@ pub fn WelsUpdateRefListScreen(pCtx: &mut sWelsEncCtx) -> bool {
 pub fn WelsBuildRefListScreen(
     pCtx: &mut sWelsEncCtx,
     iPOC: i32,
-    iBestLtrRefIdx: i32,
+    _iBestLtrRefIdx: i32,
 ) -> bool {
     if pCtx.param_opt().is_none() || pCtx.vaa().is_none() || current_layer_ref(pCtx).is_none() {
         return false;

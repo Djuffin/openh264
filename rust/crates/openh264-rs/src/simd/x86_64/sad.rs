@@ -301,6 +301,11 @@ pub fn sample_sad_16x16<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 /// built, not on every candidate the mode-decision loop scores — and it is why this
 /// is `pub(crate)`: the module boundary is what keeps the set of callers to the one
 /// that checks, in place of a branch each call would pay for.
+// Only the kernel set `simd::kernels` currently aliases has a caller for this
+// (`encoder/sample.rs`'s AVX2 slot); every set carries the pair because every
+// set has to satisfy that dispatch, and the sets that are compiled but not
+// aliased — which `--features wide` / `--features scalar` decide — go dead.
+#[allow(dead_code)]
 #[inline(always)]
 pub(crate) fn sample_sad_16x16_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     // SAFETY: the caller established AVX2 support before installing this; see above.
@@ -323,6 +328,11 @@ pub fn sample_sad_16x8<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 /// built, not on every candidate the mode-decision loop scores — and it is why this
 /// is `pub(crate)`: the module boundary is what keeps the set of callers to the one
 /// that checks, in place of a branch each call would pay for.
+// Only the kernel set `simd::kernels` currently aliases has a caller for this
+// (`encoder/sample.rs`'s AVX2 slot); every set carries the pair because every
+// set has to satisfy that dispatch, and the sets that are compiled but not
+// aliased — which `--features wide` / `--features scalar` decide — go dead.
+#[allow(dead_code)]
 #[inline(always)]
 pub(crate) fn sample_sad_16x8_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     // SAFETY: the caller established AVX2 support before installing this; see above.

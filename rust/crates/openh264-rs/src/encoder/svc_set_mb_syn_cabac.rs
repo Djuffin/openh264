@@ -29,10 +29,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables,
-    unused_mut
+    non_upper_case_globals
 )]
 
 //! Context-based Adaptive Binary Arithmetic Coding (CABAC) Macroblock Syntax Writer.

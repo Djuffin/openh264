@@ -228,6 +228,11 @@ pub fn sample_sad_16x16<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 
 /// The AVX2 slot's kernel. Safe to install anywhere: nothing here needs AVX2, see
 /// [`sad_16x_two_rows`].
+// Only the kernel set `simd::kernels` currently aliases has a caller for this
+// (`encoder/sample.rs`'s AVX2 slot); every set carries the pair because every
+// set has to satisfy that dispatch, and the sets that are compiled but not
+// aliased — which `--features wide` / `--features scalar` decide — go dead.
+#[allow(dead_code)]
 #[inline(always)]
 pub(crate) fn sample_sad_16x16_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     sad_16x_two_rows::<S, 16>(sample1, sample2, 0, 0)
@@ -239,6 +244,11 @@ pub fn sample_sad_16x8<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 }
 
 /// See [`sample_sad_16x16_avx2`].
+// Only the kernel set `simd::kernels` currently aliases has a caller for this
+// (`encoder/sample.rs`'s AVX2 slot); every set carries the pair because every
+// set has to satisfy that dispatch, and the sets that are compiled but not
+// aliased — which `--features wide` / `--features scalar` decide — go dead.
+#[allow(dead_code)]
 #[inline(always)]
 pub(crate) fn sample_sad_16x8_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     sad_16x_two_rows::<S, 8>(sample1, sample2, 0, 0)

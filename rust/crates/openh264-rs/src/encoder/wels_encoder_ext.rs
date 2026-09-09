@@ -1,9 +1,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 //! C++ SVC Encoder Facade and Lifecycle Controller (`CWelsH264SVCEncoder`).
@@ -1008,7 +1006,7 @@ pub fn WelsEncoderApplyBitRate(
 /// Derives the reference-frame count the requested LTR setting needs, raises
 /// `iMaxNumRefFrame`/`iNumRefFrame` to reach it, and re-adjusts the encoder.
 pub fn WelsEncoderApplyLTR(
-    pLogCtx: SLogContext,
+    _pLogCtx: SLogContext,
     ppCtx: &mut Option<Box<sWelsEncCtx>>,
     pLTRValue: &mut SLTRConfig,
 ) -> i32 {

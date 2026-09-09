@@ -7,9 +7,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 #![deny(unsafe_code)]
@@ -1794,17 +1792,18 @@ macro_rules! abi_guard {
     }};
 }
 
-/// **The guard's covering-test hook.** Compiled only under `cfg(test)`, so it is not
-/// in the library a consumer links.
-///
-/// The guard's window can only be shown to work by putting a panic inside it, and a
-/// panic inside a `catch_unwind`-less thunk aborts the whole test binary — so this
-/// cannot be an ordinary test that reaches a real defect. It is **thread-local**
-/// rather than a global: the crate's other unit tests drive `DecodeFrame2` and
-/// `EncodeFrame` too, `cargo test` runs them in parallel in one process, and a global
-/// switch would fire in whichever test happened to be inside a thunk at the time.
 #[cfg(test)]
 thread_local! {
+    /// **The guard's covering-test hook.** Compiled only under `cfg(test)`, so it is
+    /// not in the library a consumer links.
+    ///
+    /// The guard's window can only be shown to work by putting a panic inside it, and
+    /// a panic inside a `catch_unwind`-less thunk aborts the whole test binary — so
+    /// this cannot be an ordinary test that reaches a real defect. It is
+    /// **thread-local** rather than a global: the crate's other unit tests drive
+    /// `DecodeFrame2` and `EncodeFrame` too, `cargo test` runs them in parallel in one
+    /// process, and a global switch would fire in whichever test happened to be inside
+    /// a thunk at the time.
     pub(crate) static PANIC_PROBE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -4021,13 +4020,11 @@ pub(crate) mod abi_test_driver {
     ///
     /// A frame's slices are exactly the NALs of its
     /// `VIDEO_CODING_LAYER` layers (`uiLayerType`), so `vcl_nals` **is** the coded
-    /// slice count — where `nals` also counts the parameter sets an IDR carries in
-    /// its `NON_VIDEO_CODING_LAYER`. On the IDR, `nals` is ≥ 2 whatever the slice
-    /// mode does.
+    /// slice count — which a count over every layer would not be, since an IDR also
+    /// carries its parameter sets in a `NON_VIDEO_CODING_LAYER`.
     pub(crate) struct EncodedFrame {
         pub(crate) kind: EVideoFrameType,
         pub(crate) bytes: usize,
-        pub(crate) nals: usize,
         pub(crate) vcl_nals: usize,
         pub(crate) frame_size: i32,
         /// `first_mb_in_slice` of every VCL NAL of this frame, in emission order.
@@ -4326,7 +4323,6 @@ pub(crate) mod abi_test_driver {
                     "EncodeFrame failed at frame {f}"
                 );
                 let mut bytes = 0usize;
-                let mut nals = 0usize;
                 let mut vcl_nals = 0usize;
                 let mut first_mbs: Vec<u32> = Vec::new();
                 for l in 0..info.iLayerNum as usize {
@@ -4334,7 +4330,6 @@ pub(crate) mod abi_test_driver {
                     if lay.pNalLengthInByte.is_null() {
                         continue;
                     }
-                    nals += lay.iNalCount as usize;
                     let is_vcl = lay.uiLayerType == LAYER_TYPE::VIDEO_CODING_LAYER as u8;
                     if is_vcl {
                         vcl_nals += lay.iNalCount as usize;
@@ -4355,7 +4350,6 @@ pub(crate) mod abi_test_driver {
                 out.push(EncodedFrame {
                     kind: info.eFrameType,
                     bytes,
-                    nals,
                     vcl_nals,
                     frame_size: info.iFrameSizeInBytes,
                     first_mbs,
@@ -4478,6 +4472,12 @@ mod send_verdict {
     macro_rules! is_send {
         ($t:ty) => {{
             struct Probe<T>(std::marker::PhantomData<T>);
+            // Each expansion uses exactly one of the two arms and leaves the other
+            // dead — that *is* the trick, so both carry the allow. The trait arm is
+            // dead when `$t` is `Send` (`is_send!(u32)`), the inherent one when it is
+            // not (`is_send!(Decoder)`); dropping either turns one of the two answers
+            // into a compile error.
+            #[allow(dead_code)]
             trait NotSend {
                 fn probe(&self) -> bool {
                     false
@@ -4485,6 +4485,7 @@ mod send_verdict {
             }
             impl<T> NotSend for Probe<T> {}
             impl<T: Send> Probe<T> {
+                #[allow(dead_code)]
                 fn probe(&self) -> bool {
                     true
                 }

@@ -38,9 +38,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    dead_code,
-    unused_variables
+    non_upper_case_globals
 )]
 
 #![deny(unsafe_code)]
@@ -1006,8 +1004,6 @@ pub fn ParseInterInfo(
         pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.bDefaultMotionPredFlag;
     let bAdaptiveMotionPredFlag =
         pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.bAdaptiveMotionPredFlag;
-    let iDirectSpatialMvPredFlag = pCurDqLayer
-        .sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.iDirectSpatialMvPredFlag;
     let uiRefCountHdr =
         pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt.sSliceHeader.uiRefCount;
     let ppRefPic = &pCtx.sRefPic.pRefList[0];
@@ -2596,7 +2592,6 @@ pub fn WelsResidualBlockCavlc(
     let iCurIdx = pBs.cavlc_bit_pos() as usize;
     let pBuf = &buf[iCurIdx >> 3..];
     let bChromaDc = CHROMA_DC == iResidualProperty;
-    let bChroma = bChromaDc || CHROMA_AC == iResidualProperty;
 
     let uiCache32Bit = ((pBuf[0] as u32) << 24)
         | ((pBuf[1] as u32) << 16)

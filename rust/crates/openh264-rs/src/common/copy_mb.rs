@@ -31,7 +31,7 @@
 //! Translated from `codec/common/inc/copy_mb.h` and
 //! `codec/common/src/copy_mb.cpp`.
 
-#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, dead_code)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 #![deny(unsafe_code)]
 

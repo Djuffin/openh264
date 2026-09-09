@@ -40,8 +40,7 @@
 #![allow(
     non_snake_case,
     non_camel_case_types,
-    non_upper_case_globals,
-    unused_variables
+    non_upper_case_globals
 )]
 
 use std::sync::atomic::{AtomicI32, AtomicU16, Ordering};
@@ -1088,7 +1087,7 @@ impl<'a> SliceJobHandle<'a> {
 /// The prefix-NAL pair both encode bodies open with
 /// (`CWelsBaseTask::WritePrefixNal`).
 fn WritePrefixNalForSlice(
-    pCtx: &sWelsEncCtx,
+    _pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
     eNalRefIdc: EWelsNalRefIdc,
     eNalType: EWelsNalUnitType,

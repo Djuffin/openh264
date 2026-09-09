@@ -346,9 +346,10 @@ fn written_streams_read_back_through_the_old_reader() {
         let mut out = vec![0u8; 4096];
         let mut w = BsWriter::new();
         let ops: Vec<WriteOp> = (0..rng.below(32) + 1)
-            .map(|_| match rng.below(3) {
+            .map(|_| match rng.below(4) {
                 0 => WriteOp::Bits(rng.range_i32(1, 16), rng.next_u32() & 0xFFFF),
                 1 => WriteOp::Ue(rng.below(1 << 14)),
+                2 => WriteOp::OneBit(rng.below(2)),
                 _ => WriteOp::Se(rng.range_i32(-8000, 8000)),
             })
             .map(|op| match op {
