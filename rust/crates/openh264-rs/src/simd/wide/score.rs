@@ -1,6 +1,5 @@
 //! The CAVLC bit-cost estimate on `wide` lane types — the twin of
-//! `simd::x86_64::score`, which explains why this is the one kernel of `score.asm`'s
-//! four that is worth having.
+//! `simd::x86_64::score`.
 //!
 //! The non-zero mask is a saturating narrow (`i8x16::from_i16x16_saturate`, which
 //! is `packsswb`), a byte compare and `to_bitmask` (`pmovmskb`); the run-length sum
@@ -59,11 +58,8 @@ pub fn calculate_single_ctr_4x4(dct: &[i16; 16]) -> i32 {
 mod tests {
     use crate::encoder::encode_mb_aux::calculate_single_ctr_4x4;
 
-    /// `calculate_single_ctr_4x4` reads its input only through `== 0`, so its
-    /// result is a function of the 16-bit non-zero mask alone — all 65536 of
-    /// which fit in a test. Nothing weaker would do: this kernel replaces
-    /// the scalar's per-coefficient walk with a walk over set bits, so the two
-    /// share no structure that a sampled test could lean on.
+    /// The result depends only on the 16-bit non-zero mask, so all 65536 masks
+    /// are covered.
     #[test]
     fn single_ctr_matches_the_scalar_for_every_mask() {
         for mask in 0u32..=0xFFFF {
@@ -76,9 +72,8 @@ mod tests {
         }
     }
 
-    /// The mask is built through a **saturating** narrow, so a coefficient whose
-    /// low byte is zero has to stay non-zero. `256` is the smallest such value
-    /// and `-256` its mirror; a `packuswb`/truncating kernel reports 0 for both.
+    /// The saturating narrow keeps a coefficient whose low byte is zero non-zero;
+    /// a truncating narrow would report 0 for values such as `256` and `-256`.
     #[test]
     fn single_ctr_sees_coefficients_a_truncating_narrow_would_lose() {
         for &v in &[256i16, -256, 512, i16::MIN, 0x0100, 0x7F00] {

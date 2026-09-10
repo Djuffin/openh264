@@ -205,7 +205,7 @@ pub use crate::decoder::slice::EWelsSliceType::*;
 pub use crate::decoder::nalu::EWelsNalUnitType;
 pub use crate::decoder::nalu::EWelsNalUnitType::*;
 
-// Data Structures Matching C/C++ Layout
+// Data Structures
 
 pub use crate::decoder::decoder_context::SPosOffset;
 use crate::decoder::decoder_context::{
@@ -306,11 +306,9 @@ impl Default for SLayerInfo {
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct DqLayerState {
-    /// Every per-macroblock array the layer owns, with one set of dimensions — the
-    /// **allocation's**, fixed when the layer is constructed — and indexing that
-    /// panics rather than running off the end.
-    ///
-    /// Sized once at [`InitialDqLayersContext`] and dropped with the layer.
+    /// Every per-macroblock array the layer owns, dimensioned by the allocation (not
+    /// the current slice) and indexed with bounds checks. Sized once at
+    /// [`InitialDqLayersContext`] and dropped with the layer.
     pub grid: MbGrid,
     pub sLayerInfo: SLayerInfo,
     pub iLumaStride: i32,
@@ -351,25 +349,19 @@ pub struct DqLayerState {
 }
 
 impl DqLayerState {
-    /// A layer whose [`grid`](Self::grid) covers `dims`, and whose every other field
-    /// is what `WelsMallocz`'s zeroing left it — plus the two the C++ constructor
-    /// overwrites (`uiRefLayerDqId = 255`, `uiRefLayerChromaPhaseYPlus1 = 1`).
+    /// A layer whose [`grid`](Self::grid) covers `dims`, every other field zeroed,
+    /// and `uiRefLayerDqId = 255`, `uiRefLayerChromaPhaseYPlus1 = 1`.
     pub fn for_grid(dims: MbDims) -> Self {
         Self {
             grid: MbGrid::new(dims),
-            // `SLayerInfo`'s `Default` is `WelsMallocz`'s zero field for field, with
-            // one deliberate difference: `Option<SpsRef>` keeps its
-            // niche in a `bool`, so the all-zero pattern reads back as
-            // `Some(SpsRef { id: 0, subset: false })` where the C's memset leaves a
-            // null `pSps`. `None` is the faithful spelling; the zero pattern was not.
             sLayerInfo: SLayerInfo::default(),
             iLumaStride: 0,
             iChromaStride: 0,
             iMbX: 0,
             iMbY: 0,
             iMbXyIndex: 0,
-            // Not the allocation's dimensions: these are the *current slice's*, and
-            // the C leaves them zero until `InitDqLayerInfo` writes them.
+            // Not the allocation's dimensions: the *current slice's*, zero until
+            // `InitDqLayerInfo` writes them.
             iMbWidth: 0,
             iMbHeight: 0,
             iSliceIdcBackup: 0,
@@ -379,8 +371,6 @@ impl DqLayerState {
             iInterLayerSliceAlphaC0Offset: 0,
             iInterLayerSliceBetaOffset: 0,
             iSliceGroupChangeCycle: 0,
-            // The three the C++ carries as pointers into the slice header; `None` is
-            // the null it memsets them to.
             sRefPicListReordering: None,
             sPredWeightTable: None,
             sRefPicMarking: None,
@@ -392,7 +382,6 @@ impl DqLayerState {
             bStoreRefBasePicFlag: false,
             bTCoeffLevelPredFlag: false,
             bConstrainedIntraResamplingFlag: false,
-            // The two the C++ constructor overwrites after its own zeroing.
             uiRefLayerDqId: 255,
             uiRefLayerChromaPhaseXPlus1Flag: 0,
             uiRefLayerChromaPhaseYPlus1: 1,
@@ -426,7 +415,6 @@ pub use crate::decoder::decoder_context::{Picture, SPicBuff, SPicture};
 
 // Logging and Bitstream Reading Helpers
 
-/// The C++'s logging entry point.
 pub use crate::common::wels_trace::WelsLog;
 
 #[inline]
@@ -451,14 +439,11 @@ pub fn BsGetSe(buf: &[u8], pBs: &mut BsCursor, pOut: &mut i32) -> i32 {
 
 // External and Internal Helper Stubs
 
-/// Number of decoding threads. Always **0**: the C++ decoder's multi-threading was
-/// never ported.
+/// Number of decoding threads — always 0, as multi-threaded decoding is unsupported.
+/// `GetThreadCount` in `decoder_context.h`.
 ///
-/// Matches `GetThreadCount` in `decoder_context.h`. **The literal must be `0`, not
-/// `1`**: every other caller tests `> 1` or `<= 1` and cannot tell the two apart,
-/// but `api/codec_api.rs:1831` branches on `GetThreadCount(p_ctx) <= 0` to increment
-/// `uiDecodeTimeStamp`, so a `1` here would silently stop that branch running and
-/// change the decoding timestamp.
+/// The literal must be `0`, not `1`: most callers only test `> 1` or `<= 1`, but
+/// `api/codec_api.rs` branches on `<= 0` to increment `uiDecodeTimeStamp`.
 #[inline]
 pub fn GetThreadCount(_pCtx: &SWelsDecoderContext) -> i32 {
     0
@@ -498,7 +483,6 @@ pub fn UpdateDecStatNoFreezingInfo(pCtx: &mut SWelsDecoderContext, pCurDq: Optio
     let Some(bIsComplete) = dec_pic(&mut pCtx.pPicBuff, pCtx.pDec).map(|p| p.bIsComplete) else {
         return;
     };
-    // The C++'s `if (NULL == pCtx->pDecoderStatistics) return;`.
     let pDecStat = &mut pCtx.pDecoderStatistics;
 
     if pDecStat.iAvgLumaQp == -1 {
@@ -667,24 +651,20 @@ pub fn ComputeColocatedTemporalScaling(
     }
 }
 
-/// Does a stream with this SPS need the Annex C bumping process to put its pictures
-/// into output order, or is decoding order already output order?
-/// Matches `bool NeedsPictureReordering (const PSps)` in `decoder_core.cpp`.
+/// Whether this SPS needs the Annex C bumping process to put pictures into output
+/// order — `NeedsPictureReordering` in `decoder_core.cpp`.
 ///
-/// Direct output is what the display layer always did for baseline, and it stays
-/// correct — and keeps the decoder at zero latency — for three families:
+/// Decoding order is already output order, so pictures go out directly at zero
+/// latency, for three families:
 ///
 /// * the baseline and CAVLC 4:4:4 profiles, which carry no B slices and no
 ///   reordering;
-/// * `pic_order_cnt_type` other than 0. Type 2 has, by its own definition, output
-///   order equal to decoding order. Type 1 does permit reordering, but this decoder
-///   derives no POC for it (see the POC switch in [`DecodeCurrentAccessUnit`]), so
-///   there would be nothing to sort by; such a stream stays in decoding order as it
-///   always has, and no stream in this tree's test material exercises it;
+/// * `pic_order_cnt_type` other than 0. Type 2 has output order equal to decoding
+///   order by definition; type 1 permits reordering but this decoder derives no POC
+///   for it (see the POC switch in [`DecodeCurrentAccessUnit`]), so there is nothing
+///   to sort by;
 /// * a VUI whose `max_num_reorder_frames` is 0 (E.2.1): the encoder has stated that
 ///   no picture precedes another in output order that follows it in decoding order.
-///   This project's own encoder writes exactly that (`encoder/core/src/au_set.cpp`),
-///   so openh264-encoded streams keep the latency they have always had.
 pub fn NeedsPictureReordering(kpSps: &SSps) -> bool {
     if kpSps.uiProfileIdc == 66 || kpSps.uiProfileIdc == 83 {
         return false;
@@ -698,19 +678,16 @@ pub fn NeedsPictureReordering(kpSps: &SSps) -> bool {
     true
 }
 
-/// Size of the decoded picture buffer in frames — A.3.1 over Table A-1, the
-/// derivation the JM spells out as `getDpbSize()`.
-/// Matches `int32_t GetDpbSize (const PSps)` in `decoder_core.cpp`.
+/// Size of the decoded picture buffer in frames — A.3.1 over Table A-1.
+/// `GetDpbSize` in `decoder_core.cpp`.
 ///
 /// `MaxDpbMbs / (PicWidthInMbs * FrameHeightInMbs)`, capped at 16 frames, unless the
 /// VUI carries `max_dec_frame_buffering`, which replaces it; then never below
 /// `max_num_ref_frames`, and never below one frame.
 ///
-/// The C++ reads `pSps->pSLevelLimits`, the row `ParseSps` attached; this port keeps
-/// no pointer in the SPS and resolves the row here instead. [`GetLevelLimits`]
-/// resolves `level_idc` 9 — and 11 with `constraint_set3_flag` — to level 1b, and
-/// `ParseSps` rejects an SPS whose `level_idc` it does not know, so a picture only
-/// ever decodes with a row available; the `None` arm is the 16-frame maximum.
+/// The Table A-1 row is resolved here by [`GetLevelLimits`], which maps `level_idc` 9
+/// — and 11 with `constraint_set3_flag` — to level 1b. `ParseSps` rejects an unknown
+/// `level_idc`, so the `None` arm (the 16-frame maximum) is unreachable in decoding.
 pub fn GetDpbSize(kpSps: &SSps) -> i32 {
     let mut iDpbFrames = MAX_REF_PIC_COUNT as i32;
     if let Some(kpLevelLimits) =
@@ -727,10 +704,9 @@ pub fn GetDpbSize(kpSps: &SSps) -> i32 {
     iDpbFrames.max(kpSps.iNumRefFrames).max(1)
 }
 
-/// Adaptive picture-queue size, `pSps->iNumRefFrames + 2` (the extra two are
-/// the EC MV copy exchange buffers) — or, for a stream that reorders,
-/// `GetDpbSize() + iNumRefFrames + 3`.
-/// Matches `GetTargetRefListSize` in `decoder.cpp`.
+/// Adaptive picture-queue size, `iNumRefFrames + 2` (the extra two are the EC MV copy
+/// exchange buffers) — or, for a stream that reorders, `GetDpbSize() +
+/// iNumRefFrames + 3`. `GetTargetRefListSize` in `decoder.cpp`.
 pub fn GetTargetRefListSize(pCtx: &mut SWelsDecoderContext) -> i32 {
     let kpSps = active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).copied();
     let mut iNumRefFrames = match kpSps {
@@ -743,9 +719,9 @@ pub fn GetTargetRefListSize(pCtx: &mut SWelsDecoderContext) -> i32 {
             } else if NeedsPictureReordering(&kpSps) {
                 // A stream that reorders holds pictures past the point they stop
                 // being references: the display layer keeps up to `GetDpbSize()` of
-                // them, and lags the specification's bumping by at most one reference
-                // frame plus one, because it emits one picture per completed picture.
-                // Plus the picture being decoded, plus the two the EC exchange wants.
+                // them and lags the specification's bumping by at most one reference
+                // frame plus one, since it emits one picture per completed picture.
+                // Plus the picture being decoded, plus the two for the EC exchange.
                 GetDpbSize(&kpSps) + kpSps.iNumRefFrames + 3
             } else {
                 kpSps.iNumRefFrames + 2
@@ -766,19 +742,14 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
         let iPicBufSize = GetTargetRefListSize(pCtx);
         pCtx.iPicQueueNumber = iPicBufSize;
 
-        // `WelsRequestMem` (`decoder.cpp:464–545`) is what this function's first
-        // half is. The C's early return is `bHaveGotMemory && same size &&
-        // !bNeedChangePicQueue`. `WelsResetRefPic` is the caller's
-        // (`AllocPicBuffOnNewSeqBegin`, matching `decoder.cpp:489`'s placement relative
-        // to this work), so the reference lists are already clear of the pool being
-        // dropped or reordered here.
+        // `WelsRequestMem` (`decoder.cpp`). The caller (`AllocPicBuffOnNewSeqBegin`)
+        // has already run `WelsResetRefPic`, so the reference lists are clear of the
+        // pool being dropped or reordered here.
         let size_changed = pCtx.bHaveGotMemory
             && (iPicWidth != pCtx.iImgWidthInPixel || iPicHeight != pCtx.iImgHeightInPixel);
         if size_changed {
-            // `decoder.cpp:518–528`: destroy, forget the DPB back-reference into the
-            // pool being freed, rebuild at the new size. `.take()` is the C's
-            // `ppPicBuf` out-parameter — it reads the pool and nulls the field in one
-            // expression, the form `WelsFreeDynamicMemory` already uses.
+            // Destroy, forget the DPB back-reference into the pool being freed,
+            // rebuild at the new size.
             let pool = pCtx.pPicBuff.take();
             crate::decoder::pic_queue::DestroyPicBuff(pCtx, pool);
             pCtx.pLastDecPicInfo.pPreviousDecodedPictureInDpb = None;
@@ -794,18 +765,15 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
                 return 1;
             };
             pCtx.pPicBuff = Some(pool);
-            // `decoder.cpp:534–540`, and only on the arm that actually allocated:
-            // the size the pictures were built at, and `pDec = NULL` because "need
-            // prefetch a new pic due to spatial size changed" — the id the field holds
-            // names a slot of the pool that was just dropped.
+            // The size the pictures were built at. `pDec` is cleared because the id it
+            // holds names a slot of the pool that was just dropped.
             pCtx.iImgWidthInPixel = iPicWidth;
             pCtx.iImgHeightInPixel = iPicHeight;
             pCtx.bHaveGotMemory = true;
             pCtx.pDec = None;
         } else {
-            // The third arm: same resolution, different queue size.
-            // `decoder.cpp:493-509`. A stream that changes `num_ref_frames` without
-            // changing resolution lands here.
+            // Same resolution, different queue size: a stream that changes
+            // `num_ref_frames` without changing resolution.
             let capacity = pic_pool_mut(pCtx).map_or(0, |pool| pool.capacity());
             if capacity != iPicBufSize {
                 WelsLog(
@@ -835,10 +803,8 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
                 if iErr != ERR_NONE {
                     return iErr;
                 }
-                // `decoder.cpp:534-540`, which the C++ reaches from this arm as well
-                // as from the reallocating one: the pool's pictures were built at
-                // this size, and `pDec` names a slot whose occupant the resize may
-                // have moved or dropped.
+                // The pool's pictures were built at this size, and `pDec` names a slot
+                // whose occupant the resize may have moved or dropped.
                 pCtx.iImgWidthInPixel = iPicWidth;
                 pCtx.iImgHeightInPixel = iPicHeight;
                 pCtx.bHaveGotMemory = true;
@@ -866,7 +832,7 @@ pub use crate::decoder::pic_queue::PrefetchLastPicForThread;
 use crate::decoder::error_concealment::{ImplementErrorCon, MarkECFrameAsRef, NeedErrorCon};
 
 #[inline]
-/// Matches `ResetActiveSPSForEachLayer` in `decoder_context.h`.
+/// `ResetActiveSPSForEachLayer` in `decoder_context.h`.
 pub fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
     if pCtx.iTotalNumMbRec == 0 {
         for i in 0..MAX_LAYER_NUM {
@@ -875,16 +841,10 @@ pub fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
     }
 }
 
-/// `decoder.cpp:716-724`. The three feedback fields `DECODER_OPTION_VCL_NAL`,
-/// `DECODER_OPTION_TEMPORAL_ID` and `DECODER_OPTION_IS_REF_PIC` read, taken from the
-/// access unit's **first** NAL (`uiStartPos`, not the last — the AU is ordered and the
-/// base layer leads it).
-///
-/// The reference has no null guard here — `pAccessUnitList` and its `pNalUnitsList`
-/// entry are both live at the one call site (`decoder_core.cpp:2274`, right after
-/// `WelsDecodeAccessUnitStart`). The port's accessors return `Option`, and a `None`
-/// leaves the three fields at their per-call reset, which is what a caller reading
-/// them before any AU already sees.
+/// Reads the three feedback fields `DECODER_OPTION_VCL_NAL`,
+/// `DECODER_OPTION_TEMPORAL_ID` and `DECODER_OPTION_IS_REF_PIC` from the access unit's
+/// **first** NAL (`uiStartPos`, not the last — the AU is ordered and the base layer
+/// leads it). With no AU available the three fields keep their per-call reset values.
 pub fn GetVclNalTemporalId(pCtx: &mut SWelsDecoderContext) {
     let Some(pAccessUnit) = cur_au(&mut pCtx.access_unit) else {
         return;
@@ -923,13 +883,12 @@ use crate::decoder::nalu::{
 };
 use crate::decoder::parse_mb_syn_cavlc::InitVlcTable;
 use crate::decoder::pic_queue::{CreatePicBuff, DecreasePicBuff, IncreasePicBuff};
-/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
-/// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
-/// site because the kernels share their names with the scalars in this module — which
-/// is the point of the naming, and the reason the module qualifier has to stay.
+/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
+/// default, `simd::wide` under `--features wide`. The kernels share their names with
+/// the scalars in this module, so the module qualifier has to stay at each site.
 use crate::simd::{detect_cpu_features, kernels};
 
-// Core Functions Implemented in `decoder_core.cpp`
+// Core Functions
 pub fn DecodeFrameConstruction(
     pCtx: &mut SWelsDecoderContext,
     pCurDq: Option<&DqLayerState>,
@@ -967,9 +926,8 @@ pub fn DecodeFrameConstruction(
         if let Some(sFrameCrop) = sFrameCrop {
             pCtx.sFrameCrop = sFrameCrop;
         }
-        // `LONG_TERM_REF` is defined (`decoder_context.h:67`), so
-        // `decoder_core.cpp:60` clears **`bParamSetsLostFlag`** here and leaves
-        // `bReferenceLostAtT0Flag` alone.
+        // With `LONG_TERM_REF` enabled it is `bParamSetsLostFlag` that clears here;
+        // `bReferenceLostAtT0Flag` is left alone.
         pCtx.bParamSetsLostFlag = false;
         if pCtx.iTotalNumMbRec == kiTotalNumMbInCurLayer {
             pCtx.bPrintFrameErrorTraceFlag = true;
@@ -1003,14 +961,10 @@ pub fn DecodeFrameConstruction(
                         - ((sps.sFrameCrop.iTopOffset + sps.sFrameCrop.iBottomOffset) << 1),
                 )
             });
-            // `decoder_core.cpp:88-175`, whole: the IDR SPS/PPS prepend, the two
-            // capacity checks, `ExpandBsLenBuffer`, and the per-NAL copy out of
-            // `sSavedData`.
-            //
-            // The reference interleaves the two checks with the copies; hoisting them
-            // is the same growth on the same inputs, because both are functions of
-            // `iNalNum` and the access unit's index range and neither copy changes
-            // those.
+            // The IDR SPS/PPS prepend, the two capacity checks, `ExpandBsLenBuffer`,
+            // and the per-NAL copy out of `sSavedData`. Both capacity checks are
+            // hoisted above the copies: they are functions only of `iNalNum` and the
+            // access unit's index range, which no copy changes.
             let (iIdx0, iEndIdx0) = match cur_au(&mut pCtx.access_unit) {
                 Some(au) => (au.uiStartPos as i32, au.uiEndPos as i32),
                 None => (0, -1),
@@ -1040,7 +994,7 @@ pub fn DecodeFrameConstruction(
                     .unwrap_or(0)
             };
             if bDoPrepend {
-                // "2 reserved for sps+pps" — `decoder_core.cpp:113`.
+                // 2 reserved for sps+pps.
                 if iNalNumAfter > iMaxNalNum(pCtx) - 2 {
                     WelsLog(
                         pCtx.sLogCtx,
@@ -1094,7 +1048,6 @@ pub fn DecodeFrameConstruction(
                         iTotalNalLen += *len;
                     }
                 }
-                // `uint8_t* pDstBuf = pParser->pDstBuff + iTotalNalLen;` as an offset.
                 let mut iDstPos = iTotalNalLen.max(0) as usize;
                 let mut iIdx = pCurAu.uiStartPos as i32;
                 let iEndIdx = pCurAu.uiEndPos as i32;
@@ -1106,11 +1059,10 @@ pub fn DecodeFrameConstruction(
                     pParser.iSpsHeightInPixel = h;
                 }
 
-                // `decoder_core.cpp:110-140` — an IDR that opens a frame gets the
-                // active SPS and PPS written in front of it, from the caches
-                // `ParseSps`/`ParsePps` fill, whether or not the source stream
-                // repeated them. This is what makes the parse-only output
-                // independently decodable.
+                // An IDR that opens a frame gets the active SPS and PPS written in
+                // front of it, from the caches `ParseSps`/`ParsePps` fill, whether or
+                // not the source stream repeated them. This makes the parse-only
+                // output independently decodable.
                 if bDoPrepend {
                     *bParamSetsLostFlag = false;
                     let sps_row = if bSubSps {
@@ -1158,9 +1110,9 @@ pub fn DecodeFrameConstruction(
                             *slot = iNalLen;
                             pParser.iNalNum += 1;
                         }
-                        // `decoder_core.cpp:155-172`. The source is `sSavedData`, the
-                        // **EBSP** copy `ParseNalHeader` made; `sRawData` holds the
-                        // de-escaped RBSP and is the wrong bytes to hand out.
+                        // The source is `sSavedData`, the EBSP copy `ParseNalHeader`
+                        // made; `sRawData` holds the de-escaped RBSP and is the wrong
+                        // bytes to hand out.
                         if iDstPos + iNalLen.max(0) as usize >= MAX_ACCESS_UNIT_CAPACITY {
                             *iErrorCode |= dsOutOfMemory;
                             pParser.iNalNum = 0;
@@ -1371,11 +1323,10 @@ pub fn ParsePredWeightedTable(
         }
         pSh.sPredWeightTable.uiLumaLog2WeightDenom = uiCode;
 
-        // `Option`, not a defaulted scalar: the two arms below distinguish "no SPS" from
-        // "monochrome SPS" and they distinguish them *in opposite directions* — the
-        // first parses nothing without an SPS, the second parses chroma weights
-        // *because* there is none. A `map_or(0, …)` collapses them and desynchronises
-        // the slice header.
+        // `Option`, not a defaulted scalar: the two arms below need "no SPS" and
+        // "monochrome SPS" kept apart, and they treat them in opposite directions —
+        // the first parses nothing without an SPS, the second parses chroma weights
+        // because there is none. Collapsing them desynchronises the slice header.
         let uiChromaArrayType =
             sps_of(&pCtx.sSpsPpsCtx, pSh.sps_ref).map(|sps| sps.uiChromaArrayType);
 
@@ -1740,10 +1691,8 @@ pub fn ParseDecRefPicMarking(
                             info.iPrevPicOrderCntMsb = 0;
                         }
                         pSh.iPicOrderCntLsb = 0;
-                        // The NAL under decode is `pCtx->nal_cur`, and this — its
-                        // only reader — resolves it. `pSh` above is the *layer's*
-                        // copy and is a different object, which is why both writes
-                        // are here.
+                        // `pSh` above is the layer's copy, a different object from the
+                        // NAL's own slice header, so both need the write.
                         let nal_cur = pCtx.slice_hdr_nal;
                         if let Some(nal) = nal_cur.and_then(|i| {
                             cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(i))
@@ -1794,8 +1743,6 @@ pub fn FillDefaultSliceHeaderExt(
 }
 
 pub fn InitBsBuffer(pCtx: &mut SWelsDecoderContext) -> i32 {
-    // `WelsMalloczHelper`'s zeroed allocation, owned: the allocation size *is*
-    // `sRawData.len()`.
     match RawDataBuffer::try_new_zeroed(MIN_ACCESS_UNIT_CAPACITY * MAX_BUFFERED_NUM) {
         Ok(raw) => pCtx.sRawData = raw,
         Err(()) => return ERR_INFO_OUT_OF_MEMORY,
@@ -1930,23 +1877,20 @@ pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
     }
 }
 
-/// Returns the detected host CPU core count.
-/// Matches `int32_t GetCPUCount()` in `decoder.cpp`.
+/// Detected host CPU core count. `GetCPUCount` in `decoder.cpp`.
 pub fn GetCPUCount() -> i32 {
     1
 }
 
-/// Detects SIMD hardware capabilities.
-/// Matches `uint32_t WelsCPUFeatureDetect (int32_t* pCPUFlag)` in `decoder.cpp`.
+/// Detects SIMD hardware capabilities. `WelsCPUFeatureDetect` in `decoder.cpp`.
 pub fn WelsCPUFeatureDetect(pCpuCores: &mut i32) -> u32 {
     *pCpuCores = GetCPUCount();
     detect_cpu_features()
 }
 
-/// Fill data fields in default for decoder context.
-/// Matches `void WelsDecoderDefaults (PWelsDecoderContext pCtx, SLogContext* pLogCtx)` in `decoder.cpp`.
+/// Fills the decoder context's default field values. `WelsDecoderDefaults` in
+/// `decoder.cpp`.
 pub fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, pLogCtx: Option<&SLogContext>) {
-    // `decoder.cpp:340` — `pCtx->sLogCtx = *pLogCtx`.
     if let Some(pLogCtx) = pLogCtx {
         pCtx.sLogCtx = *pLogCtx;
     }
@@ -1991,8 +1935,8 @@ pub fn WelsDecoderDefaults(pCtx: &mut SWelsDecoderContext, pLogCtx: Option<&SLog
     }
 }
 
-/// Fill data fields in SPS and PPS default for decoder context.
-/// Matches `void WelsDecoderSpsPpsDefaults (SWelsDecoderSpsPpsCTX& sSpsPpsCtx)` in `decoder.cpp`.
+/// Fills the SPS/PPS context's default field values. `WelsDecoderSpsPpsDefaults` in
+/// `decoder.cpp`.
 pub fn WelsDecoderSpsPpsDefaults(
     sSpsPpsCtx: &mut crate::decoder::decoder_context::SWelsDecoderSpsPpsCTX,
 ) {
@@ -2012,8 +1956,8 @@ pub fn WelsDecoderSpsPpsDefaults(
     sSpsPpsCtx.iSeqId = -1;
 }
 
-/// Fill last decoded picture info defaults.
-/// Matches `void WelsDecoderLastDecPicInfoDefaults (SWelsLastDecPicInfo& sLastDecPicInfo)` in `decoder.cpp`.
+/// Fills last-decoded-picture info defaults. `WelsDecoderLastDecPicInfoDefaults` in
+/// `decoder.cpp`.
 pub fn WelsDecoderLastDecPicInfoDefaults(
     sLastDecPicInfo: &mut crate::decoder::decoder_context::SWelsLastDecPicInfo,
 ) {
@@ -2025,10 +1969,8 @@ pub fn WelsDecoderLastDecPicInfoDefaults(
     sLastDecPicInfo.uiDecodingTimeStamp = 0;
 }
 
-/// Reset picture reordering buffer list.
-/// Matches `void ResetReorderingPictureBuffers (...)` in `decoder.cpp`.
-/// `iLargestBufferedPicIndex + 1` is clamped to the array's length — the C++ trusts
-/// the field.
+/// Resets the picture reordering buffer list. `ResetReorderingPictureBuffers` in
+/// `decoder.cpp`. `iLargestBufferedPicIndex + 1` is clamped to the array's length.
 pub fn ResetReorderingPictureBuffers(
     pPictReoderingStatus: &mut SPictReoderingStatus,
     pPictInfo: &mut [SPictInfo; PICT_INFO_LIST_SIZE],
@@ -2053,13 +1995,11 @@ pub fn ResetReorderingPictureBuffers(
     pPictReoderingStatus.iPrevCoreSeqNum = IMinInt32;
 }
 
-/// `void CWelsDecoder::OutputStatisticsLog (SDecoderStatistics&)` —
-/// `welsDecoderExt.cpp:947`.
+/// `CWelsDecoder::OutputStatisticsLog` — `welsDecoderExt.cpp`.
 ///
-/// One line every `iStatisticsLogInterval` decoded frames (1000 by
-/// default, `WelsDecoderDefaults`), and the reason `uiDecodedFrameCount` has to be
-/// counted on *both* of `DecodeFrame2`'s tails rather than only the error one: the
-/// interval is a modulus over it, and a counter that never moves prints nothing and
+/// One line every `iStatisticsLogInterval` decoded frames (1000 by default). The
+/// interval is a modulus over `uiDecodedFrameCount`, so that counter must advance on
+/// both of `DecodeFrame2`'s tails: a counter that never moves prints nothing and
 /// divides by zero in `DECODER_OPTION_GET_STATISTICS`'s two speed fields.
 pub fn OutputStatisticsLog(pCtx: &mut SWelsDecoderContext) {
     let s = pCtx.pDecoderStatistics;
@@ -2112,14 +2052,11 @@ pub fn OutputStatisticsLog(pCtx: &mut SWelsDecoderContext) {
 
 pub fn DecoderConfigParam(pCtx: &mut SWelsDecoderContext, kpParam: &SDecodingParam) {
     pCtx.pParam = *kpParam;
-    // `decoder.cpp:663` — parse-only decoding disables concealment.
+    // Parse-only decoding disables concealment.
     if pCtx.pParam.bParseOnly {
         pCtx.pParam.eEcActiveIdc = ERROR_CON_DISABLE;
     }
     InitErrorCon(pCtx);
-    // `decoder.cpp:667–671`. The out-of-range `else` is `read_decoding_param`'s, for
-    // the same reason the clamp is: `VIDEO_BITSTREAM_TYPE` has two variants and the
-    // wire has 2^32 values.
     pCtx.eVideoType = pCtx.pParam.sVideoProperty.eVideoBsType;
     WelsLog(
         pCtx.sLogCtx,
@@ -2132,7 +2069,6 @@ pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext) -> i32 {
     let mut cpu_cores = 0i32;
     pCtx.uiCpuFlag = WelsCPUFeatureDetect(&mut cpu_cores);
     WelsInitDecoderFuncs(pCtx);
-    // `decoder.cpp:606` — the vlc tables, right after the function pointers.
     InitVlcTable(&mut pCtx.pVlcTable);
     pCtx.bParamSetsLostFlag = true;
     pCtx.bNewSeqBegin = true;
@@ -2143,18 +2079,16 @@ pub fn WelsOpenDecoder(pCtx: &mut SWelsDecoderContext) -> i32 {
     ERR_NONE
 }
 
-/// Frees dynamically-grown decoder memory (DQ layers, FMO, reference
-/// pictures, picture buffer, CABAC engine).
-/// Matches `void WelsFreeDynamicMemory (PWelsDecoderContext pCtx)` in `decoder.cpp`.
+/// Frees dynamically-grown decoder memory (DQ layers, FMO, reference pictures,
+/// picture buffer, CABAC engine). `WelsFreeDynamicMemory` in `decoder.cpp`.
 pub fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
     UninitialDqLayersContext(pCtx);
     ResetFmoList(pCtx);
     WelsResetRefPic(pCtx);
 
     if pCtx.pPicBuff.is_some() {
-        // `.take()` is the C's `ppPicBuf` out-parameter: it reads the pool and nulls
-        // the field in one expression, so `DestroyPicBuff` cannot return with the
-        // context still naming a pool it has freed.
+        // `.take()` nulls the field before the free, so `DestroyPicBuff` cannot
+        // return with the context still naming a pool it has freed.
         let pool = pCtx.pPicBuff.take();
         crate::decoder::pic_queue::DestroyPicBuff(pCtx, pool);
     }
@@ -2169,8 +2103,8 @@ pub fn WelsFreeDynamicMemory(pCtx: &mut SWelsDecoderContext) {
     pCtx.bHaveGotMemory = false;
 }
 
-/// Terminates decoder worker threads and cleans up internal decoding context.
-/// Matches `void WelsEndDecoder (PWelsDecoderContext pCtx)` in `decoder.cpp:711`.
+/// Terminates decoder worker threads and cleans up the decoding context.
+/// `WelsEndDecoder` in `decoder.cpp`.
 pub fn WelsEndDecoder(pCtx: &mut SWelsDecoderContext) {
     {
         WelsFreeDynamicMemory(pCtx);
@@ -2200,14 +2134,11 @@ pub fn WelsInitStaticMemory(pCtx: &mut SWelsDecoderContext) -> i32 {
 pub fn WelsFreeStaticMemory(pCtx: &mut SWelsDecoderContext) {
     pCtx.access_unit = None;
 
-    // The buffers own their allocations now; reset releases them.
     pCtx.sRawData.reset();
 
     if pCtx.pParam.bParseOnly {
         pCtx.sSavedData.reset();
     }
-    // Outside the `bParseOnly` arm on purpose: as an owned field the release is
-    // unconditional.
     pCtx.pParserBsInfo = None;
 }
 
@@ -2226,13 +2157,10 @@ pub fn UpdateDecoderStatisticsForActiveParaset(
     pDecoderStatistics.uiLevel = pSps.uiLevelIdc as u32;
 }
 
-/// The header is parsed into a scratch and written back once.
-///
-/// A local scratch, copied in and copied
-/// back at the single exit, is behaviour-identical: the C++ parses in place, and
-/// nothing between the two copies reads that node (the sub-parsers take the scratch;
-/// `ParseDecRefPicMarking`'s second POC write targets a *different* NAL, the decode
-/// loop's, through `slice_hdr_nal`).
+/// The header is parsed into a scratch and written back to the NAL once, at the
+/// single exit. Nothing between the two copies reads that node: the sub-parsers take
+/// the scratch, and `ParseDecRefPicMarking`'s second POC write targets a different
+/// NAL, the decode loop's, through `slice_hdr_nal`.
 pub fn ParseSliceHeaderSyntaxs(
     pCtx: &mut SWelsDecoderContext,
     kiRbspStart: usize,
@@ -2252,9 +2180,8 @@ pub fn ParseSliceHeaderSyntaxs(
         None => return ERR_INFO_INVALID_PTR,
     };
     let iRet = parse_slice_header_into(pCtx, kiRbspStart, pBs, kbExtensionFlag, &mut ext, &mut hdr);
-    // The single exit's copy-back. It is unconditional on `iRet` because the in-place
-    // parse it replaces left every field it had written behind on an error return, and
-    // `WelsParseOneNal`'s error arms read the node afterwards.
+    // Unconditional on `iRet`: `WelsParseOneNal`'s error arms read the node
+    // afterwards and expect the fields written before the failure.
     if let Some(nal) = cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(last)) {
         nal.sNalData.sVclNal.sSliceHeaderExt = ext;
         nal.sNalHeaderExt = hdr;
@@ -2408,8 +2335,6 @@ fn parse_slice_header_into(
                 return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_HEADER, ERR_INFO_INVALID_IDR_PIC_ID);
             }
             pSliceHeadExt.sSliceHeader.uiIdrPicId = uiCode as u16;
-            // `decoder_core.cpp:1060-1062`, under `LONG_TERM_REF` (which
-            // `decoder_context.h:67` defines, so it is on in every reference build).
             pCtx.uiCurIdrPicId = uiCode as u16;
         }
 
@@ -2541,9 +2466,9 @@ fn parse_slice_header_into(
                 return iRet;
             }
 
-            // pred_weight_table(): present for weighted P slices and for B slices when
-            // weighted_bipred_idc == 1. Skipping it desynchronises the rest of the
-            // slice header (`decoder_core.cpp`).
+            // pred_weight_table(): present for weighted P slices and for B slices
+            // when weighted_bipred_idc == 1. Skipping it desynchronises the rest of
+            // the slice header.
             if (pps!().bWeightedPredFlag && uiSliceType == P_SLICE as u32)
                 || (pps!().uiWeightedBipredIdc == 1 && uiSliceType == B_SLICE as u32)
             {
@@ -2688,8 +2613,8 @@ fn parse_slice_header_into(
         if !kbExtensionFlag {
             FillDefaultSliceHeaderExt(pSliceHeadExt, pNalHeaderExt);
         } else {
-            // Extra syntax elements newly introduced (G.7.3.3.4). These bits are part of
-            // the slice header, so skipping them desynchronises the slice-data parse.
+            // Extra syntax elements from G.7.3.3.4. These bits are part of the slice
+            // header, so skipping them desynchronises the slice-data parse.
             pSliceHeadExt.subset_sps_id = Some(pps!().iSpsId);
             // The `None` arm is unreachable: the id is the PPS's own `iSpsId`, which
             // `ParsePps` bounds to `< MAX_SPS_COUNT` before the PPS is ever stored.
@@ -2921,14 +2846,10 @@ pub fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
             pCtx.uiTargetDqId = dq_id;
         }
 
-        // `decoder_core.cpp:1454`. "Added for mosaic avoidance, 11/19/2009": an
-        // access unit that arrives while the decoder is still waiting for a key
-        // frame, and that contains no IDR, means the references this AU predicts
-        // from are gone — `dsRefLost`.
-        //
-        // `LONG_TERM_REF` is defined (`decoder_context.h:67`), so the guard is
-        // `bParamSetsLostFlag || bNewSeqBegin`. Both trees leave `bParamSetsLostFlag` true
-        // from `WelsOpenDecoder` on every non-parse-only path — the only clear is inside
+        // Mosaic avoidance: an access unit that arrives while the decoder is still
+        // waiting for a key frame, and that contains no IDR, means the references this
+        // AU predicts from are gone — `dsRefLost`. `bParamSetsLostFlag` stays true from
+        // `WelsOpenDecoder` on every non-parse-only path; the only clear is inside
         // `DecodeFrameConstruction`'s `bParseOnly` arm.
         let waiting_for_key = pCtx.bParamSetsLostFlag || pCtx.bNewSeqBegin;
         if waiting_for_key {
@@ -2987,9 +2908,8 @@ pub fn InitialDqLayersContext(
 
         UninitialDqLayersContext(pCtx);
 
-        // The **allocation's** dimensions, from the negotiated maximum — the layer's
-        // `iMbWidth`/`iMbHeight` are the current slice's and are smaller on any stream
-        // decoding below it.
+        // The allocation's dimensions, from the negotiated maximum. The layer's
+        // `iMbWidth`/`iMbHeight` are the current slice's and can be smaller.
         let dims = MbDims::new(
             ((kiMaxWidth + 15) >> 4) as usize,
             ((kiMaxHeight + 15) >> 4) as usize,
@@ -3011,12 +2931,9 @@ pub fn UninitialDqLayersContext(pCtx: &mut SWelsDecoderContext) {
     pCtx.bInitialDqLayersMem = false;
 }
 
-/// The rotation moves nodes, so the indices that name nodes move with it.
-///
-/// The rotation is a `Vec::swap`, which
-/// leaves the boxed node where it is; what it does move is the node's **index**, and an
-/// index is what [`SWelsDecoderContext::nal_cur`] and
-/// [`SWelsDecoderContext::slice_hdr_nal`] hold.
+/// Swaps two access-unit nodes, carrying [`SWelsDecoderContext::nal_cur`] and
+/// [`SWelsDecoderContext::slice_hdr_nal`] with them: those hold node *indices*, which
+/// the swap moves even though the boxed nodes stay put.
 #[inline]
 fn swap_au_nodes(
     pAu: &mut SAccessUnit,
@@ -3066,8 +2983,8 @@ pub fn ResetCurrentAccessUnit(pCtx: &mut SWelsDecoderContext) {
     }
 }
 
-/// **The two indices travel with the rotation** — `swap_au_nodes`' reason, and why
-/// this takes them rather than the access unit alone.
+/// Takes the two node indices, not just the access unit, because the rotation moves
+/// them (see `swap_au_nodes`).
 pub fn ForceResetCurrentAccessUnit(
     pAu: &mut SAccessUnit,
     nal_cur: &mut Option<usize>,
@@ -3296,8 +3213,8 @@ pub fn CheckIntegrityNalUnitsList(pCtx: &mut SWelsDecoderContext) -> bool {
             RefineIdxNoInterLayerPred(pCurAu, &mut iIdxNoInterLayerPred);
             pCurAu.uiStartPos = iIdxNoInterLayerPred as u32;
 
-            // `CheckAvailNalUnitsListContinuity` derives the access unit itself and writes
-            // `uiEndPos` through its own borrow, so everything below re-derives.
+            // `CheckAvailNalUnitsListContinuity` writes `uiEndPos` through its own
+            // borrow of the access unit, so everything below re-derives it.
             CheckAvailNalUnitsListContinuity(pCtx, iIdxNoInterLayerPred, kiEndPos);
 
             let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
@@ -3508,8 +3425,6 @@ pub fn WelsDecodeInitAccessUnitStart(
     }
     let bTmpNewSeqBegin = CheckNewSeqBeginAndUpdateActiveLayerSps(pCtx);
     if bTmpNewSeqBegin {
-        // `decoder_core.cpp:2265`'s `if (pCtx->pStreamSeqNum) (*pCtx->pStreamSeqNum)++;
-        // else pCtx->iSeqNum++;`.
         pCtx.pStreamSeqNum += 1;
     }
     pCtx.bNewSeqBegin = pCtx.bNewSeqBegin || bTmpNewSeqBegin;
@@ -3538,9 +3453,7 @@ pub fn WelsDecodeInitAccessUnitStart(
         return iErr;
     }
 
-    // Derived here, not at the head: `CheckNewSeqBeginAndUpdateActiveLayerSps` and
-    // `WelsDecodeAccessUnitStart` both derive the access unit in between, and the
-    // second of them moves `uiStartPos`.
+    // Derived here, not at the head: `WelsDecodeAccessUnitStart` moves `uiStartPos`.
     let pNal = match cur_au(&mut pCtx.access_unit) {
         Some(au) => au.node(au.uiStartPos as usize).map(|nal| {
             (
@@ -3618,8 +3531,8 @@ pub fn ConstructAccessUnit(
     iErr
 }
 
-/// Core bitstream decoding loop that demultiplexes Annex B NAL units and decodes them into an access unit.
-/// Matches `int32_t WelsDecodeBs (PWelsDecoderContext pCtx, const uint8_t* kpBsBuf, const int32_t kiBsLen, uint8_t** ppDst, SBufferInfo* pDstBufInfo, SParserBsInfo* pDstBsInfo)` in `decoder.cpp:741`.
+/// Core decoding loop: demultiplexes Annex B NAL units and decodes them into an
+/// access unit. `WelsDecodeBs` in `decoder.cpp`.
 pub fn WelsDecodeBs(
     pCtx: &mut SWelsDecoderContext,
     kpBsBuf: &[u8],
@@ -3635,14 +3548,7 @@ pub fn WelsDecodeBs(
         let input_slice = &kpBsBuf[..kiBsLen as usize];
         let units = crate::split_annexb_units(input_slice);
 
-        // A buffer with no start code is an error, not an empty loop. The C++ opens
-        // with `DetectStartCodePrefix`, and its *return value* is a verdict, not just
-        // an offset:
-        //
-        //     if (NULL == DetectStartCodePrefix (kpBsBuf, &iOffset, kiBsLen)) {
-        //       pCtx->iErrorCode |= dsBitstreamError;
-        //       return dsBitstreamError;      // decoder.cpp:760
-        //     }
+        // A buffer with no start code is an error, not an empty loop.
         if units.is_empty() {
             pCtx.iErrorCode |= dsBitstreamError;
             return dsBitstreamError;
@@ -3661,41 +3567,30 @@ pub fn WelsDecodeBs(
             } else if payload_slice.starts_with(&[0, 0, 1]) {
                 payload_slice = &payload_slice[3..];
             }
-            // `kpSrcNal` — the *escaped* NAL, start code included, which
-            // is what parse-only hands back to its caller and the one thing
-            // `sRawData` cannot supply (it holds the RBSP). The reference passes
-            // `pSrcNal - 3` with length `iSrcIdx + 3` (`decoder.cpp:815`, `:877`):
-            // the three-byte start-code form, whichever form the stream used, which
-            // is why both parse-only writers open by prepending the missing `0x00`.
-            // Trailing zeros belonging to the next start code are inside this window
-            // in the reference too, and both trees trim them the same way.
+            // The escaped NAL, start code included, in the three-byte start-code
+            // form. Parse-only hands this back to its caller, and it is the one thing
+            // `sRawData` cannot supply, which holds the de-escaped RBSP.
             let src_nal: &[u8] = if unit.starts_with(&[0, 0, 0, 1]) {
                 &unit[1..]
             } else {
                 unit
             };
-            // An empty NAL is a NAL. The C++
-            // has no such skip: a start code with nothing behind it reaches
-            // `ParseNalHeader` with `iSrcRbspLen == 0`, whose header byte then reads
-            // out of the **four reserved zero bytes** the scanner writes at the write
-            // position before every parse (`decoder.cpp:875`, `:874`). That is
-            // `nal_unit_type` 0 — `NAL_UNIT_UNSPEC_0` — with no SPS ahead of it, so
-            // the C++ answers `dsNoParamSets`.
-            // The four zeroes are written below rather than assumed: they are also the
-            // guard bytes the refill predicate is allowed to touch past an RBSP end,
-            // and `sRawData` is reused across access units, so "the buffer
-            // starts zeroed" stops being true after the first rewind.
+            // An empty NAL is still a NAL: with `iSrcRbspLen == 0` the header byte
+            // reads out of the four reserved zero bytes written at the write position
+            // before every parse, giving `nal_unit_type` 0 (`NAL_UNIT_UNSPEC_0`) and,
+            // with no SPS ahead of it, `dsNoParamSets`. Those four zeroes are written
+            // below rather than assumed: they double as the guard bytes the refill
+            // predicate may touch past an RBSP end, and `sRawData` is reused across
+            // access units, so it is not zeroed after the first rewind.
 
             // Copy the NAL into the persistent raw-data buffer, stripping
-            // emulation-prevention bytes (00 00 03 -> 00 00), as the C++
-            // WelsDecodeBs start-code scanner does.
+            // emulation-prevention bytes (00 00 03 -> 00 00).
             if pCtx.sRawData.remaining() < payload_slice.len() + 4 {
-                // Wrap to the buffer head like the C++ scanner; the buffer is
-                // sized for several access units, so pending NAL data (near
-                // the current write position) is not overwritten.
+                // Wrap to the buffer head; the buffer is sized for several access
+                // units, so pending NAL data near the current write position is not
+                // overwritten.
                 pCtx.sRawData.rewind();
                 if pCtx.sRawData.len() < payload_slice.len() + 4 {
-                    // ExpandBsBuffer's policy, now RawDataBuffer::grow.
                     if pCtx.sRawData.grow(payload_slice.len()).is_err() {
                         pCtx.iErrorCode |= dsOutOfMemory;
                         return pCtx.iErrorCode;
@@ -3734,9 +3629,8 @@ pub fn WelsDecodeBs(
                     );
                 }
                 CheckAndFinishLastPic(pCtx, ppDst, pDstInfo);
-                // Decode a completed access unit as soon as the parser marks
-                // the boundary, matching `WelsDecodeBs` in `decoder_core.cpp`.
-                // (`ConstructAccessUnit` runs frame construction internally.)
+                // Decode a completed access unit as soon as the parser marks the
+                // boundary; `ConstructAccessUnit` runs frame construction internally.
                 if pCtx.bAuReadyFlag && au_has_nals(pCtx) {
                     ConstructAccessUnit(pCtx, ppDst, pDstInfo);
                 }
@@ -3744,10 +3638,9 @@ pub fn WelsDecodeBs(
             DecodeFinishUpdate(pCtx);
         }
     } else if pCtx.bEndOfStreamFlag {
-        // End of stream: flush the pending (final) access unit.
-        // Not `mark_au_ready`: the flush ends the access unit without setting
-        // `bAuReadyFlag`, because it is about to decode it here rather than wait for
-        // the parser to say so.
+        // End of stream: flush the pending (final) access unit. Not `mark_au_ready`
+        // — the flush ends the access unit without setting `bAuReadyFlag`, since it is
+        // decoded here rather than on the parser's say-so.
         let bHasPending = match cur_au(&mut pCtx.access_unit) {
             Some(au) if au.uiAvailUnitsNum > 0 => {
                 au.uiEndPos = au.uiAvailUnitsNum - 1;
@@ -3806,9 +3699,8 @@ pub fn InitDqLayerInfo(
         pDqLayer.bUseWeightedBiPredIdc = false;
 
         if kuiQualityId == BASE_QUALITY_ID {
-            // The assignment stays inside this `kuiQualityId` block, which is what
-            // keeps the retention rule: at a quality-enhancement slice nothing writes
-            // these three and they still read the base slice's.
+            // Base quality only: at a quality-enhancement slice these three are not
+            // written and keep the base slice's values.
             pDqLayer.sRefPicListReordering = Some(pSh.pRefPicListReordering);
             pDqLayer.sRefPicMarking = Some(pSh.sRefMarking);
             if let Some((bWeightedPredFlag, uiWeightedBipredIdc)) =
@@ -3827,7 +3719,6 @@ pub fn InitDqLayerInfo(
     }
 }
 
-/// The parameter sets arrive as ids, resolved at the one line that reads them.
 pub fn WelsDqLayerDecodeStart(
     pCtx: &mut SWelsDecoderContext,
     nal_idx: Option<usize>,
@@ -3914,12 +3805,9 @@ pub fn DecodeCurrentAccessUnit(
     let pNalCur: Option<usize> = Some(iIdx as usize);
     pCtx.nal_cur = pNalCur;
 
-    // The bracket *moves* the layer out of
-    // the context for the call and puts it back below. That is what makes the dozen
-    // calls under it — every one of which takes `pCtx` beside the layer — safe code.
-    //
-    // **The labelled block is the restore's guarantee**: every path out of the loop —
-    // the five `break 'au`s — lands on the line that puts the layer back.
+    // The layer is moved out of the context so the calls below can take `pCtx` beside
+    // it. The labelled block guarantees the restore: every exit, including the five
+    // `break 'au`s, lands on the line that puts the layer back.
     let mut owned_layer = pCtx.pDqLayersList.take();
     let mut dq_cur = owned_layer.as_deref_mut();
     let mut pNalCur = pNalCur;
@@ -3934,19 +3822,8 @@ pub fn DecodeCurrentAccessUnit(
 
         while iIdx <= iEndIdx {
             let mut pLayerInfo = SLayerInfo::default();
-            // `decoder_core.cpp:2538-2541`:
-            //
-            // ```c
-            // bool isNewFrame = true;
-            // if (iThreadCount > 1) {
-            //   isNewFrame = pCtx->pDec == NULL;
-            // }
-            // ```
-            //
-            // `GetThreadCount` returns 0 here, so this
-            // reads `true` in every configuration the port can be in today. It is
-            // written as the C++ writes it because the condition is the fact, and a
-            // `true` literal would lose why.
+            // `GetThreadCount` is 0, so this is always `true`; the condition states
+            // the rule that only multi-threaded decoding reuses a started picture.
             let isNewFrame = if iThreadCount > 1 {
                 pCtx.pDec.is_none()
             } else {
@@ -3954,19 +3831,17 @@ pub fn DecodeCurrentAccessUnit(
             };
 
             if pCtx.pDec.is_none() {
-                // The prefetch hands back the slot it landed on, which is what this field
-                // holds. `None` is the pool being empty or fully held, which is the arm
-                // below.
+                // The prefetch hands back the slot it landed on; `None` means the pool
+                // is empty or fully held, handled by the arm below.
                 pCtx.pDec = match pic_pool_mut(pCtx) {
                     Some(pool) => pool.prefetch_free(),
                     None => None,
                 };
-                // `decoder_core.cpp:2568-2569` — a fresh picture starts from zero
-                // recorded macroblocks, and the zeroing precedes the null check because
-                // the C's does. Without it a count left over from a dropped access unit
-                // (EC disabled, refs lost) accumulates across frames, and
-                // `ResetActiveSPSForEachLayer` — gated on `iTotalNumMbRec == 0` in both
-                // trees — never fires again.
+                // A fresh picture starts from zero recorded macroblocks; the zeroing
+                // precedes the null check. Without it a count left over from a dropped
+                // access unit (EC disabled, refs lost) accumulates across frames and
+                // `ResetActiveSPSForEachLayer`, gated on `iTotalNumMbRec == 0`, never
+                // fires again.
                 if pCtx.iTotalNumMbRec != 0 {
                     pCtx.iTotalNumMbRec = 0;
                 }
@@ -3979,8 +3854,7 @@ pub fn DecodeCurrentAccessUnit(
                     pDec.bNewSeqBegin = bNewSeqBegin;
                 }
             } else if pCtx.iTotalNumMbRec == 0 {
-                // `decoder_core.cpp:2588-2590` — a picture already prefetched but not yet
-                // started re-takes the flag ("pDec != NULL, already start").
+                // A picture already prefetched but not yet started re-takes the flag.
                 let bNewSeqBegin = pCtx.bNewSeqBegin;
                 if let Some(pDec) = dec_pic(&mut pCtx.pPicBuff, pCtx.pDec) {
                     pDec.bNewSeqBegin = bNewSeqBegin;
@@ -3999,15 +3873,13 @@ pub fn DecodeCurrentAccessUnit(
             }
 
             if pCtx.iTotalNumMbRec == 0 {
-                // Picture starts to decode: reset per-picture MB state, matching
-                // `DecodeCurrentAccessUnit` in `decoder_core.cpp`.
+                // Picture starts to decode: reset per-picture MB state.
                 let iMbCacheNum =
                     (((pCtx.iPicWidthReq + 15) >> 4) * ((pCtx.iPicHeightReq + 15) >> 4)) as usize;
                 if let Some(pDq) = dq_cur.as_deref_mut() {
-                    // `memset(pSliceIdc, 0xff, numMb * sizeof(int32_t))` — 0xff bytes in
-                    // an `i32` is -1. `iMbCacheNum` is computed from `iPicWidthReq`, which
-                    // `InitialDqLayersContext` sets to the same `kiMaxWidth` the grid's
-                    // dimensions come from, so the bound is an identity.
+                    // -1 marks "no slice". `iMbCacheNum` comes from `iPicWidthReq`,
+                    // which `InitialDqLayersContext` sets from the same `kiMaxWidth` the
+                    // grid's dimensions come from, so the bound is an identity.
                     pDq.grid.slice_idc.as_mut_slice()[..iMbCacheNum].fill(-1);
                 }
                 if let Some(iMbNum) = active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
@@ -4015,9 +3887,8 @@ pub fn DecodeCurrentAccessUnit(
                 {
                     if let Some(pDq) = dq_cur.as_deref_mut() {
                         pDq.grid.mb_correctly_decoded_flag.as_mut_slice()[..iMbNum].fill(false);
-                        // The C's `memset(.., 0, iMbWidth * iMbHeight)` over the
-                        // **SPS's** dimensions, which are the current sequence's and can
-                        // be smaller than the grid's negotiated maximum.
+                        // Bounded by the SPS's dimensions, the current sequence's,
+                        // which can be smaller than the grid's negotiated maximum.
                         pDq.grid.mb_ref_concealed_flag.as_mut_slice()[..iMbNum].fill(false);
                     }
                     if let Some(pDec) = dec_pic(&mut pCtx.pPicBuff, pCtx.pDec) {
@@ -4027,13 +3898,11 @@ pub fn DecodeCurrentAccessUnit(
                 if let Some(pDec) = dec_pic(&mut pCtx.pPicBuff, pCtx.pDec) {
                     pDec.pRefPic[LIST_0] = [None; MAX_DPB_COUNT];
                     pDec.pRefPic[LIST_1] = [None; MAX_DPB_COUNT];
-                    // Fix relative to 2.6.0, mirroring `decoder_core.cpp:2663-2671`: the per-8x8
-                    // reference pictures are written by `WelsRecordRefPicturesSlice` for the
-                    // macroblocks a slice actually covers, and pictures come out of a pool, so start
-                    // the picture with "no reference" everywhere rather than with the previous
-                    // tenant's handles. The C bounds its memset by the SPS's macroblock count; this
-                    // clears the picture's own array, which is that count or more — the surplus
-                    // beyond `uiTotalMbCount` is never read.
+                    // The per-8x8 reference pictures are written by
+                    // `WelsRecordRefPicturesSlice` only for the macroblocks a slice
+                    // actually covers, and pictures come out of a pool, so the picture
+                    // starts with "no reference" everywhere rather than with the
+                    // previous tenant's handles.
                     for listIdx in LIST_0..LIST_A {
                         pDec.pRefPicture[listIdx].as_mut_slice().fill([None; 4]);
                     }
@@ -4064,9 +3933,7 @@ pub fn DecodeCurrentAccessUnit(
 
                 let iCurrIdQ = hdr_ext.uiQualityId as i16;
                 let iCurrIdD = hdr_ext.uiDependencyId as i16;
-                // The C++'s `pSh` outlives the slice loop and names the *last* slice
-                // header, which is what the frame_num update below wants; the one field
-                // that outlives the iteration is carried out by value.
+                // The frame_num update below wants the *last* slice header's value.
                 iLastSliceFrameNum = pSh.iFrameNum;
                 pCtx.bRPLRError = false;
                 let bReconstructSlice =
@@ -4099,13 +3966,11 @@ pub fn DecodeCurrentAccessUnit(
                 pLayerInfo.sps_ref = pSh.sps_ref;
                 pLayerInfo.subset_sps_id = pShExt.subset_sps_id;
 
-                // **FMO activation** (`decoder_core.cpp:2651-2663`). The id is what the C
-                // indexes `sFmoList` with, and the slice header parse has already rejected
-                // `iPpsId >= MAX_PPS_COUNT` (`:2155`), so the entry always exists.
-                //
+                // FMO activation. The id indexes `sFmoList`; the slice header parse
+                // has already rejected `iPpsId >= MAX_PPS_COUNT`, so the entry exists.
                 // `FmoParamUpdate` rebuilds the map only when the PPS's slice-group
-                // parameters changed (`FmoParamSetsChanged`), which is why the state is
-                // per-PPS and kept across access units rather than per slice.
+                // parameters changed, so the state is per-PPS and kept across access
+                // units rather than per slice.
                 pCtx.fmo_id = Some(iPpsId);
                 let SWelsDecoderContext {
                     sFmoList,
@@ -4147,10 +4012,10 @@ pub fn DecodeCurrentAccessUnit(
                         .copied();
                     InitDqLayerInfo(pCtx, dq_cur.as_deref_mut(), &pLayerInfo, nal_copy.as_ref());
 
-                    // Subclause 8.2.5.2, gaps in `frame_num`
-                    // (`decoder_core.cpp:2675`). A non-IDR slice whose `frame_num` is
-                    // neither the previous one nor its successor means frames went missing
-                    // in transmission, so the pictures this one predicts from are gone.
+                    // Subclause 8.2.5.2, gaps in `frame_num`. A non-IDR slice whose
+                    // `frame_num` is neither the previous one nor its successor means
+                    // frames went missing in transmission, so the pictures this one
+                    // predicts from are gone.
                     let dq_layer_info = dq_cur.as_deref().map(|dq| {
                         (
                             dq.sLayerInfo.sps_ref,
@@ -4165,9 +4030,6 @@ pub fn DecodeCurrentAccessUnit(
                         (dq_sps, dq_layer_info)
                     {
                         let kbIdrFlag = bIdrFlag || eNalUnitType == NAL_UNIT_CODED_SLICE_IDR;
-                        // `pLastThreadCtx` is the multi-threaded arm's `GetPrevFrameNum`
-                        // detour; `GetThreadCount` is identically 0 here, so the C++'s
-                        // single-threaded read is the whole of it.
                         let iPrevFrameNum = pCtx.pLastDecPicInfo.iPrevFrameNum;
                         let wrap = (1i32 << uiLog2MaxFrameNum) - 1;
                         if !kbIdrFlag
@@ -4206,7 +4068,6 @@ pub fn DecodeCurrentAccessUnit(
                             bAllRefComplete = false;
                             let h = nal_hdr(pCtx, pNalCur).copied();
                             HandleReferenceLost(pCtx, h.as_ref());
-                            // `decoder_core.cpp:2713`.
                             WelsLog(
                                 pCtx.sLogCtx,
                                 WELS_LOG_DEBUG,
@@ -4228,7 +4089,7 @@ pub fn DecodeCurrentAccessUnit(
                         ComputeColocatedTemporalScaling(pCtx, dq_cur.as_deref_mut());
                     }
 
-                    // This arm is unreachable (`GetThreadCount` returns 0).
+                    // Unreachable: `GetThreadCount` returns 0.
                     if iThreadCount > 1 {
                         iRet = WelsDecodeAndConstructSlice(pCtx, dq_cur.as_deref_mut());
                     } else {
@@ -4292,9 +4153,8 @@ pub fn DecodeCurrentAccessUnit(
                 }
             }
 
-            // The C++ code runs the completion/frame-construction block below even
-            // when all NAL units are consumed (pNalCur == NULL); only a missing DQ
-            // layer aborts here.
+            // The completion/frame-construction block below still runs with all NAL
+            // units consumed (`pNalCur == None`); only a missing DQ layer aborts here.
             if dq_cur.is_none() {
                 break;
             }
@@ -4381,8 +4241,7 @@ pub fn DecodeCurrentAccessUnit(
                 }
                 pCtx.pDec = None;
 
-                // "need update frame_num due current frame is well decoded"
-                // (`decoder_core.cpp:2864`).
+                // frame_num needs updating now the current frame is well decoded.
                 let bStartNalIsRef = cur_au(&mut pCtx.access_unit)
                     .and_then(|au| au.node(au.uiStartPos as usize))
                     .is_some_and(|nal| nal.sNalHeaderExt.sNalUnitHeader.uiNalRefIdc > 0);
@@ -4463,11 +4322,9 @@ pub fn CheckAndFinishLastPic(
         }
     }
 
-    // The error-concealment bracket: this runs *between* access
-    // units — `ConstructAccessUnit` above may have just returned — so it takes its own
-    // derivation of the layer rather than inheriting one.
-    // The layer is *moved out* of the context for the block, exactly as
-    // `DecodeCurrentAccessUnit`'s bracket moves it; the restore is at the single exit.
+    // Error concealment runs between access units — `ConstructAccessUnit` above may
+    // have just returned — so it derives the layer itself. The layer is moved out of
+    // the context for the block and restored at the single exit.
     let mut owned_layer = pCtx.pDqLayersList.take();
     let mut dq_cur = owned_layer.as_deref_mut();
     let bRet = 'ec: {
@@ -4526,7 +4383,7 @@ pub fn CheckAndFinishLastPic(
                 }
             }
             pCtx.pDec = None;
-            // Re-derived: `ConstructAccessUnit` ran above, and it decodes.
+            // Re-derived: `ConstructAccessUnit` ran above and decodes.
             let bStartNalIsRef = cur_au(&mut pCtx.access_unit)
                 .and_then(|au| au.node(au.uiStartPos as usize))
                 .is_some_and(|nal| nal.sNalHeaderExt.sNalUnitHeader.uiNalRefIdc > 0);
@@ -4669,10 +4526,8 @@ pub fn CheckRefPicturesComplete(
 mod tests {
     use super::*;
 
-    /// The grid's per-list arrays and `decoder_context::LIST_A` are the same
-    /// number. `safe/mb_grid.rs` depends on nothing, so it declares its own
-    /// `LIST_COUNT`; this is the one place both names are in scope, which makes
-    /// it the place the identity is checked rather than assumed.
+    /// `safe/mb_grid.rs` declares its own `LIST_COUNT`; this is the one place it and
+    /// `decoder_context::LIST_A` are both in scope, so the identity is checked here.
     #[test]
     fn mb_grid_list_count_matches_list_a() {
         assert_eq!(LIST_COUNT, LIST_A);
@@ -4682,16 +4537,14 @@ mod tests {
         assert_eq!(g.ref_index.len(), LIST_A);
     }
 
-    /// Every C-defaulted field still reads zero, the two the C++ constructor
-    /// overwrites read their overwritten values, and the grid is a real grid rather
-    /// than 22 null `Vec`s.
+    /// The grid is fully sized, `uiRefLayerDqId`/`uiRefLayerChromaPhaseYPlus1` carry
+    /// their non-zero defaults, and every other field reads zero.
     #[test]
     fn for_grid_constructs_a_layer_whose_grid_is_valid_and_whose_rest_is_zero() {
         {
             let dims = MbDims::new(5, 3);
             let layer = DqLayerState::for_grid(dims);
 
-            // the owned field
             assert_eq!(layer.grid.dims(), dims);
             assert_eq!(layer.grid.mb_type.as_slice().len(), dims.count());
             assert!(
@@ -4703,11 +4556,11 @@ mod tests {
                     .all(|mb| mb.iter().all(|&c| c == 0))
             );
 
-            // the two the C++ constructor overwrites
+            // the two non-zero defaults
             assert_eq!(layer.uiRefLayerDqId, 255);
             assert_eq!(layer.uiRefLayerChromaPhaseYPlus1, 1);
 
-            // and a sample of what `WelsMallocz`'s zeroing used to leave behind
+            // and a sample of the zeroed rest
             assert_eq!(layer.iMbWidth, 0);
             assert_eq!(layer.iMbHeight, 0);
             assert!(!layer.bUseWeightPredictionFlag);
@@ -4715,7 +4568,7 @@ mod tests {
         }
     }
 
-    /// The grid is sized from the **allocation's** dimensions, and the layer's
+    /// The grid is sized from the allocation's dimensions; the layer's
     /// `iMbWidth`/`iMbHeight` are the current slice's.
     #[test]
     fn the_grid_outlives_a_narrower_slice() {
@@ -4793,9 +4646,8 @@ mod tests {
                 assert_eq!(WelsDecodeAndConstructSlice(pCtx, None), ERR_NONE);
                 assert_eq!(WelsInitRefList(pCtx, None, 0), ERR_NONE);
                 assert_eq!(WelsInitBSliceRefList(pCtx, None, 0), ERR_NONE);
-                // `manage_dec_ref`'s `ERR_INFO_INVALID_PTR` is 3 where this module's own
-                // constant is 1 — the three shims below forward into the former, which is
-                // why the value is spelled through its owner.
+                // The three shims below forward into `manage_dec_ref`, whose
+                // `ERR_INFO_INVALID_PTR` is 3 where this module's own constant is 1.
                 const MDR_INVALID_PTR: i32 = crate::decoder::manage_dec_ref::ERR_INFO_INVALID_PTR;
                 assert_eq!(WelsReorderRefList(pCtx, None), MDR_INVALID_PTR);
                 assert_eq!(WelsReorderRefList2(pCtx, None), MDR_INVALID_PTR);
@@ -4813,8 +4665,7 @@ mod tests {
                 let mut cpu_cores = 0;
                 assert_eq!(WelsCPUFeatureDetect(&mut cpu_cores), detect_cpu_features());
                 assert_eq!(cpu_cores, 1);
-                // `WelsOpenDecoder` on a real context is the success path
-                // `Initialize` takes.
+                // `WelsOpenDecoder` on a real context is the success path.
                 assert_eq!(
                     WelsOpenDecoder(&mut SWelsDecoderContext::new_boxed()),
                     ERR_NONE
@@ -4901,19 +4752,14 @@ mod tests {
         }
     }
 
-    /// `ResetCurrentAccessUnit`'s rotation moves the
-    /// access unit's slots; the C rotates a *pointer array*, so `pCtx->pSliceHeader` —
-    /// a pointer *into* a node — still names the same slice header afterwards. The port
-    /// holds that reference as an index, so the rotation has to carry it: without
-    /// `swap_au_nodes`' remap the index keeps naming slot 0, which the rotation has just
-    /// filled with the **next** access unit's NAL, and every reader downstream — the
-    /// api's three reordering sites among them — reads a slice header one access unit
-    /// ahead of the picture it is describing.
+    /// `ResetCurrentAccessUnit`'s rotation moves the access unit's slots, so the node
+    /// indices naming the current slice header have to move with it. Without the remap
+    /// the index keeps naming slot 0, which the rotation has just filled with the next
+    /// access unit's NAL, and readers get a slice header one access unit ahead of the
+    /// picture it describes.
     ///
-    /// The shape is the measured one: one decoded slice at slot 0, the successor AU's
-    /// already-parsed NAL at slot 1, `uiActualUnitsNum` 1 and `uiAvailUnitsNum` 2.
-    /// Revert `swap_au_nodes` to a bare `nal_units.swap` and the first assertion reads
-    /// `P_SLICE`/`99`.
+    /// The shape here is one decoded slice at slot 0, the successor AU's already-parsed
+    /// NAL at slot 1, `uiActualUnitsNum` 1 and `uiAvailUnitsNum` 2.
     #[test]
     fn the_au_rotation_carries_the_two_node_indices_with_it() {
         use crate::decoder::decoder_context::slice_header_of;
@@ -4969,8 +4815,8 @@ mod tests {
         );
     }
 
-    /// [`ForceResetCurrentAccessUnit`]'s half of the same rule — the error path's
-    /// rotation, driven from `uiEndPos` instead of `uiActualUnitsNum`.
+    /// The same rule for [`ForceResetCurrentAccessUnit`], the error path's rotation,
+    /// driven from `uiEndPos` instead of `uiActualUnitsNum`.
     #[test]
     fn the_error_path_rotation_carries_them_too() {
         let mut ctx = SWelsDecoderContext::new_boxed();
@@ -5005,17 +4851,10 @@ mod tests {
         );
     }
 
-    /// `AllocPicBuffOnNewSeqBegin` opens with
-    /// "the active SPS, or else the first initialized entry of `sSpsBuffer`".
-    ///
-    /// `WelsDecodeInitAccessUnitStart` writes
-    /// `active_sps` from the start NAL's slice header before this runs, so the `if`
-    /// arm is always the one taken. The
-    /// scan is exercised here directly, which is the only way it is exercised.
-    ///
-    /// The scan is the *port's*
-    /// guard, not a transcription: the C++ reads `pCtx->pSps->iMbWidth` with no null
-    /// test, so this state is a null dereference there.
+    /// `AllocPicBuffOnNewSeqBegin` takes the active SPS, or else the first initialized
+    /// entry of `sSpsBuffer`. `WelsDecodeInitAccessUnitStart` writes `active_sps` from
+    /// the start NAL's slice header before it runs, so in decoding the first arm is
+    /// always taken; this exercises the fallback scan directly.
     #[test]
     fn the_fallback_scan_takes_the_first_initialized_sps() {
         use crate::decoder::decoder_context::SpsRef;
@@ -5023,11 +4862,11 @@ mod tests {
         let mut ctx = SWelsDecoderContext::new_boxed();
         assert!(
             ctx.active_sps.is_none(),
-            "F56: the context is born with no active SPS"
+            "the context is born with no active SPS"
         );
 
         // Entries 0 and 1 are the zeroed buffer; 2 is the first one a `ParseSps` has
-        // filled. `uiTotalMbCount > 0` is the initialized test the null test was.
+        // filled. `uiTotalMbCount > 0` is the initialized test.
         ctx.sSpsPpsCtx.sSpsBuffer[2].iSpsId = 2;
         ctx.sSpsPpsCtx.sSpsBuffer[2].iMbWidth = 5;
         ctx.sSpsPpsCtx.sSpsBuffer[2].iMbHeight = 3;
@@ -5036,9 +4875,9 @@ mod tests {
         ctx.sSpsPpsCtx.sSpsBuffer[7].iSpsId = 7;
         ctx.sSpsPpsCtx.sSpsBuffer[7].uiTotalMbCount = 99;
 
-        // `pMemAlign` is null on a bare context, so `SyncPictureResolutionExt`
-        // returns 1 at its own guard — after the scan has run and stored its answer,
-        // which is the step under test.
+        // `pMemAlign` is null on a bare context, so `SyncPictureResolutionExt` returns
+        // 1 at its own guard — after the scan has run and stored its answer, the step
+        // under test.
         let _ = AllocPicBuffOnNewSeqBegin(&mut ctx);
         assert_eq!(
             ctx.active_sps,
@@ -5048,8 +4887,7 @@ mod tests {
             })
         );
 
-        // And with nothing initialized the scan finds nothing, which is the C++'s
-        // null `pSps` reached without dereferencing it.
+        // With nothing initialized the scan finds nothing.
         let mut empty = SWelsDecoderContext::new_boxed();
         assert_eq!(AllocPicBuffOnNewSeqBegin(&mut empty), ERR_INFO_INVALID_PTR);
         assert!(empty.active_sps.is_none());

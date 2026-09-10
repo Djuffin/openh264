@@ -1,17 +1,12 @@
 //! Minimal Y4M (YUV4MPEG2) parsing and gold-reference comparison.
 //!
-//! openh264-rs carries no dependencies beyond `libc`, so rather than pulling in
-//! the `y4m` crate this module parses just enough of the container to compare a
-//! decoded stream against a reference file: the stream header (for the frame
-//! size) and the `FRAME`-delimited 4:2:0 planes that follow.
-//!
-//! Comparing parsed frames rather than raw bytes matters. The gold files in
-//! `res/` were produced by ffmpeg and carry header fields our writer does not
-//! emit -- `Ip A0:0 C420jpeg XYSCSS=420JPEG`, plus a per-stream frame rate --
-//! so a plain byte comparison would fail on the header of every single stream.
+//! Parses just enough of the container to compare a decoded stream against a
+//! reference file: the stream header (for the frame size) and the
+//! `FRAME`-delimited 4:2:0 planes that follow. Frames are compared as parsed
+//! planes rather than as raw bytes, since header fields that do not affect the
+//! pixels (frame rate, aspect ratio, chroma siting) vary between writers.
 
-/// Luma samples per macroblock edge. Used to report mismatches by macroblock,
-/// which is the unit you actually debug a decoder in.
+/// Luma samples per macroblock edge. Mismatches are reported by macroblock.
 const MB_WIDTH: usize = 16;
 
 pub struct Frame<'a> {

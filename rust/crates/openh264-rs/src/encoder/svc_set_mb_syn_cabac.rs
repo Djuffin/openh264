@@ -30,8 +30,8 @@
 
 //! Context-based Adaptive Binary Arithmetic Coding (CABAC) Macroblock Syntax Writer.
 //!
-//! Translated from `codec/encoder/core/src/svc_set_mb_syn_cabac.cpp`,
-//! `codec/encoder/core/inc/svc_set_mb_syn.h`, and `codec/encoder/core/inc/set_mb_syn_cabac.h`.
+//! C++: `codec/encoder/core/src/svc_set_mb_syn_cabac.cpp`,
+//! `codec/encoder/core/inc/svc_set_mb_syn.h`, `codec/encoder/core/inc/set_mb_syn_cabac.h`.
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -87,10 +87,6 @@ pub fn IS_SKIP(mb_type: u32) -> bool {
 pub fn CLIP3_QP_0_51(qp: i32) -> usize {
     qp.clamp(0, 51) as usize
 }
-
-// ============================================================================
-// Block Category Enumeration
-// ============================================================================
 
 // ============================================================================
 // Context Offset Tables
@@ -612,15 +608,12 @@ pub fn WelsCabacSubMbType(buf: &mut [u8], pCabacCtx: &mut SCabacCtx, pCurMb: &SM
                 WelsCabacEncodeDecision(buf, pCabacCtx, 21, 1);
                 continue;
             }
-            // Every writer of `uiSubMbType` in this encoder sets `SUB_MB_TYPE_8x8`
-            // (`svc_base_layer_md.rs:1164`/`:1249`/`:1262`,
-            // `svc_mode_decision.rs:2495`); upstream's only other writers are inside
-            // `#if 0 //Disable for sub8x8 modes for now`
-            // (`svc_mode_decision.cpp:634-661`). A wrong bin here desynchronises the
-            // arithmetic coder for the rest of the slice, so this fails loudly.
+            // No writer of `uiSubMbType` in this encoder sets anything but
+            // `SUB_MB_TYPE_8x8`. A wrong bin here desynchronises the arithmetic coder
+            // for the rest of the slice, so this fails loudly.
             unreachable!(
                 "sub_mb_type {:#x} — the sub-8x8 search is #if 0 upstream and \
-                 unwritten here (D-dead-2/F122)",
+                 unwritten here",
                 uiSubMbType
             );
         }
@@ -652,7 +645,7 @@ pub fn WelsCabacSubMbMvd(
                 // See `WelsCabacSubMbType` above for the reachability argument.
                 unreachable!(
                     "sub_mb_type {:#x} — the sub-8x8 search is #if 0 upstream and \
-                     unwritten here (D-dead-2/F122)",
+                     unwritten here",
                     uiSubMbType
                 );
             }
@@ -1017,9 +1010,8 @@ pub fn WelsSpatialWriteMbSynCabac(
     pSliceBsBuf: &mut [u8],
     _pCtxOutBs: &mut Option<&mut crate::encoder::vlc_encoder::BsWriter>,
 ) -> i32 {
-    // The CABAC arm spends its bits through `sCabacCtx` and touches no
-    // `BsWriter`, so the threaded writer is unused here — the CAVLC arm is its
-    // consumer.
+    // The CABAC arm spends its bits through `sCabacCtx` and touches no `BsWriter`, so
+    // the threaded writer is unused here.
     let buf = pSliceBsBuf;
     let pCabacCtx = &mut pSlice.sCabacCtx;
     let pMbCache = &mut pSlice.sMbCacheInfo;

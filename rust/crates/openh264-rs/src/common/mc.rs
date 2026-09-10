@@ -2,14 +2,10 @@
 #![forbid(unsafe_code)]
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-// CPU feature flags from cpu_core.h
-
 use crate::safe::plane::{BlockRows, PlaneCursor, PlaneCursorMut, RefSamples};
 
-/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
-/// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
-/// site because the kernels share their names with the scalars in this module — which
-/// is the point of the naming, and the reason the module qualifier has to stay.
+/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
+/// default, `simd::wide` under `--features wide`.
 use crate::simd::kernels;
 
 // Function pointer signatures matching mc.h.
@@ -47,10 +43,8 @@ pub struct TagMcFunc {
 pub type SMcFunc = TagMcFunc;
 
 impl Default for TagMcFunc {
-    /// The kernels are wrapped in non-capturing closures rather than named
-    /// directly: they are generic over the cursor type, so a bare path does not
-    /// coerce to a slot type that is higher-ranked over the cursor's lifetime,
-    /// and a non-capturing closure does.
+    /// Non-capturing closures rather than bare paths: the kernels are generic over the
+    /// cursor type, and only a closure coerces to a higher-ranked slot type.
     fn default() -> Self {
         Self {
             pfLumaHalfpelHor: |s, d, w, h| mc_hor_ver20_c(s, d, w, h),
@@ -168,25 +162,21 @@ pub fn WelsClip1(iX: i32) -> u8 {
 // Kernels
 // ============================================================================
 //
-// These kernels read one plane and write another: they take a `PlaneCursor` (the
-// reference picture, or an encoder search buffer) *and* a `PlaneCursorMut` (the
-// destination) rather than one cursor over a single surface. The two are different
-// allocations at every real call site.
+// Each kernel reads one plane through a `PlaneCursor` and writes another through a
+// `PlaneCursorMut`; the two are different allocations at every real call site.
 //
-// The reads reach outside the block by design — the 6-tap Wiener filter of H.264
-// half-pel interpolation needs two samples before and three after each output
-// sample, in whichever direction it runs. An MC read is legal because the caller
-// clamped the motion vector first.
+// The reads reach outside the block: the 6-tap Wiener filter of H.264 half-pel
+// interpolation needs two samples before and three after each output sample, in
+// whichever direction it runs. That reach is legal because the caller clamped the
+// motion vector first.
 //
-// Every intermediate below keeps the width `codec/common/src/mc.cpp` uses: with
-// byte inputs the 6-tap sums are bounded by `510 * 20 = 10200` in
+// With byte inputs the 6-tap sums are bounded by `510 * 20 = 10200` in
 // `filter_input_8bit` and by `21420 + 25500 + 428400 = 475320` in
-// `hor_filter_input_16bit`, so nothing here can overflow its `i32`, and the `as
-// i16` narrowing in `mc_hor_ver22` is likewise inside range.
+// `hor_filter_input_16bit`, so nothing here overflows its `i32`, and the `as i16`
+// narrowing in `mc_hor_ver22` is likewise in range.
 
-/// The 6-tap Wiener filter over six samples — the C++ `FilterInput8bitWithStride_c`
-/// with its `kiOffset` walk already done by the caller, so `p[i]` is that kernel's
-/// `pSrc[(i - 2) * kiOffset]`.
+/// The 6-tap Wiener filter over six samples. The caller has already walked
+/// `kiOffset`, so `p[i]` is `pSrc[(i - 2) * kiOffset]`.
 ///
 /// C++: `FilterInput8bitWithStride_c`, `codec/common/src/mc.cpp`.
 #[inline(always)]
@@ -210,19 +200,11 @@ pub fn hor_filter_input_16bit(p: &[i16; 6]) -> i32 {
     iPix05 - (iPix14 * 5) + (iPix23 * 20)
 }
 
-/// A `WIDTH`x`HEIGHT` block, source to destination, **through one bounds-checked
-/// span per operand**.
+/// A `WIDTH`x`HEIGHT` block, source to destination, through one bounds-checked span
+/// per operand.
 ///
-/// Both dimensions are const parameters and neither is an argument. The width has to
-/// be, or `copy_from_slice` lowers to a `_platform_memmove` *call* per row where the
-/// C++ `LD64`/`ST64A8` pairs were hand-written to get one wide load and one wide
-/// store; the height has to be, or the row loop stays a loop and `y * stride` stays
-/// symbolic, which is the one thing no span length can place inside a span. With
-/// both const the loop unrolls, every row offset is a constant, and the checks the
-/// two spans paid once are the only checks in the copy — see [`RefSamples::span`]
-/// and [`PlaneSpanMut`].
-///
-/// This path carries the zero-MV block, the commonest luma case there is.
+/// Both dimensions are const parameters so the row loop unrolls and each row is one
+/// wide load and store; the two spans' checks are the only checks in the copy.
 #[inline(always)]
 fn copy_block<const WIDTH: usize, const HEIGHT: usize, S: RefSamples + Copy>(
     src: &S,
@@ -237,12 +219,8 @@ fn copy_block<const WIDTH: usize, const HEIGHT: usize, S: RefSamples + Copy>(
 
 /// `WIDTH` bytes of each of `height` rows, source to destination.
 ///
-/// The heights an H.264 block copy can have are 16, 8, 4 and 2 — the luma
-/// partitions and their chroma halves — and each is dispatched to a const
-/// instantiation of [`copy_block`], which is where the argument for why that matters
-/// is written down. Any other height falls back to the row-at-a-time walk, which is
-/// what this whole function used to be: correct for every height, one pair of slice
-/// checks per row.
+/// Heights 16, 8, 4 and 2 — the luma partitions and their chroma halves — dispatch to
+/// a const instantiation of [`copy_block`]; any other height walks row at a time.
 #[inline(always)]
 pub(crate) fn copy_rows<const WIDTH: usize, S: RefSamples + Copy>(
     src: &S,
@@ -305,12 +283,8 @@ pub fn mc_copy_width_eq16<S: RefSamples + Copy>(
     copy_rows::<16, _>(src, dst, height);
 }
 
-/// The width `McCopy_c` actually copies for a nominal `width`.
-///
-/// The C++ dispatches on the exact value and treats **everything that is not 16, 8
-/// or 4 as 2** — the comment there reads "here iWidth == 2". Reproduced rather than
-/// generalised to a `width`-byte copy: a caller passing 3 gets two bytes from the
-/// C++ and would get three from the obvious rewrite.
+/// The width actually copied for a nominal `width`: anything that is not 16, 8 or 4
+/// copies 2 bytes.
 #[inline(always)]
 fn copy_width(width: usize) -> usize {
     match width {
@@ -329,8 +303,6 @@ pub fn mc_copy<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    // Dispatched exactly as the C++ dispatches, and for the same reason it does:
-    // each arm is a constant-width copy. See [`copy_rows`].
     match width {
         16 => copy_rows::<16, _>(src, dst, height),
         8 => copy_rows::<8, _>(src, dst, height),
@@ -343,31 +315,17 @@ pub fn mc_copy<S: RefSamples + Copy>(
 // The block shapes, and the dispatch onto them
 // ============================================================================
 //
-// **What the run-time width and height cost.** Every kernel below used to take
-// `width` and `height` as arguments and read its input a row at a time through
-// [`RefSamples::row_view`], the run-time-length accessor. On a plane cursor that is
-// two slice checks a row; on the [`RecCursor`](crate::encoder::rec_view::RecCursor)
-// the encoder hands them — a view over shared cells, which cannot lend a `&[u8]` —
-// it is an anchor computation, two checks, a zeroed 32-byte `RowBuf` and a
-// cell-by-cell copy loop, all before the kernel's own vector load.
+// [`RefSamples::span`] takes the block's shape as const parameters and hoists the
+// slice checks out of the row loop, where [`RefSamples::row_view`] pays two per row.
+// Each entry point matches `(width, height)` onto a const instantiation, and the
+// kernel inside cuts one span per operand and walks it with constant row offsets.
+// [`SHAPES_LUMA`], [`SHAPES_REFINE_*`] and [`SHAPES_CHROMA`] below are the shapes the
+// call sites use.
 //
-// [`RefSamples::span`] is the accessor that removes the checks, and it needs the
-// block's shape as **const parameters**. So each entry point matches `(width,
-// height)` onto a const instantiation, exactly as [`copy_rows`] matches the height
-// onto [`copy_block`], and the kernel inside cuts one span per operand and walks it
-// with constant row offsets.
-//
-// **The shape table is the call sites'**, and [`SHAPES_LUMA`], [`SHAPES_REFINE_*`]
-// and [`SHAPES_CHROMA`] below are it, written down so a test can drive every entry
-// of it and assert that none reached the fallback.
-//
-// **`SW`, `SH`, and why they are parameters rather than arithmetic.** The horizontal
-// filter reads `W + 5` samples a row, the vertical `H + 5` rows, the bilinear chroma
-// one extra of each. Stable Rust has no arithmetic in a const-argument position, so
-// `span::<{W + 5}, H>` cannot be written; the reach is passed as its own const
-// parameter by the dispatch arm, which is the spelling `sad::sample_sad_four_16x16`
-// already uses for its `W + 2`. Every arm below pairs them, and
-// [`shapes_are_consistent`](tests::shapes_are_consistent) checks the pairing.
+// The horizontal filter reads `W + 5` samples a row, the vertical `H + 5` rows, the
+// bilinear chroma one extra of each. Stable Rust has no arithmetic in a const-argument
+// position, so the reach travels as its own const parameter — `SW` and `SH`, paired
+// with `W` and `H` by every dispatch arm below.
 
 /// The seven luma partition shapes: `BaseMC`'s block sizes in the decoder, and the
 /// sizes `mc_luma`'s quarter-pel composites run their leaves at.
@@ -376,8 +334,7 @@ pub(crate) const SHAPES_LUMA: [(usize, usize); 7] =
     [(16, 16), (16, 8), (8, 16), (8, 8), (8, 4), (4, 8), (4, 4)];
 
 /// `MeRefineFracPixel`'s horizontal filter, `(kiW + 1, kiH)` at the four block sizes
-/// the motion search refines (`svc_base_layer_md.rs`; the sub-8x8 partitions are
-/// `#if 0` upstream and `unreachable!` here).
+/// the motion search refines.
 #[cfg(test)]
 pub(crate) const SHAPES_REFINE_HOR: [(usize, usize); 4] = [(17, 16), (17, 8), (9, 16), (9, 8)];
 
@@ -397,15 +354,8 @@ pub(crate) const SHAPES_CHROMA: [(usize, usize); 7] =
 
 #[cfg(test)]
 thread_local! {
-    /// Counts the shapes that reached a run-time-width fallback on **this thread**.
-    ///
-    /// The fallbacks exist so that an unforeseen shape is slow rather than a panic —
-    /// the decoder's error-concealment slots hold these kernels and a `match` that
-    /// panicked on a shape they passed would be a crash in production. But nothing
-    /// the codec itself calls should reach one, and that is a claim worth testing
-    /// rather than asserting: `mc_shapes_all_reach_a_const_arm` drives every entry of
-    /// the tables above and reads this back. Thread-local because the test suite runs
-    /// in parallel.
+    /// Counts the shapes that reached a run-time-width fallback on this thread.
+    /// Thread-local because the test suite runs in parallel.
     pub(crate) static RUNTIME_SHAPES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -660,62 +610,44 @@ pub fn mc_hor_ver22<S: RefSamples + Copy>(
     kernels::mc::mc_hor_ver22(src, dst, width, height)
 }
 
-/// A `16`-stride scratch surface for the quarter-pel kernels — the C++
-/// `uint8_t uiTmp[256]`, which is why luma MC blocks are at most 16 wide and tall.
+/// A 16-stride scratch surface for the quarter-pel kernels; its 256 bytes are what
+/// bound a luma MC block at 16 wide and 16 tall.
 #[inline(always)]
 fn scratch() -> [u8; 256] {
     [0u8; 256]
 }
 
 // ============================================================================
-// The quarter-pel composites, once
+// The quarter-pel composites
 // ============================================================================
 
-/// **The four half-pel leaves and the averaging step, as one substitutable set.**
+/// The four half-pel leaves and the averaging step, as one substitutable set.
 ///
-/// Twelve of the fifteen `McHorVerXY` kernels are not filters at all: they are
-/// compositions of `McHorVer20` (horizontal), `McHorVer02` (vertical),
-/// `McHorVer22` (centre) and `McSampleAvg`, at fixed offsets the standard fixes.
-/// Only those four do arithmetic, and only they have an SSE2 form worth writing;
-/// `McChromaWithFragMv`'s bilinear filter is here too, because it wants the same
-/// const-shape treatment and nothing else about it is shared.
+/// Twelve of the fifteen `McHorVerXY` kernels are compositions of `McHorVer20`
+/// (horizontal), `McHorVer02` (vertical), `McHorVer22` (centre) and `McSampleAvg` at
+/// offsets the standard fixes; only those four do arithmetic.
+/// `McChromaWithFragMv`'s bilinear filter is here for the same const-shape treatment.
 ///
-/// The scalar and SSE2 chains share these bodies and differ only in `L`, so they cannot
-/// drift apart. The trade is that a structural mistake in a composite can no longer be
-/// caught by comparing two spellings, because there is one; the leaves stay
-/// individually tested, and `mc_luma_parity` compares the two instantiations across all
-/// sixteen quarter-pel positions.
-///
-/// # The const parameters
-///
-/// Every method takes the block's `W`x`H` **and the reach its reads need**, so the
-/// kernel can cut one [`RefSamples::span`] per operand instead of a `row_view` per
-/// row. `SW` is the row length the horizontal six-tap reads (`W + 5`) or the bilinear
-/// chroma reads (`W + 1`); `SH` is the row count the vertical six-tap reads (`H + 5`)
-/// or chroma's (`H + 1`). They are separate parameters because stable Rust has no
-/// arithmetic in a const-argument position — see the shape tables above.
+/// Every method takes the block's `W`x`H` and the reach its reads need, so the kernel
+/// can cut one [`RefSamples::span`] per operand instead of a `row_view` per row. `SW`
+/// is the row length the horizontal six-tap reads (`W + 5`) or the bilinear chroma
+/// reads (`W + 1`); `SH` is the row count the vertical six-tap reads (`H + 5`) or
+/// chroma's (`H + 1`). They are separate const parameters because stable Rust has no
+/// arithmetic in a const-argument position.
 ///
 /// `AVG` on [`hor`](Self::hor) and [`ver`](Self::ver) is 0 for the plain half-pel
 /// filter, or the tap the result is averaged with: 2 for the `_AVERAGE_WITH_0`
 /// quarter-pel kernels and 3 for `_AVERAGE_WITH_1`. Only the sets that fuse those
 /// forms instantiate it non-zero.
 ///
-/// Each method has an `_any` twin taking the shape at run time. Those exist so that a
-/// shape the tables above do not carry is **slow rather than a panic** — the decoder's
-/// `SMcFunc` slots hold these kernels — and `mc_shapes_all_reach_a_const_arm` proves
-/// nothing the codec calls reaches one.
+/// Each method has an `_any` twin taking the shape at run time, so a shape the tables
+/// above do not carry is slow rather than a panic.
 pub trait McLeaves {
-    /// **Whether this set fuses the `_AVERAGE_WITH_` quarter-pel kernels into the two
-    /// direct filters**, as `McLuma_AArch64_neon` does — `McHorVer10/30/01/03` are
-    /// the horizontal or vertical filter with a rounded average against one of its
-    /// own taps, and the asm has them as single kernels rather than a filter into
-    /// scratch and an averaging pass over it.
-    ///
-    /// The fused form is byte-identical to the composite it replaces — the same
-    /// rounded average of the same two values — and `mc_luma_parity` says so for all
-    /// sixteen positions in every set. Only the sets that have written the fused arms
-    /// turn this on; the rest take the composites, and their `AVG != 0` instantiations
-    /// are then never generated.
+    /// Whether this set fuses the `_AVERAGE_WITH_` quarter-pel kernels into the two
+    /// direct filters: `McHorVer10/30/01/03` are the horizontal or vertical filter
+    /// with a rounded average against one of its own taps, and the fused form is
+    /// byte-identical to the composite it replaces. Sets without the fused arms take
+    /// the composites, and their `AVG != 0` instantiations are never generated.
     const FUSED_QPEL: bool = false;
 
     /// `McHorVer20` — the horizontal half-pel filter. Reads `SW = W + 5` per row.
@@ -802,8 +734,8 @@ pub trait McLeaves {
 // The scalar leaf bodies
 // ----------------------------------------------------------------------------
 
-/// `McHorVer20_c` over one const-shape block: **one span for the source, one for the
-/// destination**, and `W` six-tap windows per row.
+/// `McHorVer20_c` over one const-shape block: one span for the source, one for the
+/// destination, and `W` six-tap windows per row.
 #[inline(always)]
 fn hor_block_c<
     S: RefSamples + Copy,
@@ -831,8 +763,7 @@ fn hor_block_c<
     }
 }
 
-/// The run-time-shape twin, sample by sample through [`RefSamples::at`] — cold, and
-/// spelled for simplicity rather than speed. See [`McLeaves`].
+/// The run-time-shape twin, sample by sample through [`RefSamples::at`]; cold.
 fn hor_any_c<S: RefSamples + Copy, const AVG: usize>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -909,8 +840,8 @@ fn ver_any_c<S: RefSamples + Copy, const AVG: usize>(
     }
 }
 
-/// `McHorVer22_c` over one const-shape block. `iTmp` is the C++'s `int16_t[17 + 5]`,
-/// which is what bounds `SW` at 22 and so the width at 17.
+/// `McHorVer22_c` over one const-shape block. `iTmp`'s `17 + 5` entries bound `SW` at
+/// 22 and so the width at 17.
 #[inline(always)]
 fn cen_block_c<
     S: RefSamples + Copy,
@@ -1057,7 +988,7 @@ fn chroma_any_c<S: RefSamples + Copy>(
 }
 
 /// The scalar leaf set. Every method is a `_c` kernel, so a composite instantiated
-/// here cannot route into SIMD — which is what makes it usable as a parity reference.
+/// here never routes into SIMD.
 pub struct ScalarLeaves;
 
 impl McLeaves for ScalarLeaves {
@@ -1175,11 +1106,10 @@ impl McLeaves for ScalarLeaves {
 // The twelve composites, at a const shape
 // ----------------------------------------------------------------------------
 //
-// Each is `McHorVerXY_c`'s body with the leaf shapes fixed by the caller, so the
-// leaf's own `(width, height)` match is gone: `mc_luma_with` dispatches the shape
-// once and everything below it is const. The intermediates stay the C++'s
-// `uint8_t uiTmp[256]` at stride 16, which is what bounds a luma MC block at 16x16
-// and why `mc_luma_with`'s const table is the luma partitions and nothing wider.
+// Each is `McHorVerXY_c`'s body with the leaf shapes fixed by the caller:
+// `mc_luma_with` dispatches the shape once and everything below it is const. The
+// intermediates are 256 bytes of scratch at stride 16, which bounds a luma MC block at
+// 16x16 and keeps `mc_luma_with`'s const table to the luma partitions.
 
 /// C++: `McHorVer01_c` — the composite, over `L`'s leaves.
 #[inline(never)]
@@ -1480,8 +1410,7 @@ fn luma_shaped<
 ) {
     match ((mv_x & 0x03) as u8, (mv_y & 0x03) as u8) {
         (0, 0) => copy_block::<W, H, S>(src, dst),
-        // The four `_AVERAGE_WITH_` positions, fused where the set has them; see
-        // [`McLeaves::FUSED_QPEL`].
+        // The four `_AVERAGE_WITH_` positions, fused where the set has them.
         (0, 1) if L::FUSED_QPEL => L::ver::<_, W, H, SH, 2>(src, dst),
         (0, 3) if L::FUSED_QPEL => L::ver::<_, W, H, SH, 3>(src, dst),
         (1, 0) if L::FUSED_QPEL => L::hor::<_, W, SW, H, 2>(src, dst),
@@ -1504,10 +1433,8 @@ fn luma_shaped<
     }
 }
 
-/// The run-time-shape twin of [`luma_shaped`] — cold, for a shape
-/// `SHAPES_LUMA` does not carry; see [`McLeaves`]. The same sixteen arms over the
-/// `_any` leaves and the same 16-stride scratch, so it is correct wherever the const
-/// path is and slow everywhere.
+/// The run-time-shape twin of [`luma_shaped`] — the same sixteen arms over the `_any`
+/// leaves and the same 16-stride scratch; cold.
 fn luma_any<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -1518,7 +1445,6 @@ fn luma_any<L: McLeaves, S: RefSamples + Copy>(
 ) {
     let (mut p, mut q) = (scratch(), scratch());
     let (qx, qy) = ((mv_x & 0x03) as u8, (mv_y & 0x03) as u8);
-    // The leaf that fills a scratch plane, and the cursor to read it back through.
     macro_rules! hor_to {
         ($t:expr, $s:expr) => {
             L::hor_any::<_, 0>(&$s, &mut PlaneCursorMut::new(&mut $t, 0, 16), w, h)
@@ -1610,8 +1536,8 @@ fn luma_any<L: McLeaves, S: RefSamples + Copy>(
 /// `mc_luma`'s fan-out, over whichever leaf set `L` names.
 ///
 /// C++: `McLuma_c`'s `switch` on `(mv_x & 3, mv_y & 3)`, with the block shape
-/// resolved to consts **once** — see the shape tables above. Every arm below is a
-/// luma partition, which is also what bounds the composites' 16-stride scratch.
+/// resolved to consts once — see the shape tables above. Every arm below is a luma
+/// partition, which is also what bounds the composites' 16-stride scratch.
 pub fn mc_luma_with<L: McLeaves, S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -1714,34 +1640,29 @@ pub fn mc_chroma<S: RefSamples + Copy>(
 // The same-picture arm — motion compensation in one borrow
 // ============================================================================
 //
-// **What this family is for.** A malformed stream can put the picture being decoded
-// into its own reference list (`decoder/pic_queue.rs`), and the C++ resolves that
-// entry and motion-compensates from the picture it is writing. Every kernel above
-// takes two cursors because the two pictures are two allocations at every
-// *well-formed* call site; here they are one, so there is no second cursor to
-// build. `decoder/pic_queue.rs`'s `PicRefs::classify` is what tells the two apart,
-// and these are what its `RefSlot::Current` arm runs.
 //
-// **The shape.** One `PlaneCursorMut` anchored at the destination block, plus the
-// source anchor `(sx, sy)` *relative to that same anchor* — legal because one plane
-// has one stride, so a source displaced by a motion vector is a relative offset and
-// nothing else. Reads go through `at`, writes through `set`, and the two interleave
-// exactly as the C++'s `pSrc[j]` / `pDst[j]` do.
+// A malformed stream can put the picture being decoded into its own reference list
+// (`decoder/pic_queue.rs`), so motion compensation reads from the picture it is
+// writing. `PicRefs::classify` tells the two apart, and these kernels are what its
+// `RefSlot::Current` arm runs.
 //
-// **Why the ordering is the whole contract.** When the source window overlaps the
-// destination block, motion compensation reads samples it has already written, and
-// *which* ones depends on the loop order. So these reproduce the C++'s order rather
-// than a faster equivalent: raster within each output row for the direct filters, a
+// The shape is one `PlaneCursorMut` anchored at the destination block plus the source
+// anchor `(sx, sy)` relative to that same anchor: one plane has one stride, so a
+// source displaced by a motion vector is a relative offset. Reads go through `at`,
+// writes through `set`, and the two interleave.
+//
+// The loop order is the contract: where the source window overlaps the destination
+// block, motion compensation reads samples it has already written, and which ones
+// depends on that order. It is raster within each output row for the direct filters, a
 // per-output-row 16-bit intermediate for the centre kernel, and `copy_within` (not a
-// block copy) for the integer-MV path. The composite quarter-pel kernels are the
-// cheap case and are *not* rewritten: they already build their intermediates into
-// 16-stride scratch surfaces, so the source reads all finish before the first
-// destination write, and they reuse the two-cursor kernels above through a shared
-// borrow of this cursor. Only the four kernels that write the destination straight
-// from the source are index-based.
+// block copy) for the integer-MV path. The composite quarter-pel kernels build their
+// intermediates into 16-stride scratch surfaces, so all the source reads finish before
+// the first destination write and they reuse the two-cursor kernels through a shared
+// borrow; only the four kernels that write the destination straight from the source
+// are index-based.
 //
-// **Cold by construction** — malformed input only — so the spelling is chosen for
-// soundness, not speed: `at` per sample where the two-cursor form hoists a row.
+// Cold by construction — malformed input only — so the spelling favours soundness over
+// speed: `at` per sample where the two-cursor form hoists a row.
 
 /// The six horizontal taps the 6-tap filter reads for output column `x` of row `y`.
 #[inline(always)]
@@ -1770,8 +1691,7 @@ fn taps_v(p: &PlaneCursorMut<'_>, x: isize, y: isize) -> [u8; 6] {
 }
 
 /// [`mc_copy`]'s same-plane form — `McCopy_c` when source and destination are one
-/// allocation. The width narrowing is [`copy_width`]'s, so a caller passing 3 moves
-/// two samples here exactly as it does there.
+/// allocation. The width narrowing is [`copy_width`]'s.
 #[inline(never)]
 fn same_copy(p: &mut PlaneCursorMut<'_>, sx: isize, sy: isize, width: usize, height: usize) {
     let w = copy_width(width);
@@ -1802,9 +1722,9 @@ fn same_hor_ver02(p: &mut PlaneCursorMut<'_>, sx: isize, sy: isize, width: usize
     }
 }
 
-/// [`mc_hor_ver22`]'s same-plane form — the `iTmp` row is the C++'s own, refilled
-/// per output row, which is what puts each row's reads before that row's writes and
-/// each row's writes before the *next* row's reads.
+/// [`mc_hor_ver22`]'s same-plane form. The `iTmp` row is refilled per output row,
+/// which puts each row's reads before that row's writes and each row's writes before
+/// the next row's reads.
 #[inline(never)]
 fn same_hor_ver22(p: &mut PlaneCursorMut<'_>, sx: isize, sy: isize, width: usize, height: usize) {
     let mut iTmp = [0i16; 17 + 5];
@@ -1969,56 +1889,27 @@ pub fn mc_chroma_same(
 // ============================================================================
 //
 // A kernel reaches past the block it is given: the 6-tap filter needs two samples
-// before and three after each output sample. The source has already been displaced
-// by a motion vector, so the reach is legal only because the caller clamped that
-// vector first. The decoder's clamp is `BaseMC`
-// (`decoder/decode_slice.rs:1069-1091`), and it is *exactly* calibrated to this
-// reach:
+// before and three after each output sample. The source has already been displaced by
+// a motion vector, so the reach is legal only because the caller clamped that vector
+// first. The decoder's clamp is in `BaseMC` (`decoder/decode_slice.rs`), calibrated
+// exactly to this reach: the integer part of the vector lands in `-30 ..= width + 13`,
+// so a 16-wide block reaching `x - 2` at the low end and `x + 16 + 3` at the high end
+// touches `-32 ..= width + 32` — precisely the 32-sample luma border `AllocPicture`
+// allocates (`decoder/pic_queue.rs`), with nothing to spare at either end. Chroma is
+// the same argument at half scale against the 16-sample chroma border.
 //
-// ```text
-// const PADDING_LENGTH: i32 = 32;
-// iFullMVx = WELS_CLIP3(iFullMVx, (-PADDING_LENGTH + 2) * 4,
-//                       (pMCRefMem.iPicWidth  + PADDING_LENGTH - 19) * 4);
-// iFullMVy = WELS_CLIP3(iFullMVy, (-PADDING_LENGTH + 2) * 4,
-//                       (pMCRefMem.iPicHeight + PADDING_LENGTH - 19) * 4);
-// pSrcY = pMCRefMem.pSrcY.offset((iFullMVx >> 2) + (iFullMVy >> 2) * iSrcLineLuma);
-// ```
-//
-// Read the arithmetic out: the integer part of the vector lands in
-// `-30 ..= width + 13`, so a 16-wide block reaching `x - 2` at the low end and
-// `x + 16 + 3` at the high end touches `-32 ..= width + 32` — precisely the
-// 32-sample luma border `AllocPicture` allocates (`decoder/pic_queue.rs`), with
-// nothing to spare at either end. The `+ 2` and the `- 19` in the clamp are that
-// margin: `19 == 16 + 3`. Chroma is the same argument at half scale against the
-// 16-sample chroma border.
-//
-// The encoder's callers are a different family of buffers: ME refinement filters
-// out of the reference picture into `pBufferInterPredMe` scratch
-// (`encoder/md.rs:1043-1046`), and the search window is bounded before the call
-// rather than by a clamp inside it.
+// The encoder's callers filter out of the reference picture into `pBufferInterPredMe`
+// scratch (`encoder/md.rs`), with the search window bounded before the call rather
+// than by a clamp inside it.
 
 /// C++: `InitMcFunc`, `codec/common/src/mc.cpp` — both codecs call it at open time.
 ///
-/// # The table it fills is not this port's MC dispatch path
-///
-/// Upstream calls MC *through* `sMcFunc`, so its `uiCpuFlag` gate here is what selects
-/// scalar or SSE2 for every motion-compensated block. This port does not: `md.rs:582`
-/// states it outright — "MC and the half-pel filters are called directly, not via
-/// `sMcFuncs`" — and `grep` for the six field names below finds no read anywhere
-/// outside this file. `mc_luma`, `mc_chroma`, `pixel_avg` and the half-pel filters call
-/// `simd::kernels` directly, and which kernel set that names was decided at compile
-/// time.
-///
-/// The consequence, unchanged by editing this function: **a caller that restricts
-/// `uiCpuFlag` to force scalar MC does not get it.** The slots go scalar; the code that
-/// runs is whichever set the build selected. `--features scalar` is what forces scalar
-/// MC, and it forces it everywhere at once. So `init_mc_func_cpu_flags` below is a
-/// faithful test of *this function* and of nothing downstream of it — not evidence that
-/// MC dispatch is gated by the argument.
-///
-/// The table is still filled, and the fields still exist (`decoder_context.rs:1281`,
-/// `encoder/wels_func_ptr_def.rs:327`), because the struct is part of the ported
-/// context layout. Closing the gap means routing MC back through the table.
+/// The six slots it fills are never read: `mc_luma`, `mc_chroma`, `pixel_avg` and the
+/// half-pel filters call `simd::kernels` directly, and which kernel set that names is
+/// decided at compile time. So `uiCpuFlag` here does not select scalar or SSE2 motion
+/// compensation — `--features scalar` does, and everywhere at once. The table is still
+/// filled because the fields are part of the context layout (`decoder_context.rs`,
+/// `encoder/wels_func_ptr_def.rs`).
 pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, uiCpuFlag: u32) {
     *pMcFuncs = SMcFunc::default();
     if (uiCpuFlag & WELS_CPU_SSE2) != 0 {
@@ -2067,14 +1958,9 @@ mod tests {
     const LUMA_SHAPES: [(usize, usize); 7] =
         [(16, 16), (16, 8), (8, 16), (8, 8), (8, 4), (4, 8), (4, 4)];
 
-    /// **The same-picture arm equals the two-cursor arm wherever both are defined.**
-    ///
-    /// These kernels exist because a source that *is* the destination cannot be
-    /// spelled as a cursor pair; that makes the two forms incomparable exactly on the
-    /// overlapping case and comparable everywhere else. This drives every one of the
-    /// sixteen quarter-pel arms at every block shape with the two windows disjoint
-    /// inside one buffer, and requires the whole buffer — not just the block — to come
-    /// out equal, so a kernel writing outside its block is caught too.
+    /// The same-picture arm equals the two-cursor arm wherever both are defined: every
+    /// quarter-pel arm at every block shape, with the two windows disjoint inside one
+    /// buffer and the whole buffer — not just the block — required to match.
     #[test]
     fn same_picture_luma_matches_the_two_cursor_kernels_when_the_windows_are_disjoint() {
         let base = filled_plane();
@@ -2158,15 +2044,9 @@ mod tests {
         }
     }
 
-    /// **The overlapping case, where the two forms are not comparable and the C++'s
-    /// loop order is the whole specification.**
-    ///
-    /// The reference here is a transliteration of `McHorVer20_c` over one buffer —
-    /// raster order, each output sample written before the next one's taps are read —
-    /// so what this pins is the property the two-cursor kernel cannot state: that
-    /// `same_hor_ver20` reads a sample it has already written exactly when the C++
-    /// does. The geometry puts the destination two rows below the source, inside the
-    /// filter's own vertical reach.
+    /// The overlapping case, where raster loop order is the specification: the
+    /// reference loop writes each output sample before the next one's taps are read,
+    /// and the geometry puts the destination inside the filter's own vertical reach.
     #[test]
     fn the_overlapping_arm_reproduces_the_c_loop_order() {
         let base = filled_plane();
@@ -2206,8 +2086,7 @@ mod tests {
 
     /// [`PlaneCursorMut::copy_row_within`] is memmove, not memcpy: the integer-MV arm
     /// of a self-referencing macroblock copies a row onto itself displaced by a few
-    /// samples, and the C++'s `LD64`/`ST64` pairs make that overlap defined by
-    /// accident where a Rust block copy would make it UB.
+    /// samples, which a block copy would make UB.
     #[test]
     fn the_copy_arm_is_defined_when_the_row_overlaps_itself() {
         let mut buf = vec![0u8; STRIDE * 4];
@@ -2231,41 +2110,15 @@ mod tests {
         assert_eq!(buf, want);
     }
 
-    /// `InitMcFunc` installs SIMD kernels when `WELS_CPU_SSE2` is present on x86_64,
-    /// and scalar defaults otherwise.
-    ///
-    /// **Why this compares two tables instead of a table against named
-    /// functions.** The obvious assert-map — `t.pMcLumaFunc as usize
-    /// == McLuma_c as usize` — is *unsound for these six functions*. Four of
-    /// them are `#[inline(always)]`, and an `#[inline(always)]` function whose
-    /// address is taken gets instantiated locally in whatever codegen unit takes
-    /// it: the integration-test crate gets its own copy, and so does this
-    /// `tests` submodule. Neither address is the one `InitMcFunc` stored.
-    ///
-    /// Both addresses here come from the same `InitMcFunc` instantiation, so
-    /// the comparison is meaningful. Not under Miri: it mints a fresh synthetic
-    /// address for each reified function pointer, so even two calls of the
-    /// *same* installer compare unequal there.
-    /// **Every shape the codec calls motion compensation with reaches a const
-    /// instantiation**, and none of them falls through to a run-time-shape kernel.
-    ///
-    /// The tables at the head of this module are transcribed from the call sites —
-    /// `decoder/decode_slice.rs`'s `BaseMC` for the luma partitions and their chroma
-    /// halves, `encoder/svc_base_layer_md.rs` and `encoder/svc_mode_decision.rs` for
-    /// the skip and partition candidates, and `encoder/md.rs`'s `MeRefineFracPixel`
-    /// for the `kiW + 1` / `kiH + 1` half-pel buffers — and this drives every entry of
-    /// them through the kernel set this build compiled, over **both** operand
-    /// storages: the plain plane cursor the decoder hands them and the shared cell
+    /// Every shape the codec calls motion compensation with reaches a const
+    /// instantiation, and none falls through to a run-time-shape kernel. Drives every
+    /// entry of the shape tables at the head of this module over both operand
+    /// storages: the plane cursor the decoder hands the kernels and the shared cell
     /// view the encoder does.
     ///
-    /// The fallbacks it proves unreachable still have to exist and still have to be
-    /// correct: the decoder's `SMcFunc` slots hold these kernels, and a `match` that
-    /// panicked on a shape they were handed would be a crash in production. The
-    /// parity tests in each kernel set drive shapes outside the tables for exactly
-    /// that reason.
-    ///
-    /// Runs under Miri, which sees the scalar set — the const-shape kernels here are
-    /// where the new safe accessor use lives, and this is what drives all of them.
+    /// The fallbacks it proves unreachable still have to exist and be correct: the
+    /// decoder's `SMcFunc` slots hold these kernels, and a `match` that panicked on a
+    /// shape handed to it would be a crash in production.
     #[test]
     fn mc_shapes_all_reach_a_const_arm() {
         let base = filled_plane();
@@ -2329,8 +2182,7 @@ mod tests {
              run-time-shape kernel; every one of them should have reached a const arm"
         );
 
-        // And the counter is what makes that assertion mean anything, so show it
-        // moves: 5x4 is a shape no table carries, and it has to reach the fallback.
+        // 5x4 is a shape no table carries, so it must reach the fallback.
         let odd = runtime_shapes_during(|| {
             let src = PlaneCursor::new(&base, src_c, STRIDE);
             kernels::mc::mc_hor_ver20(
@@ -2346,14 +2198,10 @@ mod tests {
         );
     }
 
-    /// **The `_AVERAGE_WITH_` forms of the scalar filters agree with the composites
-    /// they would replace.**
-    ///
-    /// [`McLeaves::FUSED_QPEL`] is off for [`ScalarLeaves`], so `mc_luma_c` takes the
-    /// composite at quarter-pel `(1, 0)`, `(3, 0)`, `(0, 1)` and `(0, 3)` and the
-    /// `AVG` arms of [`McLeaves::hor`] and [`McLeaves::ver`] are never instantiated by
-    /// the codec. They are still part of the trait and still have to be right — the
-    /// NEON set's fused kernels are the same arithmetic — so drive them here.
+    /// The `_AVERAGE_WITH_` forms of the scalar filters agree with the composites they
+    /// would replace. [`McLeaves::FUSED_QPEL`] is off for [`ScalarLeaves`], so the
+    /// codec never instantiates the `AVG` arms of [`McLeaves::hor`] and
+    /// [`McLeaves::ver`]; the NEON set's fused kernels are the same arithmetic.
     #[test]
     fn the_fused_quarter_pel_arms_agree_with_the_composites() {
         let base = filled_plane();
@@ -2386,9 +2234,8 @@ mod tests {
         }
     }
 
-    /// **Scope: `InitMcFunc` only.** The slots this checks are never read — see the
-    /// note on `InitMcFunc`. Passing does not mean a `uiCpuFlag` without
-    /// `WELS_CPU_SSE2` produces scalar motion compensation; it does not.
+    /// Scope: `InitMcFunc` only. The slots it fills are never read, so this says
+    /// nothing about which kernels motion compensation actually runs.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn init_mc_func_cpu_flags() {
@@ -2431,12 +2278,6 @@ mod tests {
             let mut sse2_base = SMcFunc::default();
             InitMcFunc(&mut sse2_base, WELS_CPU_SSE2);
             let sse2_want = addrs(&sse2_base);
-            // The `assert_ne!` that stood here — "the SSE2 flag installs something other
-            // than the scalar" — is gone with the other two wiring assertions: under the
-            // scalar `simd::kernels` alias it would compare two distinct forwards to the
-            // same body and pass while nothing was accelerated. That property is now
-            // `simd::tests::every_kernel_is_named_by_a_dispatch_site`, which asks it of
-            // the kernels rather than of two function-pointer addresses.
 
             let sse2_flags: [u32; 6] = [
                 WELS_CPU_SSE2,

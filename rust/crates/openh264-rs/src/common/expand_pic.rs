@@ -4,33 +4,28 @@
 
 //! Picture-border expansion, shared by encoder and decoder.
 //!
-//! Translated from `codec/common/inc/expand_pic.h` and
-//! `codec/common/src/expand_pic.cpp`.
+//! `codec/common/inc/expand_pic.h`, `codec/common/src/expand_pic.cpp`.
 
 // ============================================================================
 // Safe kernel
 // ============================================================================
 
 /// C++: `ExpandPictureLuma_c` / `ExpandPictureChroma_c`,
-/// `codec/common/src/expand_pic.cpp` — one body, pad-parameterised, exactly as
-/// the C++'s two copies differ only in `PADDING_LENGTH` vs `PADDING_LENGTH >> 1`.
+/// `codec/common/src/expand_pic.cpp`.
 ///
 /// Replicates the picture's border into the `pad`-pixel margin on all four
 /// sides: the first/last rows are copied up/down `pad` times, each row's
 /// first/last samples are smeared left/right, and the four corners take the
 /// corner samples.
 ///
-/// `buf` is the plane's **full allocation** — `(pic_h + 2*pad)` rows of
-/// `stride` bytes or more (`AllocPicture` rounds the row count up) — with the
-/// picture's `(0, 0)` at byte `pad * stride + pad`, which is where both
-/// codecs' `AllocPicture`s put it (`pData = pBuffer + (1 + stride) * pad`).
+/// `buf` is the plane's full allocation — `(pic_h + 2*pad)` rows of `stride`
+/// bytes or more — with the picture's `(0, 0)` at byte `pad * stride + pad`.
 ///
 /// # Panics
 /// If the geometry does not hold: `stride < pic_w + 2*pad`, a buffer shorter
-/// than `(pic_h + 2*pad) * stride`, or `pic_w`/`pic_h` of zero. The C++
-/// equivalent would read and write out of the allocation.
+/// than `(pic_h + 2*pad) * stride`, or `pic_w`/`pic_h` of zero.
 pub fn expand_picture(buf: &mut [u8], stride: usize, pic_w: usize, pic_h: usize, pad: usize) {
-    // The two pads both codecs ever ask for, specialised — see `expand_with`.
+    // The only two pads in use, specialised — see `expand_with`.
     match pad {
         PAD_LUMA => expand_with::<PAD_LUMA>(buf, stride, pic_w, pic_h),
         PAD_CHROMA => expand_with::<PAD_CHROMA>(buf, stride, pic_w, pic_h),
@@ -39,22 +34,13 @@ pub fn expand_picture(buf: &mut [u8], stride: usize, pic_w: usize, pic_h: usize,
 }
 
 /// `PADDING_LENGTH`, and its chroma half — the only two pads
-/// `ExpandPicture`'s call sites pass, in either codec.
+/// `ExpandPicture`'s call sites pass.
 const PAD_LUMA: usize = 32;
 const PAD_CHROMA: usize = 16;
 
-/// [`expand_picture`] with the pad known at compile time.
-///
-/// This is where upstream's split into `ExpandPictureLuma_sse2` and
-/// `ExpandPictureChroma{Align,Unalign}_sse2` lands, and it buys the same thing
-/// their vector stores do without an intrinsic or an `unsafe`. The margin fills
-/// are `pad` bytes wide and `pad` is a parameter, so `expand_any` leaves a
-/// `memset` **call** at each of them — six in the emitted body, two of which sit
-/// in the per-row loop and so run `2 * pic_h` times per plane. A constant width
-/// lowers each to a couple of stores instead.
-///
-/// Kept as a wrapper over the general body rather than a second copy of it:
-/// monomorphising is the whole point, and the source stays single.
+/// [`expand_picture`] with the pad known at compile time. With `pad` a runtime
+/// parameter each margin fill leaves a `memset` call, two of them inside the
+/// per-row loop; a constant width lowers each to a couple of stores.
 #[inline]
 fn expand_with<const PAD: usize>(buf: &mut [u8], stride: usize, pic_w: usize, pic_h: usize) {
     expand_any(buf, stride, pic_w, pic_h, PAD);

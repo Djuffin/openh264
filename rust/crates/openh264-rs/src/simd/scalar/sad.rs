@@ -1,4 +1,4 @@
-//! Scalar forwards for the `sad` kernels — see the module header.
+//! Scalar forwards for the `sad` kernels.
 
 use crate::common::sad_common::{sample_sad, sample_sad_four};
 use crate::safe::plane::RefSamples;

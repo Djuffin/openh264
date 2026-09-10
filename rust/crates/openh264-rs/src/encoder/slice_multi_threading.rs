@@ -30,7 +30,7 @@
 
 //! # Multithreaded Slice Processing & Dynamic Workload Balancing
 //!
-//! Translated from `codec/encoder/core/inc/slice_multi_threading.h` and
+//! C++: `codec/encoder/core/inc/slice_multi_threading.h`,
 //! `codec/encoder/core/src/slice_multi_threading.cpp`.
 //!
 //! Implements OpenH264's slice-level multithreading architecture, Root-Mean-Square
@@ -116,7 +116,7 @@ pub fn fill_mb_map(map: &[AtomicU16], kiFirstMb: i32, kiCount: i32, uiValue: u16
 #[derive(Debug)]
 pub struct SSliceThreading {
     /// The `iSliceNumInFrame` lock. `DynSlcJudgeSliceBoundaryStepBack` holds it
-    /// across `AddSliceBoundary` and the increment, which is what the C++ does
+    /// across `AddSliceBoundary` and the increment
     /// (`svc_encode_slice.cpp:1776-1791`).
     pub mutexSliceNumUpdate: std::sync::Mutex<()>,
     /// One bs scratch buffer per worker slot. The fork entries `mem::take` each
@@ -128,7 +128,7 @@ pub struct SSliceThreading {
     /// (`ForkWidth`).
     pub uiThreadBsBufferNum: usize,
     /// The persistent worker threads the three forks run on — `CWelsThreadPool`'s
-    /// place in the port. Built with the buffers, one worker per slot
+    /// counterpart. Built with the buffers, one worker per slot
     /// (`uiThreadBsBufferNum`), and dropped with them: the threads end when the
     /// context does, at `WelsUninitEncoderExt`, and none outlives the encoder.
     /// `Default` is a pool of no threads, on which every job runs on the calling
@@ -217,15 +217,12 @@ pub fn WelsDivRound64(x: i64, y: i64) -> i64 {
 // ============================================================================
 //
 // A `std::sync::Mutex` cannot be locked and unlocked through two separate calls
-// the way pthreads can — the guard owns the lock — so the lock/unlock pair is
-// expressed as one scoped call. Every C++ lock/unlock pair in the encoder
-// brackets a single straight-line region, so the critical sections are
-// identical; only the spelling differs.
+// the way pthreads can — the guard owns the lock — so each lock/unlock pair is
+// expressed as one scoped call over a straight-line critical section.
 
 /// Runs `f` holding `pMutex`, i.e. a `WelsMutexLock`/`WelsMutexUnlock` pair.
 ///
-/// A null handle runs `f` unlocked; that mirrors the C++ behaviour on an
-/// uninitialised mutex closely enough for the single-threaded paths, which
+/// `None` runs `f` unlocked; only the single-threaded paths pass it, and they
 /// never contend.
 pub fn with_wels_mutex<R>(pMutex: Option<&std::sync::Mutex<()>>, f: impl FnOnce() -> R) -> R {
     let Some(m) = pMutex else {
@@ -268,9 +265,9 @@ pub fn UpdateMbListNeighborParallel(
 /// Calculates the normalized computational complexity ratio (`iSliceComplexRatio`)
 /// for each slice in a spatial layer based on measured CPU consumption time.
 ///
-/// The producer half of the load-balancing loop. Called from
-/// `WelsEncoderEncodeExt`, at the end of the per-layer body, under the C++'s own
-/// four-term guard — the site is `encoder_ext.cpp:4064-4073`.
+/// The producer half of the load-balancing loop, called from
+/// `WelsEncoderEncodeExt` at the end of the per-layer body, under its four-term
+/// guard (`encoder_ext.cpp:4064-4073`).
 pub fn CalcSliceComplexRatio(pCurDq: &mut SDqLayer) {
     let pSliceCtx = &mut pCurDq.sSliceEncCtx;
     let mut iSumAv = 0i32;
@@ -516,10 +513,9 @@ pub fn RequestMtResource(
     for i in 0..iThreadBufferNum {
         pSmt.pThreadBsBuffer[i] = vec![0u8; iCountBsLen as usize];
     }
-    // The workers, one per slot — `CWelsThreadPool::AddReference`'s moment. They
-    // are created here, on the application's thread, and joined when the
-    // context drops. A thread the OS refuses is the same failure as a buffer it
-    // refuses.
+    // The workers, one per slot: created here, on the application's thread, and
+    // joined when the context drops. A thread the OS refuses is the same failure
+    // as a buffer it refuses.
     pSmt.pool = match WorkerPool::try_new(iThreadBufferNum) {
         Ok(pool) => pool,
         Err(_) => return 1,
@@ -629,9 +625,8 @@ pub fn AppendSliceToFrameBs(
 
 /// Encapsulates Raw Byte Sequence Payload (RBSP) data into Annex B NAL units for a slice.
 ///
-/// Takes the slice rather than its `sSliceBs` (the C++ took `SWelsSliceBs*`):
-/// the NAL list is offsets into the thread buffer the slice was claimed into, and
-/// that buffer is `pThreadBsBuffer[pSlice->uiBufferIdx]`.
+/// Takes the slice rather than its `sSliceBs`: the NAL list is offsets into the
+/// thread buffer the slice was claimed into, `pThreadBsBuffer[pSlice->uiBufferIdx]`.
 pub fn WriteSliceBs(
     pCtx: &sWelsEncCtx,
     pSlice: &mut SSlice,
@@ -650,8 +645,7 @@ pub fn WriteSliceBs(
     let iTotalLeftLength = (pSliceBs.uiBsSize - pSliceBs.uiBsPos) as i32;
     let kpNalHdrExt = &current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
     // The write cursor is the slice's own buffer, absent when the slice shares
-    // the frame's; `WelsEncodeNal` takes the `INVALIDINPUT` arm for `None`
-    // exactly as the C++ did for null.
+    // the frame's; `WelsEncodeNal` takes the `INVALIDINPUT` arm for `None`.
     let bHasOwnBuffer = pSliceBs.pBs.is_some();
     let mut iDstPos = 0usize;
 
@@ -663,9 +657,8 @@ pub fn WriteSliceBs(
     while iNalIdx < kiNalCnt {
         let mut iNalSize = 0i32;
         // The slice's own buffer is re-sliced from the running offset each
-        // iteration; `iTotalLeftLength - *iSliceSize` is the same bound said
-        // as a number, and the two agree by construction because `uiBsSize` is
-        // that buffer's length.
+        // iteration; the bound `iTotalLeftLength - *iSliceSize` agrees with it by
+        // construction, because `uiBsSize` is that buffer's length.
         let kNalEntry = pSliceBs.sNalList[iNalIdx as usize];
         let kiLeft = (iTotalLeftLength - *iSliceSize).max(0) as usize;
         let pDstTail = if bHasOwnBuffer {
@@ -844,8 +837,7 @@ pub struct SliceJobHandle<'a> {
     pBsBuf: &'a mut [u8],
     /// This worker's slices. Worker `k` codes slices `k, k+step, k+2*step, …`, so
     /// the bank is distributed by that rule on the calling thread while the
-    /// layer is `&mut`, and each worker holds `&mut SSlice`s **no sibling can
-    /// name**.
+    /// layer is `&mut`, and each worker holds `&mut SSlice`s no sibling can name.
     pSlices: Vec<&'a mut SSlice>,
     /// This worker's macroblock windows. One per slice this worker codes (fixed
     /// modes, paired 1:1 with `pSlices`), or the single partition run
@@ -899,7 +891,7 @@ impl<'a> SliceJobHandle<'a> {
             .expect("both fork entry points refuse a null pSliceThreading");
         debug_assert!(
             iBsSlot >= 0 && (iBsSlot as usize) < pSmt.uiThreadBsBufferNum,
-            "job slot {} is outside the {} allocated bs buffers — F67's bound",
+            "job slot {} is outside the {} allocated bs buffers",
             iBsSlot,
             pSmt.uiThreadBsBufferNum
         );
@@ -955,19 +947,18 @@ fn WritePrefixNalForSlice(
 
 /// What one slice's encode reports back through the join.
 ///
-/// `bInitFailed` is not decoration. `CWelsSliceEncodingTask::Execute` returns
-/// early when `InitTask` fails — **before** `FinishTask`, which is the only place
-/// the task's result is ORed into `pCtx->iEncoderError`. So a failed init is
-/// swallowed on both sides today: the frame comes back short rather than as an
-/// error, and changing which one the caller sees is a behaviour change. Carried
-/// here so the calling thread can OR exactly what `FinishTask` would have.
+/// `CWelsSliceEncodingTask::Execute` returns early when `InitTask` fails, before
+/// `FinishTask` — the only place a task's result is ORed into
+/// `pCtx->iEncoderError` — so a failed init is swallowed and the frame comes back
+/// short rather than as an error. `bInitFailed` carries that distinction so the
+/// calling thread ORs exactly what `FinishTask` would have.
 struct SliceJobResult {
     iResult: i32,
     bInitFailed: bool,
 }
 
 /// One slice, start to finish, on a worker thread: the `InitTask` / `ExecuteTask`
-/// / `FinishTask` triple of `CWelsSliceEncodingTask`, minus the two mutexes.
+/// / `FinishTask` triple of `CWelsSliceEncodingTask`.
 fn EncodeOneSliceInJob(
     pCtx: &sWelsEncCtx,
     iSliceIdx: i32,
@@ -1008,11 +999,9 @@ fn EncodeOneSliceInJob(
     let iSliceStart = if bRecordsTime { WelsTime() } else { 0 };
 
     // The slice's bitstream buffer is the job's partition slot, subsliced to the
-    // claimed size. The subslice length is the claimed size every deep call used
-    // to pass to `thread_bs_buffer`; `uiSize` cannot exceed the slot (both are
-    // `iCountBsLen`, single writer).
-    // The `pOut` writer option is `None` on this side: every slice of a forked
-    // layer has its own writer.
+    // claimed size; `uiSize` cannot exceed the slot (both are `iCountBsLen`,
+    // single writer). The `pOut` writer option is `None` here: every slice of a
+    // forked layer has its own writer.
     debug_assert_eq!(
         pSlice.uiBufferIdx as i32, iBsSlot,
         "the slice's claimed slot is this job's"
@@ -1098,12 +1087,12 @@ fn ForkWidth(pCtx: &mut sWelsEncCtx, iItemCount: i32) -> i32 {
     iItemCount.min(iBuffers.max(1)).max(1)
 }
 
-/// **The fork/join for every fixed slice mode** — what
-/// `pTaskManage->ExecuteTasks(WELS_ENC_TASK_ENCODING)` did for
+/// The fork/join for every fixed slice mode —
+/// `pTaskManage->ExecuteTasks(WELS_ENC_TASK_ENCODING)` for
 /// `uiSliceMode != SM_SIZELIMITED_SLICE`.
 ///
 /// Returns the value `FinishTask` would have ORed into `pCtx->iEncoderError`; the
-/// caller ORs it, exactly where it read the field before.
+/// caller ORs it.
 ///
 /// # Panics
 /// Panics if the layer's `pFirstMbIdxOfSlice` / `pCountMbNumInSlice` are not sized
@@ -1116,19 +1105,15 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
     let bRecordsTime = pCtx.param_opt().is_some() && pCtx.param().bUseLoadBalancing;
     let iWidth = ForkWidth(pCtx, kiSliceCount);
 
-    // Hoisted out of the fork: `WelsCodeOneSlice` wrote
-    // `sLayerInfo.sNalHeaderExt.bIdrFlag` once per slice per worker; the write is the
-    // same constant on every worker and no worker reads the field before its own
-    // write, so running it once here, on the calling thread, before anything spawns,
-    // is byte-for-byte what the race produced. See `StampLayerIdrFlagForSliceType`.
+    // Hoisted out of the fork: `sLayerInfo.sNalHeaderExt.bIdrFlag` is the same
+    // constant on every worker and no worker reads it before its own write, so it is
+    // stamped once here, on the calling thread, before anything spawns.
     crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
 
     // The pre-fork partition of the bitstream pool: the worker buffers leave the
-    // context while it is still `&mut` — the borrow that cannot coexist with the
-    // fork — so each worker's `&mut [u8]` borrows this local, never the shared
-    // context. Taken, not copied: the pool is `[Vec<u8>; MAX_THREADS_NUM]`, and
-    // moving a `Vec` moves no bytes. Restored below, after the join, behind the
-    // same `&mut`.
+    // context while it is still `&mut`, so each worker's `&mut [u8]` borrows this
+    // local and never the shared context. Moved, not copied. Restored below, after
+    // the join, behind the same `&mut`.
     let mut vTakenBsBufs: Vec<Vec<u8>> = {
         let pSmt = pCtx.pSliceThreading.as_deref_mut().expect("guarded above");
         (0..iWidth as usize)
@@ -1140,12 +1125,11 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
             .collect()
     };
 
-    // The slice bank is carved the same way. In every fixed slice mode all
-    // workers resolve bank 0, so the bank leaves the layer here, while it is
-    // still `&mut`, and its slices are distributed by the rule the fork already
-    // uses: worker `k` codes slices `k, k+iWidth, k+2*iWidth, …`, which is
-    // `i % iWidth == k`. Every slice reaches exactly one worker because
-    // `iter_mut().enumerate()` yields each element once.
+    // The slice bank is carved the same way. In every fixed slice mode all workers
+    // resolve bank 0, so the bank leaves the layer here while it is still `&mut`,
+    // and its slices are distributed by the rule the fork already uses: worker `k`
+    // codes slices `k, k+iWidth, k+2*iWidth, …`, i.e. `i % iWidth == k`. Every
+    // slice reaches exactly one worker.
     let mut vTakenBank: Vec<SSlice> = {
         let pCurDq = current_layer_expect_mut(pCtx);
         std::mem::take(&mut pCurDq.sSliceBufferInfo[0].pSliceBuffer)
@@ -1153,11 +1137,10 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
 
     // The macroblock grid is carved beside the bank — a `split_at_mut` chain over
     // `[pFirstMbIdxOfSlice[i] .. +pCountMbNumInSlice[i])`, the ranges the slice map
-    // itself was built from, and final before the fork (`SetSliceBoundaryInfo`,
-    // inside the worker, only *reads* them). Every slice index in
-    // `0..kiSliceCount` gets a window at its own position — no filtering and no
-    // reordering, because the job pairs windows with slices by `kiLocal`
-    // arithmetic.
+    // itself was built from, final before the fork (`SetSliceBoundaryInfo`, inside
+    // the worker, only reads them). Every slice index in `0..kiSliceCount` gets a
+    // window at its own position, unfiltered and unreordered, because the job pairs
+    // windows with slices by `kiLocal` arithmetic.
     let (vSliceRanges, kiGridWidth) = {
         let pCurDq = current_layer_expect(pCtx);
         let r: Vec<(i32, i32)> = (0..kiSliceCount as usize)
@@ -1235,8 +1218,8 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
         }
 
         // The persistent workers, borrowed through the shared context like
-        // everything else the jobs see. `scope` has `std::thread::scope`'s shape
-        // and its guarantee: nothing below it returns until every job has.
+        // everything else the jobs see. `scope` has `std::thread::scope`'s
+        // guarantee: nothing below it returns until every job has.
         let pool = &pCtx.pSliceThreading.as_deref().expect("guarded above").pool;
         pool.scope(|s| {
             let mut handles = Vec::with_capacity(jobs.len());
@@ -1262,16 +1245,16 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
                             iWorkerErr |= r.iResult;
                         }
                         if r.bInitFailed {
-                            // `Execute`'s early return: this task is over, and it
+                            // `Execute`'s early return: this task is over and
                             // reports nothing. The remaining slices of this worker
-                            // were separate tasks and still run, as they would have.
+                            // were separate tasks and still run.
                         }
                         iSliceIdx += job.iSliceStep;
                     }
                     iWorkerErr
                 }));
             }
-            // The join IS the barrier `WelsTaskBarrier` was.
+            // The join is the barrier (`WelsTaskBarrier`).
             for h in handles {
                 iErr |= h.join().unwrap_or(ENC_RETURN_UNEXPECTED);
             }
@@ -1298,14 +1281,11 @@ pub fn EncodeFixedSlicesForked(pCtx: &mut sWelsEncCtx, kiSliceCount: i32) -> i32
     iErr
 }
 
-/// **The fork/join for the macroblock-map update** — what
-/// `pTaskManage->InitFrame` dispatched as `WELS_ENC_TASK_UPDATEMBMAP`.
+/// The fork/join for the macroblock-map update — `pTaskManage->InitFrame`'s
+/// `WELS_ENC_TASK_UPDATEMBMAP`.
 ///
-/// Ordering, and it is the C++'s: this is a *separate* fork/join that fully joins
-/// before the encoding one starts. `InitFrame` runs at the top of
-/// `WelsInitCurrentLayer`, hundreds of lines above the encode dispatch, and its
-/// task list is drained by the same barrier before it returns. The two are not
-/// fused here because fusing them would let a slice encode against a neighbour map
+/// A separate fork/join that fully joins before the encoding one starts. The two
+/// are not fused: fusing them would let a slice encode against a neighbour map
 /// another worker had not finished writing.
 ///
 /// It fires only when `bNeedAdjustingSlicing` is set, which only
@@ -1338,10 +1318,10 @@ pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
 
     // The pre-fork partition: each slice's records are the contiguous run
     // `[pFirstMbIdxOfSlice[i] .. + pCountMbNumInSlice[i])`, and the runs are
-    // disjoint, so a chain of `split_at_mut` carves them. The grid is carved
-    // here, on the calling thread, while the layer is `&mut` — the borrow that
-    // cannot coexist with the fork — and each worker is handed its own chunks.
-    // Nothing crosses the spawn but `&mut [SMB]` and a shared `&SSliceCtx`.
+    // disjoint, so a chain of `split_at_mut` carves them. The grid is carved here,
+    // on the calling thread, while the layer is `&mut`, and each worker is handed
+    // its own chunks. Nothing crosses the spawn but `&mut [SMB]` and a shared
+    // `&SSliceCtx`.
     let SDqLayer {
         sMbDataP,
         sSliceEncCtx,
@@ -1402,26 +1382,23 @@ pub fn UpdateMbMapForked(pCtx: &mut sWelsEncCtx, kiTaskCount: i32) {
 
 /// One partition's slices under `SM_SIZELIMITED_SLICE` —
 /// `CWelsConstrainedSizeSlicingEncodingTask`'s `InitTask` / `ExecuteTask` /
-/// `FinishTask`, with the two mutexes the fork/join makes unnecessary removed and
-/// nothing else moved.
+/// `FinishTask`, without the two mutexes the fork/join makes unnecessary.
 ///
-/// **The order argument.** The claiming here was never a queue:
+/// Nothing here depends on the schedule:
 ///
 /// * there are exactly `iActiveThreadsNum` tasks, and task `t` works partition
-///   `t % iActiveThreadsNum` — which is `t`. Partition is a **static** function of
-///   the task index;
+///   `t % iActiveThreadsNum`, i.e. `t` — partition is a static function of the task
+///   index;
 /// * the slice indices a partition produces are `t`, `t + N`, `t + 2N`, ... with
-///   `N = iActiveThreadsNum` — a **static** arithmetic progression, stamped into
+///   `N = iActiveThreadsNum`, a static arithmetic progression stamped into
 ///   `SSlice::iSliceIdx`;
 /// * `ReOrderSliceInLayer` (after the join, on the calling thread) recovers the
 ///   layer position from that stamp alone — `iSliceIdx % N` gives the partition and
 ///   `iSliceIdx / N` the position within it — never from which bank held the slice.
 ///
-/// So the *only* schedule-dependent quantity today is which bank/bs-slot a partition
-/// borrows, and `ReOrderSliceInLayer` is blind to it. Worker `p` owns partition `p`,
-/// bank `p` and bs slot `p`, which also makes `NumSliceCodedOfPartition[p]` and
-/// `LastCodedMbIdxOfPartition[p]` — written from inside the encode — disjoint by
-/// construction.
+/// Worker `p` owns partition `p`, bank `p` and bs slot `p`, which also makes
+/// `NumSliceCodedOfPartition[p]` and `LastCodedMbIdxOfPartition[p]` — written from
+/// inside the encode — disjoint by construction.
 fn EncodeOnePartitionSizeLimited(
     pCtx: &sWelsEncCtx,
     iPartitionIdx: i32,
@@ -1471,9 +1448,8 @@ fn EncodeOnePartitionSizeLimited(
     }
     // The last coded slice is a remembered *index*, stamped after the loop.
     let mut kiLastCodedSlot: Option<usize> = None;
-    // `CWelsConstrainedSizeSlicingEncodingTask` derives from the load-balancing task,
-    // not from `CWelsSliceEncodingTask`, so it stamps the slice time *unconditionally*
-    // — `bUseLoadBalancing` does not gate this one (`wels_task_encoder.h:110`).
+    // The slice time is stamped unconditionally here: `bUseLoadBalancing` does not
+    // gate this task (`wels_task_encoder.h:110`).
     let iSliceStart = WelsTime();
 
     // ---- ExecuteTaskConstrainedSize
@@ -1599,8 +1575,8 @@ fn EncodeOnePartitionSizeLimited(
     }
 }
 
-/// **The fork/join for `SM_SIZELIMITED_SLICE`** — what
-/// `pTaskManage->ExecuteTasks(WELS_ENC_TASK_ENCODING)` did on the dynamic path.
+/// The fork/join for `SM_SIZELIMITED_SLICE` —
+/// `pTaskManage->ExecuteTasks(WELS_ENC_TASK_ENCODING)` on the dynamic path.
 ///
 /// One worker per picture partition, which is what the task count already was
 /// (`kiTaskCount = iActiveThreadsNum`, `wels_task_management.rs` `CreateTasks`).
@@ -1616,8 +1592,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
     }
     // Every partition is its own worker: the partition count is bounded by
     // `iMultipleThreadIdc` (`PicPartitionNumDecision`), which is also the bs-buffer
-    // count, so the bound is met with equality rather than by clamping. The
-    // `min` is kept as the enforcement, not as an expectation.
+    // count, so the bound holds with equality. `ForkWidth`'s `min` enforces it.
     let iWidth = ForkWidth(pCtx, kiPartitionCnt);
     debug_assert_eq!(
         iWidth, kiPartitionCnt,
@@ -1628,11 +1603,9 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
     crate::encoder::svc_encode_slice::StampLayerIdrFlagForSliceType(pCtx);
 
     // The pre-fork partition of the bitstream pool: the worker buffers leave the
-    // context while it is still `&mut` — the borrow that cannot coexist with the
-    // fork — so each worker's `&mut [u8]` borrows this local, never the shared
-    // context. Taken, not copied: the pool is `[Vec<u8>; MAX_THREADS_NUM]`, and
-    // moving a `Vec` moves no bytes. Restored below, after the join, behind the
-    // same `&mut`.
+    // context while it is still `&mut`, so each worker's `&mut [u8]` borrows this
+    // local and never the shared context. Moved, not copied. Restored below, after
+    // the join, behind the same `&mut`.
     let mut vTakenBsBufs: Vec<Vec<u8>> = {
         let pSmt = pCtx.pSliceThreading.as_deref_mut().expect("guarded above");
         (0..iWidth as usize)
@@ -1658,10 +1631,9 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
             .map(|p| {
                 let first = pCurDq.FirstMbIdxOfPartition[p];
                 let end = pCurDq.EndMbIdxOfPartition[p];
-                // A partition whose span is zero codes NOTHING, and the count must
-                // say so. `EncodeOnePartitionSizeLimited` above is the authority —
-                // `iDiffMbIdx == 0` stamps `iSliceIdx = -1` and returns before it
-                // reads the window — and this is the same rule at the carve.
+                // A partition whose span is zero codes nothing, and the count must
+                // say so: `EncodeOnePartitionSizeLimited`'s `iDiffMbIdx == 0` guard
+                // stamps `iSliceIdx = -1` and returns before it reads the window.
                 // `WelsInitCurrentQBLayerMltslc` clamps `iPartitionNum` to 1 whenever
                 // `kiMbNumInFrame / iPartitionNum` is 0 or 1, then zeroes every
                 // remaining slot, while the fork still runs `iActiveThreadsNum`
@@ -1736,7 +1708,7 @@ pub fn EncodeSizeLimitedSlicesForked(pCtx: &mut sWelsEncCtx, kiPartitionCnt: i32
             .zip(vTakenBanks.iter_mut())
         {
             let k = k as i32;
-            // The size-limited fork carries no carved *slices* — the whole bank
+            // The size-limited fork carries no carved slices — the whole bank
             // instead, owned, because it grows in-fork — plus the partition's one
             // macroblock window and the restore scratch, `None` where the buffer
             // was never allocated.
@@ -1852,14 +1824,13 @@ mod tests {
 
         {
             // The pool is reached through the same shared borrow of the owner
-            // the workers hold — production's shape exactly.
+            // the workers hold.
             let pSmtShared: &SSliceThreading = &pSmt;
             pSmtShared.pool.scope(|s| {
                 for (k, buf) in vTakenBsBufs.iter_mut().enumerate() {
                     s.spawn(move || {
-                        // Production's shape: a shared borrow of the owner held
-                        // beside this worker's `&mut` slot, both live across
-                        // the writes.
+                        // A shared borrow of the owner held beside this worker's
+                        // `&mut` slot, both live across the writes.
                         assert_eq!(pSmtShared.uiThreadBsBufferNum, WORKERS);
                         for (i, b) in buf.iter_mut().enumerate() {
                             *b = (k as u8) ^ (i as u8);
@@ -1893,8 +1864,7 @@ mod tests {
     }
 
     /// A layer with one bank of `n` slices and `ppSliceInLayer` naming them in
-    /// order — the shape `InitSliceInLayer` builds, in the two lines a test needs.
-    /// The bank is returned so it outlives the layer that points into it.
+    /// order — the shape `InitSliceInLayer` builds.
     fn layer_with_bank(n: usize) -> SDqLayer {
         let mut dq_layer = SDqLayer::default();
         dq_layer.sSliceBufferInfo[0].pSliceBuffer = (0..n).map(|_| SSlice::new()).collect();
@@ -1940,26 +1910,20 @@ mod tests {
     }
 
     /// Runs the whole encoder with `bUseLoadBalancing` on, four threads and four
-    /// slices — the exact four-term guard `WelsEncoderEncodeExt` tests before it
-    /// calls the producer — for enough frames that frame N+1's boundaries are
-    /// computed from frame N's measured times.
+    /// slices — the four-term guard `WelsEncoderEncodeExt` tests before it calls the
+    /// producer — for enough frames that frame N+1's boundaries are computed from
+    /// frame N's measured times. Boundaries depend on wall-clock times, so it
+    /// asserts structure, never bytes.
     ///
-    /// It asserts structure and never bytes, and it cannot do otherwise: the
-    /// boundaries this path produces are a function of wall-clock encode times, so
-    /// two runs of the **C++** disagree with each other; there is no reference to
-    /// compare against.
-    ///
-    /// **256x192 is forced, not chosen.** `MIN_NUM_MB_PER_SLICE` is 48, and
+    /// 256x192 is forced: `MIN_NUM_MB_PER_SLICE` is 48 and
     /// `SliceArgumentValidationFixedSliceMode` silently rewrites a request it cannot
-    /// honour down to a mode that needs no threads — so four slices need at least
-    /// 4 x 48 = 192 macroblocks, and a 16x12 grid is exactly 192. The
-    /// `vcl_nals == 4` assertion is what would catch the rewrite: on a smaller
-    /// picture every other assertion here passes while the encoder runs
-    /// single-slice, single-threaded, and the load-balancing path stays dark.
+    /// honour down to a mode that needs no threads, so four slices need at least
+    /// 4 x 48 = 192 macroblocks and a 16x12 grid is exactly 192. The
+    /// `vcl_nals == 4` assertion catches that rewrite: on a smaller picture every
+    /// other assertion passes while the encoder runs single-slice,
+    /// single-threaded.
     ///
-    /// Ignored under Miri: 192 macroblocks x 4 frames x 4 threads is roughly eight
-    /// times the work of the fork/join probe in `svc_encode_slice.rs`, which is
-    /// itself the most expensive test in the battery.
+    /// Ignored under Miri: 192 macroblocks x 4 frames x 4 threads.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn load_balancing_completes_frames_with_sane_slice_counts() {
@@ -1990,10 +1954,8 @@ mod tests {
              here: {:?}",
             frames.iter().map(|f| (f.kind, f.bytes)).collect::<Vec<_>>()
         );
-        // The assertion that keeps the test on the path it names. `DynamicAdjustSlicing`
-        // redistributes macroblocks *across* the slices; it never changes how many there
-        // are. Four every frame, or either the request was rewritten or a rebalance lost
-        // one.
+        // `DynamicAdjustSlicing` redistributes macroblocks across the slices; it never
+        // changes how many there are.
         assert!(
             frames.iter().all(|f| f.vcl_nals == 4),
             "a frame did not carry four VCL NALs, so the slice count moved under the \

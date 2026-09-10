@@ -1,49 +1,28 @@
 //! Common test helper utilities for integration tests.
 
-// **`dead_code` stays allowed here, and only here.** This file is `#[path]`-included
-// into ~14 test binaries, both benches and an example, and each of them is its own
-// crate that sees only the helpers it happens to call — so every helper is "never
-// used" from the point of view of most of them. The lint has nothing to report that
-// is true of the module as a whole, and there is no way to scope it per-consumer
-// short of duplicating the helpers. It covers the `#[path]`-included `prng` too,
-// which is live code in `src/safe/prng.rs`.
+// `#[path]`-included into several test crates, each of which uses only some helpers.
 #![allow(dead_code)]
 
 pub mod sha1;
 pub mod y4m;
 
-/// The deterministic PRNG the safe-vocabulary tests use, included from the library
-/// so that a seed printed by an in-module unit test replays identically here.
+/// The library's deterministic PRNG, so a seed printed by a unit test replays here.
 #[path = "../../src/safe/prng.rs"]
 pub mod prng;
-// The two convenience re-exports, for the same reason `dead_code` is allowed above:
-// each consumer of this module is its own crate and pulls in only one of them, or
-// neither.
 #[allow(unused_imports)]
 pub use sha1::Sha1Hasher;
 #[allow(unused_imports)]
 pub use y4m::compare_y4m_buffers;
 
-/// **Loading the shipped C++ library at runtime.**
+/// Loading a shared library at runtime, so both codecs can live in one process.
 ///
-/// Both benches measure the port against the C++ build by `dlopen`ing it and calling
-/// through the vtable it hands back; neither links it, because the point is to have
-/// both encoders live in one process on one machine with one input. The two calls
-/// that needs are POSIX-only, and `libc` does not declare Windows' equivalents at
-/// all — `libc::dlopen` simply is not in the crate's `windows` module, which is what
-/// broke the benches on this host. So the pair is behind one interface here, in the
-/// module both benches already share, rather than duplicated per platform per bench.
-///
-/// `LoadLibraryW` rather than `LoadLibraryA` so a path through a user directory with
-/// non-ASCII characters resolves; the ANSI entry point would mangle it under any
-/// code page that cannot represent it.
+/// `LoadLibraryW` rather than `LoadLibraryA`, so a path with non-ASCII characters resolves.
 pub mod dylib {
     use std::ffi::{CStr, c_void};
     use std::path::Path;
 
     /// Loads `path`, returning a null handle if it is not loadable. The handle is
-    /// never closed — a bench holds its library for the life of the process, and
-    /// unloading it under the pointers it handed out is what a crash looks like.
+    /// never closed: the library must outlive every pointer it handed out.
     #[cfg(unix)]
     pub fn open(path: &Path) -> *mut c_void {
         let Ok(c_path) = std::ffi::CString::new(path.to_str().unwrap_or_default()) else {

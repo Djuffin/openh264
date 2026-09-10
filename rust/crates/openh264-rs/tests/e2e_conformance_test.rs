@@ -1,64 +1,15 @@
 //! End-to-end conformance and FFmpeg integration tests for openh264-rs.
 //!
-//! Two families of tests, both comparing our decoder's output against a
-//! reference Y4M frame by frame:
+//! Two families of tests, both comparing the decoder's output against a reference
+//! Y4M frame by frame:
 //!
 //! * JVT conformance streams from `res/`, checked against gold `.y4m` files.
 //! * Synthetic clips encoded on the fly by ffmpeg/libx264 and cross-checked
 //!   against ffmpeg's own decode of the same bitstream. These are skipped when
 //!   ffmpeg is not on `PATH`.
 //!
-//! **No test here is `#[ignore]`d any more.** Every JVT stream in `res/` with a
-//! gold, and every ffmpeg/libx264 clip these tests build, decodes bit-exactly.
-//! What follows is the history of how that list emptied, kept because each entry
-//! names a defect this tree fixed rather than a family that "does not work".
-//!
-//! **Picture output order is no longer one of them.** The display layer used to
-//! hold a picture back until a B slice had been seen and then emit from a
-//! POC-distance heuristic; this tree replaces that with the bumping process of
-//! Annex C — output is (coded video sequence, POC) order, one picture per
-//! completed picture, with the DPB size of A.3.1 and the VUI's
-//! `max_num_reorder_frames` deciding when a picture is safe to emit. That, with
-//! explicit weighted prediction reaching both halves of an 8x4 or 4x8 B
-//! sub-partition (`rec_mb.cpp`'s `GetInterBPred`), activated four of the six
-//! tests that were ignored here before: `test_CVBS3_Sony_C`,
-//! `test_CACQP3_Sony_D`, `test_CVWP3_TOSHIBA_E` and `test_CVWP2_TOSHIBA_E`.
-//!
-//! **Neither is the slice-boundary residual.** `test_ffmpeg_multi_slice_variable_size`
-//! was ignored here as one unattributed 8x8 sub-partition of one macroblock; it is
-//! attributed now, and it was never about the slice boundary. `mv_pred.cpp`'s
-//! `PredMvBDirectSpatial` cleared a macroblock's list flags as if every sub-block
-//! were direct, so a B_8x8 with an explicit B_L1_8x8 beside an L0-only direct
-//! sub-block lost `MB_TYPE_L1` — and `GetColocatedMb` reads that word, so when the
-//! picture was later some other B picture's co-located picture (x264 writes
-//! `b-pyramid=normal` by default, which makes B pictures references) those explicit
-//! sub-blocks' list-1 motion never reached the direct derivation. Guarding the two
-//! macroblock-level clears with `bSkipOrDirect` activated this test.
-//!
-//! **And the last one was the cross-slice boundary strength.**
-//! `test_CABAST3_Sony_E` codes four slices per picture with the types changing
-//! inside the picture, and both marginal bS routines resolved *both* macroblocks'
-//! reference indices through the *filtering* slice's lists — so at a P/B boundary
-//! the neighbour's list-0 index named the wrong picture, and its list-1 indices,
-//! which a P-slice parse never writes, resolved into a phantom second reference.
-//! 14 of its 25 pictures were off by up to 3 levels on the two macroblock rows
-//! either side of that boundary. Recording each macroblock's reference *pictures*
-//! per slice (`SPicture::pRefPicture`, 8.7.2.1's "based only on which pictures are
-//! referenced") and comparing those activated this test, the last one on the list.
-//!
-//! Things that used to be on that list are not any more, and the difference is
-//! worth keeping straight. High-profile 8x8 coding is conformant on its own:
-//! `test_ffmpeg_high_cabac_8x8`, `_high_cavlc_8x8`, `_high_multi_slice` and
-//! `_high_custom_scaling_matrix` are bit-exact and run. B-slice bi-prediction was
-//! a defect until `codec/decoder/core/src/rec_mb.cpp`'s `GetInterBPred` was fixed
-//! in this tree — that fix activated eleven of the twenty tests ignored here
-//! before it. And four more decoder fixes in this tree (B_Skip internal
-//! deblocking edges, the temporal-direct reference indices reaching the
-//! MV-prediction cache, a co-located P_8x8ref0 in `GetColocatedMb`, and the
-//! reference-list modification bound) activated three more —
-//! `test_CABA3_SVA_B`, `test_CAWP5_TOSHIBA_E`, `test_ffmpeg_main` — and turned
-//! the MV-prediction and reference-list families off this list entirely. The
-//! multi-slice family is off it too: every `test_ffmpeg_*multi_slice*` here runs.
+//! Every JVT stream in `res/` with a gold, and every ffmpeg/libx264 clip these tests
+//! build, decodes bit-exactly; no test here is `#[ignore]`d.
 
 #![allow(non_snake_case)]
 
@@ -164,17 +115,12 @@ fn decode_to_y4m(encoded_video_buffer: &[u8]) -> Result<Vec<u8>, String> {
             );
             process_frame(p_dst, &buf_info);
 
-            // The null `DecodeFrame2` that `h264dec` follows every NAL with:
-            // `h264dec.cpp:418-430` on the `-legacy` path — its own zeroed
-            // `SBufferInfo`, and whatever frame it returns written out, which is
-            // the shape here — and `DecodeFrameNoDelay` (`welsDecoderExt.cpp:720-725`)
-            // otherwise. It constructs the access unit the NAL completed instead
-            // of leaving it pending, and that is observable: a same-id PPS
+            // A null `DecodeFrame2` after every NAL, the call sequence the golds are
+            // refereed against. It constructs the access unit the NAL completed
+            // instead of leaving it pending, which is observable: a same-id PPS
             // arriving next is parked in the spare slot for
             // `WriteBackActiveParameters` rather than overwriting `sPpsBuffer[id]`
-            // in place under the pending picture (`au_parser.cpp:1458` against
-            // `:1465`). Every gold in this file is refereed against `h264dec`, so
-            // the call sequence has to be `h264dec`'s.
+            // in place under the pending picture.
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
             let _ = ISVCDecoder::DecodeFrame2(
@@ -246,80 +192,65 @@ fn test_decoding_against_gold(
 
 #[test]
 pub fn test_NL1_Sony_D() -> Result<(), String> {
-    // All slices are coded as I slices. Each picture contains only one slice.
-    // disable_deblocking_filter_idc is equal to 1, specifying disabling of the deblocking filter process.
+    // I slices, one slice per picture. Deblocking disabled
+    // (disable_deblocking_filter_idc=1).
     test_decoding_against_gold("res/NL1_Sony_D.jsv", "res/NL1_Sony_D.y4m")
 }
 
 #[test]
 pub fn test_SVA_NL1_B() -> Result<(), String> {
-    // All slices are coded as I slices. Each picture contains only one slice.
-    // disable_deblocking_filter_idc is equal to 1, specifying disabling of the deblocking filter process.
+    // I slices, one slice per picture. Deblocking disabled
+    // (disable_deblocking_filter_idc=1).
     test_decoding_against_gold("res/SVA_NL1_B.264", "res/SVA_NL1_B.y4m")
 }
 
 #[test]
 pub fn test_BA1_Sony_D() -> Result<(), String> {
-    // Decoding of I slices with the deblocking filter process enabled.
-    // All slices are coded as I slices. Each picture contains only one slice.
+    // I slices, one slice per picture. Deblocking enabled.
     test_decoding_against_gold("res/BA1_Sony_D.jsv", "res/BA1_Sony_D.y4m")
 }
 
 #[test]
 pub fn test_NL2_Sony_H() -> Result<(), String> {
-    // Decoding of P slices.
-    // All slices are coded as I or P slices. Each picture contains only one slice.
-    // disable_deblocking_filter_idc is equal to 1, specifying disabling of the deblocking filter process.
-    // pic_order_cnt_type is equal to 0.
-    // h264 (Constrained Baseline), yuv420p(progressive), 176x144
+    // I/P slices, one slice per picture. Deblocking disabled. POC type 0.
+    // Constrained Baseline, yuv420p progressive, 176x144.
     test_decoding_against_gold("res/NL2_Sony_H.jsv", "res/NL2_Sony_H.y4m")
 }
 
 #[test]
 pub fn test_SVA_BA2_D() -> Result<(), String> {
-    // Decoding of I or P slices. Each picture contains only one slice.
-    // deblocking filter process enabled.
-    // pic_order_cnt_type is equal to 2.
+    // I/P slices, one slice per picture. Deblocking enabled. POC type 2.
     test_decoding_against_gold("res/SVA_BA2_D.264", "res/SVA_BA2_D_rec.y4m")
 }
 
 #[test]
 pub fn test_BA2_Sony_F() -> Result<(), String> {
-    // Decoding of I or P slices. Each picture contains only one slice.
-    // deblocking filter process enabled.
-    // pic_order_cnt_type is equal to 0.
+    // I/P slices, one slice per picture. Deblocking enabled. POC type 0.
     test_decoding_against_gold("res/BA2_Sony_F.jsv", "res/BA2_Sony_F.y4m")
 }
 
 #[test]
 pub fn test_CANL1_TOSHIBA_G() -> Result<(), String> {
-    // All slices are coded as I slices. Each picture contains only one slice. disable_deblocking_filter_idc is equal
-    // to 1, specifying disabling of the deblocking filter process. entropy_coding_mode_flag is equal to 1, specifying the
-    // CABAC parsing process. pic_order_cnt_type is equal to 2.
+    // I slices, one slice per picture. Deblocking disabled. CABAC. POC type 2.
     test_decoding_against_gold("res/CANL1_TOSHIBA_G.264", "res/CANL1_TOSHIBA_G_dec.y4m")
 }
 
 #[test]
 pub fn test_CANL1_Sony_E() -> Result<(), String> {
-    // All slices are coded as I slices. Each picture contains only one slice. disable_deblocking_filter_idc is equal
-    // to 1, specifying disabling of the deblocking filter process. entropy_coding_mode_flag is equal to 1, specifying the
-    // CABAC parsing process. pic_order_cnt_type is equal to 0.
+    // I slices, one slice per picture. Deblocking disabled. CABAC. POC type 0.
     test_decoding_against_gold("res/CANL1_Sony_E.jsv", "res/CANL1_Sony_E.y4m")
 }
 
 #[test]
 pub fn test_CANL2_Sony_E() -> Result<(), String> {
-    // All slices are coded as I or P slices. Each picture contains only one slice. disable_deblocking_filter_idc is
-    // equal to 1, specifying disabling of the deblocking filter process. entropy_coding_mode_flag is equal to 1, specifying the
-    // CABAC parsing process. pic_order_cnt_type is equal to 0.
+    // I/P slices, one slice per picture. Deblocking disabled. CABAC. POC type 0.
     test_decoding_against_gold("res/CANL2_Sony_E.jsv", "res/CANL2_Sony_E.y4m")
 }
 
 #[test]
 pub fn test_CABA2_SVA_B() -> Result<(), String> {
-    // Decoding of I or P slices with CABAC and the deblocking filter process enabled.
-    // Each picture contains only one slice. entropy_coding_mode_flag is equal to 1, specifying the
-    // CABAC parsing process. pic_order_cnt_type is equal to 0. num_ref_frames is equal to 5.
+    // I/P slices, one slice per picture. Deblocking enabled. CABAC. POC type 0.
+    // num_ref_frames=5.
     test_decoding_against_gold("res/CABA2_SVA_B.264", "res/CABA2_SVA_B_rec.y4m")
 }
 
@@ -367,9 +298,8 @@ pub fn test_CAWP5_TOSHIBA_E() -> Result<(), String> {
 
 #[test]
 pub fn test_SVA_Base_B() -> Result<(), String> {
-    // Multi-slice picture, 3 slices per picture. CAVLC. IP slices, POC type 2,
-    // 5 ref frames. disable_deblocking_filter_idc=0 -- picture-level deblocking
-    // filters across slice boundaries.
+    // 3 slices per picture. CAVLC. I/P slices, POC type 2, 5 ref frames.
+    // disable_deblocking_filter_idc=0, so deblocking filters across slice boundaries.
     test_decoding_against_gold("res/SVA_Base_B.264", "res/SVA_Base_B_rec.y4m")
 }
 
@@ -384,11 +314,10 @@ pub fn test_CACQP3_Sony_D() -> Result<(), String> {
 
 #[test]
 pub fn test_CABAST3_Sony_E() -> Result<(), String> {
-    // Multi-slice picture: 4 slices per picture at first_mb_in_slice
-    // 0 / 99 / 198 / 297, with the slice types changing *inside* the picture —
-    // I/P/I/P in the reference pictures, I/P/B/I in the non-reference ones — and
-    // deblocking filtering across the boundaries between them. 25 pictures.
-    // CABAC. IPB slices, POC type 0, 1 ref frame, temporal direct prediction.
+    // 4 slices per picture at first_mb_in_slice 0 / 99 / 198 / 297, with the slice
+    // types changing inside the picture — I/P/I/P in the reference pictures, I/P/B/I
+    // in the non-reference ones — and deblocking across the boundaries between them.
+    // 25 pictures. CABAC. IPB slices, POC type 0, 1 ref frame, temporal direct.
     test_decoding_against_gold("res/CABAST3_Sony_E.jsv", "res/CABAST3_Sony_E.y4m")
 }
 
@@ -481,8 +410,7 @@ fn ffmpeg_roundtrip(tmp_dir_name: &str, encode_args: &[&str]) -> Result<(), Stri
 
 #[test]
 fn test_ffmpeg_baseline() -> Result<(), String> {
-    // Generate H.264 baseline stream using ffmpeg
-    // We use -pix_fmt yuv420p to ensure it's compatible with baseline profile
+    // Baseline profile; -pix_fmt yuv420p keeps the stream baseline-compatible.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_baseline",
         &[
@@ -504,10 +432,8 @@ fn test_ffmpeg_baseline() -> Result<(), String> {
 
 #[test]
 fn test_ffmpeg_main() -> Result<(), String> {
-    // Generate H.264 main stream using ffmpeg.
-    // -bf 8: Allow up to 8 consecutive B-frames.
-    // -b_strategy 0: Disable adaptive B-frame placement to force the maximum number of B-frames.
-    // -coder 1: Explicitly force CABAC entropy coding.
+    // Main profile. -bf 8: up to 8 consecutive B-frames. -b_strategy 0: no adaptive
+    // B-frame placement, forcing the maximum number of them. -coder 1: CABAC.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_main",
         &[
@@ -535,10 +461,9 @@ fn test_ffmpeg_main() -> Result<(), String> {
 
 #[test]
 fn test_ffmpeg_multiple_reference_frames() -> Result<(), String> {
-    // Multiple Reference Frames (-refs 5)
-    // Force the encoder to keep a deeper history of frames to use for prediction.
-    // This stresses the DPB memory management control operations (MMCO) and sliding window algorithms.
-    // It ensures the decoder correctly maps ref_idx to the right historical frame in ref_pic_list0 and ref_pic_list1.
+    // `-refs 5` keeps a deeper prediction history, exercising the DPB memory
+    // management control operations and the sliding window, and the mapping from
+    // ref_idx to the right picture in ref_pic_list0 / ref_pic_list1.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_multiple_reference_frames",
         &[
@@ -562,9 +487,7 @@ fn test_ffmpeg_multiple_reference_frames() -> Result<(), String> {
 
 #[test]
 fn test_ffmpeg_weighted_prediction() -> Result<(), String> {
-    // Weighted Prediction (-x264-params weightp=2:weightb=1)
-    // Weighted prediction allows the encoder to apply a multiplier and offset
-    // to reference frames to handle fades or lighting changes.
+    // `weightp=2:weightb=1`: a multiplier and offset applied to reference frames.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_weighted_prediction",
         &[
@@ -588,8 +511,7 @@ fn test_ffmpeg_weighted_prediction() -> Result<(), String> {
 
 #[test]
 fn test_ffmpeg_cavlc_b_frames() -> Result<(), String> {
-    // CAVLC with B-Frames (-coder 0 on Main Profile)
-    // While Main profile usually defaults to CABAC, it still fully supports CAVLC.
+    // CAVLC with B-frames: `-coder 0` on Main profile, which defaults to CABAC.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_cavlc_b_frames",
         &[
@@ -615,10 +537,9 @@ fn test_ffmpeg_cavlc_b_frames() -> Result<(), String> {
 
 #[test]
 fn test_ffmpeg_dpb_flush_idr() -> Result<(), String> {
-    // Force IDR frames often with B-frames in between so that IDR has to flush them.
-    // -g 5:  Sets GOP size to 5, forcing an IDR frame every 5 frames.
-    // -bf 3: Allows up to 3 consecutive B-frames, increasing the chance they
-    //        are held in the DPB when the next IDR frame forces a flush.
+    // Frequent IDR frames with B-frames in between, so an IDR has to flush them.
+    // -g 5: an IDR frame every 5 frames. -bf 3: up to 3 consecutive B-frames, likely
+    // still in the DPB when the next IDR arrives.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_dpb_flush_idr",
         &[
@@ -670,11 +591,9 @@ fn test_ffmpeg_all_intra() -> Result<(), String> {
     // All-intra stream: every frame is an IDR I-frame.
     // -g 1:                        GOP size of 1 forces an IDR frame every frame.
     // -bf 0:                       Disable B-frames (no inter-prediction at all).
-    // keyint=1:min-keyint=1:       Belt-and-braces -- tell x264 directly that every
-    //                              frame must be a keyframe, overriding any scenecut
-    //                              heuristics that might otherwise emit P-frames.
-    // scenecut=0:                  Disable scenecut detection since it's irrelevant
-    //                              when every frame is already a keyframe.
+    // keyint=1:min-keyint=1:       Every frame must be a keyframe, overriding any
+    //                              scenecut heuristics that would emit P-frames.
+    // scenecut=0:                  Disable scenecut detection.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_all_intra",
         &[
@@ -702,11 +621,10 @@ fn test_ffmpeg_all_intra() -> Result<(), String> {
 
 #[test]
 fn test_ffmpeg_high_cavlc_8x8() -> Result<(), String> {
-    // High profile + CAVLC + 8x8 transform with deblocking enabled.
-    // -profile:v high:    High profile enables the 8x8 transform and 8x8 intra prediction.
-    // -coder 0:           Force CAVLC entropy coding (High profile defaults to CABAC).
-    // 8x8dct=1:           Explicitly enable transform_8x8_mode_flag so blocks exercise the
-    //                     8x8 residual / intra prediction paths rather than only 4x4.
+    // High profile + CAVLC + 8x8 transform, deblocking enabled. -profile:v high
+    // enables the 8x8 transform and 8x8 intra prediction, -coder 0 forces CAVLC, and
+    // 8x8dct=1 sets transform_8x8_mode_flag so blocks take the 8x8 residual and
+    // intra-prediction paths rather than only 4x4.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_high_cavlc_8x8",
         &[
@@ -732,11 +650,10 @@ fn test_ffmpeg_high_cavlc_8x8() -> Result<(), String> {
 
 #[test]
 fn test_ffmpeg_high_cabac_8x8() -> Result<(), String> {
-    // High profile + CABAC + 8x8 transform. Mirrors test_ffmpeg_high_cavlc_8x8
-    // but uses -coder 1 (CABAC, the default High-profile coder) to exercise the
-    // 8x8 CABAC residual path: ctxBlockCat=5, Table 9-43 ctxIdxInc mapping,
-    // 64-coefficient sig-coeff/last parsing, and luma_level8x8 storage. P-frame
-    // inter MBs with 8x8 DCT also exercise the transform_size_8x8_flag CABAC bin.
+    // High profile + CABAC + 8x8 transform: the 8x8 CABAC residual path —
+    // ctxBlockCat=5, Table 9-43 ctxIdxInc mapping, 64-coefficient sig-coeff/last
+    // parsing, luma_level8x8 storage — plus the transform_size_8x8_flag bin on
+    // P-frame inter macroblocks.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_high_cabac_8x8",
         &[
@@ -763,11 +680,9 @@ fn test_ffmpeg_high_cabac_8x8() -> Result<(), String> {
 #[test]
 fn test_ffmpeg_high_custom_scaling_matrix() -> Result<(), String> {
     // High profile + CABAC + 8x8 transform + custom scaling matrices.
-    // cqm=jvt tells x264 to emit the JVT default scaling matrices (non-flat),
-    // which sets seq_scaling_matrix_present_flag=1 in the SPS and exercises
-    // the full custom scaling path: SPS parsing of scaling_list(), rule-A
-    // fallback resolution, and the weight_scale used in the inverse
-    // quantization of 4x4 luma/chroma and 8x8 luma residuals.
+    // cqm=jvt emits the non-flat JVT default scaling matrices, exercising the custom
+    // scaling path: parsing of scaling_list(), rule-A fallback resolution, and the
+    // weight_scale used to dequantise 4x4 luma/chroma and 8x8 luma residuals.
     let Some((encoded_data, expected_y4m)) = ffmpeg_encode(
         "target/tmp_ffmpeg_high_custom_scaling_matrix",
         &[
@@ -793,10 +708,8 @@ fn test_ffmpeg_high_custom_scaling_matrix() -> Result<(), String> {
         return Ok(());
     };
 
-    // Sanity check, before comparing pixels: the encoded stream really does
-    // signal a custom scaling matrix. If ffmpeg/x264 silently ignored the cqm
-    // setting, the y4m comparison below would still pass with flat matrices,
-    // so probe the bitstream to make sure the feature was exercised at all.
+    // The comparison below would pass with flat matrices too, so check first that the
+    // encoded stream really does signal a custom scaling matrix.
     assert!(
         stream_signals_custom_scaling_matrix(&encoded_data),
         "expected a custom scaling matrix in the SPS or PPS; x264 may not have honored cqm=jvt"
@@ -809,10 +722,9 @@ fn test_ffmpeg_high_custom_scaling_matrix() -> Result<(), String> {
 
 #[test]
 fn test_ffmpeg_baseline_multi_slice() -> Result<(), String> {
-    // Baseline profile, 4 slices per picture. CAVLC, I/P only.
-    // disable_deblocking_filter_idc defaults to 0 (filter across all edges),
-    // so this exercises picture-level deblocking with cross-slice edges and
-    // the boundary state machine across many slice transitions.
+    // Baseline profile, 4 slices per picture, CAVLC, I/P only.
+    // disable_deblocking_filter_idc defaults to 0, so deblocking runs across all
+    // edges, including the cross-slice ones.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_baseline_multi_slice",
         &[
@@ -868,10 +780,9 @@ fn test_ffmpeg_main_multi_slice() -> Result<(), String> {
 
 #[test]
 fn test_ffmpeg_high_multi_slice() -> Result<(), String> {
-    // High profile (8x8 transform) with 3 slices per picture. Confirms the
-    // 8x8 deblocking branch (filter only at the 8-sample MB boundary) picks
-    // the right per-slice deblock parameters when transform_size_8x8_flag
-    // is set across slices.
+    // High profile (8x8 transform), 3 slices per picture: the 8x8 deblocking branch
+    // (filtering only at the 8-sample macroblock boundary) must pick the right
+    // per-slice deblock parameters when transform_size_8x8_flag is set across slices.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_high_multi_slice",
         &[
@@ -897,10 +808,9 @@ fn test_ffmpeg_high_multi_slice() -> Result<(), String> {
 
 #[test]
 fn test_ffmpeg_multi_slice_variable_size() -> Result<(), String> {
-    // Variable slice size via `slice-max-mbs`. Tests next_mb_addr tracking when
-    // slices have non-uniform MB counts within a picture.
-    // 432x240 = 27x15 = 405 MBs; max-mbs=120 yields 3-4 slices per picture
-    // with varying sizes (last slice typically smaller).
+    // Variable slice size via `slice-max-mbs`: next_mb_addr tracking when slices have
+    // non-uniform macroblock counts within a picture. 432x240 = 27x15 = 405 MBs, so
+    // max-mbs=120 yields 3-4 slices per picture of differing sizes.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_multi_slice_variable_size",
         &[
@@ -926,10 +836,9 @@ fn test_ffmpeg_multi_slice_variable_size() -> Result<(), String> {
 
 #[test]
 fn test_ffmpeg_multi_slice_weighted() -> Result<(), String> {
-    // Multi-slice combined with weighted prediction. Each slice carries its
-    // own `pred_weight_table`; this confirms that picture-scope deblocking
-    // and motion field assembly stay correct when slice-scoped state varies
-    // across slices of the same picture.
+    // Multi-slice with weighted prediction: each slice carries its own
+    // `pred_weight_table`, so picture-scope deblocking and motion field assembly must
+    // stay correct while slice-scoped state varies within a picture.
     ffmpeg_roundtrip(
         "target/tmp_ffmpeg_multi_slice_weighted",
         &[
@@ -957,8 +866,8 @@ fn test_ffmpeg_multi_slice_weighted() -> Result<(), String> {
     )
 }
 
-/// Just enough bitstream plumbing to answer one question about an encoded
-/// stream: did its SPS signal a custom scaling matrix?
+/// Just enough bitstream plumbing to answer one question: did the stream signal a
+/// custom scaling matrix?
 struct BitReader<'a> {
     data: &'a [u8],
     bit_pos: usize,
@@ -1035,8 +944,7 @@ fn nal_payload(unit: &[u8]) -> Option<(u8, Vec<u8>)> {
 /// either `seq_scaling_matrix_present_flag` (SPS) or
 /// `pic_scaling_matrix_present_flag` (PPS).
 ///
-/// Both have to be checked: which one x264 uses for `cqm=jvt` depends on the
-/// build. ffmpeg 8.1.2 puts them in the PPS and leaves the SPS flag clear.
+/// Both have to be checked: which one x264 uses for `cqm=jvt` depends on the build.
 fn stream_signals_custom_scaling_matrix(stream: &[u8]) -> bool {
     for unit in split_annexb_units(stream) {
         let Some((nal_type, rbsp)) = nal_payload(unit) else {

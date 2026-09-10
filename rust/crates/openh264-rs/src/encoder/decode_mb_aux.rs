@@ -1,14 +1,11 @@
-//! Port of the reconstruction half of `codec/encoder/core/src/decode_mb_aux.cpp` —
-//! the dequantisation and inverse-transform kernels, plus
+//! Dequantisation and inverse-transform reconstruction kernels, plus
 //! `WelsInitReconstructionFuncs`, which installs them.
 //!
-//! `WelsIHadamard4x4Dc`, `WelsDequantLumaDc4x4`, `WelsDequantIHadamard2x2Dc`,
-//! `WelsIDctT4Rec_c` and `WelsIDctFourT4Rec_c` were already ported into
-//! `svc_encode_mb.rs`; they are re-exported here so the table filler reads like the
-//! C++ and so this module is the single place that describes the file.
+//! `codec/encoder/core/src/decode_mb_aux.cpp`.
 //!
-//! Only the `_c` scalar variants exist. The SIMD overrides in the C++ are behind
-//! `uiCpuFlag` tests that do not fire on any target this port builds for.
+//! `WelsIHadamard4x4Dc`, `WelsDequantLumaDc4x4`, `WelsDequantIHadamard2x2Dc`,
+//! `WelsIDctT4Rec_c` and `WelsIDctFourT4Rec_c` live in `svc_encode_mb.rs` and are
+//! re-exported here.
 
 #![allow(non_snake_case)]
 #![forbid(unsafe_code)]
@@ -33,18 +30,16 @@ use crate::encoder::svc_encode_mb::g_kuiDequantCoeff;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 
 use crate::common::cpu_core::WELS_CPU_SSE2;
-/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
-/// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
-/// site because the kernels share their names with the scalars in this module — which
-/// is the point of the naming, and the reason the module qualifier has to stay.
+/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
+/// default, `simd::wide` under `--features wide`. The `kernels::` qualifier separates
+/// them from the like-named scalars in this module.
 use crate::simd::kernels;
 
 /// Inverse 4x4 Hadamard of the luma DC block, then scale by the
 /// dequantisation multiplier. The qp >= 12 path (the qp < 12 path is
 /// [`ihadamard_4x4_dc`] + [`dequant_luma_dc_4x4`]).
 ///
-/// All arithmetic is wrapping `i16`, equal to the C++'s `int` arithmetic
-/// narrowed at every `int16_t` store, so it is total over the full input range.
+/// All arithmetic is wrapping `i16`, so it is total over the full input range.
 ///
 /// C++: `WelsDequantIHadamard4x4_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
@@ -107,9 +102,7 @@ pub fn idct_rec_i16x16_dc(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, 
     kernels::dct::idct_rec_i16x16_dc(rec, pred, dc)
 }
 
-/// The scalar body of [`idct_rec_i16x16_dc`], never dispatched. Kept separate so the parity
-/// tests have a reference that is guaranteed not to route back into
-/// the kernel under test.
+/// Scalar reference body of [`idct_rec_i16x16_dc`]; never dispatched.
 pub fn idct_rec_i16x16_dc_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc: &[i16; 16]) {
     for i in 0..16usize {
         let r: &mut [u8; 16] = rec.row_mut(i as isize, 0, 16).try_into().unwrap();
@@ -124,26 +117,16 @@ pub fn idct_rec_i16x16_dc_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>
 /// 4x4 inverse integer DCT of `dct`, added to the prediction block and
 /// saturated into the reconstruction block.
 ///
-/// The horizontal pass narrows each intermediate with `as i16`
-/// (`iTemp[16]` is `int16_t` in the C++ and the sums can exceed it — the
-/// truncation is observable and load-bearing); the vertical pass and the
-/// `+32 >> 6` rounding run in `i32`, total over the full coefficient range.
-///
-/// **That last sentence is a claim about the dispatched path, not only this one.**
-/// It was true of the `_c` body alone for a while: the SSE2 kernel this dispatches to
-/// on x86_64 ran its vertical pass in `epi16` and wrapped where this saturates, so the
-/// same stream decoded differently per architecture. `compute_idct_residuals`
-/// widened to `epi32` and the two now agree over the whole `i16` coefficient range,
-/// which `simd::x86_64::dct::tests` exercises rather than assumes.
+/// The horizontal pass narrows each intermediate with `as i16`; that truncation is
+/// observable and load-bearing. The vertical pass and the `+32 >> 6` rounding run in
+/// `i32`, total over the full coefficient range.
 ///
 /// C++: `WelsIDctT4Rec_c`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
     kernels::dct::idct_t4_rec(rec, pred, dct)
 }
 
-/// The scalar body of [`idct_t4_rec`], never dispatched. Kept separate so the parity
-/// tests have a reference that is guaranteed not to route back into
-/// the kernel under test.
+/// Scalar reference body of [`idct_t4_rec`]; never dispatched.
 pub fn idct_t4_rec_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
@@ -156,18 +139,12 @@ pub fn idct_t4_rec_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: 
 }
 
 /// [`idct_t4_rec`] with the prediction already *in* `rec` — the inter-macroblock
-/// reconstruction, where the C++ passes the reconstruction plane as both `pRec`
-/// and `pPred` (`OutputPMbWithoutConstructCsRsNoCopy`, `svc_encode_slice.cpp`) and
-/// the kernel adds each residual to the sample it then overwrites. Same
-/// arithmetic, one cursor: the sample is read where [`idct_t4_rec`] reads
-/// `pred`, and written where it writes `rec`.
+/// reconstruction: each residual is added to the sample it then overwrites.
 pub fn idct_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
     kernels::dct::idct_t4_rec_in_place(rec, dct)
 }
 
-/// The scalar body of [`idct_t4_rec_in_place`], never dispatched. Kept separate so the parity
-/// tests have a reference that is guaranteed not to route back into
-/// the kernel under test.
+/// Scalar reference body of [`idct_t4_rec_in_place`]; never dispatched.
 pub fn idct_t4_rec_in_place_c(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
@@ -179,8 +156,7 @@ pub fn idct_t4_rec_in_place_c(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
 }
 
 /// The transform half of [`idct_t4_rec`]: the 4x4 residual before the
-/// `+32 >> 6` rounding and the add to the prediction. Shared by the two-plane and
-/// the in-place reconstruction so the arithmetic exists once.
+/// `+32 >> 6` rounding and the add to the prediction.
 #[inline]
 fn idct_t4_residual(dct: &[i16; 16]) -> [[i32; 4]; 4] {
     let mut tmp = [0i16; 16];
@@ -198,9 +174,8 @@ fn idct_t4_residual(dct: &[i16; 16]) -> [[i32; 4]; 4] {
         tmp[idx + 3] = (sum_u - sum_d) as i16;
     }
 
-    // The C++ walks columns with four strided stores each; every sample is
-    // written exactly once, so transposing to row-major is bit-exact and each
-    // row becomes one bounds check and a fixed-size window.
+    // Every sample is written exactly once, so the vertical pass emits row-major:
+    // one bounds check and a fixed-size window per row.
     let mut res = [[0i32; 4]; 4];
     for i in 0..4usize {
         let sum_l = tmp[i] as i32 + tmp[8 + i] as i32;
@@ -223,9 +198,8 @@ pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dc
     kernels::dct::idct_four_t4_rec(rec, pred, dct)
 }
 
-/// The scalar body of [`idct_four_t4_rec`], never dispatched. Kept separate so the parity
-/// tests have a reference that is guaranteed not to route back into the kernel
-/// under test — which is why its inner calls name the `_c` bodies too.
+/// Scalar reference body of [`idct_four_t4_rec`]; never dispatched, and its inner
+/// calls name the `_c` bodies.
 pub fn idct_four_t4_rec_c(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 64]) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
@@ -239,9 +213,8 @@ pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) 
     kernels::dct::idct_four_t4_rec_in_place(rec, dct)
 }
 
-/// The scalar body of [`idct_four_t4_rec_in_place`], never dispatched. Kept separate so the parity
-/// tests have a reference that is guaranteed not to route back into the kernel
-/// under test — which is why its inner calls name the `_c` bodies too.
+/// Scalar reference body of [`idct_four_t4_rec_in_place`]; never dispatched, and its
+/// inner calls name the `_c` bodies.
 pub fn idct_four_t4_rec_in_place_c(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
@@ -250,31 +223,20 @@ pub fn idct_four_t4_rec_in_place_c(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]
     }
 }
 
-/// The reconstruction-seam flavour of [`idct_t4_rec`] and friends.
+/// The reconstruction-seam flavour of [`idct_t4_rec`]: 4x4 residual added to an arena
+/// prediction, saturated into the shared view.
 ///
-/// **Why a second set rather than a generic destination.** `PlaneCursorMut::row_mut`
-/// hands out `&mut [u8]`; the seam cannot and must not, because a macroblock's
-/// contiguous plane span is the full width of its rows and a `&mut` over it would
-/// claim the neighbouring slice's columns (`rec_view`'s module docs). So the
-/// destination writes go through [`RecCursor::write_row`] by value. Everything
-/// else — the transform, the `+32 >> 6` rounding, the `WelsClip1` saturation, the
-/// `as i16` narrowing in the horizontal pass — is [`idct_t4_residual`], shared
-/// with the `PlaneCursorMut` forms so the arithmetic exists exactly once.
+/// Destination writes go through [`RecCursor::write_row`] by value rather than a
+/// `&mut [u8]`: a macroblock's contiguous plane span is the full width of its rows, so
+/// a `&mut` over it would claim the neighbouring slice's columns. The arithmetic is
+/// [`idct_t4_residual`], shared with the `PlaneCursorMut` forms.
 ///
-/// **The prediction operand is a slice, not a cursor.** Every blocked idct site
-/// takes its prediction from the macroblock cache's `sMemPredMb` arena at a fixed
-/// stride (16 for luma, 16 for the chroma pair as the C++ calls them) — a plain
-/// owned array, never the picture. The in-place pair takes no prediction at all:
-/// there `pRec` *is* `pPred`.
-///
-/// 4x4 residual added to an arena prediction, saturated into the shared view.
+/// `pred` is a flat `sMemPredMb` arena buffer at `pred_stride`, never the picture.
 pub fn idct_t4_rec_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dct: &[i16; 16]) {
     kernels::dct::idct_t4_rec_to_view(rec, pred, pred_stride, dct)
 }
 
-/// The scalar body of [`idct_t4_rec_to_view`], never dispatched. Kept separate so the parity
-/// tests have a reference that is guaranteed not to route back into the kernel
-/// under test — which is why its inner calls name the `_c` bodies too.
+/// Scalar reference body of [`idct_t4_rec_to_view`]; never dispatched.
 pub fn idct_t4_rec_to_view_c(
     rec: &RecCursor<'_>,
     pred: &[u8],
@@ -302,9 +264,8 @@ pub fn idct_four_t4_rec_to_view(
     kernels::dct::idct_four_t4_rec_to_view(rec, pred, pred_stride, dct)
 }
 
-/// The scalar body of [`idct_four_t4_rec_to_view`], never dispatched. Kept separate so the parity
-/// tests have a reference that is guaranteed not to route back into the kernel
-/// under test — which is why its inner calls name the `_c` bodies too.
+/// Scalar reference body of [`idct_four_t4_rec_to_view`]; never dispatched, and its
+/// inner calls name the `_c` bodies.
 pub fn idct_four_t4_rec_to_view_c(
     rec: &RecCursor<'_>,
     pred: &[u8],
@@ -329,9 +290,7 @@ pub fn idct_rec_i16x16_dc_to_view(
     kernels::dct::idct_rec_i16x16_dc_to_view(rec, pred, pred_stride, dc)
 }
 
-/// The scalar body of [`idct_rec_i16x16_dc_to_view`], never dispatched. Kept separate so the parity
-/// tests have a reference that is guaranteed not to route back into the kernel
-/// under test — which is why its inner calls name the `_c` bodies too.
+/// Scalar reference body of [`idct_rec_i16x16_dc_to_view`]; never dispatched.
 pub fn idct_rec_i16x16_dc_to_view_c(
     rec: &RecCursor<'_>,
     pred: &[u8],
@@ -350,16 +309,13 @@ pub fn idct_rec_i16x16_dc_to_view_c(
 }
 
 /// [`idct_t4_rec_in_place`]'s seam flavour — the inter reconstruction where the
-/// prediction is already in the picture. Reads and writes the same four
-/// rows, which `RecCursor`'s by-value `row`/`write_row` pair does without ever
-/// naming a `&mut [u8]`.
+/// prediction is already in the picture. Reads and writes the same four rows through
+/// `RecCursor`'s by-value `row`/`write_row` pair, never naming a `&mut [u8]`.
 pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
     kernels::dct::idct_t4_rec_in_place_view(rec, dct)
 }
 
-/// The scalar body of [`idct_t4_rec_in_place_view`], never dispatched. Kept separate so the parity
-/// tests have a reference that is guaranteed not to route back into the kernel
-/// under test — which is why its inner calls name the `_c` bodies too.
+/// Scalar reference body of [`idct_t4_rec_in_place_view`]; never dispatched.
 pub fn idct_t4_rec_in_place_view_c(rec: &RecCursor<'_>, dct: &[i16; 16]) {
     let res = idct_t4_residual(dct);
     for (dy, r) in res.iter().enumerate() {
@@ -377,9 +333,8 @@ pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
     kernels::dct::idct_four_t4_rec_in_place_view(rec, dct)
 }
 
-/// The scalar body of [`idct_four_t4_rec_in_place_view`], never dispatched. Kept separate so the parity
-/// tests have a reference that is guaranteed not to route back into the kernel
-/// under test — which is why its inner calls name the `_c` bodies too.
+/// Scalar reference body of [`idct_four_t4_rec_in_place_view`]; never dispatched, and
+/// its inner calls name the `_c` bodies.
 pub fn idct_four_t4_rec_in_place_view_c(rec: &RecCursor<'_>, dct: &[i16; 64]) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
@@ -389,18 +344,14 @@ pub fn idct_four_t4_rec_in_place_view_c(rec: &RecCursor<'_>, dct: &[i16; 64]) {
 }
 
 /// `WelsIDctT4RecOnMb`'s seam flavour: the 16x16 luma inter reconstruction, four
-/// 8x8 quadrants of [`idct_four_t4_rec_in_place_view`].
-///
-/// In-place only, because that is the only way its one caller ever used it —
-/// `OutputPMbWithoutConstructCsRsNoCopy` passes `pDecY` as both `pDst` and
-/// `pPred`. One cursor, one stride, no pair.
+/// 8x8 quadrants of [`idct_four_t4_rec_in_place_view`]. In-place only — one cursor,
+/// one stride.
 pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
     kernels::dct::idct_t4_rec_on_mb_in_place_view(rec, dct)
 }
 
-/// The scalar body of [`idct_t4_rec_on_mb_in_place_view`], never dispatched. Kept separate so the parity
-/// tests have a reference that is guaranteed not to route back into the kernel
-/// under test — which is why its inner calls name the `_c` bodies too.
+/// Scalar reference body of [`idct_t4_rec_on_mb_in_place_view`]; never dispatched, and
+/// its inner calls name the `_c` bodies.
 pub fn idct_t4_rec_on_mb_in_place_view_c(rec: &RecCursor<'_>, dct: &[i16; 256]) {
     const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
     for (k, &(dx, dy)) in QUADS.iter().enumerate() {
@@ -411,10 +362,9 @@ pub fn idct_t4_rec_on_mb_in_place_view_c(rec: &RecCursor<'_>, dct: &[i16; 256]) 
 
 /// Inverse 4x4 Hadamard for the I16x16 luma DC block, qp < 12 path.
 ///
-/// The additions are **plain `i16`**: with a 16x worst-case gain across the two
-/// passes, an input above `+-2047` can overflow an intermediate — a debug build
-/// panics where the C++'s `int` arithmetic narrows. In-contract DC levels are
-/// far below the threshold.
+/// The additions are plain `i16`: with a 16x worst-case gain across the two passes, an
+/// input above `+-2047` can overflow an intermediate and panic in a debug build.
+/// In-contract DC levels are far below the threshold.
 ///
 /// C++: `WelsIHadamard4x4Dc`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn ihadamard_4x4_dc(res: &mut [i16; 16]) {
@@ -485,9 +435,8 @@ pub fn dequant_ihadamard_2x2_dc(dct: &mut [i16; 4], mf: u16) {
 
 /// `decode_mb_aux.cpp:251`. Installs the scalar dequantisation kernels.
 ///
-/// The C++'s three `pfIDct*` slots are not carried by `SWelsFuncPtrList` (see
-/// `abi_guard.rs`), so nothing is installed for them: the port calls those kernels
-/// by name.
+/// `SWelsFuncPtrList` carries no `pfIDct*` slots (see `abi_guard.rs`); those kernels
+/// are called by name.
 pub fn WelsInitReconstructionFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
     let fl = &mut *pFuncList;
 
@@ -509,15 +458,8 @@ mod tests {
     use crate::encoder::rec_view::shared_plane_for_test;
     use crate::safe::plane::PaddedPlane;
 
-    /// **The seam kernels' acceptance.** Each `RecCursor` form is run against its
-    /// `PlaneCursorMut` twin over *two planes built the same way*, from the same
-    /// coefficients and the same prediction, and the whole allocations are
-    /// compared — not just the block, so a write that lands one row or one column
-    /// out is a failure rather than a silent pass.
-    ///
-    /// Pseudo-random but fixed: a 64-bit LCG seeded per test, because a constant
-    /// pattern cannot tell a transposed write from a correct one and real
-    /// coefficients span the `as i16` narrowing the horizontal pass depends on.
+    /// 64-bit LCG, seeded per test. The seam tests compare whole allocations, so a
+    /// constant pattern would not distinguish a transposed write from a correct one.
     fn lcg(seed: &mut u64) -> u32 {
         *seed = seed
             .wrapping_mul(6364136223846793005)
@@ -541,14 +483,12 @@ mod tests {
     }
 
     fn noisy_coeffs<const N: usize>(seed: &mut u64) -> [i16; N] {
-        // Full `i16` range: the horizontal pass narrows with `as i16` and that
-        // truncation is load-bearing (see `idct_t4_residual`), so the test has to
-        // reach coefficients large enough to exercise it.
+        // Full `i16` range, so the `as i16` narrowing in the horizontal pass is
+        // exercised (see `idct_t4_residual`).
         core::array::from_fn(|_| (lcg(seed) as u16) as i16)
     }
 
-    /// The arena prediction operand: `sMemPredMb`'s shape — a flat owned buffer at
-    /// a fixed stride, never the picture.
+    /// The arena prediction operand: a flat owned buffer at a fixed stride.
     fn noisy_pred(seed: &mut u64, stride: usize, rows: usize) -> Vec<u8> {
         (0..stride * rows)
             .map(|_| (lcg(seed) & 0xFF) as u8)
@@ -624,9 +564,8 @@ mod tests {
         assert_eq!(pa.as_slice(), pb.as_slice());
     }
 
-    /// The in-place pair reads *and* writes the same block, so the twin planes
-    /// must start equal — which `twin_planes` guarantees — and the prediction is
-    /// whatever noise is already there.
+    /// The in-place pair reads *and* writes the same block, so the twin planes must
+    /// start equal and the prediction is whatever noise is already there.
     #[test]
     fn idct_t4_rec_in_place_view_matches_the_plane_cursor_form() {
         let mut seed = 0x2545F4914F6CDD1D;

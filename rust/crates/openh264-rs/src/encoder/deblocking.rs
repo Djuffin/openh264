@@ -27,12 +27,12 @@
 // ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-//! # In-Loop Adaptive Deblocking Filter Engine
+//! In-loop adaptive deblocking filter.
 //!
-//! Translated from `codec/encoder/core/inc/deblocking.h` and `codec/encoder/core/src/deblocking.cpp`.
+//! C++: `codec/encoder/core/inc/deblocking.h`, `codec/encoder/core/src/deblocking.cpp`.
 //!
-//! Provides boundary strength ($bS$) calculation, alpha/beta clipping threshold lookups,
-//! luma and chroma 4-sample directional edge filtering, and frame/slice macroblock raster traversal.
+//! Boundary strength ($bS$) calculation, alpha/beta clipping threshold lookups, luma and
+//! chroma 4-sample directional edge filtering, and frame/slice macroblock traversal.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 // ============================================================================
@@ -74,10 +74,8 @@ pub fn IS_INTRA(mb_type: u32) -> bool {
 // ============================================================================
 
 /// Table 8-16 in H.264/AVC standard: Alpha table indexed by clipped QP + offset (0..51 + padding)
-// `g_kuiAlphaTable`/`g_kiBetaTable`/`g_kiTc0Table` are `static const` **file-local**
-// in both codecs and are deliberately different sizes: `codec/encoder/core/src/
-// deblocking.cpp:72-92` declares `[52 + 12]`, `codec/decoder/core/src/deblocking.cpp:
-// 144-166` declares `[52 + 24]`.
+// The encoder's and decoder's copies of these three tables are file-local and sized
+// differently: `[52 + 12]` here, `[52 + 24]` in the decoder.
 pub static g_kuiAlphaTable: [u8; 52 + 12] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6, 7, 8, 9, 10, 12, 13, 15, 17, 20,
     22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 71, 80, 90, 101, 113, 127, 144, 162, 182, 203, 226,
@@ -448,25 +446,17 @@ pub fn DeblockingBSMarginalMBAvcbase(pCurMb: &SMB, pNeighMb: &SMB, iEdge: usize)
 /// cannot make.
 ///
 /// `uiBS[0][0]` is the left MB-boundary edge, `uiBS[1][0]` the top one;
-/// `uiBS[dir][1..4]` are the interior edges. The C++ writes the boundary rows
-/// through `uint32_t` punning (`*(uint32_t*)uiBS[0][0]`); a 4-byte row
-/// assignment is the same store with the type kept.
+/// `uiBS[dir][1..4]` are the interior edges.
 ///
-/// This is `DeblockingBSCalc_AArch64_neon` (`deblocking.cpp:578`) rather than
-/// `DeblockingBSCalc_c`: the kernel computes all eight edge groups from the three
-/// macroblocks' counts and vectors, and the caller then stamps `0x04040404` across a
-/// macroblock edge whose neighbour is intra — the one thing that depends on a
-/// neighbour's *type* rather than its data, and the only thing upstream's own NEON
-/// wrapper does after calling the asm. The `!iLeftFlag` / `!iTopFlag` zeroing the C++
-/// also does there is the kernel's `None` case here.
+/// The kernel computes all eight edge groups from the three macroblocks' counts and
+/// vectors; this function then stamps `0x04040404` across a macroblock edge whose
+/// neighbour is intra — the one thing that depends on a neighbour's *type* rather than
+/// its data. An absent neighbour is the kernel's `None` case.
 ///
-/// The counts are normalised in place first, and that write-back is *observable* —
-/// `DeblockingBSCalc_c` has always performed it and later readers of
-/// `iNonZeroCount` see the normalised values — so it stays, even though the kernel
-/// tests non-zero-ness and would not need it.
+/// The counts are normalised in place first, and that write-back is observable: later
+/// readers of `iNonZeroCount` see the normalised values.
 ///
-/// A flag set with the neighbour absent from the split is a bug, and
-/// [`MbSplit`]'s panic names it.
+/// A flag set with the neighbour absent from the split panics in [`MbSplit`].
 pub fn DeblockingBSCalc(
     mbs: &mut MbSplit<'_, SMB>,
     uiBS: &mut [[[u8; 4]; 4]; 2],
@@ -475,7 +465,6 @@ pub fn DeblockingBSCalc(
     iTopFlag: bool,
 ) {
     if uiCurMbType != MB_TYPE_SKIP {
-        // deblocking.cpp:615
         WelsNonZeroCount_c(&mut mbs.cur_mut().iNonZeroCount);
     }
     let cur = mbs.cur();
@@ -499,28 +488,18 @@ pub fn DeblockingBSCalc(
     }
 }
 
-/// **The boundary-strength calculation on plain data** — what every kernel set's
-/// `bs_calc` computes, and the body the scalar set forwards to.
+/// The boundary-strength calculation on plain data — what every kernel set's `bs_calc`
+/// computes, and the body the scalar set forwards to.
 ///
-/// Factored out of `DeblockingBSCalc_c` so that the strength calculation takes
-/// per-macroblock *data* rather than a window into the macroblock array: the NEON
-/// kernel reaches its neighbours the same way, and the two can therefore be held
-/// against each other directly. See
-/// [`kernels::deblock::bs_calc`](crate::simd::kernels) for the contract, which is
-/// this function's.
+/// It takes per-macroblock *data* rather than a window into the macroblock array; see
+/// [`kernels::deblock::bs_calc`](crate::simd::kernels) for the contract.
 ///
-/// # How this differs, line by line, from the three functions it replaces
-///
-/// * The macroblock edges are `DeblockingBSMarginalMBAvcbase` with its table indices
-///   spelled out, and are unchanged.
-/// * The interior edges are `DeblockingBSInsideMBNormal` with `BS_EDGE`'s
-///   `(bs | mv) << (bs != 0)` written as the test it performs — `2` when either block
-///   has a coefficient, else the vector term. The two agree exactly on counts already
-///   normalised to 0/1, which is what the caller passes, and this spelling also holds
-///   for raw counts, where `BS_EDGE`'s shift would not.
-/// * `DeblockingBSInsideMBAvsbase` (the `MB_TYPE_16x16` rule, coefficients only) and
-///   the skip macroblock's all-zero interior are `inside_mask` — `0x02` and `0x00`
-///   against this function's `0xFF` — rather than separate bodies.
+/// The interior edges use `BS_EDGE`'s `(bs | mv) << (bs != 0)` written as the test it
+/// performs: `2` when either block has a coefficient, else the vector term. That holds
+/// both for the 0/1-normalised counts the caller passes and for raw counts, where the
+/// shift would not. The `MB_TYPE_16x16` rule (coefficients only) and a skip macroblock's
+/// all-zero interior are `inside_mask` values — `0x02` and `0x00` against the default
+/// `0xFF` — rather than separate bodies.
 pub fn bs_calc_scalar(
     cur_nzc: &[i8; MB_LUMA_CHROMA_BLOCK4x4_NUM],
     cur_mv: &[SMVUnitXY; MB_BLOCK4x4_NUM],
@@ -577,10 +556,8 @@ pub fn bs_calc_scalar(
 
 /// The `inside_mask` for a macroblock kind — see [`bs_calc_scalar`].
 ///
-/// `DeblockingBSCalc_c` branches on the same three cases: a skip macroblock's interior
-/// edges are set to zero outright, `MB_TYPE_16x16` takes
-/// `DeblockingBSInsideMBAvsbase`, whose rule is the coefficient term alone, and
-/// everything else takes `DeblockingBSInsideMBNormal`.
+/// A skip macroblock's interior edges are zero, `MB_TYPE_16x16` keeps the coefficient
+/// term alone, and everything else takes the full rule.
 #[inline]
 pub fn inside_bs_mask(uiCurMbType: u32) -> u8 {
     match uiCurMbType {
@@ -601,8 +578,7 @@ pub fn WelsNonZeroCount_c(pNonZeroCount: &mut [i8; MB_LUMA_CHROMA_BLOCK4x4_NUM])
 
 /// This macroblock's three reconstruction cursors.
 ///
-/// Luma is 16 samples per macroblock and chroma 8, which is the whole
-/// content of the `<< 4` and `<< 3`.
+/// Luma is 16 samples per macroblock and chroma 8, hence the `<< 4` and `<< 3`.
 fn mb_cursors<'a>(
     view: &'a RecPicView,
     iMbX: i32,
@@ -619,11 +595,10 @@ fn mb_cursors<'a>(
 
 /// The eight directional edge dispatchers.
 ///
-/// `iStride` stays a parameter even though the cursor carries it, because it is
-/// not addressing here — it is the kernels' `step_x`/`step_y`, the linear
-/// distance between taps. Which of the two gets the stride is the whole
-/// difference between a vertical and a horizontal edge, and it is the reason the
-/// upstream slot names read backwards against these function names: `…Ver`
+/// `iStride` stays a parameter even though the cursor carries it: here it is not
+/// addressing but the kernels' `step_x`/`step_y`, the distance between taps. Which of
+/// the two gets the stride is the difference between a vertical and a horizontal edge,
+/// and it is why the upstream slot names read backwards against these names — `…Ver`
 /// steps its taps by the stride, which filters a *horizontal* edge.
 fn FilteringEdgeLumaH(
     pFilter: &SDeblockingFilter,
@@ -703,8 +678,8 @@ fn FilteringEdgeLumaIntraV(pFilter: &SDeblockingFilter, pix: &mut RecCursor<'_>,
     }
 }
 
-/// Chroma takes two cursors, one per plane: the C++ filters Cb and Cr line by
-/// line in one call, and `deblock_chroma_lt4` keeps that interleaving.
+/// Chroma takes two cursors, one per plane: `deblock_chroma_lt4` filters Cb and Cr line
+/// by line in one call.
 fn FilteringEdgeChromaH(
     pFilter: &SDeblockingFilter,
     cb: &mut RecCursor<'_>,
@@ -800,9 +775,8 @@ fn FilteringEdgeChromaIntraV(
 
 /// The inter macroblock's eight edges.
 ///
-/// The validity flags and the three plane cursors are the caller's — computed once in
-/// [`DeblockingMbAvcbase`] where the boundary strengths need them too, rather than
-/// re-derived here from the slice map and `mb_cursors` as they were.
+/// The validity flags and the three plane cursors come from the caller, computed once in
+/// [`DeblockingMbAvcbase`] where the boundary strengths need them too.
 pub fn DeblockingInterMb(
     mbs: &MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
@@ -1104,27 +1078,18 @@ pub fn DeblockingIntraMb(
     FilteringEdgeChromaHV(mbs, pFilter, pDestCb, pDestCr, iLeftFlag, iTopFlag);
 }
 
-/// One macroblock's filter, and **the one place its neighbour flags and plane cursors
-/// are computed**.
+/// One macroblock's filter, and the one place its neighbour flags and plane cursors are
+/// computed; the callees take both as arguments.
 ///
-/// Both used to be re-derived by each callee — the flags three times from the slice
-/// map, the cursors twice through `mb_cursors`, which is six `SharedPlane::cursor`
-/// constructions — for values that are the macroblock's and settled here. The C++ does
-/// the same thing in `DeblockingMbAvcbase` and passes `pFilter` down with the
-/// pointers already in it.
-///
-/// The flags are also *lazier* than the array pair they replace: `bLeftBsValid[2]`
-/// built both elements, so the slice map was read even at `uiFilterIdc == 0`, which
-/// only ever selects element 0. The read is relaxed and side-effect-free, so dropping
-/// it changes nothing but the work.
+/// The slice map is read only for the flag `uiFilterIdc` actually selects. The read is
+/// relaxed and side-effect-free, so skipping the other costs nothing.
 pub fn DeblockingMbAvcbase(
     view: &RecPicView,
     map: &[AtomicU16],
     mbs: &mut MbSplit<'_, SMB>,
     pFilter: &mut SDeblockingFilter,
 ) {
-    // deblocking.cpp:629 — `uint8_t uiBS[2][4][4]`, two 4x4 planes (vertical and
-    // horizontal edges).
+    // Two 4x4 planes of strengths: vertical edges, then horizontal.
     let mut uiBS: [[[u8; 4]; 4]; 2] = [[[0; 4]; 4]; 2];
     let cur = mbs.cur();
     let uiCurMbType = cur.uiMbType;
@@ -1201,10 +1166,8 @@ pub fn DeblockingFilterFrameAvcbase(pCurDq: &mut SDqLayer) {
 
     let map: &[AtomicU16] = &pCurDq.sSliceEncCtx.pOverallMbMap;
 
-    // The whole grid as one window: this walk is the single-threaded frame
-    // filter, the one deblocking path where the guards' `[0]` mode legitimately
-    // reads a neighbour record across a slice boundary — so its window is the
-    // grid.
+    // The whole grid as one window: the single-threaded frame filter is the one
+    // deblocking path that legitimately reads a neighbour record across a slice boundary.
     let mut mbs = MbWindow::whole(&mut pCurDq.sMbDataP, 0);
     for iMbY in 0..kiMbHeight as usize {
         for iMbX in 0..kiMbWidth as usize {
@@ -1287,9 +1250,8 @@ pub extern "C" fn PerformDeblockingFilter(pEnc: &mut sWelsEncCtx) {
         DeblockingFilterFrameAvcbase(pCurDq);
     } else if pCurDq.iLoopFilterDisableIdc == 2 {
         let iSliceCount = GetCurrentSliceNum(&*pCurDq);
-        // The layer's disjoint fields, split once — the grid becomes one
-        // whole window and each slice comes out of the banks, all from a single
-        // `&mut SDqLayer`.
+        // The layer's disjoint fields, split once: the grid becomes one whole window and
+        // each slice comes out of the banks, all from a single `&mut SDqLayer`.
         let SDqLayer {
             sMbDataP,
             sSliceEncCtx,
@@ -1377,13 +1339,10 @@ mod tests {
     // Boundary strength
     // ========================================================================
 
-    /// **The three-way scalar this replaced, kept verbatim as the test's oracle.**
-    ///
-    /// `DeblockingBSCalc_c` as it stood before the strength calculation became one
-    /// kernel over plain data: the marginal edges through
-    /// `DeblockingBSMarginalMBAvcbase`, then one of three interior bodies chosen by
-    /// the macroblock kind, with `WelsNonZeroCount_c` run over the current
-    /// macroblock's counts in between. Everything below is held against this.
+    /// The three-way scalar the tests below use as their oracle: the marginal edges
+    /// through `DeblockingBSMarginalMBAvcbase`, then one of three interior bodies chosen
+    /// by the macroblock kind, with `WelsNonZeroCount_c` run over the current
+    /// macroblock's counts in between.
     fn bs_calc_three_way(
         cur: &mut SMB,
         left: Option<&SMB>,
@@ -1507,12 +1466,9 @@ mod tests {
         }
     }
 
-    /// **The kernel and the three-way scalar agree, byte for byte, over every
-    /// combination that reaches them.**
-    ///
-    /// Both neighbour flags on and off, intra and inter neighbours, all three
-    /// macroblock kinds, raw and normalised counts, and motion vectors drawn around
-    /// the whole-sample threshold and at the ends of the 16-bit range.
+    /// The kernel and the three-way scalar agree byte for byte over both neighbour flags,
+    /// intra and inter neighbours, all macroblock kinds, raw and normalised counts, and
+    /// motion vectors around the whole-sample threshold and at the 16-bit extremes.
     #[test]
     fn the_boundary_strength_kernel_matches_the_three_way_scalar() {
         let mut r = Lcg(0x5EED_1234_ABCD_0001);
@@ -1523,9 +1479,8 @@ mod tests {
             MB_TYPE_8x16,
             MB_TYPE_8x8,
         ];
-        // 400 rounds natively; a tenth of that keeps the Miri filter for this module
-        // inside its three-minute budget, and the combinations below are what the
-        // coverage rests on rather than the round count.
+        // A tenth of the rounds under Miri, which is orders of magnitude slower; the
+        // coverage rests on the combinations below rather than the round count.
         for round in 0..if cfg!(miri) { 40 } else { 400 } {
             for &kind in &kinds {
                 // A 16x16 or skip macroblock carries one vector in all sixteen
@@ -1547,8 +1502,8 @@ mod tests {
                         bs_calc_three_way(&mut a, l.as_ref(), t.as_ref(), &mut want);
                         bs_calc_via_kernel(&mut b, l.as_ref(), t.as_ref(), &mut got);
                         assert_eq!(want, got, "round {round} kind {kind:#x} left {lk} top {tk}");
-                        // The count normalisation is observable — later readers of
-                        // `iNonZeroCount` see it — so it has to survive too.
+                        // The count normalisation is observable to later readers of
+                        // `iNonZeroCount`, so it has to match too.
                         assert_eq!(
                             a.iNonZeroCount, b.iNonZeroCount,
                             "the write-back of the normalised counts, round {round}"
@@ -1559,20 +1514,13 @@ mod tests {
         }
     }
 
-    /// **Why upstream's asm can leave the two kind masks out, and why this port
-    /// applies them anyway.**
+    /// The two kind masks are no-ops on the data the encoder actually produces: with
+    /// `0xFF` for `inside`, the unmasked partitioned-inter rule already equals the kind's
+    /// own. A `MB_TYPE_16x16` macroblock replicates one motion vector to all sixteen
+    /// blocks, so its vector term is zero and only the coefficient term is left; a skip
+    /// macroblock has that and no coefficients, so its interior is zero.
     ///
-    /// `DeblockingBSCalcEnc_AArch64_neon` computes one rule for every interior edge —
-    /// the partitioned-inter one — where `DeblockingBSCalc_c` has three. It gets away
-    /// with it on the data the encoder produces: a `MB_TYPE_16x16` macroblock has one
-    /// motion vector replicated to all sixteen blocks, so the vector term is zero and
-    /// the coefficient term is all that is left, which is `DeblockingBSInsideMBAvsbase`;
-    /// and a skip macroblock has that *and* no coefficients, so its interior is zero.
-    ///
-    /// This asserts exactly that — with `0xFF` for `inside`, the unmasked rule already
-    /// equals the kind's own — and, by the negative half, that it is a property of the
-    /// data and not of the kernel: give a 16x16 macroblock two different vectors and
-    /// the masks start to matter.
+    /// The negative half shows this is a property of the data, not of the kernel.
     #[test]
     fn the_kind_masks_are_no_ops_on_the_data_the_encoder_produces() {
         let mut r = Lcg(0x5EED_1234_ABCD_0002);
@@ -1603,9 +1551,9 @@ mod tests {
             }
         }
 
-        // The negative half: a 16x16 macroblock whose blocks disagree about the
-        // motion vector — which the encoder never builds — is where the mask earns
-        // its place, because the unmasked rule would raise those edges to 1.
+        // A 16x16 macroblock whose blocks disagree about the motion vector — which the
+        // encoder never builds — is where the mask matters: the unmasked rule would
+        // raise those edges to 1.
         let mut cur = SMB {
             uiMbType: MB_TYPE_16x16,
             ..Default::default()

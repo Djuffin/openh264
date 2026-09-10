@@ -28,10 +28,9 @@
 
 //! # Intra Prediction Common Interfaces (16x16 Luma)
 //!
-//! Translated from `codec/common/inc/intra_pred_common.h` and `codec/common/src/intra_pred_common.cpp`.
+//! `codec/common/inc/intra_pred_common.h`, `codec/common/src/intra_pred_common.cpp`.
 //!
-//! Provides vertical and horizontal 16x16 luma spatial intra-frame prediction
-//! kernels for both C reference fallbacks and SIMD hardware acceleration (SSE2, NEON, AArch64, MMI, LSX).
+//! Vertical and horizontal 16x16 luma spatial intra-frame prediction kernels.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
@@ -41,25 +40,19 @@
 // Safe kernels
 // ============================================================================
 
-// Both kernels write a **packed** 16x16 block: `pPred` advances by a literal 16 per
-// row, and `kiStride` describes the reference surface only. That is what separates
-// these two from their same-named 2-arg cousins in `decoder/get_intra_predictor.rs`,
-// which predict in place on a strided plane. Same Wels names, different functions,
-// and they must never be unified — hence `[u8; 256]` here where the decoder side
-// takes a `PlaneCursorMut`.
+// Both kernels write a **packed** 16x16 block: the destination advances by 16 per row,
+// and any stride describes the reference surface only. The same-named 2-arg kernels in
+// `decoder/get_intra_predictor.rs` instead predict in place on a strided plane — hence
+// `[u8; 256]` here where the decoder side takes a `PlaneCursorMut`.
 //
-// The two also take *different* reference shapes rather than a common one, because
-// their reaches genuinely differ: V reads the sixteen samples of the row above and
-// nothing else, H reads one sample from each of sixteen rows in the column to the
-// left. A shared `(cursor)` parameter would make each kernel's contract claim the
-// other's reach.
+// The reference shapes differ because the reaches differ: V reads the sixteen samples of
+// the row above, H reads one sample from each of sixteen rows in the column to the left.
 
 use crate::safe::plane::RefSamples;
 
 /// C++: `WelsI16x16LumaPredV_c`, `codec/common/src/intra_pred_common.cpp`.
 ///
-/// Copies the sixteen reconstructed samples above the macroblock down all sixteen
-/// rows. `top` is the caller's proof that the row above exists.
+/// Copies the sixteen reconstructed samples above the macroblock down all sixteen rows.
 #[inline(always)]
 pub fn i16x16_luma_pred_v(pred: &mut [u8; 256], top: &[u8; 16]) {
     for y in 0..16 {
@@ -72,12 +65,6 @@ pub fn i16x16_luma_pred_v(pred: &mut [u8; 256], top: &[u8; 16]) {
 ///
 /// Broadcasts the reconstructed sample left of each row across that row. Reads `x` at
 /// `-1` for `y` in `0 .. 16` from `reference`, and nothing else.
-///
-/// The C++ walks rows 15 down to 0 because it carries two descending offsets; each row
-/// is written once from an input the block does not contain, so ascending is the same
-/// sixteen writes in a different order. `fill` replaces the `0x0101010101010101 *
-/// value` broadcast — that trick was never a memory operation, only a way to spell a
-/// wide store.
 #[inline(always)]
 pub fn i16x16_luma_pred_h(pred: &mut [u8; 256], reference: &impl RefSamples) {
     for y in 0..16 {

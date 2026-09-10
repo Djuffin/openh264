@@ -1,16 +1,13 @@
 //! `ENCODER_OPTION_TRACE_CALLBACK` / `_CONTEXT` and `DECODER_OPTION_TRACE_CALLBACK`
-//! / `_CONTEXT` are documented options on a documented interface: a caller installs
-//! a function and every message the codec logs is handed to it.
-//!
-//! These tests drive the option pair from outside and count what arrives.
+//! / `_CONTEXT`: a caller installs a function and every message the codec logs is
+//! handed to it, together with the caller's context pointer.
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
 use std::ffi::{CStr, c_char, c_void};
 
-/// What a callback run collects. The address of one of these is what the caller
-/// installs as the trace *context*, which is the pointer the callback is handed
-/// back.
+/// What a callback run collects; its address is installed as the trace context and
+/// handed back to the callback.
 #[derive(Default)]
 struct Collected {
     lines: Vec<(i32, String)>,
@@ -25,13 +22,10 @@ unsafe extern "C" fn collect(ctx: *mut c_void, level: i32, string: *const c_char
     }
 }
 
-/// `WELS_LOG_INFO` / `WELS_LOG_ERROR` — `codec_app_def.h:323-331`, where the
-/// levels are a **bit mask**: `WELS_LOG_ERROR = 1 << 0`, `WELS_LOG_INFO = 1 << 2`.
-///
-/// **Spelled out rather than imported, on purpose.** These are the values a C
-/// caller gets from the real header, and this test's job is to assert the port
-/// delivers *those* — importing `common::wels_trace`'s constants would make the
-/// assertion agree with the port by construction and check nothing.
+/// `WELS_LOG_INFO` / `WELS_LOG_ERROR` — `codec_app_def.h:323-331`, where the levels
+/// are a bit mask: `WELS_LOG_ERROR = 1 << 0`, `WELS_LOG_INFO = 1 << 2`. Spelled out
+/// rather than imported, so the assertions cannot agree with the crate by
+/// construction.
 const WELS_LOG_INFO: i32 = 4;
 const WELS_LOG_ERROR: i32 = 1;
 
@@ -64,10 +58,8 @@ fn test_encoder_trace_callback_receives_the_init_line() {
             ),
             CM_RESULT_SUCCESS
         );
-        // The default level is `WELS_LOG_DEFAULT` = `WELS_LOG_WARNING`, so the init
-        // line — `WELS_LOG_INFO` in the reference — needs the level raised. Setting
-        // it is half the covering: a filter that never passes and a filter that
-        // never blocks look the same from outside.
+        // The default level is `WELS_LOG_DEFAULT` = `WELS_LOG_WARNING`, so the
+        // `WELS_LOG_INFO` init line only arrives once the level is raised.
         let mut level = WELS_LOG_INFO as u32;
         assert_eq!(
             ISVCEncoder::SetOption(
@@ -115,9 +107,8 @@ fn test_encoder_trace_callback_receives_the_init_line() {
     }
 }
 
-/// The filter, from the other side: at the default level an `Info` line is dropped
-/// and an `Error` line is not. `Initialize(NULL)` is the reference's
-/// `welsEncoderExt.cpp:192` error arm.
+/// At the default level an `Info` line is dropped and an `Error` line is not.
+/// `Initialize(NULL)` hits the `welsEncoderExt.cpp:192` error arm.
 #[test]
 fn test_encoder_trace_level_filters() {
     unsafe {
@@ -248,9 +239,8 @@ fn test_decoder_trace_callback_and_the_error_throttle() {
             "the DecodeFrame2 error line never arrived: {:?}",
             sink.lines
         );
-        // The throttle: `bPrintFrameErrorTraceFlag` is cleared on the first line of a
-        // burst and re-armed only by a complete frame, so the lines must be strictly
-        // fewer than the erroring calls.
+        // `bPrintFrameErrorTraceFlag` is cleared on the first line of a burst and
+        // re-armed only by a complete frame, so lines < erroring calls.
         assert!(
             failures < erroring,
             "the error line was not throttled: {failures} lines over {erroring} \

@@ -1,33 +1,22 @@
 #![deny(unsafe_code)]
 
-//! Rust translation of OpenH264 CABAC Decoder Engine (`cabac_decoder.h` and `cabac_decoder.cpp`).
+//! CABAC decoder engine — `cabac_decoder.h`, `cabac_decoder.cpp`.
 //!
-//! # The read-extent audit
+//! # Read extents
 //!
-//! ## Every buffer access the engine can issue
+//! Only two functions load bytes; nothing else in this file touches the buffer. Every
+//! `Decode*` entry point reaches it through [`Read32BitsCabac`] alone.
 //!
-//! Two functions load bytes; one does position arithmetic and loads nothing; nothing
-//! else in this file touches the buffer. `DecodeBinCabac`, `DecodeBypassCabac`,
-//! `DecodeTerminateCabac`, `DecodeUnaryBinCabac`, `DecodeExpBypassCabac`,
-//! `DecodeUEGLevelCabac` and `DecodeUEGMvCabac` reach it **only** through
-//! [`Read32BitsCabac`]; the per-bin path issues no load of its own.
+//! [`InitCabacDecEngineFromBS`] — the 5-byte prime, max index `len + 2`.
+//! `curr = pos - remaining_bytes` with `remaining_bytes = ((-left_bits) >> 3) + 2 ∈
+//! [0, 4]` (`left_bits ∈ [-16, 15]` on every path that reaches here), guarded by
+//! `curr <= len - 2`, then loads `curr[0..=4]`. **Needs `avail >= len + 3`**, so this is
+//! the one site that takes the wider [`RawDataBuffer::window_from`] window rather than
+//! the RBSP one, and it reads through `get`: a violated contract is an error return, not
+//! a panic and not a read past the allocation.
 //!
-//! ### 1. [`InitCabacDecEngineFromBS`] — the 5-byte prime. Max index `len + 2`.
-//!
-//! `curr = pos - remaining_bytes`, guarded by the C++ `pCurr < pEndBuf - 1`, i.e.
-//! `curr <= len - 2`; it then loads `curr[0..=4]`, so the largest index it can touch
-//! is `len + 2`. `remaining_bytes = ((-left_bits) >> 3) + 2 ∈ [0, 4]`, because
-//! `left_bits ∈ [-16, 15]` on every path that reaches here (`init` and
-//! `init_read_bits` set −16, `dump_bits` refills from `>= 0` down by 16, `end_cavlc`
-//! sets `-16 + (idx & 7)`). **Needs `avail >= len + 3`**, which is why this is the one
-//! site that takes the wider [`RawDataBuffer::window_from`] window rather than the RBSP
-//! one, and it reads through `get` so a violated contract is an error return, not a
-//! panic and not a read past the allocation.
-//!
-//! ### 2. [`Read32BitsCabac`] — the 4/3/2/1 end ladder. Max index `len - 1`.
-//!
-//! **It never reads past the RBSP**, because its own selector is measured against
-//! `pBuffEnd`:
+//! [`Read32BitsCabac`] — the 4/3/2/1 end ladder, max index `len - 1`, because its
+//! selector is measured against `pBuffEnd`:
 //!
 //! | `iLeftBytes` | loads | largest index |
 //! |---|---|---|
@@ -35,30 +24,21 @@
 //! | `1` / `2` / `3` | `curr[0..n)` | `curr + n - 1 = len - 1` |
 //! | `>= 4` | `curr[0..4)` | `curr + 3 <= len - 1` |
 //!
-//! So the ladder is bounded by `len`, needs `avail >= len` and nothing more, and can be
-//! handed a slice of exactly `len` bytes — [`RawDataBuffer::rbsp_window`]. That makes
-//! `buf.len()` *be* `pBuffEnd - pBuffStart`, so the engine computes no extent of its
-//! own and there is no second `readable_from`-shaped site to keep coherent.
-//!
+//! It needs `avail >= len` and nothing more, so it takes a slice of exactly `len` bytes
+//! ([`RawDataBuffer::rbsp_window`]) and `buf.len()` *is* `pBuffEnd - pBuffStart`.
 //! `iLeftBytes` is genuinely negative in practice: init leaves the position at
 //! `curr + 5 <= len + 3`, so a stream truncated into its first CABAC bytes enters the
 //! ladder at `-3`, takes the `<= 0` arm and returns `ERR_CABAC_NO_BS_TO_READ` having
-//! loaded nothing. The port expresses the predicate as the **comparison** `pos >= len`
-//! rather than as a subtraction for exactly that reason — `len - pos` in `usize` would
-//! wrap to a huge positive and select the 4-byte arm, which would be a new
-//! out-of-bounds read where the raw code errored.
+//! loaded nothing. The predicate is therefore the **comparison** `pos >= len` and not a
+//! subtraction: `len - pos` in `usize` would wrap to a huge positive and select the
+//! 4-byte arm.
 //!
-//! ### 3. [`RestoreCabacDecEngineToBS`] — **no load**.
+//! [`RestoreCabacDecEngineToBS`] loads nothing — position only.
 //!
-//! Position only. See its own doc comment for why the rewind cannot underflow.
-//!
-//! ## Where the two numbers come from
-//!
-//! `len` = `cursor.len()` = `pBuffEnd - pBuffStart`, the logical RBSP end, one owner.
-//! The readable extent past it is **derived from the owning [`RawDataBuffer`] at call
-//! time** (`window_from`), one owner. `window.len() >= len + 4` structurally
-//! (`WelsDecodeBs` sizes every payload with four bytes to spare), which covers site
-//! 1's `len + 2`.
+//! `len` = `cursor.len()` = `pBuffEnd - pBuffStart`, the logical RBSP end. The readable
+//! extent past it is derived from the owning [`RawDataBuffer`] at call time
+//! (`window_from`); `window.len() >= len + 4` structurally, since `WelsDecodeBs` sizes
+//! every payload with four bytes to spare, which covers the prime's `len + 2`.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
@@ -729,25 +709,16 @@ pub struct SWelsCabacCtx {
     pub uiMPS: u8,
 }
 
-/// The decoder context's four CABAC model tables — `sWelsCabacContexts`'s own type,
-/// named here so `WelsCabacGlobalInit` and `WelsCabacContextInit` can take the field
-/// by reference.
+/// The decoder context's four CABAC model tables — `sWelsCabacContexts`'s own type.
 pub type CabacModelTables = [[[SWelsCabacCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX as usize + 1]; 4];
 
 /// The arithmetic-decoding engine state — a **detached position**.
 ///
-/// The C++ carries a pointer triple (`pBuffStart`/`pBuffCurr`/`pBuffEnd`) alongside
-/// the arithmetic registers. All three are gone:
-///
-/// | C++ field | here | why |
-/// |---|---|---|
-/// | `uiRange`, `uiOffset`, `iBitsLeft` | unchanged | the arithmetic state |
-/// | `pBuffCurr - pBuffStart` | `pos` | the position, the only thing that moves |
-/// | `pBuffStart` | — | the buffer is the caller's; it is passed per call |
-/// | `pBuffEnd` | — | `buf.len()` of the RBSP window ([`RawDataBuffer::rbsp_window`]) |
-///
-/// Field order is deliberate: `uiRange` and `uiOffset` stay adjacent so the pair load
-/// the release build already emits for them (`ldp x9, x11, [x0]`) survives.
+/// `uiRange`, `uiOffset` and `iBitsLeft` are the arithmetic state; `pos` replaces the
+/// C++ pointer triple `pBuffStart`/`pBuffCurr`/`pBuffEnd`. The buffer is the caller's
+/// and is passed per call, and its RBSP end is `buf.len()` of the window
+/// ([`RawDataBuffer::rbsp_window`]). Field order matters: `uiRange` and `uiOffset` stay
+/// adjacent so they load as a pair.
 ///
 /// `WelsMalloczHelper` zeroes this at allocation (`decoder_core.rs:3591`), and a zeroed
 /// engine is inert rather than null-pointered: `pos = 0` with an empty window takes the
@@ -812,26 +783,23 @@ pub fn WelsCabacContextInit(
         }
         let qp_idx = iQp as usize;
         let model_idx = iIdx;
-        // The C++ `memcpy` of `WELS_CONTEXT_COUNT` contexts.
         *active = contexts[model_idx][qp_idx];
     }
 }
 
 // 2. Decoding engine initialization
-/// Primes the engine from the CAVLC cursor's position — **audit site 1**, the only
-/// place in this module that reads past the RBSP (`len + 2`, needing `avail >= len+3`).
+/// Primes the engine from the CAVLC cursor's position — the only place in this module
+/// that reads past the RBSP (`len + 2`, needing `avail >= len + 3`).
 ///
 /// # The rewind cannot underflow
 ///
-/// `curr = pos - remaining_bytes` with `remaining_bytes ∈ [0, 4]` (derived in the
-/// module docs from `left_bits ∈ [-16, 15]`). Every path into this function has primed
-/// the cursor since the last write to `pos` — `DecInitBits` → `BsCursor::init` sets
-/// `pos = 4` for the slice-header path, and `InitReadBits` → `init_read_bits` does
-/// `pos += 4` for the I_PCM re-entry at `parse_mb_syn_cabac.rs:3317` — and both leave
-/// **`pos >= 4`**. The bound is tight rather than generous: a cursor primed and not yet
-/// advanced gives `pos = 4, remaining_bytes = 4`, landing exactly on `curr = 0`. The
-/// `debug_assert` is there because that reasoning is about *callers*, and callers
-/// change.
+/// `curr = pos - remaining_bytes` with `remaining_bytes ∈ [0, 4]` (from
+/// `left_bits ∈ [-16, 15]`). Every path into this function has primed the cursor since
+/// the last write to `pos` — `DecInitBits` → `BsCursor::init` sets `pos = 4` for the
+/// slice-header path, and `InitReadBits` → `init_read_bits` does `pos += 4` for the
+/// I_PCM re-entry — and both leave **`pos >= 4`**. The bound is tight: a cursor primed
+/// and not yet advanced gives `pos = 4, remaining_bytes = 4`, landing exactly on
+/// `curr = 0`.
 pub fn InitCabacDecEngineFromBS(
     pDecEngine: &mut SWelsCabacDecEngine,
     pBsAux: &mut BsReader,
@@ -854,19 +822,17 @@ pub fn InitCabacDecEngineFromBS(
             iRemainingBytes
         );
         let iCurr = pos - iRemainingBytes;
-        // `pCurr >= pEndBuf - 1`, in offsets. Signed on both sides: `len` is at least 1
-        // (`BsCursor::init` rejects a non-positive payload) but the arithmetic is
-        // written so a zero-length window compares rather than wraps.
+        // `pCurr >= pEndBuf - 1`, in offsets. Signed on both sides so a zero-length
+        // window compares rather than wraps.
         if iCurr >= len - 1 {
             return ERR_INFO_INVALID_ACCESS;
         }
         let curr = iCurr as usize;
 
-        // The wider window — this is the one site that needs the readable extent past
-        // the RBSP, and it is derived from the owning buffer at call time. The guard
-        // above bounds `curr <= len - 2`, so `curr + 5 <= len + 3 <= window.len()`;
-        // the `get` is therefore unreachable-None, and routes a violated contract to
-        // the error path instead of past the end of the allocation.
+        // The wider window, derived from the owning buffer at call time. The guard above
+        // bounds `curr <= len - 2`, so `curr + 5 <= len + 3 <= window.len()`; the `get`
+        // is therefore unreachable-None, and routes a violated contract to the error
+        // path instead of past the end of the allocation.
         let buf = raw.window_from(pBsAux.start);
         let b = match buf.get(curr..curr + 5) {
             Some(b) => b,
@@ -887,11 +853,7 @@ pub fn InitCabacDecEngineFromBS(
     }
 }
 
-/// Hands the position back to the CAVLC cursor — **audit site 3, which reads nothing**.
-///
-/// The C++ wrote four fields into `SBitStringAux` and re-stored `pStartBuf` from
-/// `pBuffStart`, which was a no-op restore of the base it had been given. What actually
-/// moves is the position.
+/// Hands the position back to the CAVLC cursor. Loads nothing; only the position moves.
 ///
 /// # The rewind cannot underflow either
 ///
@@ -899,9 +861,8 @@ pub fn InitCabacDecEngineFromBS(
 /// adds at most 32 before any consumer subtracts), so the rewind is at most 7 bytes.
 /// The quantity is invariant under a refill — `pos += k` and `bits_left += 8k` cancel —
 /// and only *increases* under renormalisation, starting from `curr + 5 - 3 = curr + 2`.
-/// On the error path `bits_left` goes negative, the arithmetic shift goes negative, and
-/// the position moves *forward*: the raw code's behaviour, reproduced by doing this in
-/// `isize` and casting once, exactly where the raw code cast its `offset_from`.
+/// On the error path `bits_left` goes negative, the arithmetic shift goes negative and
+/// the position moves *forward*, which is why this is done in `isize` and cast once.
 pub fn RestoreCabacDecEngineToBS(pDecEngine: &mut SWelsCabacDecEngine, pBsAux: &mut BsReader) {
     {
         let back = (pDecEngine.iBitsLeft >> 3) as isize;
@@ -914,36 +875,24 @@ pub fn RestoreCabacDecEngineToBS(pDecEngine: &mut SWelsCabacDecEngine, pBsAux: &
 }
 
 // 3. Actual decoding
-/// The refill — **audit site 2**, the 4/3/2/1 end ladder, bounded by `len - 1`.
+/// The refill — the 4/3/2/1 end ladder, bounded by `len - 1`.
 ///
 /// `win` is the RBSP window ([`RawDataBuffer::rbsp_window`]): `win.len()` **is** the C++
 /// `pBuffEnd - pBuffStart`, so the selector is the slice's own length and the engine
 /// computes no extent of its own.
 ///
-/// The `pos >= win.len()` test is the C++ `iLeftBytes <= 0` written as a comparison
-/// rather than a subtraction — see the module docs: `pos` legitimately exceeds
-/// `win.len()` after init on a truncated stream, and `win.len() - pos` in `usize` would
-/// wrap to a huge positive and select the 4-byte arm.
+/// The `pos >= win.len()` test is `iLeftBytes <= 0` written as a comparison rather than a
+/// subtraction: `pos` legitimately exceeds `win.len()` after init on a truncated stream,
+/// and `win.len() - pos` in `usize` would wrap to a huge positive and select the 4-byte
+/// arm.
 ///
-/// # Why the arms are `first_chunk`, and why the order is inverted
+/// The arms use `first_chunk::<N>()` so the width is a *type* and the bounds checks fold.
+/// `>= 4` is tested first to put the common case at the top; the four widths are a
+/// disjoint partition, so the order is free. The final `else` is `tail.len() == 1` — `0`
+/// was rejected by the guard above — and its `tail[0]` folds on that fact.
 ///
-/// Written the obvious way — `match tail.len() { 3 => …, 2 => …, 1 => …, _ => … }` with
-/// `tail[i]` indexing inside each arm — the release build **re-checked the length in
-/// the `_` arm** and emitted three `panic_bounds_check` paths, plus four separate
-/// `ldrb`s where the raw pointer version had one `ldr`+`rev`. LLVM propagated "not 1,
-/// 2 or 3" into the arm but not "therefore >= 4".
-///
-/// `first_chunk::<N>()` states the width as a *type* instead of leaving it to be
-/// re-derived: the `Some` arm carries a `&[u8; N]`, so the load folds and the checks
-/// vanish. Testing `>= 4` first
-/// puts the common case at the top of the chain; the four widths are a disjoint
-/// partition, so the order is free. The final `else` is `tail.len() == 1` — `0` was
-/// rejected by the guard above — and its `tail[0]` folds on that fact.
-///
-/// `#[inline(always)]`: the raw pointer version was inlined into `DecodeBinCabac` by
-/// the cost model alone. Adding a slice parameter tipped it over, and the call cost
-/// `DecodeBinCabac` a stack frame *on every bin*, refill or not. This pins the
-/// reference's shape rather than leaving it to a heuristic.
+/// `#[inline(always)]` keeps the refill from costing `DecodeBinCabac` a stack frame on
+/// every bin, refill or not.
 #[inline(always)]
 pub fn Read32BitsCabac(
     win: &[u8],
@@ -1119,9 +1068,8 @@ pub fn DecodeTerminateCabac(
 }
 
 // 4. Unary parsing
-/// `pBinCtx` is a **slice** because this function indexes it: the C++ walks
-/// `pBinCtx[0]` for the first bin and `pBinCtx[iCtxOffset]` for every bin after it,
-/// so the caller hands over exactly the `iCtxOffset + 1` contexts that names.
+/// `pBinCtx` is indexed: `pBinCtx[0]` for the first bin and `pBinCtx[iCtxOffset]` for
+/// every bin after it, so the caller hands over exactly `iCtxOffset + 1` contexts.
 pub fn DecodeUnaryBinCabac(
     win: &[u8],
     pDecEngine: &mut SWelsCabacDecEngine,
@@ -1252,9 +1200,8 @@ pub fn DecodeUEGLevelCabac(
     }
 }
 
-/// `pBinCtx` is a **slice** for [`DecodeUnaryBinCabac`]'s reason: the bin index walks
-/// `g_kMvdBinPos2Ctx`, whose largest entry is 3, so the caller hands over the four
-/// contexts the table can name.
+/// `pBinCtx` is indexed through `g_kMvdBinPos2Ctx`, whose largest entry is 3, so the
+/// caller hands over four contexts.
 pub fn DecodeUEGMvCabac(
     win: &[u8],
     pDecEngine: &mut SWelsCabacDecEngine,
@@ -1342,11 +1289,8 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // The CAVLC↔CABAC handoff.
-    //
-    // Both readers live in one position space, and the whole handoff is a
-    // `usize` in each direction. It is the only place the two cursors'
-    // agreement is asserted directly rather than inferred from a decoded frame.
+    // The CAVLC↔CABAC handoff: both readers live in one position space, and the
+    // handoff is a `usize` in each direction.
     // -----------------------------------------------------------------------
 
     use crate::decoder::bit_stream::{DecInitBits, READER_SLOP};
@@ -1437,8 +1381,7 @@ mod tests {
             assert_eq!(bs.cursor.len(), payload.len());
             assert_eq!(bs.cursor.bits(), (payload.len() * 8) as i32);
 
-            // And the cursor is usable again: re-prime and read, exactly as
-            // `ParseIPCMInfoCabac` does after its own restore.
+            // And the cursor is usable again: re-prime and read.
             let (b, cursor) = bs.split(&raw);
             assert_eq!(
                 crate::decoder::bit_stream::InitReadBits(b, cursor, 1),
@@ -1451,10 +1394,9 @@ mod tests {
 
     #[test]
     fn the_end_ladder_stops_at_the_rbsp_and_never_reads_the_slack() {
-        // Audit site 2: the ladder is bounded by `len`, not by `avail`. Drive
-        // the engine off the end of a short RBSP and assert it errors with the
-        // position at `len` rather than walking into the slack bytes that the
-        // allocation genuinely has.
+        // The ladder is bounded by `len`, not by `avail`. Drive the engine off
+        // the end of a short RBSP and assert it errors with the position at
+        // `len` rather than walking into the slack bytes the allocation has.
         let payload: [u8; 8] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
         let buf = rbsp_with_slack(&payload);
         let mut engine = SWelsCabacDecEngine::default();
@@ -1487,9 +1429,9 @@ mod tests {
             }
 
             // `pos` past the end — reachable after init on a truncated stream,
-            // and the C++ `iLeftBytes` is negative there. The comparison form
-            // must take the error arm; a `usize` subtraction would wrap and
-            // select the 4-byte load.
+            // where `iLeftBytes` is negative. The comparison form must take the
+            // error arm; a `usize` subtraction would wrap and select the 4-byte
+            // load.
             for start in [9usize, 12, 64] {
                 engine.pos = start;
                 assert_eq!(
@@ -1503,7 +1445,7 @@ mod tests {
 
     #[test]
     fn init_rejects_a_position_at_the_end_guard_rather_than_reading_there() {
-        // The C++ guard is `pCurr >= pEndBuf - 1`, and the rewind is what puts
+        // The guard is `pCurr >= pEndBuf - 1`, and the rewind is what puts
         // `pCurr` behind `pos`. A cursor parked at the very end of a short RBSP
         // must be refused, not primed.
         let payload: [u8; 5] = [0x80, 0x00, 0x00, 0x00, 0x00];
@@ -1515,9 +1457,9 @@ mod tests {
                 DecInitBits(&mut bs, &raw, 0, (payload.len() * 8) as i32),
                 ERR_NONE
             );
-            // Park the cursor at the end: pos == len, left_bits == 0 gives
-            // remaining_bytes == 2, so curr == len - 2 == 3 >= len - 1 == 4 is
-            // false... push it one further to land on the guard.
+            // Park the cursor one past the end so the rewind lands on the guard:
+            // at pos == len with left_bits == 0, remaining_bytes == 2 and
+            // curr == len - 2 is still inside.
             bs.cursor.set_pos(payload.len() + 1);
             bs.cursor.restore_from_cabac(payload.len() + 1); // left_bits = 0
             assert_eq!(

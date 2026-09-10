@@ -2,23 +2,14 @@
 
 //! Safe vocabulary types for the codec.
 //!
-//! * **Detached cursors.** No type here stores a borrow into a buffer.
-//!   Cursors are *positions*; buffers are *parameters*. The only lifetime-carrying
-//!   types are the ephemeral views ([`plane::PlaneCursor`], [`plane::PlaneCursorMut`],
-//!   [`pool::PoolRest`]) that never outlive the call chain that made them.
-//! * **Bounds come from slice indexing.** These types do not add bounds checks of
-//!   their own beyond validating their construction invariant; they arrange for the
-//!   arithmetic to land in a slice index, so an out-of-range access is a loud panic
-//!   instead of silent corruption.
+//! Cursors are *positions*, not borrows: no type here stores a reference into a
+//! buffer, and buffers are passed in as parameters. The only lifetime-carrying
+//! types are the ephemeral views ([`plane::PlaneCursor`], [`plane::PlaneCursorMut`],
+//! [`pool::PoolRest`]).
 //!
-//! # Map
-//!
-//! | module | replaces |
-//! |---|---|
-//! | [`plane`] | pixel-plane cursors with stride math and negative offsets |
-//! | [`bits`] | detachable bit cursors (`SBitStringAux` reader *and* writer) |
-//! | [`pool`] | multi-alias object graphs (DPB, ref lists) |
-//! | [`mb_grid`] | per-MB metadata addressing |
+//! Bounds come from slice indexing: beyond validating their construction
+//! invariant these types add no checks of their own, they arrange for the
+//! arithmetic to land in a slice index, so an out-of-range access panics.
 
 pub mod bits;
 pub mod err;
@@ -28,19 +19,12 @@ pub mod plane;
 pub mod pool;
 
 /// Deterministic PRNG for the property-style unit tests in this module.
-///
-/// Kept in a file of its own so the differential integration test can include the
-/// *same* generator by path (`tests/common/prng.rs`), which is what makes a failing
-/// seed reproducible across both test layers.
 #[cfg(test)]
 #[path = "prng.rs"]
 pub(crate) mod prng;
 
-/// Tests for [`prng`] itself.
-///
-/// They live here rather than in `prng.rs` because that file is included by path
-/// into the integration-test crates, where `cfg(test)` is also on — tests declared
-/// there would compile into pre-existing test binaries.
+/// Tests for [`prng`] itself; they live here because `prng.rs` is included by
+/// path into integration-test crates, where `cfg(test)` is also on.
 #[cfg(test)]
 mod prng_tests {
     use super::prng::Prng;

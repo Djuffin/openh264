@@ -19,10 +19,9 @@ use core::arch::x86_64::*;
 // Block shapes and lane moves
 // ============================================================================
 
-/// Rows per window cut — the twin of `simd::aarch64::mc::ROW_GROUP`, and for the
-/// same reason: a filter body is well past the unroller's threshold at sixteen rows,
-/// so `y * stride` stays symbolic and every per-row bounds check with it. One window
-/// per group of four restores the constant offsets. See
+/// Rows per window cut. A filter body is well past the unroller's threshold at sixteen
+/// rows, so `y * stride` stays symbolic and every per-row bounds check with it; one
+/// window per group of four restores the constant offsets. See
 /// [`PlaneSpanMut::window_mut`](crate::safe::plane::PlaneSpanMut::window_mut).
 #[allow(dead_code)]
 const ROW_GROUP: usize = 4;
@@ -38,10 +37,9 @@ fn ld16(r: &[u8; 16]) -> __m128i {
 /// Eight bytes of a span row in the low half of a vector.
 ///
 /// Through `i64` rather than `_mm_loadl_epi64` because [`BlockRows::row`] hands a row
-/// over **by value**: a `[u8; 8]` is one integer register, and taking its address
-/// would put it back on the stack for the load to read out again. Where the row does
-/// come from memory the `from_le_bytes` folds back into the `movq` it would have
-/// been.
+/// over **by value**: a `[u8; 8]` is one integer register, and taking its address would
+/// put it back on the stack. Where the row does come from memory the `from_le_bytes`
+/// folds back into a `movq`.
 #[target_feature(enable = "sse2")]
 fn ld8(r: &[u8; 8]) -> __m128i {
     _mm_cvtsi64_si128(i64::from_le_bytes(*r))
@@ -91,10 +89,9 @@ fn w4<R: BlockRows>(r: &R, y: usize, x: usize) -> __m128i {
 
 /// Rounded pixel average of two rows: `((a + b + 1) >> 1) as u8`, `pavgb`.
 ///
-/// The width is a const parameter so the chunk chain below has a constant trip count
-/// — a row loop whose body still contains a loop is one the unroller declines, and
-/// with it every per-row bounds check stays. See [`ROW_GROUP`].
-/// Rounded pixel average of two rows: `((a + b + 1) >> 1) as u8`, `pavgb`.
+/// The width is a const parameter so the chunk chain below has a constant trip count: a
+/// row loop whose body still contains a loop is one the unroller declines, and with it
+/// every per-row bounds check stays. See [`ROW_GROUP`].
 #[inline(always)]
 fn avg_row<const W: usize>(out: &mut [u8; W], a: &[u8; W], b: &[u8; W]) {
     if W == 16 {
@@ -207,7 +204,7 @@ fn chroma_row<R: BlockRows, const W: usize>(
 }
 
 /// The bilinear chroma filter over one const-shape block. Widths 8 and 4 take the
-/// lane path; width 2 is the scalar, as upstream has it.
+/// lane path; width 2 is the scalar.
 #[target_feature(enable = "sse4.1")]
 unsafe fn chroma_block<
     S: RefSamples + Copy,
@@ -326,14 +323,10 @@ pub fn mc_chroma<S: RefSamples + Copy>(
     mc_chroma_frac(src, dst, mv_x, mv_y, width, height)
 }
 
-/// The fractional half of [`mc_chroma`], **out of line on purpose**.
-///
-/// The whole-sample vector is the common chroma case and it is a block copy; with the
-/// bilinear dispatch in the same body the entry point was too large to inline, so
-/// `mc_copy`'s width and height arrived as run-time values at a call site that had
-/// them as constants, and the copy paid two jump tables it should not have. Split,
-/// the entry point is a test and a copy — small enough to inline — and this is one
-/// call on the path that does real work.
+/// The fractional half of [`mc_chroma`], out of line so the entry point stays small
+/// enough to inline. The whole-sample vector is the common chroma case and a block copy;
+/// with the bilinear dispatch in the same body, `mc_copy` lost its constant width and
+/// height at that call site.
 #[inline]
 fn mc_chroma_frac<S: RefSamples + Copy>(
     src: &S,
@@ -404,14 +397,6 @@ fn filter_6tap_intermediate_8_samples(
 // Horizontal 6-Tap Filter: McHorVer20 (SSE2)
 // ============================================================================
 
-/// One output row of the horizontal filter at row `y` of the window `r`, which
-/// starts at `x = -2` and holds `W + 5` bytes.
-///
-/// `AVG` is 0, or the tap the result is averaged with — 2 for quarter-pel `(1, 0)`
-/// and 3 for `(3, 0)`; see [`McLeaves`]. A macro rather than a function for the
-/// reason `simd::aarch64::mc`'s twin is one: the row index has to stay a constant at
-/// the point the bounds checks are decided, and a `#[target_feature]` function
-/// cannot be `#[inline(always)]`.
 /// Vectorized 6-tap Wiener filter on 8 samples using SSSE3 pmaddubsw and pshufb.
 #[target_feature(enable = "sse4.1")]
 #[inline]
@@ -735,14 +720,6 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
 // 2D Center 6x6-Tap Filter: McHorVer22 (SSE2)
 // ============================================================================
 
-/// `McHorVer22` over one const-shape block: the vertical 6-tap into `iTmp` over a
-/// six-row window per output row, then the scalar horizontal pass over those.
-///
-/// `iTmp` is `[i16; 17 + 5]` as in the C++ (`int16_t iTmp[17 + 5]` against
-/// `for (j = 0; j < iWidth + 5; j++)`), which is what bounds `SW` at 22 — and the
-/// vertical pass below stores through a raw pointer, so a wider `SW` would run off
-/// the stack frame rather than panic. [`cen_shaped`] only instantiates the shapes
-/// the codec calls; [`cen_any`] states the bound for everything else.
 #[target_feature(enable = "sse4.1")]
 #[inline]
 unsafe fn hor_filter_4px_16bit(v0: __m128i, v1: __m128i) -> __m128i {
@@ -859,8 +836,8 @@ unsafe fn cen_block<
     }
 }
 
-/// The run-time-shape twin — cold; see [`McLeaves`]. The `width <= 17` contract is
-/// the C++'s and is what sizes `iTmp`.
+/// The run-time-shape twin — cold; see [`McLeaves`]. The `width <= 17` contract is what
+/// sizes `iTmp`.
 fn cen_any<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -900,10 +877,8 @@ pub fn mc_hor_ver22<S: RefSamples + Copy>(
 // Luma Quarter-Pel MC (SSE2)
 // ============================================================================
 
-/// **The SSE2 leaf set** — `McLeaves` with the four real kernels in this file.
-///
-/// The twelve quarter-pel composites live once, in `common/mc.rs`; this is the whole of
-/// the SSE2 side of them. See [`crate::common::mc::McLeaves`].
+/// The SSE2 leaf set — `McLeaves` with the four kernels in this file. The twelve
+/// quarter-pel composites live once, in [`crate::common::mc::McLeaves`].
 pub struct Sse2Leaves;
 
 impl McLeaves for Sse2Leaves {
@@ -1042,9 +1017,8 @@ pub fn mc_luma<S: RefSamples + Copy>(
 mod tests {
     use super::*;
     use crate::safe::plane::PlaneCursor;
-    // These MUST be the `_c` scalar kernels, not the same-named dispatchers:
-    // the dispatchers route to the very SSE2 kernels under test, which would
-    // make every assertion below a tautology.
+    // These MUST be the `_c` scalar kernels, not the same-named dispatchers, which
+    // route to the very SSE2 kernels under test.
     use crate::common::mc::McLeaves;
     use crate::common::mc::{
         mc_chroma_with_frag_mv, mc_hor_ver02_c as scalar_hor_ver02,
@@ -1398,15 +1372,10 @@ mod tests {
         }
     }
 
-    /// **The `_AVERAGE_WITH_` forms of the two direct filters agree with the
-    /// composites they would replace.**
-    ///
-    /// [`McLeaves::FUSED_QPEL`] is off for this set, so `mc_luma` takes the composite
-    /// at quarter-pel `(1, 0)`, `(3, 0)`, `(0, 1)` and `(0, 3)` and the `AVG` arms of
-    /// [`McLeaves::hor`] and [`McLeaves::ver`] are never instantiated by the codec.
-    /// They are still part of the trait and still have to be right, so drive them
-    /// here: the fused form is a rounded average against one of the filter's own
-    /// taps, and that is what the composite computes with an averaging pass.
+    /// The `_AVERAGE_WITH_` forms of the two direct filters agree with the composites
+    /// they would replace at quarter-pel `(1, 0)`, `(3, 0)`, `(0, 1)` and `(0, 3)`: the
+    /// fused form is a rounded average against one of the filter's own taps, which is
+    /// what the composite computes with an averaging pass.
     #[test]
     fn the_fused_quarter_pel_arms_agree_with_the_composites() {
         let base = filled_plane();

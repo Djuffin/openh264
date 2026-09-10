@@ -1,27 +1,23 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-//! Port of `codec/processing/src/scrolldetection/` — the plugin reached through
-//! `METHOD_SCROLL_DETECTION`.
+//! Scroll detection — `codec/processing/src/scrolldetection/`, the plugin reached
+//! through `METHOD_SCROLL_DETECTION`.
 //!
-//! `CWelsPreProcessScreen::DetectSceneChange` runs it once per P frame, against the
-//! *first* available reference only (`wels_preprocess.cpp:1176-1201`, the
-//! `iScdIdx == 0` block), and hands the vector it finds to two consumers: the screen
-//! scene-change detector, which uses it to call a block `SCROLLED_STATIC`
-//! (`SceneChangeDetection.h:158-191`), and the mode decision's
-//! `JudgeScrollSkip` and the scrolled motion search.
+//! `CWelsPreProcessScreen::DetectSceneChange` runs it once per P frame against the
+//! first available reference only (`wels_preprocess.cpp:1176-1201`) and hands the
+//! vector to the screen scene-change detector (`SceneChangeDetection.h:158-191`), the
+//! mode decision's `JudgeScrollSkip`, and the scrolled motion search.
 //!
-//! **What it detects.** A horizontal band of the current frame is picked, a single
-//! *textured* row inside it is chosen ([`CheckLine`] — four or more distinct values,
-//! or two or three with more than three changes), and the reference frame is scanned
-//! outward from that row's own position for a row that matches it. On a match a
-//! window of up to fifty rows around the pair is verified. The answer is the vertical
-//! displacement, "previous position minus current position" — so content that has
-//! moved **up** by eight rows reports `iScrollMvY = +8`, and upstream's own gtest,
-//! which moves content *down* by 512, expects `-512`.
+//! A horizontal band of the current frame is picked, a single textured row inside it
+//! is chosen ([`CheckLine`] — four or more distinct values, or two or three with more
+//! than three changes), and the reference frame is scanned outward from that row's own
+//! position for a row that matches it. On a match a window of up to fifty rows around
+//! the pair is verified. The answer is the vertical displacement, previous position
+//! minus current position, so content that moved up by eight rows reports
+//! `iScrollMvY = +8`.
 //!
-//! **`iScrollMvX` is always zero.** [`ScrollDetectionCore`] sets it so unconditionally
-//! (`ScrollDetectionFuncs.cpp:191`); the field exists because the parameter struct and
-//! the consumers carry it, not because this detector can produce one.
+//! `iScrollMvX` is always zero — [`ScrollDetectionCore`] sets it so unconditionally
+//! (`ScrollDetectionFuncs.cpp:191`).
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -36,8 +32,7 @@ pub const CHECK_OFFSET: i32 = 25;
 pub const MAX_SCROLL_MV_Y: i32 = 511;
 pub const REGION_NUMBER: i32 = 9;
 
-/// A row-and-column offset into a plane, the safe form of the C++'s
-/// `pY + row * iStride + x`.
+/// A row-and-column offset into a plane: `row * iStride + x`.
 #[inline]
 fn at(row: i32, iStride: usize, x: i32) -> usize {
     usize::try_from(row as isize * iStride as isize + x as isize)
@@ -49,8 +44,8 @@ fn at(row: i32, iStride: usize, x: i32) -> usize {
 /// Does this row carry enough texture to be worth matching? One colour, never; two or
 /// three, only with more than three transitions; four or more, always.
 ///
-/// `iColorMap` is `int32_t[8]` upstream and `u32[8]` here: `RECORD_COLOR` sets bit
-/// `v & 31` of word `v >> 5`, so the array is a 256-bit set over the byte values.
+/// `iColorMap` is a 256-bit set over the byte values: `RECORD_COLOR` sets bit `v & 31`
+/// of word `v >> 5`.
 pub fn CheckLine(pData: &[u8], iWidth: i32) -> i32 {
     let iQualified;
     let mut iColorMap = [0u32; 8];
@@ -86,11 +81,7 @@ pub fn CheckLine(pData: &[u8], iWidth: i32) -> i32 {
 /// `mid - 1`, `mid + 2`, … The first row [`CheckLine`] qualifies wins; `-1` if none in
 /// the band does.
 ///
-/// The C++'s `TestPos` is live after the loop, and which of the two assignments left
-/// it there is the answer — so the loop is written with the same two statements rather
-/// than as a search that returns early.
-///
-/// `pY` is the plane's origin (the C++'s `pSrcPixMap->pPixel[0]`), not a row.
+/// `pY` is the plane's origin, not a row.
 pub fn SelectTestLine(
     pY: &[u8],
     iWidth: i32,
@@ -130,23 +121,14 @@ pub fn SelectTestLine(
 /// `CompareLine` — `ScrollDetectionFuncs.cpp:99-108`. 0 when the two rows are equal,
 /// 1 otherwise.
 ///
-/// **Two upstream behaviours are load-bearing here and neither is tidied.**
+/// Both slices must hold at least twelve bytes: the first twelve are compared before
+/// `kiWidth` is consulted at all, however narrow the nominal comparison is.
 ///
-/// 1. The first twelve bytes are compared *unconditionally*, as three `LD32`s, before
-///    `kiWidth` is consulted at all — so a caller passing a width below twelve still
-///    reads twelve bytes from each row. Both slices must therefore hold twelve bytes
-///    however narrow the nominal comparison is, which is exactly the reach the C++
-///    pointer arithmetic has.
-/// 2. `iCmp` is seeded **1**, and the `memcmp` that would clear it runs only when
-///    `kiWidth > 12`. So for `kiWidth <= 12` this function answers "different" even
-///    when all twelve bytes are equal. That is upstream's; the encoder never reaches
-///    it, because every width [`ScrollDetectionCore`] is called with is at least 24
-///    (see [`CScrollDetection::ScrollDetectionWithoutMask`]) and the mask path
-///    refuses anything at or below [`MINIMUM_DETECT_WIDTH`].
-///
-/// The three `LD32` comparisons are one twelve-byte slice comparison here: `LD32` is a
-/// four-byte load and the C++ compares the loads for equality, so the twelve bytes are
-/// tested for equality either way and no endianness enters.
+/// For `kiWidth <= 12` the answer is 1 even when those twelve bytes are equal, the
+/// tail comparison that would clear it running only above twelve. Unreachable from the
+/// encoder: every width [`ScrollDetectionCore`] sees is at least 24 (see
+/// [`CScrollDetection::ScrollDetectionWithoutMask`]), and the mask path refuses
+/// anything at or below [`MINIMUM_DETECT_WIDTH`].
 pub fn CompareLine(pYSrc: &[u8], pYRef: &[u8], kiWidth: i32) -> i32 {
     let mut iCmp = 1;
 
@@ -162,9 +144,9 @@ pub fn CompareLine(pYSrc: &[u8], pYRef: &[u8], kiWidth: i32) -> i32 {
 
 /// `ScrollDetectionCore` — `ScrollDetectionFuncs.cpp:110-198`.
 ///
-/// **The reference's stride is used for both frames** (`iYStride =
-/// pRefPixMap->iStride[0]`, `:118`). The encoder's two pictures come from one pool and
-/// share a geometry, so the strides are equal; the debug assertion below is that claim.
+/// The reference's stride is used for both frames (`ScrollDetectionFuncs.cpp:118`).
+/// The encoder's two pictures come from one pool and share a geometry, so the strides
+/// are equal; the debug assertion below is that claim.
 pub fn ScrollDetectionCore(
     pRefPixMap: &SPixMap,
     planes: &ScdPlanes<'_>,
@@ -196,8 +178,8 @@ pub fn ScrollDetectionCore(
         sScrollDetectionParam.bScrollDetectFlag = false;
         return;
     }
-    // `pYLine` — the source's test row. Kept as an offset, because the two windows
-    // below step away from it in both directions.
+    // The source's test row, kept as an offset because the two windows below step
+    // away from it in both directions.
     let iLineOff = at(iTestPos, kiStride, iOffsetX);
     let iMaxAbs = (iTestPos - iMinHeight - 1)
         .max(iMaxHeight - iTestPos)
@@ -284,15 +266,13 @@ impl CScrollDetection {
     }
 
     /// `CScrollDetection::Get` — `ScrollDetection.cpp:64-70`. Copies the whole
-    /// parameter block back, as the C++ assignment does.
+    /// parameter block back.
     pub fn Get(&self, pParam: &mut SScrollDetectionParam) -> i32 {
         *pParam = self.m_sScrollDetectionParam;
         RET_SUCCESS
     }
 
     /// `CScrollDetection::Process` — `ScrollDetection.cpp:40-53`.
-    ///
-    /// The C++'s two null-pixel disjuncts are the two empty-slice tests.
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -318,9 +298,9 @@ impl CScrollDetection {
 
     /// `CScrollDetection::ScrollDetectionWithMask` — `ScrollDetection.cpp:71-89`.
     ///
-    /// No writer of `bMaskInfoAvailable` exists under `codec/` — the encoder's one
-    /// caller zeroes the parameter block before every `Set`
-    /// (`wels_preprocess.cpp:1181`) — so this branch is dead in practice.
+    /// Nothing writes `bMaskInfoAvailable`: the encoder's one caller zeroes the
+    /// parameter block before every `Set` (`wels_preprocess.cpp:1181`), so this branch
+    /// is dead in practice.
     fn ScrollDetectionWithMask(
         &mut self,
         _pSrcPixMap: &SPixMap,
@@ -360,19 +340,16 @@ impl CScrollDetection {
     /// `CScrollDetection::ScrollDetectionWithoutMask` — `ScrollDetection.cpp:91-113`.
     ///
     /// Nine probe regions in a 3x3 grid over the frame, tried in order until one both
-    /// detects and reports a non-zero vector. The first region row starts *above* the
-    /// picture (`iStartY` is negative for `i < 3`), which is deliberate: the band is
-    /// seven eighths of the picture tall and the grid centres it, so
-    /// [`ScrollDetectionCore`]'s `iMinHeight`/`iMaxHeight` clamps do the trimming.
+    /// detects and reports a non-zero vector. The first region row starts above the
+    /// picture (`iStartY` is negative for `i < 3`): the band is seven eighths of the
+    /// picture tall and the grid centres it, so [`ScrollDetectionCore`]'s
+    /// `iMinHeight`/`iMaxHeight` clamps do the trimming.
     ///
-    /// `-h * 7 / 48` truncates toward zero on the negative operand in both languages
-    /// (unary minus binds tighter than `*` in each, and both divide toward zero), so
-    /// `h = 100` gives `-14` on both sides, not `-15`.
+    /// `-h * 7 / 48` truncates toward zero, so `h = 100` gives `-14`, not `-15`.
     ///
-    /// **`iWidth` here is at least 24 for any picture the encoder passes**, which is
-    /// what keeps [`CompareLine`]'s twelve-byte floor out of reach: `iWidth =
-    /// kiRegionWidth / 2 = (w - 2 * (h >> 4)) / 6`, and the smallest `scc` geometry,
-    /// 160x96, gives `(160 - 12) / 6 = 24`.
+    /// `iWidth` is at least 24 for any picture the encoder passes, which keeps
+    /// [`CompareLine`]'s twelve-byte floor out of reach: `iWidth = kiRegionWidth / 2 =
+    /// (w - 2 * (h >> 4)) / 6`, and the smallest `scc` geometry, 160x96, gives 24.
     fn ScrollDetectionWithoutMask(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -417,13 +394,10 @@ mod tests {
     use super::*;
     use crate::encoder::wels_preprocess::SRect;
 
-    /// The `gen_screen_clip.py` page, small enough to keep in a test: paper 235, text
-    /// lines every 12 rows from row 4, cells 8 columns apart, four inks rotating word
-    /// by word so a line carries the four-or-more distinct values [`CheckLine`] wants,
-    /// and every fifth line a two-value rule instead.
-    ///
-    /// Deterministic by the same 31-bit LCG the generator uses, so a failure here is
-    /// reproducible without the generator.
+    /// A synthetic text page: paper 235, text lines every 12 rows from row 4, cells 8
+    /// columns apart, four inks rotating word by word so a line carries the four-or-more
+    /// distinct values [`CheckLine`] wants, and every fifth line a two-value rule
+    /// instead. Deterministic, by a 31-bit LCG.
     fn page(w: usize, h: usize, seed: u32) -> Vec<u8> {
         const PAPER: u8 = 235;
         const INKS: [u8; 4] = [16, 48, 96, 144];
@@ -514,10 +488,9 @@ mod tests {
         out
     }
 
-    /// The sign convention, both ways, and it is upstream's: `iScrollMvY =
-    /// iSearchPos - iTestPos` is "previous position minus current position", so
-    /// content that moved **up** by eight rows reports `+8`. Upstream's own gtest
-    /// moves content *down* by 512 and expects `-512`.
+    /// The sign convention, both ways: `iScrollMvY = iSearchPos - iTestPos` is previous
+    /// position minus current position, so content that moved up by eight rows reports
+    /// `+8`.
     #[test]
     fn a_scrolled_page_reports_its_displacement_with_upstreams_sign() {
         const W: usize = 320;
@@ -573,13 +546,10 @@ mod tests {
         );
     }
 
-    /// An identical pair *is* detected, at zero — the first probe region matches its
-    /// own row at `iOffsetAbs == 0`. `ScrollDetectionWithoutMask` therefore does not
-    /// stop there (its break wants a non-zero vector) and runs all nine regions, each
-    /// reporting the same thing. This pins that a still frame reports
-    /// `bScrollDetectFlag = 1, iScrollMvY = 0` rather than "no scroll" — the two are
-    /// different inputs to the scene-change detector's `(!iScrollMvX || !iScrollMvY)`
-    /// test, which both satisfy.
+    /// An identical pair is detected, at zero: the first probe region matches its own
+    /// row at `iOffsetAbs == 0`, and since the break wants a non-zero vector all nine
+    /// regions run and report the same. A still frame therefore reports
+    /// `bScrollDetectFlag = 1, iScrollMvY = 0` rather than "no scroll".
     #[test]
     fn an_identical_pair_detects_a_zero_vector() {
         const W: usize = 320;
@@ -628,11 +598,9 @@ mod tests {
         assert_eq!(out.iScrollMvY, K as i32);
     }
 
-    /// A mask narrower than [`MINIMUM_DETECT_WIDTH`] refuses before reading a pixel —
-    /// which is why the planes below are empty of anything the core could match, and
-    /// why the assertion is that nothing was detected rather than that nothing
-    /// panicked. `iWidth` is halved *before* the test, so 100 becomes 50 and `50 > 50`
-    /// is false: the boundary is exclusive, as upstream writes it.
+    /// A mask narrower than [`MINIMUM_DETECT_WIDTH`] is refused before a pixel is read.
+    /// `iWidth` is halved before the test, so 100 becomes 50 and `50 > 50` is false:
+    /// the boundary is exclusive.
     #[test]
     fn a_narrow_mask_refuses_without_reading() {
         const W: usize = 320;
@@ -738,10 +706,9 @@ mod tests {
         assert_eq!(CheckLine(&row, 32), 0, "two colours, one change");
     }
 
-    /// [`CompareLine`]'s two upstream quirks, pinned so a later "simplification"
-    /// fails here rather than in a byte diff: twelve bytes are read whatever the
-    /// width, and a width at or below twelve answers "different" even when those
-    /// twelve bytes are equal.
+    /// [`CompareLine`]'s two edge behaviours: twelve bytes are read whatever the width,
+    /// and a width at or below twelve answers "different" even when those twelve bytes
+    /// are equal.
     #[test]
     fn compare_line_keeps_its_twelve_byte_floor() {
         let a = [9u8; 16];

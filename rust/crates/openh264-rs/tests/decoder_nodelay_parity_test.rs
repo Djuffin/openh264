@@ -1,31 +1,23 @@
-//! `DecodeFrameNoDelay` is a *different entry point* from `DecodeFrame2`, and it is
-//! refereed as one.
+//! `DecodeFrameNoDelay` is a different entry point from `DecodeFrame2`.
 //!
-//! `welsDecoderExt.cpp:720–725`, the whole of the reference's single-threaded body:
+//! `welsDecoderExt.cpp:720–725`, the whole of the single-threaded body:
 //!
 //! ```c
 //! iRet  = DecodeFrame2 (kpSrc, kiSrcLen, ppDst, pDstInfo);
 //! iRet |= DecodeFrame2 (NULL, 0, ppDst, pDstInfo);
 //! ```
 //!
-//! The second call is what "no delay" *means*: it forces reconstruction so the caller
+//! The second call is what "no delay" means: it forces reconstruction so the caller
 //! gets its frame on the call that fed the access unit.
 //!
-//! The rows below are the **C++ decoder's**, from
-//! `rust/tools/ecref/ecref <asset> 99999999 --nodelay` against `libopenh264.dylib`.
-//! The flow here is `ecref`'s statement for statement: annex-B split,
-//! `ERROR_CON_SLICE_COPY`, one NAL per call, EOS, a final
+//! The flow is an annex-B split, `ERROR_CON_SLICE_COPY`, one NAL per call, EOS, a final
 //! `DecodeFrameNoDelay(NULL, 0)`, then `FlushFrame` for what `GetOption` reports
 //! remaining, capped at 24.
 //!
-//! # What the rows show, and what must not be "fixed"
-//!
-//! `Error_I_P.264` emits **one** frame here against `DecodeFrame2`'s five, and
-//! `QCIF_2P_I_allIPCM.264` two against a different call pattern. That is not a defect:
-//! when the first call emits a picture and the second does not, the second call's
-//! `iBufferStatus = 0` overwrites it and the frame is lost to that caller. The
-//! reference has the restore written out and **commented out**
-//! (`welsDecoderExt.cpp:726–732`), so it is upstream's considered behaviour.
+//! `Error_I_P.264` emits one frame here against `DecodeFrame2`'s five, and
+//! `QCIF_2P_I_allIPCM.264` two against a different call pattern: when the first call
+//! emits a picture and the second does not, the second call's `iBufferStatus = 0`
+//! overwrites it and the frame is lost to that caller.
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
@@ -34,8 +26,8 @@ use openh264_rs::split_annexb_units;
 mod common;
 use common::Sha1Hasher;
 
-/// `(asset, frames, first-frame dims, sha1 over every emitted plane, codes, buffer statuses)`
-/// — the C++ decoder's answer, via `ecref --nodelay`.
+/// `(asset, frames, first-frame dims, sha1 over every emitted plane, codes, buffer
+/// statuses)`.
 struct Row {
     asset: &'static str,
     frames: usize,
@@ -45,9 +37,8 @@ struct Row {
     bufs: &'static [i32],
 }
 
-/// Diversity over the axes that change emission timing: CAVLC, CABAC with B-frames,
-/// a one-macroblock frame, all-IPCM, and the resolution-change stream. Every number
-/// is `ecref --nodelay`'s.
+/// Diversity over the axes that change emission timing: CAVLC, CABAC with B-frames, a
+/// one-macroblock frame, all-IPCM, and the resolution-change stream.
 const ROWS: &[Row] = &[
     Row {
         asset: "BA_MW_D.264",
@@ -102,7 +93,7 @@ const ROWS: &[Row] = &[
     },
 ];
 
-/// Drives one asset through `DecodeFrameNoDelay`, exactly as `ecref --nodelay` does.
+/// Drives one asset through `DecodeFrameNoDelay`.
 ///
 /// # Safety
 /// Uses the C ABI as a consumer does; every pointer is valid for its call.
@@ -219,8 +210,8 @@ fn decode_frame_no_delay_matches_the_reference_on_every_axis() {
         let data = std::fs::read(res.join(row.asset))
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", row.asset));
         let (frames, dims, sha1, codes, bufs) = unsafe { nodelay_row(&data) };
-        // Counts before hashes: a hash mismatch whose frame count also moved is
-        // a different defect from one whose count held.
+        // Counts before hashes: a mismatch whose count also moved is a different
+        // defect from one whose count held.
         assert_eq!(frames, row.frames, "{}: emitted frame count", row.asset);
         assert_eq!(
             dims, row.dims,

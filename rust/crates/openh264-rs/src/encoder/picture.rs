@@ -1,9 +1,7 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-//! Encoder picture buffers and reference-picture state.
-//!
-//! Translated from `codec/encoder/core/inc/picture.h`. This is the single definition
-//! of `SPicture` and `SScreenBlockFeatureStorage`.
+//! Encoder picture buffers and reference-picture state —
+//! `codec/encoder/core/inc/picture.h`.
 
 #![deny(unsafe_code)]
 
@@ -35,16 +33,9 @@ pub const LIST_SIZE: usize = 0x10000;
 /// `SScreenBlockFeatureStorage` — `codec/encoder/core/inc/picture.h:43`.
 /// Stored with a reference picture, one per frame.
 ///
-/// `iActualListSize` bounds the first two tables; the cursor table keeps the C++'s
-/// larger `WELS_MAX (LIST_SIZE_SUM_16x16, LIST_SIZE_MSE_16x16)` length, which is
-/// **not** `iActualListSize`.
-///
-/// The C++'s fifth member, `pFeatureOfBlockPointer`, is not here. It was the
-/// *address* of the layer's `SFeatureSearchPreparation::pFeatureOfBlock` scratch,
-/// stored by `PerformFMEPreprocess` and read back only inside
-/// `CalculateFeatureOfBlock` — one owner, two names. The scratch belongs to the
-/// layer and reaches both functions as `&mut [u16]`. `AllocPicture` attaches one to
-/// every reference picture of the last layer under `SCREEN_CONTENT_REAL_TIME`.
+/// `iActualListSize` bounds the first two tables; the cursor table is
+/// `WELS_MAX (LIST_SIZE_SUM_16x16, LIST_SIZE_MSE_16x16)` long, **not**
+/// `iActualListSize`.
 #[derive(Debug)]
 pub struct SScreenBlockFeatureStorage {
     pub iIs16x16: i32,
@@ -66,9 +57,8 @@ pub struct SScreenBlockFeatureStorage {
 }
 
 impl Default for SScreenBlockFeatureStorage {
-    /// The zeroed block `WelsMallocz` handed back, minus the pointers — every buffer
-    /// empty, and `uiSadCostThreshold` `UINT_MAX`-filled (a derived `Default` would
-    /// zero it, which is a different storage).
+    /// Every buffer empty and `uiSadCostThreshold` `UINT_MAX`-filled — not the zero a
+    /// derived `Default` would give.
     fn default() -> Self {
         Self {
             iIs16x16: 0,
@@ -85,17 +75,14 @@ impl Default for SScreenBlockFeatureStorage {
 }
 
 impl SScreenBlockFeatureStorage {
-    /// The allocator of `svc_motion_estimate.cpp:690-721`, as a constructor.
+    /// `svc_motion_estimate.cpp:690-721` as a constructor.
     ///
-    /// Every length is that function's, unchanged: the histogram and base table are
-    /// `kiListSize` long, the arena is `2 * kiFrameSize`, and the cursor table is the
-    /// C++'s `WELS_MAX (LIST_SIZE_SUM_16x16, LIST_SIZE_MSE_16x16)` — deliberately not
-    /// `kiListSize`. `uiSadCostThreshold` is `UINT_MAX`-filled there and here.
+    /// The histogram and base table are `kiListSize` long, the arena is
+    /// `2 * kiFrameSize`, and the cursor table is
+    /// `WELS_MAX (LIST_SIZE_SUM_16x16, LIST_SIZE_MSE_16x16)` — not `kiListSize`.
     ///
-    /// Called from `AllocPicture` (`wels_preprocess.rs`) for the last layer's
-    /// reference pictures under `SCREEN_CONTENT_REAL_TIME`, as
-    /// `picture_handle.cpp:115` calls the C++; `bIsBlock8x8` is that function's
-    /// `(kiMe8x8FME == ME_FME)`.
+    /// Called from `AllocPicture` for the last layer's reference pictures under
+    /// `SCREEN_CONTENT_REAL_TIME`; `bIsBlock8x8` is `(kiMe8x8FME == ME_FME)`.
     pub fn for_frame(
         kiFrameWidth: i32,
         kiFrameHeight: i32,
@@ -145,8 +132,7 @@ pub struct SPicture {
 
     /// The four per-macroblock side arrays, `kuiCountMbNum` entries each, or **empty**
     /// where `AllocPicture`'s `bNeedMbInfo` was false — the spatial-source and scaled
-    /// pictures never carry them, and `is_empty()` is the port's spelling of the null
-    /// the C++ leaves there (`picture_handle.cpp:104`).
+    /// pictures never carry them.
     pub uiRefMbType: Vec<u32>,
     pub pRefMbQp: Vec<u8>,
     pub pMbSkipSad: Vec<i32>,
@@ -166,26 +152,19 @@ pub struct SPicture {
     pub iFrameAverageQp: i32,
 
     // for screen reference frames
-    /// `AllocPicture` fills it with a `Some` for the last layer's reference pictures
-    /// under `SCREEN_CONTENT_REAL_TIME` (`picture_handle.cpp:115`); `None` for every
-    /// other picture, which is the C++'s `NULL`.
+    /// `Some` for the last layer's reference pictures under
+    /// `SCREEN_CONTENT_REAL_TIME`, `None` for every other picture.
     pub pScreenBlockFeatureStorage: Option<Box<SScreenBlockFeatureStorage>>,
 }
 
 impl SPicture {
     /// `picture_handle.cpp:51`, everything that is not the plane allocator.
     ///
-    /// Builds the picture whole — every field written, none inherited from a zeroed
-    /// block.
+    /// `bNeedMbInfo` decides whether the four side arrays exist at all; when it is
+    /// false they are empty `Vec`s, which every consumer tests with `is_empty()`.
     ///
-    /// `bNeedMbInfo` decides whether the four side arrays exist at all. The C++
-    /// leaves them null when it is false (`picture_handle.cpp:104`); here they are
-    /// empty `Vec`s, and every consumer that tested for null tests `is_empty()`.
-    ///
-    /// The C++ takes this struct from `WelsMallocz` (`picture_handle.cpp:57`) and
-    /// then writes *seven* fields; every other field's value is the zeroed block's.
-    /// So a fresh picture has `iFramePoc == 0` and `uiTemporalId == uiSpatialId == 0`
-    /// — **not** the `-1`/`255` that [`SetUnref`](Self::SetUnref) leaves behind.
+    /// A fresh picture has `iFramePoc == 0` and `uiTemporalId == uiSpatialId == 0` —
+    /// **not** the `-1`/`255` that [`SetUnref`](Self::SetUnref) leaves behind.
     pub fn new(kiWidth: i32, kiHeight: i32, bNeedMbInfo: bool) -> Box<SPicture> {
         let kuiCountMbNum = if bNeedMbInfo {
             (((15 + kiWidth) >> 4) * ((15 + kiHeight) >> 4)).max(0) as usize
@@ -201,10 +180,8 @@ impl SPicture {
         let kuiChromaStride = align_up((kuiAlignedWidth + 2 * PADDING_LENGTH) >> 1, 16);
 
         Box::new(SPicture {
-            // Zeroed: `AnalyzeSpatialPic` hands `VaaCalculation` a reference picture
-            // nothing has written on the first frame and `VAACalcSad` reads its
-            // visible luma. `PaddedPlane::new` zeroes, which is what `WelsMallocz`
-            // gave and what makes the read defined.
+            // `PaddedPlane::new` zeroes: on the first frame `VAACalcSad` reads the
+            // visible luma of a reference picture nothing has written yet.
             planes: [
                 PaddedPlane::new(
                     kuiAlignedWidth,
@@ -262,10 +239,8 @@ impl SPicture {
     /// carries no macroblock info.
     ///
     /// The address is the `Vec`'s own root, never an index into it, so the pointer's
-    /// provenance covers the whole array. It exists for one consumer —
-    /// `SComplexityAnalysisParam.uiRefMbType`, a `processing/` field that is still
-    /// C-shaped and whose reader tests it for null (`AnalyzePictureComplexity` may
-    /// run with no usable reference). `is_empty()` is that null.
+    /// provenance covers the whole array. Its one consumer,
+    /// `SComplexityAnalysisParam.uiRefMbType`, tests it for null.
     #[inline]
     pub fn ref_mb_type_root(&mut self) -> *mut u32 {
         if self.uiRefMbType.is_empty() {
@@ -278,24 +253,16 @@ impl SPicture {
     /// Plane `i`'s **root-derived** cursor at its logical origin — the raw `pData[i]`
     /// every per-macroblock consumer still walks.
     ///
-    /// The obvious spelling `plane.as_mut_slice()[origin..].as_mut_ptr()` is safe
-    /// code with the right address and Undefined Behaviour at the first read into the
-    /// top or left border, because the slice index narrows provenance to `[origin..]`
-    /// and the border is exactly what this pointer exists to reach — intra prediction
-    /// reads `pRef[-iLineSize]` on the top macroblock row, and
-    /// `ExpandReferencingPicture` writes the whole frame. Deriving from the
-    /// allocation root and *offsetting* keeps the provenance of the whole plane.
+    /// The pointer is derived from the allocation root and then offset, so its
+    /// provenance covers the whole plane including the top and left border — intra
+    /// prediction reads `pRef[-iLineSize]` on the top macroblock row, and
+    /// `ExpandReferencingPicture` writes the whole frame. Slicing `[origin..]` first
+    /// would narrow provenance to that tail and make those reads Undefined Behaviour.
     ///
-    /// And the root must be taken without slicing.
-    /// `plane.as_mut_slice().as_mut_ptr()` has the right *provenance* — the whole
-    /// allocation — but `&mut self.buf` is a `Unique` retag, so the **next** call on
-    /// the same plane pops the pointer the previous one handed out. The encoder does
-    /// exactly that within one frame:
-    /// `WelsInitCurrentLayer` stamps `pEncData` from the source picture, and
-    /// `AnalyzePictureComplexity` asks the same picture for its planes again a few
-    /// hundred lines later, after which `WelsMdI16x16`'s SAD reads through the first
-    /// cursor. [`PaddedPlane::root_ptr`] reads the address out of the `Vec` header
-    /// instead, so repeated calls are siblings rather than a stack.
+    /// The root itself is read out of the `Vec` header ([`PaddedPlane::root_ptr`])
+    /// rather than through `&mut self.buf`, whose `Unique` retag would pop the pointer
+    /// a previous call handed out; the encoder holds two such cursors into one plane
+    /// within a frame, so repeated calls must be siblings rather than a stack.
     #[inline]
     pub fn data_ptr(&mut self, i: usize) -> *mut u8 {
         let plane = &mut self.planes[i];
@@ -306,10 +273,8 @@ impl SPicture {
         plane.root_ptr().wrapping_add(origin)
     }
 
-    /// [`data_ptr`](Self::data_ptr) through `&self` — the **in-fork** form.
-    ///
-    /// The root is read through `&self` ([`PaddedPlane::root_ptr_shared`]): same
-    /// address, same whole-plane provenance, null when the plane is unallocated.
+    /// [`data_ptr`](Self::data_ptr) through `&self` ([`PaddedPlane::root_ptr_shared`]):
+    /// same address, same whole-plane provenance, null when the plane is unallocated.
     #[inline]
     pub fn data_ptr_shared(&self, i: usize) -> *mut u8 {
         let plane = &self.planes[i];
@@ -354,13 +319,12 @@ impl SPicture {
     /// Copy the top-left `kiWidth x kiHeight` samples of `kpSrc` into `self`,
     /// each plane at its own stride — the pool-to-pool half of `WelsMoveMemory_c`.
     ///
-    /// Chroma takes half the geometry in each dimension, as the C++ does
-    /// (`iWidth >> 1`, `iHeight >> 1`); both pictures keep their own strides, so a
-    /// copy between differently-padded allocations is the same walk.
+    /// Chroma takes half the geometry in each dimension (`iWidth >> 1`,
+    /// `iHeight >> 1`); both pictures keep their own strides, so a copy between
+    /// differently-padded allocations is the same walk.
     ///
-    /// Every row is a `copy_from_slice` between bounds-checked ranges. A plane
-    /// short of the geometry panics here — unreachable in this tree, since the pool
-    /// sizes all three planes from the same dimensions this is called with.
+    /// # Panics
+    /// If either picture has a plane shorter than the geometry asks for.
     pub fn copy_planes_from(&mut self, kpSrc: &SPicture, kiWidth: i32, kiHeight: i32) {
         let (kuiW, kuiH) = (kiWidth.max(0) as usize, kiHeight.max(0) as usize);
         for i in 0..3 {
@@ -395,11 +359,8 @@ impl SPicture {
         &mut self.planes[i]
     }
 
-    /// All three planes mutably at once.
-    ///
-    /// [`plane_mut`](Self::plane_mut) borrows the whole picture, so a step that
-    /// writes Y, U and V in one pass — `METHOD_DENOISE` and `METHOD_DOWNSAMPLE` —
-    /// cannot hold three of them.
+    /// All three planes mutably at once, for a step that writes Y, U and V in one
+    /// pass (`METHOD_DENOISE`, `METHOD_DOWNSAMPLE`).
     #[inline]
     pub fn planes_mut3(&mut self) -> [&mut PaddedPlane; 3] {
         let [y, u, v] = &mut self.planes;
@@ -407,9 +368,6 @@ impl SPicture {
     }
 
     /// `ExpandReferencingPicture` for a picture that owns its planes.
-    ///
-    /// `plane_mut(i).as_mut_slice()` **is** the padded allocation, `origin()` is the
-    /// `pad * stride + pad`, and `expand_picture` takes it directly.
     pub fn expand_as_reference(&mut self) {
         let (kiWidthY, kiHeightY) = (self.iWidthInPixel, self.iHeightInPixel);
         let planes = [
@@ -435,9 +393,9 @@ impl SPicture {
 
     /// The picture's plane roots, strides and visible geometry, copied out.
     ///
-    /// A picture is an arena, so the preprocessing and analysis stages resolve it
-    /// once, take this, and then work through raw cursors — rather than holding an
-    /// `&SPicture` across the calls that resolve the *other* picture they need.
+    /// Preprocessing and analysis resolve a picture once, take this, and then work
+    /// through raw cursors instead of holding an `&SPicture` across the calls that
+    /// resolve the other picture they need.
     #[inline]
     pub fn planes(&mut self) -> PicPlanes {
         PicPlanes {
@@ -470,8 +428,7 @@ impl SPicture {
 /// A picture's plane roots and geometry, copied out of it — see [`SPicture::planes`].
 #[derive(Clone, Copy, Debug)]
 pub struct PicPlanes {
-    /// Null on a `Default` — "no picture bound", which is what the C++'s null
-    /// `pRefPic` meant at the sites that read this.
+    /// Null on a `Default` — no picture bound.
     pub pData: [*mut u8; 3],
     pub iLineSize: [i32; 3],
     pub iWidthInPixel: i32,
@@ -479,9 +436,8 @@ pub struct PicPlanes {
 }
 
 impl Default for PicPlanes {
-    /// "No picture bound" — three null roots and zero geometry, which is the state
-    /// `SDqLayer`'s stamped views hold on an I-slice, where the C++ leaves `pRefPic`
-    /// null and no reader reaches them.
+    /// No picture bound: three null roots and zero geometry — the state `SDqLayer`'s
+    /// stamped views hold on an I-slice, where no reader reaches them.
     fn default() -> Self {
         Self {
             pData: [std::ptr::null_mut(); 3],
@@ -496,6 +452,8 @@ impl Default for PicPlanes {
 // The two pools, and the two handle types that address them
 // ===========================================================================
 
+/// A reference-picture handle that may name **either** pool.
+///
 /// The encoder owns pictures in exactly **three** places:
 ///
 /// * the **reconstruction pool**, one per dependency layer, in that layer's
@@ -504,36 +462,24 @@ impl Default for PicPlanes {
 ///   the caller's frames;
 /// * **one scaled input picture**, a slot of its own in `Scaled_Picture`.
 ///
-/// The handles are **two distinct types that do not convert to each other**, because
-/// `pEncPic` (source) and `pDecPic`/`pRefPic` (reconstruction) meet in one
-/// `WelsEncoderEncodeExt` iteration and in `UpdateOriginalPicInfo`: one shared type
-/// would let either be passed where the other belongs, and nothing would say so.
+/// [`SrcPicId`] and [`RecPicId`] are distinct types with no conversion in either
+/// direction, because `pEncPic` (source) and `pDecPic`/`pRefPic` (reconstruction)
+/// meet in one `WelsEncoderEncodeExt` iteration and in `UpdateOriginalPicInfo`.
 ///
-/// A handle is `Copy`, names a slot rather than an address, and does not own — so
-/// the recycling hazard the C++ has is *preserved* (a slot reused under an old
-/// handle) rather than fixed, with a debug-build generation counter to catch it in
-/// tests. See [`crate::safe::pool`].
+/// A handle is `Copy`, names a slot rather than an address, and does not own, so a
+/// slot recycled under an old handle is still a hazard; a debug-build generation
+/// counter catches it. See [`crate::safe::pool`].
 ///
-/// **Scope of a [`RecPicId`]**: it names a slot in **one dependency layer's**
-/// `SRefList`, not a global picture. Every consumer resolves it through the layer it
-/// came from — `ppRefPicListExt[uiDependencyId]`, or `SDqLayer::pRefList`, which is
-/// that same list. Nothing in the port carries a `RecPicId` across a layer switch;
-/// `WelsEncoderEncodeExt` sets `pDecPic`/`pRefPic` from the current layer's list at
-/// the top of each iteration and consumes them inside it.
-/// A reference-picture handle that may name **either** pool.
+/// A [`RecPicId`] names a slot in **one dependency layer's** `SRefList`, not a global
+/// picture, and every consumer resolves it through the layer it came from —
+/// `ppRefPicListExt[uiDependencyId]`, or `SDqLayer::pRefList`, which is that same
+/// list. No `RecPicId` crosses a layer switch.
 ///
-/// One field in the encoder holds both kinds and the C++ cannot see it:
-/// `SDqLayer::pRefOri`. `WelsBuildRefList` (camera) stores *reconstruction* pictures
-/// there — `ref_list_mgr_svc.cpp:613`/`:626` assign `pRefList->pLongRefList[i]` and
-/// `pShortRefList[i]` — while `WelsBuildRefListScreen` stores *spatial source*
-/// pictures, taken from `m_pSpatialPic` through `GetRefFrameInfo`
-/// (`wels_preprocess.cpp:1267`). Both are `SPicture*` in C++, so the disagreement is
-/// invisible there; two handle types make it a type error, and this enum is the
-/// answer — the field really does hold either, and which one depends on a usage-type
-/// branch taken frames earlier.
-///
-/// Its readers are `JudgeStaticSkip` and `JudgeScrollSkip`, both screen-content
-/// paths, so on the camera path the `Rec` writes are dead stores.
+/// `SDqLayer::pRefOri` is the one field that holds both kinds: `WelsBuildRefList`
+/// (camera) stores *reconstruction* pictures there, `WelsBuildRefListScreen` stores
+/// *spatial source* pictures, and which it is depends on a usage-type branch taken
+/// frames earlier. Its readers are `JudgeStaticSkip` and `JudgeScrollSkip`, both
+/// screen-content paths, so on the camera path the `Rec` writes are dead stores.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PicRef {
     /// A slot of a dependency layer's reconstruction pool.
@@ -545,9 +491,6 @@ pub enum PicRef {
 macro_rules! pic_pool {
     ($id:ident, $pool:ident, $what:literal) => {
         #[doc = concat!("A handle to a slot of the ", $what, " picture pool.")]
-        ///
-        /// See the module note on [`SrcPicId`]/[`RecPicId`]: the two handle types are
-        /// deliberately unrelated, and there is no conversion in either direction.
         #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
         pub struct $id(Id);
 
@@ -556,8 +499,8 @@ macro_rules! pic_pool {
         pub struct $pool(Pool<Box<SPicture>>);
 
         impl $pool {
-            /// Takes ownership of `slots`. The pool never grows: both C++ picture
-            /// sets are sized once at initialisation and recycled thereafter.
+            /// Takes ownership of `slots`. The pool never grows: both picture sets
+            /// are sized once at initialisation and recycled thereafter.
             pub fn new(slots: Vec<Box<SPicture>>) -> Self {
                 Self(Pool::new(slots))
             }
@@ -589,8 +532,7 @@ macro_rules! pic_pool {
                 $id(self.0.id(index))
             }
 
-            /// Handles to every slot, in order — the iteration the recycling
-            /// predicates do.
+            /// Handles to every slot, in order.
             pub fn ids(&self) -> impl Iterator<Item = $id> + '_ {
                 self.0.ids().map($id)
             }
@@ -628,14 +570,11 @@ pic_pool!(RecPicId, RecPicPool, "reconstruction");
 mod tests {
     use super::*;
 
-    /// A `data_ptr` that narrowed provenance to `[origin..]` would read the right
-    /// bytes and be Undefined Behaviour at the first border read.
-    ///
-    /// Both backward reaches the *encoder* performs are exercised: one sample
-    /// diagonally behind the origin — intra prediction reading `pRef[-iLineSize - 1]`
-    /// on the top-left macroblock, and any motion vector past the picture edge — and
-    /// the whole `pad * stride + pad` walk back to the allocation base, which is what
-    /// `ExpandReferencingPicture` does to every reconstruction picture, every frame.
+    /// [`SPicture::data_ptr`]'s provenance covers the whole plane, not `[origin..]`:
+    /// both backward reaches the encoder performs stay in bounds — one sample
+    /// diagonally behind the origin (intra prediction's `pRef[-iLineSize - 1]`) and
+    /// the whole `pad * stride + pad` walk back to the allocation base
+    /// (`ExpandReferencingPicture`).
     #[test]
     #[allow(unsafe_code)]
     fn data_ptr_reaches_the_padding_behind_the_logical_origin() {
@@ -687,11 +626,10 @@ mod tests {
         assert_eq!(pic.plane(1).pad(), PADDING_LENGTH / 2);
     }
 
-    /// Three properties of [`SPicture::data_ptr_shared`]: the shared mint reaches
-    /// the padding behind the origin (provenance is the whole plane, not
-    /// `[origin..]`); repeated mints are siblings, so an earlier pointer survives a
-    /// later call; and a pre-fork `data_ptr` stamp followed by shared per-call mints
-    /// leaves both usable, with the shared read seeing the exclusive write.
+    /// [`SPicture::data_ptr_shared`] reaches the padding behind the origin, repeated
+    /// mints are siblings so an earlier pointer survives a later call, and an earlier
+    /// `data_ptr` stamp stays usable alongside them — the shared read sees the write
+    /// made through it.
     #[test]
     #[allow(unsafe_code)]
     fn data_ptr_shared_reaches_the_padding_and_survives_sibling_mints() {
@@ -702,8 +640,7 @@ mod tests {
         pic.plane_mut(0).set(0, 0, 0x5A);
         pic.plane_mut(0).set(-1, -1, 0xC3);
 
-        // One exclusive stamp first (WelsInitCurrentLayer's pEncData/pCsData
-        // world), then shared per-call mints.
+        // One exclusive stamp first, then shared per-call mints.
         let p_stamp = pic.data_ptr(0);
         let p1 = pic.data_ptr_shared(0);
         let p2 = pic.data_ptr_shared(0);
@@ -714,7 +651,7 @@ mod tests {
         assert_eq!(
             unsafe { *p1.sub(stride + 1) },
             0xC3,
-            "one sample diagonally behind the origin — the S28 reach"
+            "one sample diagonally behind the origin, in the top-left padding"
         );
         // Forward, to the last byte of the bottom-right padding.
         let len = pic.plane(0).as_slice().len();
@@ -748,8 +685,7 @@ mod tests {
         assert!(without.sMvList.is_empty());
     }
 
-    /// A fresh picture is `WelsMallocz`'s zeroed block plus `picture_handle.cpp`'s
-    /// seven writes — *not* the unreferenced state.
+    /// A fresh picture holds zeros where [`SPicture::SetUnref`] leaves `-1`/`255`.
     #[test]
     fn a_fresh_picture_is_not_an_unreferenced_one() {
         let pic = SPicture::new(176, 144, false);
@@ -757,7 +693,7 @@ mod tests {
         assert_eq!(pic.uiTemporalId, 0);
         assert_eq!(pic.uiSpatialId, 0);
         assert_eq!(pic.uiRecieveConfirmed, RECIEVE_UNKOWN);
-        // and the seven the C++ writes
+        // and the fields the constructor writes
         assert_eq!(pic.iWidthInPixel, 176);
         assert_eq!(pic.iHeightInPixel, 144);
         assert_eq!(pic.iFrameNum, -1);
@@ -765,15 +701,10 @@ mod tests {
         assert_eq!(pic.iLongTermPicNum, -1);
         assert_eq!(pic.iMarkFrameNum, -1);
     }
-    /// The referee for [`SPicture::copy_planes_from`] is the function it replaced.
-    /// Both run on identical picture pairs and the **whole allocation** of each
-    /// destination is compared — so a copy that wrote the right visible samples into
-    /// the wrong rows, or touched a padding byte, fails here.
-    ///
-    /// The strides differ between source and destination on purpose (176x144 pads to
-    /// a different luma stride than 160x128 does), which is the case a same-stride
-    /// test would pass while a flat `copy_from_slice` over the whole plane also
-    /// passed.
+    /// [`SPicture::copy_planes_from`] against `WelsMoveMemory_c` on identical picture
+    /// pairs, comparing the **whole allocation** of each destination — so a copy into
+    /// the wrong rows, or over a padding byte, fails here. Most cases give source and
+    /// destination different luma strides.
     #[test]
     #[allow(unsafe_code)]
     fn copy_planes_from_matches_the_raw_primitive_it_replaced() {
@@ -836,8 +767,7 @@ mod tests {
                     "plane {i} differs for src {sw}x{sh} -> dst {dw}x{dh}, copying {w}x{h}"
                 );
             }
-            // And the copy actually happened — a method that did nothing would pass
-            // every comparison above if the raw one also did nothing.
+            // And the copy actually happened.
             assert!(
                 dst_safe.planes[0].as_slice().iter().any(|&b| b != 0xA5),
                 "nothing was written for {w}x{h}"

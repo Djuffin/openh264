@@ -84,7 +84,6 @@ fn test_loopback_encode_and_decode_pipeline() {
             let enc_frame_ret = ISVCEncoder::EncodeFrame(p_encoder, &src_pic, &mut bs_info);
             assert_eq!(enc_frame_ret, CM_RESULT_SUCCESS);
 
-            // 4. Decode encoded stream
             if bs_info.eFrameType != EVideoFrameType::videoFrameTypeInvalid
                 && bs_info.eFrameType != EVideoFrameType::videoFrameTypeSkip
             {
@@ -111,7 +110,6 @@ fn test_loopback_encode_and_decode_pipeline() {
                 }
             }
 
-            // 5. Uninitialize and destroy safely
             assert_eq!(ISVCEncoder::Uninitialize(p_encoder), CM_RESULT_SUCCESS);
             assert_eq!(
                 ISVCDecoder::Uninitialize(p_decoder),
@@ -158,13 +156,12 @@ fn workspace_root() -> std::path::PathBuf {
 }
 
 /// Upstream's `DecodeEncodeFile/DecodeEncodeTest.CompareOutput`
-/// (`test/api/decode_encode_test.cpp`), which passes against `libopenh264.a`.
+/// (`test/api/decode_encode_test.cpp`).
 ///
-/// This calls `Initialize` with a bare `SEncParamBase`, exactly as upstream's
-/// `BaseEncoderTest::InitWithParam` does for this configuration. That leaves
-/// **every** `FillDefault` value in place, not just `iRCMode = RC_QUALITY_MODE`:
-/// `bEnableSceneChangeDetect`, `bEnableBackgroundDetection`, `bEnableAdaptiveQuant`
-/// and `bEnableFrameSkip` are all `true` as well.
+/// `Initialize` takes a bare `SEncParamBase`, which leaves every `FillDefault` value in
+/// place: `iRCMode = RC_QUALITY_MODE`, and `bEnableSceneChangeDetect`,
+/// `bEnableBackgroundDetection`, `bEnableAdaptiveQuant` and `bEnableFrameSkip` all
+/// `true`.
 #[test]
 fn test_decode_encode_full_cycle_sha1_parity() {
     let repo_root = workspace_root();
@@ -183,7 +180,6 @@ fn test_decode_encode_full_cycle_sha1_parity() {
         );
 
         unsafe {
-            // 1. Create decoder
             let mut p_decoder: *mut ISVCDecoder = std::ptr::null_mut();
             let dec_create = WelsCreateDecoder(&mut p_decoder);
             assert_eq!(dec_create, CM_RESULT_SUCCESS as i64);
@@ -197,19 +193,15 @@ fn test_decode_encode_full_cycle_sha1_parity() {
             let dec_init = ISVCDecoder::Initialize(p_decoder, &dec_param as *const SDecodingParam);
             assert_eq!(dec_init, CM_RESULT_SUCCESS as i64);
 
-            // 2. Create encoder
             let mut p_encoder: *mut ISVCEncoder = std::ptr::null_mut();
             let enc_create = WelsCreateSVCEncoder(&mut p_encoder);
             assert_eq!(enc_create, CM_RESULT_SUCCESS);
             assert!(!p_encoder.is_null());
 
             // `hash_str` is upstream's expectation from
-            // `test/api/decode_encode_test.cpp:133`, so the encoder has to be set up
-            // exactly the way that test sets it up. `BaseEncoderTest::InitWithParam`
-            // takes its `bBaseParamFlag` branch for this configuration — single
-            // slice, one spatial layer, no denoise, no lossless link, no LTR, CAVLC —
-            // and calls `Initialize` with a zeroed `SEncParamBase` carrying only
-            // usage type, frame rate, width, height and `iTargetBitrate = 5000000`.
+            // `test/api/decode_encode_test.cpp:133`: single slice, one spatial layer, no
+            // denoise, no lossless link, no LTR, CAVLC, and a zeroed `SEncParamBase`
+            // carrying only usage type, frame rate, width, height and the bitrate.
             let mut enc_param = SEncParamBase::default();
             enc_param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
             enc_param.fMaxFrameRate = param.frame_rate;

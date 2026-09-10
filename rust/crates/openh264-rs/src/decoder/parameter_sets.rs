@@ -5,7 +5,7 @@
 //! H.264 / AVC and SVC Sequence Parameter Set (SPS), Picture Parameter Set (PPS),
 //! and Video Usability Information (VUI) data structures.
 //!
-//! Translated from `codec/decoder/core/inc/parameter_sets.h`.
+//! C++: `codec/decoder/core/inc/parameter_sets.h`.
 
 pub const MAX_SLICEGROUP_IDS: usize = 8;
 pub const MAX_SPS_COUNT: usize = 32;
@@ -29,7 +29,7 @@ pub const PRO_SCALABLE_HIGH: ProfileIdc = 86;
 
 /// Frame cropping and picture position offset structure.
 ///
-/// Matches `TagPosOffset` / `SPosOffset` from `codec/decoder/core/inc/wels_common_basis.h`.
+/// C++: `TagPosOffset` / `SPosOffset`, `codec/decoder/core/inc/wels_common_basis.h`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub struct TagPosOffset {
@@ -43,7 +43,7 @@ pub type SPosOffset = TagPosOffset;
 
 /// Level limits for H.264 compliance validation.
 ///
-/// Matches `TagLevelLimits` / `SLevelLimits` from `codec/common/inc/wels_common_defs.h`.
+/// C++: `TagLevelLimits` / `SLevelLimits`, `codec/common/inc/wels_common_defs.h`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub struct TagLevelLimits {
@@ -250,7 +250,7 @@ pub struct TagSps {
 
     pub uiBitDepthLuma: u8,
     pub uiBitDepthChroma: u8,
-    /* TO BE CONTINUE: POC type 1 */
+    /* POC type 1, continued */
     pub bDeltaPicOrderAlwaysZeroFlag: bool,
     pub bGapsInFrameNumValueAllowedFlag: bool,
 
@@ -274,15 +274,11 @@ pub struct TagSps {
 }
 
 impl TagSps {
-    /// The all-zero SPS the C's `memset (pSps, 0, sizeof (SSps))` produces — every
-    /// field's zero *meaning*, written out.
+    /// The all-zero SPS, which is where `ParseSps` starts.
     ///
-    /// **This is not [`Default`], and the difference is load-bearing.** `Default` is
-    /// the port's *useful* SPS: `uiBitDepthLuma`/`uiBitDepthChroma` are 8 and
-    /// `bFrameMbsOnlyFlag` is `true`, because those are the values a parse that never
-    /// writes them must still read. `au_parser.cpp`'s `ParseSps` starts from the
-    /// memset instead. Use this where the C memsets; use `Default` where the port
-    /// wants a usable SPS.
+    /// Not [`Default`]: that is a usable SPS, with `uiBitDepthLuma`/`uiBitDepthChroma`
+    /// 8 and `bFrameMbsOnlyFlag` `true` — the values a parse that never writes them
+    /// must still read.
     pub fn memset_zero() -> Self {
         Self {
             iSpsId: 0,
@@ -303,12 +299,12 @@ impl TagSps {
             uiLevelIdc: 0,
             uiChromaFormatIdc: 0,
             uiChromaArrayType: 0,
-            // The two the port's `Default` sets to 8. Zero here, because the C's is.
+            // 8 in `Default`.
             uiBitDepthLuma: 0,
             uiBitDepthChroma: 0,
             bDeltaPicOrderAlwaysZeroFlag: false,
             bGapsInFrameNumValueAllowedFlag: false,
-            // Likewise: `Default` says `true`, `memset` says `false`.
+            // `true` in `Default`.
             bFrameMbsOnlyFlag: false,
             bMbaffFlag: false,
             bDirect8x8InferenceFlag: false,
@@ -407,10 +403,8 @@ pub struct TagSubsetSps {
 }
 
 impl TagSubsetSps {
-    /// The all-zero subset SPS the C's `memset (pSubsetSps, 0, sizeof (SSubsetSps))`
-    /// produces. Its `Default` inherits [`TagSps::default`]'s non-zero fields through
-    /// `sSps`, which is what makes this constructor a different value and not a
-    /// synonym.
+    /// The all-zero subset SPS. Distinct from `Default`, which inherits
+    /// [`TagSps::default`]'s non-zero fields through `sSps`.
     pub fn memset_zero() -> Self {
         Self {
             sSps: TagSps::memset_zero(),
@@ -473,12 +467,11 @@ pub struct TagPps {
 }
 
 impl TagPps {
-    /// The all-zero PPS the C's `memset (pPps, 0, sizeof (SPps))` produces — every
-    /// field's zero *meaning*, written out.
+    /// The all-zero PPS, which is where `ParsePps` starts.
     ///
-    /// **Not [`Default`]**, which is the port's usable PPS: `uiNumSliceGroups`,
-    /// `uiNumRefIdxL0Active` and `uiNumRefIdxL1Active` are 1 and `iPicInitQp`/`iPicInitQs`
-    /// are 26 there. `au_parser.cpp`'s `ParsePps` starts from the memset.
+    /// Not [`Default`]: that is a usable PPS, with `uiNumSliceGroups`,
+    /// `uiNumRefIdxL0Active` and `uiNumRefIdxL1Active` 1 and `iPicInitQp`/`iPicInitQs`
+    /// 26.
     pub fn memset_zero() -> Self {
         Self {
             iSpsId: 0,
@@ -556,13 +549,11 @@ impl Default for TagPps {
 }
 
 impl TagSps {
-    /// Computes the picture width in pixels from `iMbWidth`.
     #[inline(always)]
     pub fn frame_width_in_pixels(&self) -> u32 {
         self.iMbWidth * 16
     }
 
-    /// Computes the picture height in pixels from `iMbHeight`.
     #[inline(always)]
     pub fn frame_height_in_pixels(&self) -> u32 {
         self.iMbHeight * 16

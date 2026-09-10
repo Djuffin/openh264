@@ -1,29 +1,13 @@
-//! **`ForceIntraFrame` with LTR on** — `ltr_test.cpp:14-42`'s loop.
+//! `ForceIntraFrame` with LTR on — `ltr_test.cpp:14-42`.
 //!
-//! The reference's assertion is blunt: with long-term reference enabled
-//! (`iLTRRefNum = 1`, marking period 2) and `ForceIntraFrame(true)` called after every
-//! frame, **every frame the encoder produces must report `videoFrameTypeIDR`**. The
-//! first one is IDR because it opens the stream; each one after it is IDR because the
-//! caller asked for it.
+//! With long-term reference enabled (`iLTRRefNum = 1`, marking period 2) and
+//! `ForceIntraFrame(true)` called after every frame, every frame the encoder produces
+//! reports `videoFrameTypeIDR`: the first because it opens the stream, each one after
+//! it because the caller asked.
 //!
-//! ```c
-//! while (iIdx <= p.numframes) {
-//!   EncodeOneFrame (0);
-//!   ASSERT_TRUE (info.eFrameType == videoFrameTypeIDR);
-//!   encoder_->ForceIntraFrame (true);
-//!   iIdx++;
-//! }
-//! ```
-//!
-//! The three gtest instances of this are `rand()`-seeded (`simple_test.cpp:20-24`
-//! seeds from `time(NULL)`, and `iIDRPeriod` is `2^(layers-1) * (rand()%5 + 1)`), so
-//! *which* instance fails moves between runs and the gtest binary alone is a poor
-//! regression net. This file pins the configuration and the frame types.
-//!
-//! The configuration below is `prepareParamDefault` + `prepareParam`
+//! The configuration is `prepareParamDefault` + `prepareParam`
 //! (`encode_decode_api_test.cpp`) with the fixture's first parameter row
-//! (`decoder_ec_test.cpp:138`: 300 frames, 160x96, 6 fps, 2 slices), and the same
-//! five `SetOption` calls the test makes.
+//! (`decoder_ec_test.cpp:138`: 160x96, 6 fps, 2 slices) and its five `SetOption` calls.
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::encoder::wels_encoder_ext::SLTRConfig;
@@ -148,20 +132,18 @@ unsafe fn force_idr_frame_types(
     }
 }
 
-/// The reference's own expectation, on the fixture's three parameter rows.
+/// Every frame reports `videoFrameTypeIDR`, on the fixture's three parameter rows.
 ///
-/// 32 frames rather than the fixture's 300: the assertion fails on the *second*
-/// frame when it fails at all, and 300 flat frames at three sizes is 40 s of gate
-/// time for no extra evidence.
+/// 32 frames rather than the fixture's 300: the assertion fails on the second frame
+/// when it fails at all.
 #[test]
 fn force_intra_frame_with_ltr_gives_an_idr_every_time() {
     // `decoder_ec_test.cpp:138-140`, the three instantiations of
     // `EncodeDecodeTestAPIBase/EncodeDecodeTestAPI`.
     for (w, h, slices) in [(160, 96, 2), (140, 96, 4), (140, 96, 4)] {
-        // `iIDRPeriod = 2^(iTemporalLayerNum - 1) * (rand() % 5 + 1)`. The default
-        // temporal-layer count is 1, so the power is 1 and the range is 1..=5; all
-        // five are run, because `ForceIntraFrame` is supposed to make the interval
-        // irrelevant and that claim is the point of the test.
+        // `iIDRPeriod = 2^(iTemporalLayerNum - 1) * (rand() % 5 + 1)`; with the default
+        // one temporal layer the range is 1..=5. All five run, because
+        // `ForceIntraFrame` is supposed to make the interval irrelevant.
         for idr_interval in 1..=5 {
             let types = unsafe { force_idr_frame_types(w, h, slices, 32, idr_interval) };
             for (i, t) in types.iter().enumerate() {

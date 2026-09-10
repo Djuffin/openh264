@@ -80,14 +80,9 @@ pub const INTER_VARIANCE_SAD_THRESHOLD: i32 = 20;
 // Neighbor availability bitmasks
 pub const LEFT_MB_POS: u32 = 0x01;
 pub const TOP_MB_POS: u32 = 0x02;
-// `wels_common_basis.h:125-126`: TOPRIGHT is C (0x04) and TOPLEFT is D (0x08).
-// Both are live: FillNeighborCacheIntra below tests
-// `uiNeighborAvail & TOPLEFT_MB_POS` to set uiNeighborIntra bit 0x04, which indexes
-// g_kiIntra16AvaliMode / g_kiNeighborIntraToI4x4, and FillNeighborCacheInter* test
-// them for the top-left/top-right MV and ref-index caches.
-// The mb_cache.h:118 comment describes the *encoded* uiNeighborIntra bit layout
-// (TOPLEFT 0x04, TOPRIGHT 0x08), which is deliberately the reverse of the
-// uiNeighborAvail layout; do not "reconcile" the two.
+// `wels_common_basis.h:125-126`: TOPRIGHT is C (0x04) and TOPLEFT is D (0x08). The
+// encoded `uiNeighborIntra` layout of `mb_cache.h:118` (TOPLEFT 0x04, TOPRIGHT 0x08)
+// is deliberately the reverse of this `uiNeighborAvail` layout; the two do not agree.
 pub const TOPRIGHT_MB_POS: u32 = 0x04;
 pub const TOPLEFT_MB_POS: u32 = 0x08;
 
@@ -101,7 +96,6 @@ pub const REF_NOT_AVAIL: i8 = -2;
 
 // Macroblock sizing & type constants
 /// `MB_BLOCK8x8_NUM` — `wels_const_common.h:58`, the width of `SMB::iRefIndex`.
-/// Re-exported rather than re-declared: `encoder_ext.rs:96` already owns the copy.
 pub use crate::encoder::encoder_ext::MB_BLOCK8x8_NUM;
 /// `MB_COEFF_LIST_SIZE` — `wels_const.h`, the width of `SMbCache::sCoeffLevel`.
 pub use crate::encoder::svc_encode_slice::MB_COEFF_LIST_SIZE;
@@ -159,25 +153,17 @@ pub struct SWelsMD_sMe<'a> {
     pub sMe8x16: [SWelsME<'a>; 2],
 }
 
-/// **Everything the P-slice mode decision used to re-resolve per macroblock**,
-/// resolved once for the slice.
-///
-/// The C++ binds `pCurLayer`, `pMbCache`, `pMbList`, the PPS chroma QP offset and the
-/// MVD cost table once in `WelsMdInterMbLoop` and addresses the pictures by pointer
-/// arithmetic from `kiMbX`/`kiMbY` (`svc_encode_slice.cpp`,
-/// `svc_base_layer_md.cpp:1352`). The port reached each of those through an accessor
-/// instead, and the accessors are not free: `layer_ref_view_expect` *builds* a fresh
-/// `RoPicView` every call — layer -> reference list -> pool -> three plane captures —
-/// and `WelsMdBackgroundMbEnc` alone called it three times per macroblock.
+/// **Everything the P-slice mode decision would otherwise re-resolve per macroblock**,
+/// resolved once for the slice — the layer, the three picture views, the PPS chroma QP
+/// offset and the cost-function slots.
 ///
 /// Built where the slice's layer is known, and **never carried across layers or
 /// frames**: `layer_ref_pic` resolves through the layer's own dependency id, and the
 /// views are the ones stamped for the frame in progress. It is per-worker by
 /// construction — `RecCursor` is not `Send`, so a worker makes its own.
 ///
-/// `Copy`, and small enough for that to mean nothing: 120 bytes of references,
-/// scalars and function pointers, every one of them loop-invariant, so a consumer
-/// takes a copy and the compiler forwards the fields it actually reads.
+/// `Copy`: 120 bytes of references, scalars and function pointers, every one of them
+/// loop-invariant.
 #[derive(Clone, Copy)]
 pub struct MdSliceCtx<'a> {
     /// `current_layer_expect`.
@@ -205,22 +191,19 @@ pub struct MdSliceCtx<'a> {
     /// The active PPS's `uiChromaQpIndexOffset`.
     pub chroma_qp_offset: i32,
     /// `ctx_ref_pic(..).map_or(0, |p| p.iPictureType)` — the **context's** reference
-    /// picture, which is `sWelsEncCtx::pRefPic` through the context's own dependency
-    /// id and so is not [`ref_pic`](Self::ref_pic), which is the *layer's*. Hoisted
-    /// as a value: nothing may write the context during a slice, every worker holding
-    /// it shared.
+    /// picture, resolved through the context's own dependency id, so not
+    /// [`ref_pic`](Self::ref_pic), which is the *layer's*. Held as a value: nothing may
+    /// write the context during a slice, every worker holding it shared.
     pub ctx_ref_pic_type: i32,
     pub mb_width: i32,
     pub mb_height: i32,
     /// The cost slots this path calls, unwrapped once. `pfMdCost` is stamped
     /// per frame by `PreprocessSliceCoding`, so the selection is slice-invariant.
     ///
-    /// **`sad16` stays a slot where `sad8` became a direct call**, and the reason is
-    /// the AVX2 arm of `WelsInitSampleSadFunc`: it overwrites `pfSampleSad[16x16]`
-    /// with `sample_sad_16x16_avx2` where the host has AVX2, so that slot is *not*
-    /// one function on every build and calling `kernels::sad::sample_sad_16x16`
-    /// directly would answer the same integer through the narrower kernel. Nothing
-    /// overrides `pfSampleSad[8x8]`.
+    /// **`sad16` stays a slot where `sad8` is a direct call**: the AVX2 arm of
+    /// `WelsInitSampleSadFunc` overwrites `pfSampleSad[16x16]` with
+    /// `sample_sad_16x16_avx2` where the host has AVX2, so that slot is *not* one
+    /// function on every build. Nothing overrides `pfSampleSad[8x8]`.
     pub sad16: PSampleSadSatdCostFunc,
     pub satd16: PSampleSadSatdCostFunc,
     pub md_cost16: PSampleSadSatdCostFunc,
@@ -229,9 +212,8 @@ pub struct MdSliceCtx<'a> {
 /// The nine plane cursors a macroblock's mode decision reads, **built once per
 /// macroblock** where the C++ computes nine pointers from `kiMbX`/`kiMbY`.
 ///
-/// `SharedPlane::cursor` is a raw-parts slice and a multiply-add; at seven to fifteen
-/// calls a macroblock it was 4.5% of the flat 720p frame and 4.9% of the QVGA one.
-/// Each field here is one such call, hoisted to the top of the loop.
+/// Each field is one `SharedPlane::cursor` call — a raw-parts slice and a
+/// multiply-add — hoisted to the top of the loop.
 ///
 /// `Copy` — a `RecCursor` is a slice, an offset and a stride.
 #[derive(Clone, Copy)]
@@ -250,27 +232,18 @@ pub struct MbCursors<'a> {
 /// The reference picture's three per-macroblock entries, **taken once** where
 /// [`MbCursors`] is stamped.
 ///
-/// Each was an `Option` unwrap on the reference picture, a `Vec` deref and a
-/// bounds-checked index, spread over `WelsMdInterInit` (`uiRefMbType`), the
-/// background judgement (`pRefMbQp`) and the two skip-cost tests (`pMbSkipSad`,
-/// twice inside one comparison). The C++ reads the same words off pointers it has
-/// already formed. All three arrays are written by the *previous* frame, so only the
-/// number of reads changes, never the values.
+/// The readers are `WelsMdInterInit` (`uiRefMbType`), the background judgement
+/// (`pRefMbQp`) and the two skip-cost tests (`pMbSkipSad`). All three arrays are
+/// written by the *previous* frame, so the values never change during a slice.
 ///
-/// **The background flags are not here**, and that was measured: stamping the flag
-/// and its four neighbours cost 1.0% of the flat 1080p frame, because the readers
-/// take them under `bKeepSkip` and under `uiNeighborAvail` — guards that skip the
-/// read at exactly the macroblocks a stamp cannot skip.
-///
-/// **This is not on [`MdSliceCtx`]**, for the same kind of reason: four more slices
-/// on the context cost 0.5%, the context being copied per macroblock at every body
-/// that reads it while this is read once.
+/// **The background flags are not here**: their readers take them under `bKeepSkip`
+/// and under `uiNeighborAvail`, guards that skip the read at exactly the macroblocks a
+/// stamp cannot skip.
 #[derive(Clone, Copy, Default)]
 pub struct MbSideInfo {
     /// `SPicture::pRefMbQp[iMbXY]`.
     pub ref_qp: u8,
-    /// `ref_pic.iPictureType == P_SLICE` — a property of the slice, carried here
-    /// because the byte beside `ref_qp` is free.
+    /// `ref_pic.iPictureType == P_SLICE`.
     pub ref_is_p: bool,
     /// `SPicture::uiRefMbType[iMbXY]`.
     pub ref_mb_type: u32,
@@ -282,8 +255,7 @@ impl MbSideInfo {
     /// The entries for the macroblock at raster address `mb_xy`.
     ///
     /// # Panics
-    /// If no reference picture is bound — `WelsMdInterInit` read `uiRefMbType` off
-    /// it for every P macroblock, so this is the same requirement in the same place.
+    /// If no reference picture is bound; every P macroblock requires one.
     #[inline]
     pub fn at(sc: &MdSliceCtx<'_>, mb_xy: i32) -> Self {
         let xy = mb_xy as usize;
@@ -300,14 +272,9 @@ impl MbSideInfo {
 impl<'a> MdSliceCtx<'a> {
     /// Resolves the slice's context, once, from the layer the slice belongs to.
     ///
-    /// `ref_view` is passed in rather than built here because it is a **value**: the
-    /// caller owns the `RoPicView` for the slice's whole scope and the context
-    /// borrows it, which is what makes the one build serve every macroblock.
-    ///
-    /// The chroma QP offset is `layer_pps_ref(..).map_or(0, ..)` — the reading
-    /// `WelsMdInterMbLoop` already had. Two other sites spelled the same lookup with
-    /// `.expect`, and the two disagree only about a layer with no PPS stamped, which
-    /// no coding path reaches.
+    /// `ref_view` is passed in rather than built here: the caller owns the `RoPicView`
+    /// for the slice's whole scope and the context borrows it, which is what makes one
+    /// build serve every macroblock.
     #[inline]
     pub fn build(
         pCtx: &'a sWelsEncCtx,
@@ -358,10 +325,7 @@ impl<'a> MbCursors<'a> {
     /// The nine cursors of the macroblock at `(mb_x, mb_y)`.
     ///
     /// # Panics
-    /// If no reference view is bound. The P-slice loop is past that by
-    /// construction, and `WelsMdInterInit` — which runs on this same macroblock, a
-    /// few lines later — has always asserted the same thing of the reference
-    /// picture.
+    /// If no reference view is bound; the P-slice loop is past that by construction.
     #[inline]
     pub fn at(sc: &MdSliceCtx<'a>, mb_x: i32, mb_y: i32) -> Self {
         let refv = sc
@@ -373,10 +337,9 @@ impl<'a> MbCursors<'a> {
     /// [`at`](Self::at) from the three views themselves.
     ///
     /// The loop stamps through this rather than through `at`, so that the borrow of
-    /// `SWelsMD::sctx` the views come from has ended before the result is written
-    /// back to `SWelsMD::mbc`: with the borrow still live the nine cursors are built
-    /// into a stack temporary and `memmove`d into place, which was 1.5% of the flat
-    /// 1080p frame.
+    /// `SWelsMD::sctx` the views come from has ended before the result is written back
+    /// to `SWelsMD::mbc` — with the borrow live the nine cursors go through a stack
+    /// temporary.
     #[inline]
     pub fn from_views(
         enc: &'a crate::encoder::rec_view::RoPicView,
@@ -433,9 +396,6 @@ pub struct SWelsMD<'a> {
 
 impl<'a> SWelsMD<'a> {
     /// The slice context, for the P-slice bodies that cannot run without one.
-    ///
-    /// Returns a **copy**: the record is also written through `&mut SWelsMD` in the
-    /// same statement at many sites, and a borrow of the field would forbid that.
     ///
     /// # Panics
     /// If no context was built — every P-slice entry point builds one before the
@@ -507,12 +467,10 @@ pub type PWelsLumaHalfpelMcFunc = unsafe extern "C" fn(
 /// equal-shaped blocks, the cost-table slot type of `SSampleDealingFunc::pfSampleSad`
 /// and `pfSampleSatd`.
 ///
-/// The two operands are plane cursors anchored at sample `(0, 0)` of each block —
-/// the source macroblock, a reference block displaced by a candidate vector, or a
-/// prediction buffer in the arena — and each kernel
-/// (`common/sad_common.rs::sample_sad::<W, H>`, `encoder/sample.rs::satd_WxH`) reads
-/// `W` x `H` samples from both and nothing else. The block shape is the slot's index
-/// (`BLOCK_16x16` ..).
+/// The two operands are plane cursors anchored at sample `(0, 0)` of each block — the
+/// source macroblock, a reference block displaced by a candidate vector, or a
+/// prediction buffer in the arena — and each kernel reads `W` x `H` samples from both
+/// and nothing else. The block shape is the slot's index (`BLOCK_16x16` ..).
 pub type PSampleSadSatdCostFunc = fn(&RecCursor<'_>, &RecCursor<'_>) -> i32;
 
 /// The four fractional-pixel refinement planes, as **offsets** into the one buffer
@@ -528,11 +486,9 @@ pub struct SMeRefinePointer {
     /// `false`: best is plane 2 (1280), tmp is plane 3 (1920). `true`: swapped.
     pub bQuarPixSwapped: bool,
     /// The fixed-shape copy that moves the winning prediction into the macroblock's
-    /// inter-prediction buffer, chosen by partition shape.
-    ///
-    /// This is *not* `SWelsFuncPtrList`'s `pfCopy*` table — it is a per-partition
-    /// selection out of it, made in `WelsMdInterMbRefinement` and consumed once at
-    /// the end of `MeRefineFracPixel`.
+    /// inter-prediction buffer, selected out of `SWelsFuncPtrList`'s `pfCopy*` table by
+    /// partition shape in `WelsMdInterMbRefinement` and consumed once at the end of
+    /// `MeRefineFracPixel`.
     pub pfCopyBlockByMode: Option<fn(&RecCursor<'_>, &mut PlaneCursorMut<'_>)>,
 }
 
@@ -569,7 +525,7 @@ impl SMeRefinePointer {
             ME_PLANE_QUAR_B
         }) + self.iStride
     }
-    /// What `mem::swap(&mut pQuarPixBest, &mut pQuarPixTmp)` was.
+    /// Exchanges the best and tmp quarter-pixel planes.
     #[inline(always)]
     pub fn swap_quar(&mut self) {
         self.bQuarPixSwapped = !self.bQuarPixSwapped;
@@ -626,8 +582,7 @@ fn quar_candidate(
     h: usize,
 ) {
     let stride = ME_REFINE_BUF_STRIDE as usize;
-    // `a` is a `Buf` in every arm of `MeRefineFracPixel` (the C++ builds `pSrcA` out
-    // of `pHalfPixH`/`pHalfPixV` unconditionally); `b` is either.
+    // `a` is a `Buf` in every arm of `MeRefineFracPixel`; `b` is either.
     let MeQuarSource::Buf(a_off) = *a else {
         unreachable!("pSrcA is a scratch plane in every half-pixel arm")
     };
@@ -663,14 +618,11 @@ pub struct SMB {
     pub iMbY: i16,
     pub uiNeighborAvail: u8,
     pub uiCbp: u8,
-    /// `SMVUnitXY* sMv` in the C++, pointed at a slot of the context-wide
-    /// `pMvUnitBlock4x4` bank; here every macroblock owns its own row.
+    /// `SMVUnitXY* sMv` — one row of 4x4 motion vectors per macroblock.
     pub sMv: [SMVUnitXY; MB_BLOCK4x4_NUM],
     /// `int8_t* pRefIndex` — one entry per 8x8 partition.
     pub iRefIndex: [i8; MB_BLOCK8x8_NUM],
-    /// `int32_t* pSadCost` — the C++ points this at one `int32_t` per macroblock
-    /// (`pSadCostMb + iMbXY`) and every site reads `[0]`, so the inline form is a
-    /// scalar rather than an array.
+    /// `int32_t* pSadCost` — one value per macroblock, so a scalar here.
     pub iSadCost: i32,
     /// `int8_t* pIntra4x4PredMode` — 8 published modes (4 right column, 3 bottom
     /// row, 1 unused) that the *next* macroblock's `FillNeighborCacheIntra` reads.
@@ -716,12 +668,10 @@ impl Default for SMB {
 
 /// `TagMbCache` — `codec/encoder/core/inc/mb_cache.h:72`.
 ///
-/// C++ declares the first three members with `ALIGNED_DECLARE (..., 16)`, which
-/// aligns each *variable* to 16 bytes and gives the struct 16-byte alignment. Rust
-/// has no per-field alignment attribute, so that is reproduced here as
-/// `#[repr(C, align(16))]` plus the 14 bytes of padding the C++ compiler inserts
-/// after `sMvComponents` (146 bytes) to bring `iNonZeroCoeffCount` to offset 160.
-/// The two `[i8; 48]` arrays are already 16-multiples and need no further padding.
+/// The first three members are `ALIGNED_DECLARE (..., 16)` in C++, giving the struct
+/// 16-byte alignment. `#[repr(C, align(16))]` plus 14 bytes of padding after
+/// `sMvComponents` (146 bytes) gives the same layout, bringing `iNonZeroCoeffCount` to
+/// offset 160; the two `[i8; 48]` arrays are already 16-multiples.
 #[repr(C, align(16))]
 #[derive(Debug)]
 pub struct SMbCache {
@@ -733,20 +683,15 @@ pub struct SMbCache {
     pub sMbMvp: [SMVUnitXY; MB_BLOCK4x4_NUM],
     pub sCoeffLevel: [i16; MB_COEFF_LIST_SIZE],
     pub sSkipMb: [u8; 384],
-    /// `2 * 256` in the C++, and **the `+ 16` is this port's** — a soundness
-    /// accommodation, not a size the codec uses.
+    /// Two 256-byte halves — the I16x16 prediction ping-pong — plus 16 bytes of
+    /// headroom.
     ///
-    /// The two 256-byte halves are the I16x16 prediction ping-pong. `WelsMdI16x16`
-    /// scores a candidate in the upper half with `WelsSampleSad16x16_c`, whose last
-    /// 8x8 sub-block starts at +392 and reads through byte 511 — *exactly* in bounds.
-    /// But the raw kernel is a C transliteration that bumps its row pointer after the
-    /// final row (`sad_common.rs:158`), computing `base + 520` and never
-    /// dereferencing it. Forming that pointer is UB in Rust and in C alike.
-    ///
-    /// The `+ 16` is one luma row at the ping-pong's stride of 16 — the smallest
-    /// thing that makes the arithmetic legal. It cannot change any encoded byte: the
-    /// extra bytes are never read, never written, and never addressed except by the
-    /// one-past bump this exists to keep in bounds.
+    /// `WelsMdI16x16` scores a candidate in the upper half with
+    /// `WelsSampleSad16x16_c`, whose last 8x8 sub-block starts at +392 and reads
+    /// through byte 511, in bounds; the kernel then bumps its row pointer past the
+    /// final row (`sad_common.rs:158`), forming `base + 520` without dereferencing it.
+    /// The extra 16 bytes are one luma row at the ping-pong's stride of 16, enough to
+    /// keep that arithmetic in bounds; they are never read or written.
     pub sMemPredMb: [u8; 2 * 256 + 16],
     pub sMemPredBlk4: [u8; 2 * 16],
     pub sBufferInterPredMe: [u8; 4 * 640],
@@ -770,8 +715,7 @@ pub struct SMbCache {
     pub uiChmaI8x8Mode: u8,
     pub bCollocatedPredFlag: bool,
     pub uiRefMbType: u32,
-    // mb_cache.h:124 — an anonymous struct member literally named SPicData, not four
-    // flattened arrays.
+    // `mb_cache.h:124` — an anonymous struct member named `SPicData`.
     pub SPicData: SPicData,
 }
 
@@ -835,16 +779,15 @@ pub const fn best_pred_i4x4_blk4_off(uiBestPredI4x4Blk4Half: u8) -> usize {
     16 * uiBestPredI4x4Blk4Half as usize
 }
 
-/// `kpMbSkipSad` is the reconstruction picture's whole `pMbSkipSad` array, not a
-/// cursor into it; the four neighbour reads index `pCurMb->iMbXY + <offset>` against
-/// the root.
+/// `kpMbSkipSad` is the reconstruction picture's whole `pMbSkipSad` array, not a cursor
+/// into it; the four neighbour reads index `iMbXY + <offset>` against the root.
 ///
-/// Those four reads are of *neighbouring* macroblocks — under multi-threading, of
+/// Those reads are of *neighbouring* macroblocks — under multi-threading, of
 /// macroblocks that may belong to another worker's slice. They are guarded by the
-/// same slice-scoped `uiNeighborAvail`, so the reads never actually cross.
+/// slice-scoped `uiNeighborAvail`, so the reads never cross.
 ///
-/// `pVaaBgMbFlag` is the whole array too, indexed by `iMbXY + <neighbour offset>`.
-/// It lives on the one `SVAAFrameInfo` every worker shares.
+/// `pVaaBgMbFlag` is the whole array too, indexed the same way; it lives on the one
+/// `SVAAFrameInfo` every worker shares.
 pub type PFillInterNeighborCacheFunc = fn(
     pMbCache: &mut SMbCache,
     mbs: &MbSplit<'_, SMB>,
@@ -852,12 +795,10 @@ pub type PFillInterNeighborCacheFunc = fn(
     kpMbSkipSad: &SharedMbArray<i32>,
 );
 pub type PGetVarianceFromIntraVaaFunc = extern "C" fn(cEnc: &RecCursor<'_>) -> i32;
-// The four SADs arrive as the `[i32; 4]` they are stored as
-// (`SVAACalcResult::pSad8x8` is `Vec<[i32; 4]>`, one entry per macroblock).
+// The four SADs arrive as the `[i32; 4]` `SVAACalcResult::pSad8x8` stores per
+// macroblock.
 pub type PGetMbSignFromInterVaaFunc = fn(kpSad8x8: &[i32; 4]) -> u8;
-/// The C++ hands this `pCurMb->sMv`, a pointer into the context-wide MV bank. The
-/// bank is an inline row of `SMB` here, and the kernel writes all sixteen entries,
-/// so it takes the row.
+/// The kernel writes all sixteen entries, so it takes the macroblock's whole MV row.
 pub type PUpdateMbMvFunc = fn(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv: SMVUnitXY);
 
 // SMcFunc is a common-layer type (codec/common/inc/mc.h:46).
@@ -883,8 +824,7 @@ use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 /// macroblock.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum CostFamily {
-    /// No cost function selected. The C++ leaves the slot unset outside the
-    /// configurations that use it.
+    /// No cost function selected — the state outside the configurations that use one.
     #[default]
     Unset,
     /// `pfSampleSad` — sum of absolute differences.
@@ -904,8 +844,8 @@ pub struct SSampleDealingFunc {
     /// Which of the two sibling cost arrays mode decision reads. Read it through
     /// [`SSampleDealingFunc::md_cost`].
     pub pfMdCost: CostFamily,
-    /// As [`Self::pfMdCost`], for motion estimation. The C++ leaves this unset
-    /// outside the ME-capable configurations.
+    /// As [`Self::pfMdCost`], for motion estimation; unset outside the ME-capable
+    /// configurations.
     pub pfMeCost: CostFamily,
 }
 
@@ -1028,10 +968,8 @@ pub fn FillNeighborCacheIntra(pMbCache: &mut SMbCache, mbs: &MbSplit<'_, SMB>) {
     let mut uiNeighborIntra: u32 = 0;
 
     if (uiNeighborAvail & LEFT_MB_POS) != 0 {
-        // C++ reaches the left macroblock's rows by stepping back one stride in the
-        // flat context arrays (`pNonZeroCount - MB_LUMA_CHROMA_BLOCK4x4_NUM`,
-        // `pIntra4x4PredMode - INTRA_4x4_MODE_NUM`). The arrays are inline, so
-        // the same values come from the left macroblock's own struct.
+        // The left macroblock's `iNonZeroCount` and `iIntra4x4PredMode` rows, read from
+        // its own struct.
         let pLeftMb = mbs.left();
         pMbCache.iNonZeroCoeffCount[8] = pLeftMb.iNonZeroCount[3];
         pMbCache.iNonZeroCoeffCount[16] = pLeftMb.iNonZeroCount[7];
@@ -1518,10 +1456,10 @@ pub fn MdIntraAnalysisVaaInfo(pEncCtx: &sWelsEncCtx, cEncMb: &RecCursor<'_>) -> 
 
 /// Aim the refinement record at one partition.
 ///
-/// **The quarter-pixel selector reset is not cosmetic.** Every `MeRefineFracPixel`
-/// call is preceded by one of these, and the body re-establishes
-/// `pQuarPixBest = 1280`, `pQuarPixTmp = 1920` unconditionally — so a partition that
-/// left the pair swapped does not leak that state into the next one.
+/// The quarter-pixel selector is reset here to `pQuarPixBest = 1280`,
+/// `pQuarPixTmp = 1920`, and every `MeRefineFracPixel` call is preceded by one of
+/// these, so a partition that left the pair swapped cannot leak that state into the
+/// next one.
 pub fn InitMeRefinePointer(pMeRefine: &mut SMeRefinePointer, iStride: i32) {
     pMeRefine.iStride = iStride as usize;
     pMeRefine.iHalfPixHV = 0;
@@ -1754,12 +1692,10 @@ pub extern "C" fn MeRefineFracPixel(
         mc_hor_ver02(&cRef.advance(0, -1), &mut cDst, kiW, kiH + 1);
     }
 
-    // step 1: vertical filter — the `(0, -2)` and `(0, 2)` candidates, which are the
-    // same block one row apart in the plane the filter just wrote. **One cursor over
-    // that plane**, the second candidate being its anchor advanced: `over_owned`
-    // re-slices the arena and asserts the stride bound each time it is called, and it
-    // was called once per candidate. The two costs are computed before either
-    // comparison because `pfMeCost` reads and the comparisons only write locals.
+    // step 1: vertical filter — the `(0, -2)` and `(0, 2)` candidates, the same block
+    // one row apart in the plane the filter just wrote, read through one cursor over
+    // that plane with the second candidate at its anchor advanced. Both costs are
+    // computed before either comparison.
     let (iCostTop, iCostBottom) = {
         let off = pMeRefine.half_pix_v();
         let cTmp = RecCursor::over_owned(

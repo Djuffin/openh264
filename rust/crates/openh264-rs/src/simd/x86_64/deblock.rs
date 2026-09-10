@@ -1,4 +1,4 @@
-//! x86_64 SSE2 Deblocking Filter Kernels (Phase 4).
+//! x86_64 SSE2 Deblocking Filter Kernels.
 //!
 //! Accelerated implementations for Luma (Lt4 / Eq4) and Chroma (Lt4 / Eq4)
 //! boundary filters for both horizontal and vertical edges.
@@ -537,15 +537,10 @@ pub unsafe fn deblock_chroma_eq4_16(
 /// Accelerated Luma Lt4 filter (bS < 4).
 /// # Preconditions
 ///
-/// The scalar twin is stride-agnostic — it addresses in flat byte offsets
-/// (`deblocking_common.rs:52`), so any `(step_x, step_y)` pair is meaningful to it.
-/// This kernel addresses in 2D through the cursor instead (`row_n::<N>(dy, dx)`), so
-/// the direction guard below testing `step_y == 1` / `step_x == 1` is only half the
-/// contract: the *other* step must also be the cursor's own stride. A caller passing
-/// `step_x = 2 * stride` for field addressing, or building the cursor over a different
-/// pitch than the `iStride` it passes, still satisfies `step_y == 1`, so the scalar
-/// fallback is not taken and this reads and writes the wrong samples. No current
-/// caller violates it; the `debug_assert!` is what keeps that true.
+/// The direction guard below (`step_y == 1` / `step_x == 1`) is only half the
+/// contract: this kernel addresses in 2D through the cursor, so the other step must
+/// also be the cursor's own stride. A caller that satisfies the guard with a
+/// different pitch reads and writes the wrong samples; the `debug_assert!` checks it.
 pub fn deblock_luma_lt4(
     pix: &mut impl PlaneSamples,
     step_x: isize,
@@ -555,12 +550,9 @@ pub fn deblock_luma_lt4(
     tc: &[i8; 4],
 ) {
     if step_y == 1 {
-        // See the preconditions above: the cross-line step must be this cursor's
-        // stride, which the direction guard alone does not establish.
+        // The cross-line step must be this cursor's stride.
         debug_assert_eq!(step_x, pix.stride() as isize);
-        // Horizontal edge: taps step vertically in y (-3, -2, -1, 0, 1, 2)
-        // Taps `-3 .. 2`: one 16-wide, 6-tall span, indexed from its own row 0,
-        // rather than six `row_n` calls with a bounds check each.
+        // Horizontal edge: taps `-3 .. 2` step vertically — one 16-wide, 6-tall span.
         let (mut p2, mut p1, mut p0, mut q0, mut q1, mut q2) = {
             let s = pix.span::<16, 6>(-3, 0);
             (
@@ -581,11 +573,9 @@ pub fn deblock_luma_lt4(
 
         pix.set_block::<16, 4>(-2, 0, &[p1, p0, q0, q1]);
     } else if step_x == 1 {
-        // See the preconditions above: the cross-line step must be this cursor's
-        // stride, which the direction guard alone does not establish.
+        // The cross-line step must be this cursor's stride.
         debug_assert_eq!(step_y, pix.stride() as isize);
-        // Vertical edge: 16 rows, line i has taps at row i, cols -4..4
-        // Sixteen lines of taps `-4 .. 4`, out of one span.
+        // Vertical edge: 16 lines of taps at cols `-4 .. 4`, out of one span.
         let mut rows = [[0u8; 8]; 16];
         {
             let s = pix.span::<8, 16>(0, -4);
@@ -621,13 +611,9 @@ pub fn deblock_luma_lt4(
             }
         }
 
-        // **Write back only the columns the filter can modify.** The span read above is
-        // wider because the kernel needs the outer taps, but only the inner columns are
-        // assigned, and the scalar twin writes exactly those. Storing the whole span
-        // would be value-neutral yet widen this kernel's write contract past the scalar
-        // it must match — and at `iEdge == 0` the outer columns belong to the previous
-        // macroblock.
-        // Sixteen lines as one block, one bounds check for all of them.
+        // Write back only the columns the filter can modify: the span read above is
+        // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
+        // the previous macroblock.
         let out: [[u8; 4]; 16] = std::array::from_fn(|i| rows[i][2..6].try_into().expect("p1..q1"));
         pix.set_block::<4, 16>(0, -2, &out);
     } else {
@@ -638,15 +624,10 @@ pub fn deblock_luma_lt4(
 /// Accelerated Luma Eq4 filter (bS == 4).
 /// # Preconditions
 ///
-/// The scalar twin is stride-agnostic — it addresses in flat byte offsets
-/// (`deblocking_common.rs:52`), so any `(step_x, step_y)` pair is meaningful to it.
-/// This kernel addresses in 2D through the cursor instead (`row_n::<N>(dy, dx)`), so
-/// the direction guard below testing `step_y == 1` / `step_x == 1` is only half the
-/// contract: the *other* step must also be the cursor's own stride. A caller passing
-/// `step_x = 2 * stride` for field addressing, or building the cursor over a different
-/// pitch than the `iStride` it passes, still satisfies `step_y == 1`, so the scalar
-/// fallback is not taken and this reads and writes the wrong samples. No current
-/// caller violates it; the `debug_assert!` is what keeps that true.
+/// The direction guard below (`step_y == 1` / `step_x == 1`) is only half the
+/// contract: this kernel addresses in 2D through the cursor, so the other step must
+/// also be the cursor's own stride. A caller that satisfies the guard with a
+/// different pitch reads and writes the wrong samples; the `debug_assert!` checks it.
 pub fn deblock_luma_eq4(
     pix: &mut impl PlaneSamples,
     step_x: isize,
@@ -655,11 +636,9 @@ pub fn deblock_luma_eq4(
     beta: i32,
 ) {
     if step_y == 1 {
-        // See the preconditions above: the cross-line step must be this cursor's
-        // stride, which the direction guard alone does not establish.
+        // The cross-line step must be this cursor's stride.
         debug_assert_eq!(step_x, pix.stride() as isize);
-        // Horizontal edge: taps step vertically in y (-4, -3, -2, -1, 0, 1, 2, 3)
-        // Taps `-4 .. 3`: one 16-wide, 8-tall span, as in `deblock_luma_lt4`.
+        // Horizontal edge: taps `-4 .. 3` step vertically — one 16-wide, 8-tall span.
         let (p3, mut p2, mut p1, mut p0, mut q0, mut q1, mut q2, q3) = {
             let s = pix.span::<16, 8>(-4, 0);
             (
@@ -682,11 +661,9 @@ pub fn deblock_luma_eq4(
 
         pix.set_block::<16, 6>(-3, 0, &[p2, p1, p0, q0, q1, q2]);
     } else if step_x == 1 {
-        // See the preconditions above: the cross-line step must be this cursor's
-        // stride, which the direction guard alone does not establish.
+        // The cross-line step must be this cursor's stride.
         debug_assert_eq!(step_y, pix.stride() as isize);
-        // Vertical edge
-        // Sixteen lines of taps `-4 .. 4`, out of one span.
+        // Vertical edge: 16 lines of taps `-4 .. 4`, out of one span.
         let mut rows = [[0u8; 8]; 16];
         {
             let s = pix.span::<8, 16>(0, -4);
@@ -722,12 +699,9 @@ pub fn deblock_luma_eq4(
             }
         }
 
-        // **Write back only the columns the filter can modify.** The span read above is
-        // wider because the kernel needs the outer taps, but only the inner columns are
-        // assigned, and the scalar twin writes exactly those. Storing the whole span
-        // would be value-neutral yet widen this kernel's write contract past the scalar
-        // it must match — and at `iEdge == 0` the outer columns belong to the previous
-        // macroblock.
+        // Write back only the columns the filter can modify: the span read above is
+        // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
+        // the previous macroblock.
         let out: [[u8; 6]; 16] = std::array::from_fn(|i| rows[i][1..7].try_into().expect("p2..q2"));
         pix.set_block::<6, 16>(0, -3, &out);
     } else {
@@ -738,15 +712,10 @@ pub fn deblock_luma_eq4(
 /// Accelerated Chroma Lt4 filter (bS < 4).
 /// # Preconditions
 ///
-/// The scalar twin is stride-agnostic — it addresses in flat byte offsets
-/// (`deblocking_common.rs:52`), so any `(step_x, step_y)` pair is meaningful to it.
-/// This kernel addresses in 2D through the cursor instead (`row_n::<N>(dy, dx)`), so
-/// the direction guard below testing `step_y == 1` / `step_x == 1` is only half the
-/// contract: the *other* step must also be the cursor's own stride. A caller passing
-/// `step_x = 2 * stride` for field addressing, or building the cursor over a different
-/// pitch than the `iStride` it passes, still satisfies `step_y == 1`, so the scalar
-/// fallback is not taken and this reads and writes the wrong samples. No current
-/// caller violates it; the `debug_assert!` is what keeps that true.
+/// The direction guard below (`step_y == 1` / `step_x == 1`) is only half the
+/// contract: this kernel addresses in 2D through the cursor, so the other step must
+/// also be the cursor's own stride. A caller that satisfies the guard with a
+/// different pitch reads and writes the wrong samples; the `debug_assert!` checks it.
 pub fn deblock_chroma_lt4(
     cb: &mut impl PlaneSamples,
     cr: &mut impl PlaneSamples,
@@ -757,9 +726,8 @@ pub fn deblock_chroma_lt4(
     tc: &[i8; 4],
 ) {
     if step_y == 1 {
-        // See the preconditions above: the cross-line step must be this cursor's
-        // stride, which the direction guard alone does not establish. Cb and Cr are
-        // separate planes, so both are checked.
+        // The cross-line step must be this cursor's stride; Cb and Cr are separate
+        // planes, so both are checked.
         debug_assert_eq!(step_x, cb.stride() as isize);
         debug_assert_eq!(step_x, cr.stride() as isize);
         // Taps `-2 .. 1` of each plane: one 8-wide, 4-tall span apiece.
@@ -803,9 +771,8 @@ pub fn deblock_chroma_lt4(
         cb.set_block::<8, 2>(-1, 0, &[cb_p0, cb_q0]);
         cr.set_block::<8, 2>(-1, 0, &[cr_p0, cr_q0]);
     } else if step_x == 1 {
-        // See the preconditions above: the cross-line step must be this cursor's
-        // stride, which the direction guard alone does not establish. Cb and Cr are
-        // separate planes, so both are checked.
+        // The cross-line step must be this cursor's stride; Cb and Cr are separate
+        // planes, so both are checked.
         debug_assert_eq!(step_y, cb.stride() as isize);
         debug_assert_eq!(step_y, cr.stride() as isize);
         // Eight lines of taps `-2 .. 2` per plane, out of one span each.
@@ -839,12 +806,9 @@ pub fn deblock_chroma_lt4(
             cr_rows[y][2] = t[2][y + 8];
         }
 
-        // **Write back only the columns the filter can modify.** The span read above is
-        // wider because the kernel needs the outer taps, but only the inner columns are
-        // assigned, and the scalar twin writes exactly those. Storing the whole span
-        // would be value-neutral yet widen this kernel's write contract past the scalar
-        // it must match — and at `iEdge == 0` the outer columns belong to the previous
-        // macroblock.
+        // Write back only the columns the filter can modify: the span read above is
+        // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
+        // the previous macroblock.
         let out_cb: [[u8; 2]; 8] =
             std::array::from_fn(|i| cb_rows[i][1..3].try_into().expect("p0, q0"));
         let out_cr: [[u8; 2]; 8] =
@@ -859,15 +823,10 @@ pub fn deblock_chroma_lt4(
 /// Accelerated Chroma Eq4 filter (bS == 4).
 /// # Preconditions
 ///
-/// The scalar twin is stride-agnostic — it addresses in flat byte offsets
-/// (`deblocking_common.rs:52`), so any `(step_x, step_y)` pair is meaningful to it.
-/// This kernel addresses in 2D through the cursor instead (`row_n::<N>(dy, dx)`), so
-/// the direction guard below testing `step_y == 1` / `step_x == 1` is only half the
-/// contract: the *other* step must also be the cursor's own stride. A caller passing
-/// `step_x = 2 * stride` for field addressing, or building the cursor over a different
-/// pitch than the `iStride` it passes, still satisfies `step_y == 1`, so the scalar
-/// fallback is not taken and this reads and writes the wrong samples. No current
-/// caller violates it; the `debug_assert!` is what keeps that true.
+/// The direction guard below (`step_y == 1` / `step_x == 1`) is only half the
+/// contract: this kernel addresses in 2D through the cursor, so the other step must
+/// also be the cursor's own stride. A caller that satisfies the guard with a
+/// different pitch reads and writes the wrong samples; the `debug_assert!` checks it.
 pub fn deblock_chroma_eq4(
     cb: &mut impl PlaneSamples,
     cr: &mut impl PlaneSamples,
@@ -877,9 +836,8 @@ pub fn deblock_chroma_eq4(
     beta: i32,
 ) {
     if step_y == 1 {
-        // See the preconditions above: the cross-line step must be this cursor's
-        // stride, which the direction guard alone does not establish. Cb and Cr are
-        // separate planes, so both are checked.
+        // The cross-line step must be this cursor's stride; Cb and Cr are separate
+        // planes, so both are checked.
         debug_assert_eq!(step_x, cb.stride() as isize);
         debug_assert_eq!(step_x, cr.stride() as isize);
         // Taps `-2 .. 1` of each plane: one 8-wide, 4-tall span apiece.
@@ -923,9 +881,8 @@ pub fn deblock_chroma_eq4(
         cb.set_block::<8, 2>(-1, 0, &[cb_p0, cb_q0]);
         cr.set_block::<8, 2>(-1, 0, &[cr_p0, cr_q0]);
     } else if step_x == 1 {
-        // See the preconditions above: the cross-line step must be this cursor's
-        // stride, which the direction guard alone does not establish. Cb and Cr are
-        // separate planes, so both are checked.
+        // The cross-line step must be this cursor's stride; Cb and Cr are separate
+        // planes, so both are checked.
         debug_assert_eq!(step_y, cb.stride() as isize);
         debug_assert_eq!(step_y, cr.stride() as isize);
         // Eight lines of taps `-2 .. 2` per plane, out of one span each.
@@ -959,12 +916,9 @@ pub fn deblock_chroma_eq4(
             cr_rows[y][2] = t[2][y + 8];
         }
 
-        // **Write back only the columns the filter can modify.** The span read above is
-        // wider because the kernel needs the outer taps, but only the inner columns are
-        // assigned, and the scalar twin writes exactly those. Storing the whole span
-        // would be value-neutral yet widen this kernel's write contract past the scalar
-        // it must match — and at `iEdge == 0` the outer columns belong to the previous
-        // macroblock.
+        // Write back only the columns the filter can modify: the span read above is
+        // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
+        // the previous macroblock.
         let out_cb: [[u8; 2]; 8] =
             std::array::from_fn(|i| cb_rows[i][1..3].try_into().expect("p0, q0"));
         let out_cr: [[u8; 2]; 8] =
@@ -1002,7 +956,7 @@ fn nzc_word(nzc: &[i8; 24], idx: [usize; 4]) -> u32 {
 }
 
 /// A macroblock's sixteen luma counts as bytes. Only their non-zero-ness is read, so
-/// the sign the C++ never sets in them cannot matter.
+/// the sign does not matter.
 #[inline]
 fn nzc_word_bytes(nzc: &[i8; 24]) -> [u8; 16] {
     std::array::from_fn(|i| nzc[i] as u8)

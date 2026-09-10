@@ -1,8 +1,8 @@
 //! x86_64 SSE2 & SSSE3 implementations of SATD (Hadamard transformed SAD).
 //!
 //! The 4x4 block every shape is built from cuts each operand once into a
-//! `RefSamples::span` and indexes its four rows inside it, so it pays one cut per
-//! operand where a `row_n` walk paid two checks per row. See `RefSamples::span`.
+//! `RefSamples::span` and indexes its four rows inside it: one bounds cut per operand
+//! rather than two checks per row. See `RefSamples::span`.
 #![allow(unsafe_code)]
 
 use crate::safe::plane::{BlockRows, RefSamples};

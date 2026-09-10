@@ -1,5 +1,5 @@
 //! Integration tests for OpenH264 parameter validation and boundary error checks.
-//! Ported from `test/api/encoder_test.cpp` and `test/api/decode_api_test.cpp`.
+//! C++: `test/api/encoder_test.cpp`, `test/api/decode_api_test.cpp`.
 
 use openh264_rs::api::codec_api::*;
 
@@ -26,7 +26,7 @@ fn test_encoder_invalid_resolution_rejected() {
         assert_eq!(ret, CM_RESULT_SUCCESS);
 
         let mut param = SEncParamBase::default();
-        param.iPicWidth = 0; // Invalid 0 width
+        param.iPicWidth = 0;
         param.iPicHeight = 240;
         param.fMaxFrameRate = 30.0;
 
@@ -52,10 +52,9 @@ fn test_decoder_null_param_rejected() {
     }
 }
 
-// Verified against the C++ reference encoder (libopenh264.a, same parameters):
-// this configuration is REJECTED, returning cmInitParaError, because
-// iTargetBitrate is left at 0 while iRCMode defaults to RC_QUALITY_MODE, and
-// ParamValidation() rejects `iTargetBitrate <= 0` for any RC mode but RC_OFF.
+// This configuration is rejected with `cmInitParaError`: `iTargetBitrate` is left at 0
+// while `iRCMode` defaults to `RC_QUALITY_MODE`, and `ParamValidation()` rejects
+// `iTargetBitrate <= 0` for every RC mode but `RC_OFF`.
 #[test]
 fn test_encoder_very_large_slices() {
     unsafe {
@@ -89,14 +88,13 @@ fn test_encoder_very_large_slices() {
     }
 }
 
-/// Upstream's `EncoderInitTest.ScreenContentScrollMotionVectorBounds`
-/// (`test/api/encoder_test.cpp:303-360`), mirrored exactly: a 640x1800 screen
-/// encode *initializes* and encodes two frames, the second scrolled down by 512
-/// rows with one macroblock corrupted, so that scroll detection predicts a large
-/// vertical displacement and the MVD-table indexing has to stay in bounds.
+/// C++: `EncoderInitTest.ScreenContentScrollMotionVectorBounds`,
+/// `test/api/encoder_test.cpp`.
 ///
-/// `ParamTranscode` aligns the layer size to 16 and crops (`param_svc.h:486-489`),
-/// so `ParamValidationExt`'s `& 0x0F` check (`encoder_ext.cpp:521`) sees 1808 and
+/// A 640x1800 screen encode initializes and encodes two frames, the second scrolled
+/// down by 512 rows with one macroblock corrupted, so scroll detection predicts a large
+/// vertical displacement and MVD-table indexing has to stay in bounds. The layer size
+/// is aligned to 16 and cropped, so `ParamValidationExt`'s `& 0x0F` check sees 1808 and
 /// the 1800-row height is accepted.
 #[test]
 fn test_encoder_screen_content_scroll_motion_vector_bounds() {
@@ -156,10 +154,8 @@ fn test_encoder_screen_content_scroll_motion_vector_bounds() {
         }
 
         // Modify macroblock (1, 32) at pixel rows 512..527 and cols 16..31 in frame1.
-        // MB(0, 32) will be skipped by scroll detection with MV -2048.
-        // MB(1, 32) cannot be skipped due to this modification, forcing it into
-        // motion estimation where it uses MB(0, 32)'s scrolled MV as a predictor
-        // during vertical full search.
+        // MB(0, 32) is skipped by scroll detection with MV -2048; MB(1, 32) cannot be,
+        // so it enters motion estimation with MB(0, 32)'s scrolled MV as a predictor.
         for y in 512..528 {
             for x in 16..32 {
                 frame1[y * width + x] ^= 0xFF;
@@ -180,12 +176,10 @@ fn test_encoder_screen_content_scroll_motion_vector_bounds() {
 
         let mut info = SFrameBSInfo::default();
 
-        // Encode Frame 0 (Base pattern)
         let rv = ISVCEncoder::EncodeFrame(p_encoder, &pic as *const SSourcePicture, &mut info);
         assert_eq!(rv, 0);
         pic.uiTimeStamp += 33;
 
-        // Encode Frame 1 (Scrolled pattern with modified MB)
         pic.pData[0] = frame1.as_mut_ptr();
         pic.pData[1] = frame1.as_mut_ptr().add(luma);
         pic.pData[2] = frame1.as_mut_ptr().add(luma + (luma >> 2));

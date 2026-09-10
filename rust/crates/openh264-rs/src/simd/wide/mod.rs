@@ -1,50 +1,38 @@
 //! The `wide`-crate kernel set — every kernel in [`super::x86_64`], written a second
 //! time against `wide` 1.7's lane types instead of `core::arch` intrinsics.
 //!
-//! # Why a second copy exists
+//! Selected in place of the intrinsic set under `--features wide`; every file here is
+//! `#![forbid(unsafe_code)]`.
 //!
-//! To measure one thing: what it costs, and what it buys, to write these kernels in
-//! safe, portable SIMD. Every file here is `#![forbid(unsafe_code)]`; the intrinsic
-//! set is `unsafe` at every load, store and `target_feature` boundary. The two are
-//! run against each other by `benches/kernel_bench.rs`, which times all three in one
-//! process; whole-encoder numbers come from building `c_vs_rust_bench` once per
-//! feature, since the kernel set is chosen when the binary is built.
-//!
-//! # The rules the port follows, so the comparison measures the API and not the author
+//! # Correspondence with the intrinsic set
 //!
 //! - **Same names, same signatures, same data access.** A kernel is named for the
 //!   operation, never for an instruction set: `deblock_luma_lt4` is the same name
-//!   here as in [`super::x86_64`], because it is the same kernel — the module path is
-//!   what says which one you get. Each also reads its samples the same way (`row_n`,
-//!   `row_view`, `block_span`), so [`super::kernels`] can alias either module and the
-//!   bench sees the same bounds checks on both sides.
+//!   here as in [`super::x86_64`], and the module path says which one you get. Each
+//!   reads its samples the same way (`row_n`, `row_view`, `block_span`), so
+//!   [`super::kernels`] can alias either module.
 //!
-//!   The one surviving suffix is `_avx2`, on the two 16-wide SAD entry points. That
-//!   is not an exception to the rule: within [`super::x86_64`] those are a *second*
-//!   kernel for the same slot, chosen by a second runtime test, so the name has to
-//!   distinguish them from the baseline pair. This module fills the same two slots to
-//!   keep the alias total, with 128-bit bodies that step two rows — see below.
+//!   The one surviving suffix is `_avx2`, on the two 16-wide SAD entry points: within
+//!   [`super::x86_64`] those are a second kernel for the same slot, chosen by a
+//!   second runtime test. This module fills the same two slots with 128-bit bodies
+//!   that step two rows.
 //! - **Same algorithm.** Where the intrinsic kernel does a step in scalar code (the
 //!   forward DCT's row pass, the IDCT's row pass, the plane predictors' coefficient
-//!   sums) this does too. A kernel is restructured only where `wide` has no way to
-//!   spell the intrinsic's operation.
-//! - **What has to be emulated is said at the site**, and summed up here:
+//!   sums) this does too. A kernel is restructured only where `wide` cannot spell the
+//!   intrinsic's operation:
 //!   - no `psadbw`: SAD is `max - min` on bytes, two zero-extends and adds, and a
 //!     `pmaddwd`-against-ones reduce (`sad.rs`);
 //!   - no `pavgb`: the rounded average is `(a | b) - ((a ^ b) >> 1)` with the bit
 //!     that crosses a byte masked off (`mc.rs`);
 //!   - no *word*-lane permute: 1.7 has `u8x16::shuffle` (and `u8x32::swizzle`), which
 //!     is `pshufb` on SSSE3 and `tbl` on NEON, but every permute here moves 16-bit
-//!     lanes and would have to be spelled as a byte table with paired indices — and on
-//!     the SSE2 baseline `pshufb` does not exist anyway. They stay array casts in
+//!     lanes and would have to be spelled as a byte table with paired indices, and on
+//!     the SSE2 baseline `pshufb` does not exist. They stay array casts in
 //!     [`lanes`], which LLVM turns back into `pshufd`/`pshuflw`/`punpck`;
 //!   - no runtime feature dispatch: `u8x32` is two SSE2 halves unless the whole
-//!     crate is built with `-C target-feature=+avx2`, so the `_avx2` entry points
-//!     here are 128-bit kernels that step two rows;
+//!     crate is built with `-C target-feature=+avx2`;
 //!   - no 16-byte load from `&[Cell<u8>]`: the block copies are the scalar's per-cell
 //!     walk with the span check hoisted (`copy.rs`).
-//!
-//! # Where `wide` ends and `bytemuck` begins
 //!
 //! `wide` re-exports `bytemuck`, and `bytemuck::cast` is the only way to move between
 //! lane types of one width (`i16x8` ↔ `u16x8`), to glue two halves into a 256-bit
@@ -183,8 +171,8 @@ pub(crate) mod lanes {
     /// column `j` of the input comes back as the low four lanes of output `j`. The
     /// upper lanes of every output are zero.
     ///
-    /// The intrinsic twin is two `punpcklwd`, two `punpckldq` and two `psrldq`; this
-    /// is the same permutation as one array expression, for LLVM to lower.
+    /// The intrinsic twin is two `punpcklwd`, two `punpckldq` and two `psrldq`; here
+    /// the same permutation is one array expression, for LLVM to lower.
     #[inline(always)]
     pub fn transpose4_lo(
         v0: i16x8,

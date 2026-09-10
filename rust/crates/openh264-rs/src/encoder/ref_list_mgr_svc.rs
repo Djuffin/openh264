@@ -2,8 +2,7 @@
 
 //! Reference picture list management and Long-Term Reference (LTR) control.
 //!
-//! Translated from `codec/encoder/core/inc/ref_list_mgr_svc.h` and
-//! `codec/encoder/core/src/ref_list_mgr_svc.cpp`.
+//! C++: `codec/encoder/core/{inc/ref_list_mgr_svc.h,src/ref_list_mgr_svc.cpp}`.
 
 #![deny(unsafe_code)]
 
@@ -221,13 +220,9 @@ pub fn WelsResetRefList(pCtx: &mut sWelsEncCtx) {
 /// Remove a long-term reference entry by index from pLongRefList.
 pub fn DeleteLTRFromLongList(pRefList: &mut SRefList, iIdx: i32) {
     let count = pRefList.uiLongRefCount as i32;
-    // Upstream (`ref_list_mgr_svc.cpp:82`) walks to `uiLongRefCount - 1` and indexes
-    // `pLongRefList[k + 1]` unchecked; the array is `[_; 1 + MAX_REF_PIC_COUNT]` and
-    // nothing in either tree *enforces* `uiLongRefCount <= 1 + MAX_REF_PIC_COUNT` —
-    // it is an emergent property of the marking schedule, not a checked bound. Where
-    // that invariant holds, `kLast` is never the binding term and this loop is
-    // byte-for-byte the C++ one. Where it fails, upstream reads past the array and
-    // this stops at its end instead of panicking.
+    // `uiLongRefCount <= 1 + MAX_REF_PIC_COUNT` is an emergent property of the marking
+    // schedule, not a checked bound, so the walk is clamped to the array's last slot
+    // (`ref_list_mgr_svc.cpp:82`).
     let kLast = pRefList.pLongRefList.len() as i32 - 1;
     let kUpper = (count - 1).min(kLast);
     let mut k = iIdx;
@@ -246,8 +241,7 @@ pub fn DeleteLTRFromLongList(pRefList: &mut SRefList, iIdx: i32) {
 /// Remove a short-term reference entry by index from pShortRefList.
 pub fn DeleteSTRFromShortList(pRefList: &mut SRefList, iIdx: i32) {
     let count = pRefList.uiShortRefCount as i32;
-    // The same guard as [`DeleteLTRFromLongList`], for the same reason and against
-    // the same C++ shape (`ref_list_mgr_svc.cpp:93`).
+    // The same clamp as [`DeleteLTRFromLongList`] (`ref_list_mgr_svc.cpp:93`).
     let kLast = pRefList.pShortRefList.len() as i32 - 1;
     let kUpper = (count - 1).min(kLast);
     let mut k = iIdx;
@@ -630,8 +624,7 @@ pub fn PrefetchNextBuffer(pCtx: &mut sWelsEncCtx) {
     }
 
     if pRefList.pNextBuffer.is_none() && pRefList.uiShortRefCount > 0 {
-        // The C++ counterpart is `ref_list_mgr_svc.cpp:343`
-        // (`pShortRefList[pRefList->uiShortRefCount - 1]`), an unchecked *read*.
+        // `ref_list_mgr_svc.cpp:343` — the index is clamped to the list's last slot.
         let lastIdx =
             ((pRefList.uiShortRefCount - 1) as usize).min(pRefList.pShortRefList.len() - 1);
         pRefList.pNextBuffer = pRefList.pShortRefList[lastIdx];
@@ -761,9 +754,6 @@ pub fn WelsUpdateRefList(pCtx: &mut sWelsEncCtx) -> bool {
         }
     }
 
-    // C++ dispatches virtually here (ref_list_mgr_svc.cpp:1041/1057/1073 —
-    // PrefetchNextBuffer / UpdateSrcPicList /
-    // UpdateSrcPicListLosslessScreenRefSelectionWithLtr).
     pCtx.eRefStrategy.EndofUpdateRefList(pCtx);
     true
 }
@@ -933,8 +923,7 @@ pub fn FilterLTRRecoveryRequest(
             return 0;
         }
 
-        // The C++ dereferences here unconditionally; an absent SPS contributes the
-        // same `1 << 0` this expression would have read from a zeroed record.
+        // An absent SPS contributes the same `1 << 0` a zeroed record would.
         let iMaxFrameNumPlus1 = 1 << ctx_sps_ref(pCtx).map_or(0, |s| s.uiLog2MaxFrameNum);
         let kuiIdrPicId = pCtx.param().sDependencyLayers[iLayerId as usize].uiIdrPicId;
         let pLtr = ctx_ltr_at(pCtx, iLayerId as usize);
@@ -1100,10 +1089,8 @@ pub fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
     if pCtx.vaa().is_none() || pCtx.pVpp.is_none() {
         return;
     }
-    // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
-    //
-    // `None` for camera content, where no extension exists and the walk
-    // below has nothing to consider; `Some` under `SCREEN_CONTENT_REAL_TIME`.
+    // `None` for camera content, where no extension exists and the walk below has
+    // nothing to consider; `Some` under `SCREEN_CONTENT_REAL_TIME`.
     let Some(pVaaExt) = pCtx.vaa_ext_ref() else {
         return;
     };
@@ -1121,10 +1108,9 @@ pub fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
             let Some(idSrc) = idEnc else {
                 continue;
             };
-            // **The block-static grid is the *source* picture's**, `(w >> 3) *
-            // (h >> 3)` of its aligned size — the same grid `SetBlockStaticIdcToMd`
-            // reads back with `kiBlocks = (kiMbWidth << 1) * (kiMbHeight << 1)`, and
-            // the same one `DetectSceneChangeScreen` wrote.
+            // The block-static grid is the *source* picture's, `(w >> 3) * (h >> 3)`
+            // of its aligned size — the grid `SetBlockStaticIdcToMd` reads back as
+            // `kiBlocks = (kiMbWidth << 1) * (kiMbHeight << 1)`.
             let kiBlocksInFrame = {
                 let src_pic = pVpp.m_pSpatialPicPool.get(idSrc);
                 ((src_pic.iWidthInPixel >> 3) * (src_pic.iHeightInPixel >> 3)).max(0) as usize
@@ -1137,13 +1123,8 @@ pub fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
             let iFrameNum = pRefList.pic(idRef).iFrameNum;
             if iVaaBestRefFrameNum != iFrameNum {
                 let ref_y = pRefList.pic(idRef).plane(0);
-                // **The `None` here is where the C++ writes through a null row.**
-                // `pVaaBestBlockStaticIdc` names no row when the store is
-                // unallocated or the selector is past its rows — the state
-                // `pVaaExt->pVaaBestBlockStaticIdc == NULL` names — and the C++
-                // hands that null to the plugin, which post-increments through it.
-                // The port refuses instead, silently, because the C++ discards this
-                // call's return value and there is nothing to report it to.
+                // `pVaaBestBlockStaticIdc` names no row when the store is unallocated
+                // or the selector is past its rows; the update is then skipped.
                 let Some(row) = pVaaExtMut
                     .pVaaBlockStaticIdc
                     .row_mut(pVaaBestBlockStaticIdc, kiBlocksInFrame)
@@ -1162,10 +1143,8 @@ pub fn UpdateBlockStatic(pCtx: &mut sWelsEncCtx) {
     });
 }
 
-/// Serializes slice header reference picture reordering syntax and marking flags.
-/// The context values `WelsUpdateSliceHeaderSyntax` reads, resolved once by its
-/// caller. None of them can change while that loop runs, because the loop
-/// writes only slice headers.
+/// The context values `WelsUpdateSliceHeaderSyntax` reads, resolved once by its caller;
+/// none can change while that loop runs, which writes only slice headers.
 pub struct SliceHeaderSyntaxIn {
     pub iNumRef0: i32,
     pub bEnableLongTermReference: bool,
@@ -1223,8 +1202,7 @@ pub fn WelsUpdateSliceHeaderSyntax(
             pRefPicMark.bNoOutputOfPriorPicsFlag = false;
             pRefPicMark.bLongTermRefFlag = kSyn.bEnableLongTermReference;
         } else {
-            // This arm drops `bLtrMarkingFlag` from the slice header's
-            // adaptive-marking decision.
+            // The screen-content arm ignores `bLtrMarkingFlag`.
             if kSyn.bScreenContent {
                 pRefPicMark.bAdaptiveRefPicMarkingModeFlag = kSyn.bEnableLongTermReference;
             } else {
@@ -1317,7 +1295,7 @@ pub fn UpdateOriginalPicInfo(pOrigPic: &mut SPicture, pReconPic: &SPicture) {
 }
 
 /// `UpdateOriginalPicInfo` over the context's current pair, resolving each handle in
-/// its own pool. A no-op if either is unset, as the C++'s null tests are.
+/// its own pool. A no-op if either is unset.
 fn UpdateOriginalPicInfoFromCtx(pCtx: &mut sWelsEncCtx) {
     let (Some(idEnc), Some(idDec)) = (pCtx.pEncPic, pCtx.pDecPic) else {
         return;
@@ -1437,11 +1415,9 @@ pub fn WelsBuildRefListScreen(pCtx: &mut sWelsEncCtx, iPOC: i32, _iBestLtrRefIdx
     let uiDid = pCtx.uiDependencyId as usize;
     let iNumRef = pCtx.param().iNumRefFrame;
     let iLTRRefNum = pCtx.param().iLTRRefNum;
-    // ref_list_mgr_svc.cpp:649 — static_cast<SVAAFrameInfoExt*> (pCtx->pVaa)
-    //
-    // `None` for camera content, where zero available screen references
-    // is the value every camera preset computes here; the extension's own count
-    // under `SCREEN_CONTENT_REAL_TIME`.
+    // `None` for camera content, where zero available screen references is what every
+    // camera preset computes here; the extension's own count under
+    // `SCREEN_CONTENT_REAL_TIME`.
     let iNumOfAvailableRef = pCtx.vaa_ext_ref().map_or(0, |ext| ext.iNumOfAvailableRef);
     pCtx.iNumRef0 = 0;
 
@@ -1534,9 +1510,8 @@ pub fn WelsBuildRefListScreen(pCtx: &mut sWelsEncCtx, iPOC: i32, _iBestLtrRefIdx
                         current_layer_expect_mut(pCtx).pRefOri[num0] = refOri;
                         pCtx.pRefList0[num0] = Some(idLong);
                         pCtx.iNumRef0 += 1;
-                        // `ref_list_mgr_svc.cpp:845-848`. The C++ reads back
-                        // `pRefList0[iNumRef0 - 1]->iFrameNum`, which is the slot
-                        // just pushed — `idLong`.
+                        // `ref_list_mgr_svc.cpp:845-848` — the slot just pushed is
+                        // `idLong`.
                         let kiRefFrameNum = pCtx
                             .ref_list(uiDid)
                             .expect("the dependency layer's reference list")
@@ -1562,10 +1537,8 @@ pub fn WelsBuildRefListScreen(pCtx: &mut sWelsEncCtx, iPOC: i32, _iBestLtrRefIdx
             }
         }
 
-        // `ref_list_mgr_svc.cpp:853-875` — the reference-list dump, after the walk
-        // and still inside the non-I arm. `%d` of a C++ `bool` prints 0/1; the two
-        // `uint8_t`s promote to `int` and print as the numbers they are. The `\t`
-        // is upstream's literal tab.
+        // `ref_list_mgr_svc.cpp:853-875` — the reference-list dump, inside the non-I
+        // arm.
         common::wels_trace::WelsLog(
             pCtx.sLogCtx,
             common::wels_trace::WELS_LOG_DEBUG,
@@ -1788,13 +1761,10 @@ pub fn DoNothing(_pCtx: &mut sWelsEncCtx) {}
 
 /// Which reference-list strategy an encoder runs.
 ///
-/// C++ declares three classes deriving from `IWelsReferenceStrategy`
-/// (`ref_list_mgr_svc.h`): `CWelsReference_TemporalLayer`, `CWelsReference_Screen`
-/// and `CWelsReference_LosslessWithLtr`.
+/// One variant per `IWelsReferenceStrategy` subclass in `ref_list_mgr_svc.h`.
 ///
-/// `TemporalLayer = 0` and `#[derive(Default)]` on it: `sWelsEncCtx` is
-/// `mem::zeroed()`-constructed (`encoder_context.rs:514`), so the all-zero pattern has
-/// to be a declared variant.
+/// `TemporalLayer` is discriminant 0 and the `Default`: `sWelsEncCtx` is
+/// `mem::zeroed()`-constructed, so the all-zero pattern has to be a declared variant.
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum RefStrategyKind {
@@ -1877,7 +1847,7 @@ impl RefStrategyKind {
     }
 }
 
-/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+/// Gate for the reconstruction dump; see `encoder::dump_enabled`.
 static REC_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 #[cfg(test)]
@@ -1912,8 +1882,8 @@ mod tests {
         }
     }
 
-    /// `sWelsEncCtx` is `mem::zeroed()`-constructed, so the zero discriminant has to
-    /// be the variant the old factory's `_ =>` arm produced.
+    /// `sWelsEncCtx` is `mem::zeroed()`-constructed, so the zero discriminant has to be
+    /// `TemporalLayer`.
     #[test]
     #[allow(unsafe_code)]
     fn ref_strategy_zero_is_the_default_arm() {

@@ -1,24 +1,18 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-//! Port of `codec/processing/src/vaacalc/` — the VAA (video analysis) statistics
-//! plugin reached through `METHOD_VAA_STATISTICS`.
+//! VAA (video analysis) statistics — `codec/processing/src/vaacalc/`, the plugin
+//! reached through `METHOD_VAA_STATISTICS`.
 //!
 //! The five kernels (`pfVAACalcSad`, `pfVAACalcSadVar`, `pfVAACalcSadSsd`,
 //! `pfVAACalcSadBgd`, `pfVAACalcSadSsdBgd`) are selected by
 //! `iCalcVar`/`iCalcSsd`/`iCalcBgd`, which `CWelsPreProcess::AnalyzeSpatialPic`
 //! derives from rate control, adaptive quantisation and background detection.
 //!
-//! **What runs, and what these five are for.** [`CVAACalculation::Process`]
-//! dispatches through [`crate::simd::kernels`]`::vaa`, like every other family in
-//! the port: on aarch64 that is the NEON transcription of
-//! `codec/processing/src/arm64/vaa_calc_aarch64_neon.S`, on x86_64 the SSE2
-//! transcription of `codec/processing/src/x86/vaa.asm`, and under
-//! `--features scalar` a forward straight back to the functions below. The five
-//! `vaa_calc_*` here stay where they are because they are **the reference**: the
-//! definition of what the kernels must compute, what the scalar set forwards to,
-//! and what each kernel set's unit tests compare against, geometry by geometry.
-//! [`vaa_span`] is shared with them — it is what `Process` trims the planes to, so
-//! a kernel that walks the picture wrong panics instead of reading past a plane.
+//! [`CVAACalculation::Process`] dispatches through [`crate::simd::kernels`]`::vaa`.
+//! The `vaa_calc_*` functions below define what every kernel set must compute and are
+//! what the scalar set forwards to. [`vaa_span`] is what `Process` trims the planes
+//! to, so a kernel that walks the picture wrong panics instead of reading past a
+//! plane.
 
 #![forbid(unsafe_code)]
 
@@ -42,22 +36,20 @@ pub struct CVAACalculation {
 
 //=================== Safe kernels =====================//
 
-// The five `VAACalc*` kernels are one whole-picture walk that differs only in which
-// per-block statistics it reports, and the C++ writes that walk out five times. Here
-// it is written once: `walk_picture` over `half_mb_stats`, with three const flags
-// selecting the accumulators. The flags are compile-time so the unused arithmetic is
-// not emitted at all.
+// The five `VAACalc*` kernels are one whole-picture walk differing only in which
+// per-block statistics it reports: `walk_picture` over `half_mb_stats`, with three
+// const flags selecting the accumulators. The flags are compile-time, so the unused
+// arithmetic is not emitted.
 
 /// The per-8x8-block statistics the five `VAACalc*` kernels choose between.
 ///
-/// Which fields are live is a compile-time decision — see [`accumulate`] — so a
-/// kernel that does not report `sqsum` never emits the multiply that would produce
-/// it. Fields its flags exclude stay zero.
+/// Which fields are live is a compile-time decision — see [`accumulate`] — so a kernel
+/// that does not report `sqsum` never emits the multiply. Excluded fields stay zero.
 #[derive(Clone, Copy, Default)]
 struct BlockStats {
     /// Sum of absolute differences. Every variant computes this one.
     sad: i32,
-    /// Sum of **signed** differences (`BGD`).
+    /// Sum of signed differences (`BGD`).
     sd: i32,
     /// Largest absolute difference in the block (`BGD`).
     mad: i32,
@@ -72,18 +64,14 @@ struct BlockStats {
 /// Accumulate the eight samples at `c[FROM..FROM+8]` against `r[FROM..FROM+8]` into
 /// one quadrant's statistics.
 ///
-/// C++: the body of the innermost `for (l)` in every kernel in
-/// `codec/processing/src/vaacalc/vaacalcfuncs.cpp`. The five copies differ in nothing
-/// but which accumulators they keep, which is what the three flags select.
+/// The innermost loop body of every kernel in
+/// `codec/processing/src/vaacalc/vaacalcfuncs.cpp`, the five copies differing only in
+/// which accumulators they keep — what the three flags select.
 ///
-/// `FROM` is a const so that both call sites index a compile-time window of a
-/// compile-time-sized array: there is no bounds check in here at all, and the eight
-/// iterations are free to vectorise.
+/// `FROM` is a const so both call sites index a compile-time window of a
+/// compile-time-sized array: no bounds check, and the eight iterations vectorise.
 ///
-/// **Arithmetic parity.** Every accumulator is `i32` and every operation is the
-/// C++'s, in the C++'s width; nothing is widened and no `wrapping_*` the old code
-/// lacks is added. `VAACalcSadSsd_c` squares an already-absolute difference where
-/// `VAACalcSadSsdBgd_c` squares `abs_diff` — the same value, so one form serves both.
+/// Every accumulator is `i32` and nothing is widened.
 #[inline(always)]
 fn accumulate<const VAR: bool, const SQDIFF: bool, const BGD: bool, const FROM: usize>(
     s: &mut BlockStats,
@@ -114,20 +102,15 @@ fn accumulate<const VAR: bool, const SQDIFF: bool, const BGD: bool, const FROM: 
 /// The statistics of the two 8x8 quadrants sitting side by side in one half of a
 /// macroblock, from plane slices anchored at that half's top-left sample.
 ///
-/// **This reads each row once, sixteen samples wide, and splits it in registers.**
-/// The C++ walks a quadrant at a time, so it reads rows 0..8 once for the top-left
-/// quadrant and *again* for the top-right; transliterating that shape costs two range
-/// checks per row per quadrant, i.e. 64 per macroblock. Reading a 16-wide row
-/// instead halves the checks to 32 per macroblock, makes each window a fixed-size
-/// `[u8; 16]` whose inner loops need no check at all, and walks the macroblock in
-/// one sequential pass instead of two overlapping ones.
+/// Each row is read once, sixteen samples wide, and split in registers: the two
+/// quadrants share the read rather than walking rows 0..8 twice, which halves the range
+/// checks to 32 per macroblock and makes each window a fixed-size `[u8; 16]` whose
+/// inner loops need none.
 ///
-/// **Why it is still bit-exact.** Regrouping only changes the order in which each
-/// quadrant's own samples are accumulated, and every accumulator is an associative,
-/// commutative `i32` sum (`mad` is a max, which is both as well). No sample moves
-/// between quadrants, and no accumulator mixes with another. The frame total is still
-/// summed in the C++'s quadrant order by [`walk_picture`], which is the one place the
-/// order could be observed at all.
+/// Still exact: regrouping changes only the order in which a quadrant's own samples
+/// accumulate, and every accumulator is an associative, commutative `i32` sum (`mad` is
+/// a max). No sample moves between quadrants and no accumulator mixes with another; the
+/// frame total is summed in quadrant order by [`walk_picture`].
 #[inline(always)]
 fn half_mb_stats<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     cur: &[u8],
@@ -136,12 +119,9 @@ fn half_mb_stats<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
 ) -> (BlockStats, BlockStats) {
     let mut left = BlockStats::default();
     let mut right = BlockStats::default();
-    // Trim both planes to **exactly** the eight rows this half reads, once, before
-    // the loop. Handed an open tail (`&cur[origin..]`) LLVM cannot relate the row
-    // offset `k * stride` to the slice length and re-checks every row; handed a
-    // window whose length it knows to be `7 * stride + 16` it can, and the eight
-    // per-row checks collapse into the two above. Same reads either way — this is
-    // the check placement changing, not the reach.
+    // Trim both planes to exactly the eight rows this half reads, once, before the
+    // loop: with a known length of `7 * stride + 16` the eight per-row checks collapse
+    // into these two. Same reads either way.
     let cur = &cur[..7 * stride + 16];
     let refp = &refp[..7 * stride + 16];
     for k in 0..8 {
@@ -157,16 +137,13 @@ fn half_mb_stats<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
 /// Walks the picture macroblock by macroblock, handing each macroblock's four
 /// quadrant statistics to `on_mb`, and returns the frame's total SAD.
 ///
-/// C++: the `for (i) for (j)` nest shared by all five kernels in
-/// `vaacalcfuncs.cpp`, quadrant order and accumulation order included — `iFrameSad`
-/// sums in quadrant-within-macroblock-within-row order here exactly as it does there.
+/// The `for (i) for (j)` nest shared by all five kernels in `vaacalcfuncs.cpp`.
+/// `iFrameSad` sums in quadrant-within-macroblock-within-row order.
 ///
-/// **The step quirk is reproduced, not corrected.** Between macroblock rows the C++
-/// advances its cursors by `(iPicStride << 4) - iPicWidth` *after* having advanced 16
-/// per macroblock, so a picture whose width is not a multiple of 16 shifts left by
-/// the remainder on every macroblock row instead of landing on the next row's first
-/// sample. [`vaa_span`] derives the read span from this same walk, so the two agree
-/// by construction.
+/// Between macroblock rows the cursors advance by `(iPicStride << 4) - iPicWidth`,
+/// after having advanced 16 per macroblock, so a picture whose width is not a multiple
+/// of 16 shifts left by the remainder on every macroblock row rather than landing on
+/// the next row's first sample. [`vaa_span`] derives the read span from this same walk.
 #[inline(always)]
 fn walk_picture<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     cur: &[u8],
@@ -213,10 +190,9 @@ fn walk_picture<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
 /// the origin the caller hands it.
 ///
 /// The last sample read is the bottom-right corner of the bottom-right macroblock's
-/// bottom-right quadrant. That quadrant begins `8 * stride + 8` past its macroblock's
-/// origin and spans eight further rows and columns, so it ends `15 * stride + 15`
-/// past that origin — which is why a walk over a picture whose height is a multiple
-/// of 16 needs no row below its last macroblock and no padding at all.
+/// bottom-right quadrant, `15 * stride + 15` past that macroblock's origin — so a
+/// picture whose height is a multiple of 16 needs no row below its last macroblock and
+/// no padding at all.
 pub fn vaa_span(pic_width: i32, pic_height: i32, pic_stride: i32) -> usize {
     let mb_width = pic_width >> 4;
     let mb_height = pic_height >> 4;
@@ -298,10 +274,9 @@ pub fn vaa_calc_sad_ssd(
 
 /// C++: `VAACalcSadBgd_c`, `vaacalcfuncs.cpp:462`.
 ///
-/// SAD plus, per 8x8 block, the **signed** sum of differences and the maximum absolute
-/// difference — both read by `CBackgroundDetection`. The maximum is accumulated as an
-/// `i32` and stored as a `u8`, as in the C++; it cannot exceed 255, so the narrowing
-/// is exact.
+/// SAD plus, per 8x8 block, the signed sum of differences and the maximum absolute
+/// difference — both read by `CBackgroundDetection`. The maximum accumulates as an
+/// `i32` and stores as a `u8`; it cannot exceed 255, so the narrowing is exact.
 pub fn vaa_calc_sad_bgd(
     cur: &[u8],
     refp: &[u8],
@@ -370,15 +345,12 @@ impl CVAACalculation {
         RET_SUCCESS
     }
 
-    /// `CVAACalculation::Process` — `vaacalculation.cpp:120`. Reads the current
-    /// picture from `planes.cur` and the reference from `planes.refp` (the C++
-    /// passes the reference as `pDstPixMap`), geometry from `src`, and writes into
-    /// `result`, which the caller hands over at the call rather than storing a
-    /// pointer to it in the parameter block (the C++'s `pCalcResult` was that
-    /// stored pointer).
+    /// `CVAACalculation::Process` — `vaacalculation.cpp:120`. Reads the current picture
+    /// from `planes.cur` and the reference from `planes.refp`, geometry from `src`, and
+    /// writes into `result`, handed over at the call.
     ///
-    /// `pCurY`/`pRefY` record the planes' addresses: the adaptive-quant pass
-    /// compares them for identity.
+    /// `pCurY`/`pRefY` record the planes' addresses: the adaptive-quant pass compares
+    /// them for identity.
     pub fn Process(
         &mut self,
         src: &SPixMap,
@@ -496,8 +468,7 @@ impl CVAACalculation {
 mod tests {
     use super::*;
 
-    /// A 16x16 picture is one macroblock: four 8x8 SADs, and the frame total is
-    /// their sum. Values checked against the C++ arithmetic by construction — a
+    /// A 16x16 picture is one macroblock: four 8x8 SADs summing to the frame total. A
     /// constant difference of `d` over an 8x8 block gives `64 * d`.
     #[test]
     fn calc_sad_one_macroblock() {
@@ -545,19 +516,14 @@ mod tests {
         assert_eq!(sad8x8.iter().flatten().filter(|&&v| v != 0).count(), 1);
     }
 
-    /// A width that is not a multiple of 16 makes the walk's step quirk observable.
+    /// A width that is not a multiple of 16 makes the walk's row step observable.
     ///
-    /// The C++ advances 16 bytes per macroblock and *then* by
-    /// `(iPicStride << 4) - iPicWidth` at the end of the macroblock row. When the
-    /// width is a multiple of 16 those two cancel to exactly sixteen rows. When it is
-    /// not — here width 40, so `iMbWidth` is 2 and only 32 of the 40 columns are
-    /// walked — the row advance comes up eight bytes short, and every macroblock row
-    /// after the first starts *before* the row it looks like it should.
-    ///
-    /// That is faithful to `vaacalcfuncs.cpp` and is reproduced deliberately. A
-    /// "corrected" walk that advanced a clean `16 * stride` would put the second
-    /// macroblock row eight bytes later and read a different block, which is exactly
-    /// what this asserts against.
+    /// The walk advances 16 bytes per macroblock and then by
+    /// `(iPicStride << 4) - iPicWidth` at the end of the macroblock row. At a width
+    /// that is a multiple of 16 the two cancel to exactly sixteen rows; at width 40,
+    /// where `iMbWidth` is 2 and only 32 of the 40 columns are walked, the row advance
+    /// comes up eight bytes short and every macroblock row after the first starts
+    /// before the row it looks like it should.
     #[test]
     fn calc_sad_reproduces_the_step_quirk_at_a_width_that_is_not_a_multiple_of_16() {
         let (w, h, stride) = (40i32, 32i32, 64i32);

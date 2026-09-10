@@ -1,13 +1,12 @@
 //! Inverse Discrete Cosine Transform (IDCT) and Macroblock Reconstruction Auxiliary Functions.
 //!
-//! Rust translation of:
-//! - `codec/decoder/core/inc/decode_mb_aux.h`
-//! - `codec/decoder/core/src/decode_mb_aux.cpp`
+//! C++: `codec/decoder/core/src/decode_mb_aux.cpp`,
+//! `codec/decoder/core/inc/decode_mb_aux.h`.
 #![deny(unsafe_code)]
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
-/// Pixel clipping / saturation helper function clamping values to [0, 255].
+/// Saturates `iX` to `[0, 255]`.
 #[inline(always)]
 pub fn WelsClip1(iX: i32) -> u8 {
     if (iX & !255) != 0 {
@@ -17,17 +16,15 @@ pub fn WelsClip1(iX: i32) -> u8 {
     }
 }
 
-// Every kernel in this file writes a fixed-size block and reaches *forward* only,
-// from the block's own (0, 0) — no `-1` column, no `-stride` row: the reachable
-// span is a function of the stride and the block size alone.
+// Every kernel here writes a fixed-size block and reaches forward only from the
+// block's own (0, 0) — no `-1` column, no `-stride` row — so the reachable span
+// follows from the stride and the block size alone.
 
 use crate::safe::plane::PlaneCursorMut;
 
 pub use crate::decoder::decode_slice::g_kuiScan8;
-/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
-/// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
-/// site because the kernels share their names with the scalars in this module — which
-/// is the point of the naming, and the reason the module qualifier has to stay.
+/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
+/// default, `simd::wide` under `--features wide`.
 use crate::simd::kernels;
 
 /// 4x4 inverse integer DCT of `rs`, added to the prediction block at `pred` and
@@ -35,17 +32,14 @@ use crate::simd::kernels;
 ///
 /// C++: `IdctResAddPred_c`, `codec/decoder/core/src/decode_mb_aux.cpp`.
 ///
-/// `rs` is read, never written — the JSVM compliance note on the C++ original.
-/// The two 1-D passes are the C++'s, unchanged, **including the `as i16`
-/// truncation of the horizontal pass's output**: `iSrc` is an `int16_t[16]` there
-/// and the sums can exceed `i16`, so the truncation is observable and load-bearing.
+/// `rs` is read, never written. The horizontal pass truncates its output to `i16`;
+/// sums can exceed that range, so the truncation is observable.
 pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
     kernels::dct::idct_res_add_pred(pred, rs)
 }
 
-/// The scalar body of [`idct_res_add_pred`], never dispatched. Kept separate so
-/// the SSE2 parity tests have a reference that is guaranteed not to route back
-/// into the kernel under test.
+/// Scalar reference body of [`idct_res_add_pred`], never dispatched; used by the
+/// SIMD parity tests.
 pub fn idct_res_add_pred_c(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
     let mut src = [0i16; 16];
 
@@ -188,12 +182,10 @@ pub fn idct_res_add_pred8x8(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 64]) {
 ///
 /// C++: `IdctFourResAddPred_c`, `codec/decoder/core/src/decode_mb_aux.cpp`.
 ///
-/// `nzc` is a window onto the macroblock's 8-wide non-zero-count raster, anchored
-/// at this quadrant's top-left 4x4 block; the four sub-blocks are therefore at
-/// `nzc[0]`, `nzc[1]`, `nzc[4]` and `nzc[5]`, which is why the parameter is a
-/// `[i8; 6]` rather than a `[i8; 4]` — six is the exact reach.
-/// A block also needs the transform when only its DC coefficient is non-zero
-/// (the I16x16 luma DC case), hence the `|| rs[k << 4] != 0`.
+/// `nzc` is a window onto the macroblock's 8-wide non-zero-count raster, anchored at
+/// this quadrant's top-left 4x4 block: the four sub-blocks sit at `nzc[0]`, `nzc[1]`,
+/// `nzc[4]` and `nzc[5]`. A block also needs the transform when only its DC
+/// coefficient is non-zero (the I16x16 luma DC case).
 pub fn idct_four_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 64], nzc: &[i8; 6]) {
     const SUBS: [(isize, isize, usize); 4] = [(0, 0, 0), (4, 0, 1), (0, 4, 4), (4, 4, 5)];
 
@@ -276,7 +268,7 @@ mod tests {
         assert_eq!(blk4_xy(1), (4, 0));
         assert_eq!(blk4_xy(2), (0, 4));
         assert_eq!(blk4_xy(3), (4, 4));
-        // And the whole 4x4 grid of 4x4 blocks is covered exactly once.
+        // The whole 4x4 grid of 4x4 blocks is covered exactly once.
         let mut seen: Vec<(isize, isize)> = (0..16).map(blk4_xy).collect();
         seen.sort();
         seen.dedup();

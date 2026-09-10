@@ -1,22 +1,10 @@
-//! `portref` — the **port's** answer for one malformed-corpus entry.
+//! Prints the decoder's output for one malformed stream.
 //!
-//! The exact counterpart of `rust/tools/ecref`, which prints the C++ decoder's
-//! answer for the same bytes.
+//! In `DecodeFrame2`/`FlushFrame` call order: the `DECODING_STATE` and
+//! `iBufferStatus` of every call, one SHA-1 per emitted frame, and a summary row.
 //!
-//! It lives in `examples/` on purpose: `cargo test` does not run examples.
-//!
-//! ```text
-//! cargo run --example portref -- narrow_16x16.264 41
-//! cargo run --example portref -- CABA2_SVA_B.264 2284
-//! ```
-//!
-//! Prints, in `DecodeFrame2`/`FlushFrame` call order: the `DECODING_STATE` and
-//! `iBufferStatus` of every call, one SHA-1 per emitted frame **individually**
-//! (which is what `ecref`'s single whole-run digest cannot give you), and the same
-//! `frames / dims / codes / bufstatus` row shape the golden tables store.
-//!
-//! Same decode as `tests/malformed_stream_parity.rs`'s `decode_case`: annex-B split,
-//! `ERROR_CON_SLICE_COPY`, per-NAL feed, EOS + drain, planes in emission order.
+//! Decodes with an annex-B split, `ERROR_CON_SLICE_COPY`, per-NAL feed, EOS plus
+//! drain, and planes in emission order.
 
 #[path = "../tests/common/mod.rs"]
 mod common;
@@ -37,12 +25,7 @@ fn run(name: &str, want: usize) {
     decode(&format!("{name} @{want}"), &data, false);
 }
 
-/// Bytes on stdin, the mirror of `ecref --stdin`.
-///
-/// A prefix truncation is `(stream, length)`; the `hdr*.*`, `tail.*` and
-/// degenerate corpus entries are built inside the harness and no such pair names
-/// them. Both referees therefore read a blob, and the harness hands one over via
-/// `MALFORMED_DUMP_DIR`.
+/// Reads the bytes to decode from stdin.
 fn run_stdin(raw: bool) {
     use std::io::Read as _;
     let mut data = Vec::new();
@@ -50,8 +33,7 @@ fn run_stdin(raw: bool) {
     decode("<stdin>", &data, raw);
 }
 
-/// `--nodelay` feeds each unit through `DecodeFrameNoDelay` instead of `DecodeFrame2`
-/// — the counterpart of `ecref --nodelay`.
+/// `--nodelay` feeds each unit through `DecodeFrameNoDelay` instead of `DecodeFrame2`.
 fn nodelay_wanted() -> bool {
     std::env::args().any(|a| a == "--nodelay")
 }

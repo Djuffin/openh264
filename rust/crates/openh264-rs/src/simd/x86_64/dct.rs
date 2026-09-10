@@ -308,20 +308,12 @@ fn widen_lo_i16_to_i32(v: __m128i) -> __m128i {
 
 /// Computes the 4x4 IDCT residual vectors for 4 rows using SSE2.
 ///
-/// # The vertical pass runs in `i32`, unlike upstream's asm
+/// # The vertical pass runs in `i32`
 ///
-/// The horizontal pass truncates to `i16` in both this and the scalar — `iSrc` is an
-/// `int16_t[16]` in the C++ and the truncation is observable — so `s0..s12` span the
-/// full `i16` range and `s0 + s8` overflows 16 bits. In `epi16` lanes that wrapped
-/// where the scalar saturates; `idct_vertical_pass_does_not_wrap_at_16_bits` pins the
-/// case.
-///
-/// **This is a deliberate divergence from `SSE2_IDCT_4x4P`**
-/// (`codec/common/x86/dct.asm:450`), which is 16-bit and has the same overflow.
-/// Upstream is not consistent about it either: `IdctResAddPred_AArch64_neon`
-/// (`codec/decoder/core/arm64/block_add_aarch64_neon.S:70`) widens to `.4s` and agrees
-/// with its own C. Widening picks the answer that agrees with this port's scalar on
-/// every architecture.
+/// The horizontal pass truncates to `i16` — `iSrc` is an `int16_t[16]` and the
+/// truncation is observable — so `s0..s12` span the full `i16` range and `s0 + s8`
+/// overflows 16 bits, where `epi16` lanes would wrap and the scalar saturates.
+/// `idct_vertical_pass_does_not_wrap_at_16_bits` pins the case.
 #[target_feature(enable = "sse2")]
 fn compute_idct_residuals(dct: &[i16; 16]) -> (__m128i, __m128i, __m128i, __m128i) {
     let s0 = widen_lo_i16_to_i32(idct_row(dct[0], dct[1], dct[2], dct[3]));
@@ -628,9 +620,8 @@ pub fn idct_rec_i16x16_dc_to_view(
 mod tests {
     use super::*;
     use crate::encoder::encode_mb_aux::{dct_4x4 as dct_4x4_c, dct_four_4x4 as dct_four_4x4_c};
-    // These MUST be the `_c` scalar kernels, not the same-named dispatchers:
-    // the dispatchers route to the very kernels under test, which would
-    // make every assertion below a tautology.
+    // The `_c` scalar kernels, not the same-named dispatchers: a dispatcher routes to
+    // the kernel under test, which would make every assertion below a tautology.
     use crate::decoder::decode_mb_aux::idct_res_add_pred_c as idct_res_add_pred;
     use crate::encoder::decode_mb_aux::{
         idct_rec_i16x16_dc_c as idct_rec_i16x16_dc, idct_t4_rec_c as idct_t4_rec,
@@ -646,11 +637,9 @@ mod tests {
         ((*seed >> 32) & 0xFF) as u8
     }
 
-    /// Coefficients over the **full `i16` range**, which is what the decoder hands the
-    /// IDCT: `rs` comes from the bitstream by way of dequantisation, not from this
-    /// port's own quantiser. A narrower cap keeps the vertical pass inside the range
-    /// where 16- and 32-bit lanes agree, and passes on a kernel that is wrong — see
-    /// `compute_idct_residuals`.
+    /// Coefficients over the full `i16` range, which is what the decoder hands the
+    /// IDCT after dequantisation. A narrower cap keeps the vertical pass inside the
+    /// range where 16- and 32-bit lanes agree, and would pass on a wrong kernel.
     fn lcg_i16(seed: &mut u64) -> i16 {
         *seed = seed
             .wrapping_mul(6364136223846793005)
@@ -740,13 +729,10 @@ mod tests {
         }
     }
 
-    /// The exact case the 16-bit vertical pass got wrong, pinned so a future
-    /// "optimisation" back to `epi16` fails here instead of in someone's stream.
-    ///
     /// `rs[0] = rs[8] = 20000` with a zero prediction puts `t1 = s0 + s8 = 40000` into
     /// the vertical butterfly. In `i32` that is `(32 + 40000) >> 6 = 625`, clipped to
-    /// 255. In 16-bit lanes it wrapped to `-25536`, `>> 6 = -399`, and `packus`
-    /// saturated it to 0 — black where the scalar produces white.
+    /// 255; in 16-bit lanes it wraps to `-25536`, `>> 6 = -399`, which `packus`
+    /// saturates to 0.
     #[test]
     fn idct_vertical_pass_does_not_wrap_at_16_bits() {
         let (w, h, pad, stride) = (16usize, 16usize, 16usize, 64usize);
@@ -838,18 +824,15 @@ mod tests {
     // The reconstruction-seam entry points.
     //
     // Each runs an `_sse2` kernel against `idct_t4_rec_c` / `idct_t4_rec_in_place_c` /
-    // `idct_rec_i16x16_dc_c`, which cannot route back here. Note the
-    // `*_matches_the_plane_cursor_form` tests in `encoder/decode_mb_aux.rs` are *not*
-    // this: on x86_64 both of their sides dispatch into this file, so they pin the
-    // `RecCursor`-vs-`PlaneCursorMut` equivalence and not SSE2 against scalar.
+    // `idct_rec_i16x16_dc_c`, which cannot route back here.
     //
     // The multi-block forms are referenced against the scalar applied per block at the
     // sub-offsets, not against this file's own four-block loop, so a transposed
-    // `(dx, dy)` in the hand-written `off`/`advance` arithmetic fails rather than being
-    // a shared assumption. Whole allocations are compared, never just the block.
+    // `(dx, dy)` in the `off`/`advance` arithmetic fails rather than being a shared
+    // assumption. Whole allocations are compared, never just the block.
     // ========================================================================
 
-    /// Two planes of identical geometry filled with the same noise, padding included —
+    /// Two planes of identical geometry filled with the same noise, padding included,
     /// so an out-of-block write shows up as an allocation difference.
     fn twin_planes(seed: &mut u64) -> (PaddedPlane, PaddedPlane) {
         let (w, h, pad, stride) = (32usize, 32usize, 16usize, 64usize);

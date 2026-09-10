@@ -28,11 +28,11 @@
 
 //! # OpenH264 Video Decoder: In-Loop Deblocking Filter
 //!
-//! Translated from `codec/decoder/core/inc/deblocking.h` and `codec/decoder/core/src/deblocking.cpp`.
+//! `codec/decoder/core/inc/deblocking.h`, `codec/decoder/core/src/deblocking.cpp`.
 //!
-//! Implements the normative H.264/AVC in-loop adaptive deblocking filter for macroblocks,
-//! including boundary strength (bS) derivation for P-slices and B-slices, slice-level iteration,
-//! macroblock edge availability masks, and SIMD dispatch table initialization.
+//! The normative H.264/AVC in-loop adaptive deblocking filter: boundary strength (bS)
+//! derivation for P- and B-slices, slice-level iteration, macroblock edge availability
+//! masks, and SIMD dispatch table initialization.
 
 #![deny(unsafe_code)]
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
@@ -94,8 +94,6 @@ pub fn IS_INTER_16x16(mb_type: u32) -> bool {
 // ============================================================================
 
 /// Table 8-16: Alpha table with +12 index offset padding
-// See the note in `encoder/deblocking.rs`: these three tables are file-local in the
-// C++ and the decoder's are `[52 + 24]` where the encoder's are `[52 + 12]`.
 pub static g_kuiAlphaTable: [u8; 52 + 24] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6,
     7, 8, 9, 10, 12, 13, 15, 17, 20, 22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 71, 80, 90, 101, 113,
@@ -818,10 +816,8 @@ fn MB_BLOCK8x8_IDX(r: usize) -> usize {
     ((r >> 3) << 1) + ((r & 3) >> 1)
 }
 
-/// Fix relative to 2.6.0, mirroring `deblocking.cpp:455`: `pFilter` is gone from both marginal
-/// routines' parameter lists. They compared reference indices resolved through the filter's snapshot
-/// of *this* slice's lists; they now compare the pictures the picture itself records, and the filter
-/// has nothing left to say about a bS at a macroblock edge.
+/// `deblocking.cpp:455` — the bS at a macroblock edge, from the reference pictures the picture
+/// records for each side rather than from indices resolved through one slice's lists.
 pub fn DeblockingBsMarginalMBAvcbase(
     pCurDqLayer: &mut DqLayerState,
     pDec: &SPicture,
@@ -836,13 +832,9 @@ pub fn DeblockingBsMarginalMBAvcbase(
     let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
     let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
 
-    // Fix relative to 2.6.0, mirroring `deblocking.cpp:470`: this edge can separate two slices, and
-    // 8.7.2.1 compares the reference *pictures* the two blocks use — "based only on which pictures
-    // are referenced, without regard to whether a prediction is formed using an index into list 0 or
-    // list 1, and without regard to the index position within a list". Resolving the neighbour's
-    // index through *this* slice's list 0, as `pFilter.ref_ids` did, names a different picture
-    // whenever the two slices carry different lists. Both sides now come from the record
-    // `WelsRecordRefPicturesSlice` wrote for each slice.
+    // This edge can separate two slices, and 8.7.2.1 compares the reference *pictures* the two
+    // blocks use, without regard to which list an index came from or its position in that list.
+    // Both sides come from the record `WelsRecordRefPicturesSlice` wrote for each slice.
     let pRefPicture = &pDec.pRefPicture[LIST_0];
 
     let is_8x8_curr = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXy as usize);
@@ -986,12 +978,9 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
     let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
     let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
 
-    // Fix relative to 2.6.0, mirroring `deblocking.cpp:567`: as in `DeblockingBsMarginalMBAvcbase`
-    // above, both macroblocks' reference pictures come from the per-slice record rather than from
-    // resolving both macroblocks' indices through the current slice's two lists (8.7.2.1). Two things
-    // went wrong across a slice boundary: the neighbour's list-0 index named whatever this slice's
-    // list 0 held at that position, and a P-slice neighbour's list-1 indices — which its parse never
-    // writes — resolved through this slice's list 1 into a phantom second reference.
+    // As in `DeblockingBsMarginalMBAvcbase` above, both macroblocks' reference pictures come from
+    // the per-slice record rather than from resolving their indices through the current slice's
+    // two lists (8.7.2.1).
     let pRefPicture0 = &pDec.pRefPicture[LIST_0];
     let pRefPicture1 = &pDec.pRefPicture[LIST_1];
 
@@ -1965,10 +1954,9 @@ fn DeblockingIntraMb(
 // Macroblock-Level Top-Level Deblocking Dispatcher
 // ============================================================================
 
-/// Fix relative to 2.6.0, mirroring `MbUsesList1` at `deblocking.cpp:1142`: true when any 8x8 block
-/// of `iMbXy` predicts from list 1, read from the per-slice record so the answer is the neighbouring
-/// slice's, not the filtering slice's. A macroblock of an I or P slice always answers false; only a B
-/// macroblock that really uses list 1 answers true.
+/// `MbUsesList1` — `deblocking.cpp:1142`. True when any 8x8 block of `iMbXy` predicts from
+/// list 1, read from the per-slice record so the answer is that macroblock's own slice's. A
+/// macroblock of an I or P slice always answers false.
 #[inline]
 fn MbUsesList1(pDec: &SPicture, iMbXy: i32) -> bool {
     pDec.pRefPicture[LIST_1]
@@ -2004,13 +1992,10 @@ pub fn WelsDeblockingMb(
                 let iMbNb = iMbXyIndex - 1;
                 let uiMbType = *pDec.pMbType.get(iMbNb as usize);
 
-                // Fix relative to 2.6.0, mirroring `deblocking.cpp:1181`: the left neighbour can
-                // belong to another slice, and the two-list derivation is the one 8.7.2.1 describes
-                // whenever *either* macroblock uses two lists. A B neighbour of a P macroblock
-                // therefore goes through the B routine too; a B neighbour that predicts from list 0
-                // alone stays on the one-list routine, which compares the same pictures. (No stream
-                // here codes a B slice above or left of a P slice, so this direction is covered only
-                // by every other asset staying byte-identical.)
+                // The left neighbour can belong to another slice, and 8.7.2.1's two-list
+                // derivation is the one to use whenever *either* macroblock uses two lists: a B
+                // neighbour of a P macroblock goes through the B routine too, while a B neighbour
+                // that predicts from list 0 alone stays on the one-list routine.
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
                 } else if bBSlice || MbUsesList1(pDec, iMbNb) {
@@ -2027,7 +2012,7 @@ pub fn WelsDeblockingMb(
                 let iMbNb = iMbXyIndex - pCurDqLayer.iMbWidth;
                 let uiMbType = *pDec.pMbType.get(iMbNb as usize);
 
-                // Fix relative to 2.6.0, mirroring `deblocking.cpp:1196`: as for the left edge above.
+                // As for the left edge above.
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
                 } else if bBSlice || MbUsesList1(pDec, iMbNb) {
@@ -2040,11 +2025,10 @@ pub fn WelsDeblockingMb(
                 nBS[1][0] = [0u8; 4];
             }
 
-            // Fix relative to 2.6.0, mirroring `deblocking.cpp:1213`: the skip short-cut (all
-            // internal edges bS = 0) holds for P_Skip, one 16x16 partition with one motion
-            // vector, but not for B_Skip, whose four 8x8 quadrants inherit direct motion that
-            // differs per 8x8 or per 4x4; 8.7.2.1 derives bS from that per-4x4 motion. A B_Skip
-            // falls through to `DeblockingBSliceBSInsideMBNormal` below, as B_Direct_16x16 does.
+            // The skip short-cut (all internal edges bS = 0) holds for P_Skip, one 16x16
+            // partition with one motion vector, but not for B_Skip, whose four 8x8 quadrants
+            // inherit direct motion that can differ per 8x8 or per 4x4; 8.7.2.1 derives bS from
+            // that motion, so a B_Skip falls through to `DeblockingBSliceBSInsideMBNormal`.
             if IS_SKIP(iCurMbType) && !bBSlice {
                 nBS[0][1] = [0u8; 4];
                 nBS[0][2] = [0u8; 4];
@@ -2097,16 +2081,15 @@ fn snapshot_ref_ids(refs: &SRefPic) -> [[Option<PicId>; MAX_DPB_COUNT]; LIST_A] 
     refs.pRefList
 }
 
-/// Fix relative to 2.6.0, mirroring `WelsRecordRefPicturesMb` at `deblocking.cpp:1250`: record, for
-/// one macroblock, the reference picture each of its four 8x8 blocks predicts from, resolved through
-/// the reference lists of the slice being decoded.
+/// `WelsRecordRefPicturesMb` — `deblocking.cpp:1250`. Records, for one macroblock, the
+/// reference picture each of its four 8x8 blocks predicts from, resolved through the reference
+/// lists of the slice being decoded.
 ///
-/// 8.7.2.1 makes an edge's boundary strength depend on which *pictures* the two blocks reference, and
-/// a reference index only names a picture together with the lists of the slice that coded it.
-/// Deblocking runs per slice and filters across slice boundaries, so the index of a neighbour in
-/// another slice has to be resolved before that slice's lists are gone. A list the slice type does
-/// not use records `None`: 8.4.2.1 gives a P macroblock no list-1 prediction at all, and its
-/// `pRefIndex[LIST_1]` is never written.
+/// 8.7.2.1 makes an edge's boundary strength depend on which *pictures* the two blocks
+/// reference, and a reference index names a picture only together with the lists of the slice
+/// that coded it; deblocking filters across slice boundaries, so a neighbour's index has to be
+/// resolved before its slice's lists are gone. A list the slice type does not use records
+/// `None` — 8.4.2.1 gives a P macroblock no list-1 prediction.
 pub fn WelsRecordRefPicturesMb(
     pCtx: &SliceCtx<'_>,
     pCurDqLayer: &DqLayerState,
@@ -2117,9 +2100,8 @@ pub fn WelsRecordRefPicturesMb(
     const BLOCK8x8_SCAN4_IDX: [usize; 4] = [0, 2, 8, 10];
 
     let iMbXy = iMbXy as usize;
-    // An intra macroblock references no picture at all — 8.7.2.1 gives its edges bS 3 or 4 without
-    // looking — and its `pRefIndex` is never written, so it records "no reference" without reading
-    // one.
+    // An intra macroblock references no picture — 8.7.2.1 gives its edges bS 3 or 4 without
+    // looking — and its `pRefIndex` is never written, so it records "no reference".
     let bIntra = IS_INTRA(*pDec.pMbType.get(iMbXy));
     let eSliceType = pCurDqLayer.sLayerInfo.sSliceInLayer.eSliceType;
     for listIdx in LIST_0..LIST_A {
@@ -2137,11 +2119,10 @@ pub fn WelsRecordRefPicturesMb(
     }
 }
 
-/// Fix relative to 2.6.0, mirroring `WelsRecordRefPicturesSlice` at `deblocking.cpp:1284`:
-/// [`WelsRecordRefPicturesMb`] over every macroblock of the slice just decoded, walking it exactly as
-/// [`WelsDeblockingFilterSlice`] below does.
+/// `WelsRecordRefPicturesSlice` — `deblocking.cpp:1284`. [`WelsRecordRefPicturesMb`] over every
+/// macroblock of the slice just decoded, walking it as [`WelsDeblockingFilterSlice`] below does.
 ///
-/// Called before deblocking and *before* the `uiDisableDeblockingFilterIdc` test, so a slice that
+/// Called before deblocking and before the `uiDisableDeblockingFilterIdc` test, so a slice that
 /// does not filter its own edges still leaves behind what a neighbouring slice reads across the
 /// boundary.
 pub fn WelsRecordRefPicturesSlice(
@@ -2206,7 +2187,6 @@ pub fn WelsDeblockingFilterSlice(
     let mut iBoundryFlag: i32;
     let iFilterIdc = pSliceHeaderExt.sSliceHeader.uiDisableDeblockingFilterIdc as i32;
 
-    // Step 1: Initialize filter parameters.
     pFilter.eSliceType = pCurDqLayer.sLayerInfo.sSliceInLayer.eSliceType as i32;
 
     pFilter.iSliceAlphaC0Offset = pSliceHeaderExt.sSliceHeader.iSliceAlphaC0Offset as i8;
@@ -2216,7 +2196,6 @@ pub fn WelsDeblockingFilterSlice(
 
     let pps_id = pSliceHeaderExt.sSliceHeader.pps_id;
 
-    // Step 2: Macroblock deblocking loop
     if iFilterIdc == 0 || iFilterIdc == 2 {
         iNextMbXyIndex = pSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
         pCurDqLayer.iMbX = iNextMbXyIndex % iMbWidth;
@@ -2287,16 +2266,10 @@ mod tests {
     use super::*;
     use crate::safe::mb_grid::MbDims;
 
-    // Boundary strength is decided by reference-picture **identity**, never by
-    // picture order count. The two differ exactly when the DPB holds two distinct
-    // pictures with a duplicate POC, which a stream can produce (an IDR resets the
-    // POC counter; MMCO 5 does too). Each test below holds the MVs equal and varies
-    // only the reference.
-    //
-    // The two slots come from a `Pool`, because that is the only place a `PicId`
-    // comes from. `pic_queue.rs`'s `pooled_pictures_are_identified_by_slot_not_by_poc`
-    // is the other end of the same property — that two real pooled pictures with one
-    // POC get two slots.
+    // Boundary strength is decided by reference-picture identity, never by picture order
+    // count; the two differ when the DPB holds two distinct pictures with a duplicate POC (an
+    // IDR resets the POC counter, as does MMCO 5). Each test below holds the MVs equal and
+    // varies only the reference.
 
     /// Two distinct slots, the shape every one of these tests needs.
     fn two_refs() -> (Option<PicId>, Option<PicId>) {
@@ -2348,10 +2321,9 @@ mod tests {
         }
     }
 
-    /// B-slice edge: `ON_MB_BS` picks between the "lists agree" and "lists crossed"
-    /// arms by comparing `ref_p0` with `ref_p1` and then `ref_p0` with `ref_q0`.
-    /// With all four MV sets equal, the arm chosen is visible in the result, so this
-    /// pins that the choice is made on identity.
+    /// B-slice edge: `ON_MB_BS` picks between the "lists agree" and "lists crossed" arms by
+    /// comparing `ref_p0` with `ref_p1` and then `ref_p0` with `ref_q0`. With all four MV sets
+    /// equal, the arm chosen is visible in the result.
     #[test]
     fn p3_on_mb_bs_arm_selection_is_by_identity() {
         let (a, b) = two_refs();

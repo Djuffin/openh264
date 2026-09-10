@@ -1,4 +1,4 @@
-//! Rust-side differential driver — mirrors `cxx_enc.cpp` statement for statement.
+//! Rust-side differential encoder driver; C++ counterpart `cxx_enc.cpp`.
 //! usage: rust_enc <src.yuv> <w> <h> <frames> <qp> <cabac 0|1> <gop> <out.264>
 #![allow(non_snake_case)]
 
@@ -9,14 +9,12 @@ use std::fs::File;
 use std::io::{Read, Write};
 
 // ---------------------------------------------------------------------------
-// The log referee's capture side — `cxx_enc.cpp`'s mirror.
+// Trace-log capture
 //
 // `OH264_TRACE_LOG=<path>` installs a trace callback that writes every delivered
 // message as `<level>|<text>`, and raises the trace level to INFO because the
-// default is WELS_LOG_WARNING and the parameter/statistics blocks are INFO. Unset
-// — every sweep run — none of this executes and the driver is unchanged.
-//
-// The callback writes through a `File` reached from the trace *context*.
+// default is WELS_LOG_WARNING and the parameter/statistics blocks are INFO. Unset,
+// none of this executes.
 // ---------------------------------------------------------------------------
 struct TraceSinkCtx {
     file: File,
@@ -57,16 +55,12 @@ unsafe fn install_trace_capture(pEnc: *mut ISVCEncoder) -> Option<Box<TraceSinkC
             std::ptr::from_mut(&mut ctx).cast::<std::ffi::c_void>(),
         );
         // `WELS_LOG_INFO` — `codec_app_def.h:323-331`, where the levels are a bit
-        // mask and INFO is `1 << 2`. **The literal is the point**: `cxx_enc.cpp`
-        // gets this value from the real header, so this driver must ask the port
-        // for the same number a C caller would. Importing the port's own constant
-        // would make the two drivers agree by construction and hide exactly the
-        // divergence the level check exists to catch.
+        // mask and INFO is `1 << 2`. The literal is deliberate: a C caller passes
+        // this number, so importing the crate's own constant instead would make
+        // both drivers agree by construction.
         //
-        // `OH264_TRACE_LEVEL`, when set, replaces it — that is how
-        // `scc_verdicts.sh` asks both drivers for `WELS_LOG_DEBUG` (8) without
-        // moving what every other caller sees. An unparseable value falls back to
-        // the literal rather than guessing.
+        // `OH264_TRACE_LEVEL`, when set, replaces it; an unparseable value falls
+        // back to the literal.
         let mut level: u32 = std::env::var("OH264_TRACE_LEVEL")
             .ok()
             .filter(|s| !s.is_empty())
@@ -95,26 +89,25 @@ fn main() {
     let cabac: i32 = a[6].parse().unwrap();
     let gop: i32 = a[7].parse().unwrap();
     let out = &a[8];
-    // Optional 9th argument: iRCMode. Defaults to RC_OFF_MODE, the gate configuration.
+    // Optional 9th argument: iRCMode. Defaults to RC_OFF_MODE.
     let rcmode: i32 = if a.len() > 9 {
         a[9].parse().unwrap()
     } else {
         RC_MODES::RC_OFF_MODE as i32
     };
     // Optional 10th argument: 1 selects Initialize(SEncParamBase), the path
-    // upstream's BaseEncoderTest::InitWithParam takes and the one the SHA-1 parity
-    // test exercises. It leaves FillDefault's values in place, so scene-change
-    // detection, background detection, adaptive quantisation and frame skip are all
-    // ON. 0 (default) is InitializeExt with the gate configuration.
-    // 2 selects the GetDefaultParams + InitializeExt path: FillDefault's values with
-    // only width/height/framerate/bitrate/threads set on top — the ordinary API flow,
-    // the one c_vs_rust_bench drives. qp/cabac/gop/rcmode/slice args are ignored.
+    // `BaseEncoderTest::InitWithParam` takes. It leaves FillDefault's values in
+    // place, so scene-change detection, background detection, adaptive quantisation
+    // and frame skip are all ON. 0 (default) is InitializeExt with the configuration
+    // built below. 2 selects the GetDefaultParams + InitializeExt path: FillDefault's
+    // values with only width/height/framerate/bitrate/threads set on top, the
+    // ordinary API flow; qp/cabac/gop/rcmode/slice args are ignored.
     let baseinit: i32 = if a.len() > 10 {
         a[10].parse().unwrap()
     } else {
         0
     };
-    // Optional 11th/12th: uiSliceMode and uiSliceNum. See cxx_enc.cpp.
+    // Optional 11th/12th: uiSliceMode and uiSliceNum.
     //   0 = SM_SINGLE_SLICE, 1 = SM_FIXEDSLCNUM_SLICE, 2 = SM_RASTER_SLICE,
     //   3 = SM_SIZELIMITED_SLICE (uiSliceNum is then the size constraint in bytes).
     let slicemode: i32 = if a.len() > 11 {
@@ -133,16 +126,14 @@ fn main() {
     } else {
         1
     };
-    // Optional 14th: iComplexityMode. 0 LOW (default, and what every sweep preset
-    // runs), 1 MEDIUM, 2 HIGH. See cxx_enc.cpp.
+    // Optional 14th: iComplexityMode. 0 LOW (default), 1 MEDIUM, 2 HIGH.
     let complexity: i32 = if a.len() > 14 {
         a[14].parse().unwrap()
     } else {
         0
     };
     // Optional 15th: iLTRRefNum. 0 (default) leaves long-term reference OFF; N > 0
-    // turns bEnableLongTermReference on and asks for N long-term slots. See
-    // cxx_enc.cpp.
+    // turns bEnableLongTermReference on and asks for N long-term slots.
     let ltr: i32 = if a.len() > 15 {
         a[15].parse().unwrap()
     } else {
@@ -155,22 +146,22 @@ fn main() {
         30
     };
     // Optional 17th: LTR feedback bitmask. 1 = marking feedback, 2 = recovery
-    // request. See cxx_enc.cpp — the schedule is fixed and identical on both sides.
+    // request. The schedule below is fixed.
     let ltrfb: i32 = if a.len() > 17 {
         a[17].parse().unwrap()
     } else {
         0
     };
-    // Optional 18th: eSpsPpsIdStrategy, as the enum's own value. See
-    // cxx_enc.cpp — 0/1/2/3/6, and not a dense range.
+    // Optional 18th: eSpsPpsIdStrategy, as the enum's own value: 0/1/2/3/6, not a
+    // dense range.
     let psstrategy: i32 = if a.len() > 18 {
         a[18].parse().unwrap()
     } else {
         0
     };
-    // Optional 19th/20th: iSpatialLayerNum and bEnableDenoise. The two axes
-    // `METHOD_DOWNSAMPLE` and `METHOD_DENOISE` sit behind. Layer geometry is
-    // `BaseEncoderTest`'s (`test/api/BaseEncoderTest.cpp:43`).
+    // Optional 19th/20th: iSpatialLayerNum and bEnableDenoise, behind which sit
+    // `METHOD_DOWNSAMPLE` and `METHOD_DENOISE`. Layer geometry follows
+    // `test/api/BaseEncoderTest.cpp:43`.
     let dlayers: i32 = if a.len() > 19 {
         a[19].parse().unwrap()
     } else {
@@ -181,28 +172,24 @@ fn main() {
     } else {
         0
     };
-    // Optional 21st: bEnableBackgroundDetection. See cxx_enc.cpp. It does NOT reach
-    // the scene-change family: `WelsInitSCDPskipFunc` also requires `bScreenContent`,
-    // which is the `usage` argument below.
+    // Optional 21st: bEnableBackgroundDetection. It does NOT reach the scene-change
+    // family: `WelsInitSCDPskipFunc` also requires `bScreenContent`, which is the
+    // `usage` argument below.
     let bgd: i32 = if a.len() > 21 {
         a[21].parse().unwrap()
     } else {
         0
     };
-    // 23rd: the log referee's reach into `SetOption` — see `cxx_enc.cpp` for why.
-    // N > 0 re-applies the same `SEncParamExt` through
-    // `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` after frame N-1. 0 in every
-    // sweep row.
+    // 23rd: N > 0 re-applies the same `SEncParamExt` through
+    // `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` after frame N-1; 0 disables.
     let setoptext: i32 = if a.len() > 22 {
         a[22].parse().unwrap()
     } else {
         0
     };
-    // 24th/25th: iUsageType (0 camera — the default — 1 SCREEN_CONTENT_REAL_TIME)
-    // and bIsLosslessLink, which the encoder reads only
-    // under screen usage (`ParamValidationExt` turns long-term reference off
-    // without it). See cxx_enc.cpp for the forcing screen usage applies to the
-    // three pinned flags below, and the `scc` preset in sweep.sh.
+    // 24th/25th: iUsageType (0 camera, the default; 1 SCREEN_CONTENT_REAL_TIME) and
+    // bIsLosslessLink, which the encoder reads only under screen usage
+    // (`ParamValidationExt` turns long-term reference off without it).
     let usage: i32 = if a.len() > 23 {
         a[23].parse().unwrap()
     } else {
@@ -227,7 +214,7 @@ fn main() {
         ISVCEncoder::GetDefaultParams(pEnc, &mut p);
 
         if baseinit == 2 {
-            // ---- defaults mode: exactly what c_vs_rust_bench's fill_params sets ----
+            // ---- defaults mode: width/height/framerate/bitrate/threads only ----
             p.iPicWidth = w;
             p.iPicHeight = h;
             p.fMaxFrameRate = 30.0;
@@ -295,8 +282,8 @@ fn main() {
             p.bPsnrU = false;
             p.bPsnrV = false;
 
-            // See cxx_enc.cpp: a baseline layer forces CAVLC, so the profile has to
-            // follow the cabac flag or `cabac 1` never reaches the CABAC writers.
+            // A baseline layer forces CAVLC, so the profile has to follow the cabac
+            // flag or `cabac 1` never reaches the CABAC writers.
             p.sSpatialLayers[0].uiProfileIdc = if cabac != 0 {
                 EProfileIdc::PRO_HIGH
             } else {
@@ -344,7 +331,7 @@ fn main() {
                     p.sSpatialLayers[i].iSpatialBitrate = p.iTargetBitrate;
                     p.sSpatialLayers[i].iMaxSpatialBitrate = UNSPECIFIED_BIT_RATE;
                 }
-                // See cxx_enc.cpp: the multiply comes after, as BaseEncoderTest does it.
+                // The multiply comes after, as `BaseEncoderTest` does it.
                 p.iTargetBitrate *= dlayers;
             }
         }
@@ -372,7 +359,7 @@ fn main() {
 
         let mut coded = 0;
 
-        // See cxx_enc.cpp: the feedback must quote the encoder's own `uiIdrPicId`.
+        // The LTR feedback below must quote the encoder's own `uiIdrPicId`.
 
         let mut idr_seen: u32 = 0;
         for f in 0..frames {
@@ -397,8 +384,7 @@ fn main() {
                 eprintln!("EncodeFrame failed at {}: {}", f, ret);
                 break;
             }
-            // The referee's SetOption reach — after this frame, before the next.
-            // `cxx_enc.cpp` does the same thing at the same point.
+            // Re-apply the parameters after this frame, before the next.
             if setoptext > 0 && f == setoptext - 1 {
                 let opt_ret = ISVCEncoder::SetOption(
                     pEnc,

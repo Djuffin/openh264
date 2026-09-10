@@ -1,7 +1,7 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-//! Port of `codec/processing/src/complexityanalysis/ComplexityAnalysis.cpp` — the
-//! plugin reached through `METHOD_COMPLEXITY_ANALYSIS`.
+//! `codec/processing/src/complexityanalysis/ComplexityAnalysis.cpp` — the plugin
+//! reached through `METHOD_COMPLEXITY_ANALYSIS`.
 //!
 //! `CWelsPreProcess::AnalyzePictureComplexity` selects one of three modes from the
 //! rate-control mode and the slice type (`wels_preprocess.cpp:896-908`):
@@ -23,12 +23,12 @@
 //! intra, horizontal intra and collocated inter, per macroblock, summed into GOM
 //! buckets — reached only from `SCREEN_CONTENT_REAL_TIME`.
 //!
-//! ## Unsigned arithmetic is load-bearing
+//! ## Unsigned arithmetic
 //!
-//! `uiGomSad`, `uiSampleSum` and `uiSquareSum` are `uint32_t` in C++ and the
-//! `GOM_VAR` expression squares a sum that overflows 32 bits for any realistic GOM
-//! (20 macroblocks * 256 samples * 255 = 1.3e6, squared = 1.7e12). The wrap is part
-//! of the result, so every one of these is a `u32` with `wrapping_*` here.
+//! `uiGomSad`, `uiSampleSum` and `uiSquareSum` are 32-bit unsigned, and the `GOM_VAR`
+//! expression squares a sum that overflows 32 bits for any realistic GOM (20
+//! macroblocks * 256 samples * 255 = 1.3e6, squared = 1.7e12). The wrap is part of
+//! the result, so these are `u32` with `wrapping_*`.
 
 #![forbid(unsafe_code)]
 
@@ -63,16 +63,12 @@ fn WELS_MIN(a: i32, b: i32) -> i32 {
 }
 
 /// `CComplexityAnalysis` — `ComplexityAnalysis.h:61`.
-///
-/// The C++ object keeps the whole `SComplexityAnalysisParam` by value (`Set` copies
-/// it in, `Get` copies `iFrameComplexity` back out), so this does too.
 pub struct CComplexityAnalysis {
     pub m_sComplexityAnalysisParam: SComplexityAnalysisParam,
 }
 
 impl Default for CComplexityAnalysis {
     fn default() -> Self {
-        // `CComplexityAnalysis::CComplexityAnalysis` memsets the param to zero.
         Self {
             m_sComplexityAnalysisParam: SComplexityAnalysisParam::default(),
         }
@@ -80,7 +76,7 @@ impl Default for CComplexityAnalysis {
 }
 
 impl CComplexityAnalysis {
-    /// `CComplexityAnalysis::Set` — copies the caller's parameter block in whole.
+    /// `CComplexityAnalysis::Set`.
     pub fn Set(&mut self, param: &SComplexityAnalysisParam) -> i32 {
         self.m_sComplexityAnalysisParam = *param;
         RET_SUCCESS
@@ -92,8 +88,7 @@ impl CComplexityAnalysis {
         RET_SUCCESS
     }
 
-    /// `CComplexityAnalysis::Process`. `calc` is the VAA statistics of this picture
-    /// pair, handed over at the call.
+    /// `CComplexityAnalysis::Process`. `calc` is the VAA statistics of this picture pair.
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -161,9 +156,8 @@ impl CComplexityAnalysis {
 
     /// `CComplexityAnalysis::GetFrameSadExcludeBackground` — `ComplexityAnalysis.cpp:107`.
     ///
-    /// The C++ returns `int32_t` from a `uint32_t` accumulator; the sign of that
-    /// conversion is what `iFrameComplexity` then sign-extends, so the cast chain is
-    /// kept as-is.
+    /// The `u32` accumulator is reinterpreted as `i32`, which `iFrameComplexity` then
+    /// sign-extends.
     fn GetFrameSadExcludeBackground(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -205,7 +199,7 @@ impl CComplexityAnalysis {
     /// `CComplexityAnalysis::AnalyzeGomComplexityViaSad` — `ComplexityAnalysis.cpp:169`.
     ///
     /// `InitGomSadFunc` picks `GomSampleSad` or `GomSampleSadExceptBackground` from
-    /// `iCalcBgd`; both are inlined below because the choice is a single predicate.
+    /// `iCalcBgd`; both are inlined below.
     fn AnalyzeGomComplexityViaSad(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -243,13 +237,9 @@ impl CComplexityAnalysis {
 
             loop {
                 for i in iMbStartIndex..iMbEndIndex {
-                    // The fourth argument of the C++ call is
-                    // `pBackgroundMbFlag[i] && !IS_INTRA (uiRefMbType[i])`. Only
-                    // `GomSampleSadExceptBackground` reads it, so it is evaluated
-                    // only on that arm here — C++ evaluates it either way, but
-                    // `GomSampleSad` discards it, and on the `GomSampleSad` arm
-                    // `uiRefMbType` may legitimately be null (`AnalyzePictureComplexity`
-                    // only assigns it when there is a reference picture).
+                    // `pBackgroundMbFlag[i] && !IS_INTRA (uiRefMbType[i])`, evaluated
+                    // only on the except-background arm: only that arm reads it, and
+                    // `uiRefMbType` is empty when there is no reference picture.
                     let uiBackgroundMbFlag = bExceptBackground
                         && pBackgroundMbFlag[i as usize] != 0
                         && !IS_INTRA(uiRefMbType[i as usize]);
@@ -330,7 +320,7 @@ impl CComplexityAnalysis {
             }
 
             // `uiSquareSum - (uiSampleSum * uiSampleSum / iGomSampleNum)` — all three
-            // operations are 32-bit unsigned in C++, and the square overflows.
+            // operations are 32-bit unsigned, and the square overflows.
             let mean = uiSampleSum
                 .wrapping_mul(uiSampleSum)
                 .wrapping_div(iGomSampleNum as u32);
@@ -348,19 +338,16 @@ impl CComplexityAnalysis {
 /// `CComplexityAnalysisScreen` — `ComplexityAnalysis.h:87-105`,
 /// `ComplexityAnalysis.cpp:272-494`.
 ///
-/// A different measurement from the camera plugin above, not a variant of it: per
-/// 16x16 macroblock it takes the cost of the cheapest of three predictions —
+/// Per 16x16 macroblock it takes the cost of the cheapest of three predictions —
 /// vertical intra, horizontal intra, and (on a P frame) the collocated inter block —
 /// and sums those costs into GOM buckets `iMbRowInGom` macroblock rows tall.
 /// `AnalyzePictureComplexity` feeds the buckets to `RcGomTargetBits` and the frame
-/// total to `RcUpdateFrameComplexity`; nothing here reaches the bitstream except
-/// through the QP the rate controller then chooses.
+/// total to `RcUpdateFrameComplexity`.
 ///
-/// **The GOM array is the rate controller's**, borrowed from
-/// `pWelsSvcRc.pCurrentFrameGomSad` at the call, exactly as the camera plugin's is.
-/// `iGomNumInFrame` is written back as *this plugin's* count of buckets, overwriting
-/// the `iGomSize` the caller staged there — that is what the C++ does, and the
-/// caller must not "preserve" the old value.
+/// The GOM array is the rate controller's, borrowed from
+/// `pWelsSvcRc.pCurrentFrameGomSad` at the call. `iGomNumInFrame` is written back as
+/// *this plugin's* count of buckets, overwriting the `iGomSize` the caller staged
+/// there.
 #[derive(Debug, Default)]
 pub struct CComplexityAnalysisScreen {
     pub m_ComplexityAnalysisParam: SComplexityAnalysisScreenParam,
@@ -373,8 +360,8 @@ impl CComplexityAnalysisScreen {
         RET_SUCCESS
     }
 
-    /// `CComplexityAnalysisScreen::Get` — `ComplexityAnalysis.cpp:348-355`. The whole
-    /// block, so `iGomNumInFrame` and `iFrameComplexity` both travel back.
+    /// `CComplexityAnalysisScreen::Get` — `ComplexityAnalysis.cpp:348-355`. Copies the
+    /// whole block, so `iGomNumInFrame` and `iFrameComplexity` both travel back.
     pub fn Get(&self, pParam: &mut SComplexityAnalysisScreenParam) -> i32 {
         *pParam = self.m_ComplexityAnalysisParam;
         RET_SUCCESS
@@ -382,8 +369,7 @@ impl CComplexityAnalysisScreen {
 
     /// `CComplexityAnalysisScreen::Process` — `ComplexityAnalysis.cpp:316-337`.
     ///
-    /// `pRef` is `None` where the C++ pointer is null; `planes.refp` may be empty in
-    /// that case and is not read.
+    /// `planes.refp` may be empty when `pRef` is `None`; it is not read then.
     pub fn Process(
         &mut self,
         pSrc: &SPixMap,
@@ -406,8 +392,7 @@ impl CComplexityAnalysisScreen {
             return RET_INVALIDPARAM;
         }
 
-        // The C++'s three-way `if` at `:327-334`, in its order. The `pRef` of the two
-        // inter arms is `Some` because the intra arm above took every `None`.
+        // The three-way `if` at `:327-334`, in its order.
         if iIdrFlag == 0
             && let Some(pRef) = pRef
         {
@@ -423,12 +408,9 @@ impl CComplexityAnalysisScreen {
     /// `CComplexityAnalysisScreen::GomComplexityAnalysisIntra` —
     /// `ComplexityAnalysis.cpp:357-411`.
     ///
-    /// **The C++ names its two SADs backwards** and the values are what matter:
-    /// `m_pIntraFunc[0]` is `WelsI16x16LumaPredV_c`, the *vertical* prediction, and
-    /// its cost is stored in the variable called `iBlockSadH`; `m_pIntraFunc[1]` is
-    /// the horizontal prediction and its cost goes in `iBlockSadV`. Since only
-    /// `WELS_MIN` of the pair is ever read, the swap is invisible in the C++ — so the
-    /// locals below are named for what they hold and this note is the crossreference.
+    /// `m_pIntraFunc[0]` is the vertical prediction and `m_pIntraFunc[1]` the
+    /// horizontal; upstream stores their costs in variables named the other way round.
+    /// The locals below are named for what they hold.
     ///
     /// The vertical prediction needs the row above the macroblock and the horizontal
     /// one the column to its left, which is why each is guarded by `j > 0` / `i > 0`
@@ -448,8 +430,7 @@ impl CComplexityAnalysisScreen {
         let mut iIdx: usize = 0;
         let iStrideY = planes.cur_stride;
 
-        // `ENFORCE_STACK_ALIGN_1D (uint8_t, iMemPredMb, 256, 16)` — the 16x16
-        // prediction block, at stride 16.
+        // The 16x16 prediction block, at stride 16.
         let mut iMemPredMb = [0u8; 256];
 
         self.m_ComplexityAnalysisParam.iFrameComplexity = 0;
@@ -492,25 +473,14 @@ impl CComplexityAnalysisScreen {
     ///
     /// The intra pair as above, plus the collocated inter SAD; the bucket takes the
     /// minimum of the three. There is no `if (i || j)` guard here — at the top-left
-    /// macroblock both intra costs are `i32::MAX` and the minimum is the inter cost,
-    /// which is exactly what the C++ computes.
+    /// macroblock both intra costs are `i32::MAX` and the minimum is the inter cost.
     ///
-    /// **Two upstream facts about the scroll branch.**
-    ///
-    /// 1. The scrolled reference is read at `pTmpRef - iScrollMvY * iStrideX +
-    ///    iScrollMvX` (`:451`) — **minus** on Y where the scene-change detector
-    ///    (`SceneChangeDetection.h:170`) adds it for the same vector. Two plugins,
-    ///    one vector, opposite conventions.
-    /// 2. The bounds test is `iBlockPointY + iScrollMvY` against `iHeight - 8` while
-    ///    the read subtracts, and `iHeight - 8`/`iWidth - 8` are an *8x8* margin for a
-    ///    read that is 16x16 wide. So the guard does not bound the read it guards: a
-    ///    macroblock near the top with a positive vector passes the test and reads
-    ///    above the picture.
-    ///
-    /// Neither is reachable from the encoder, and the reason is the caller, not the
-    /// plugin: `AnalyzePictureComplexity` zeroes `sScrollResult` before every `Set`
-    /// (`wels_preprocess.cpp:863-865`), so `bScrollFlag` is false on every call the
-    /// encoder makes and this whole branch is dark.
+    /// The scrolled reference is read at `pTmpRef - iScrollMvY * iStrideX + iScrollMvX`
+    /// (`:451`) — minus on Y, where the scene-change detector adds it for the same
+    /// vector — and the bounds test around it uses an 8x8 margin for a 16x16 read, so it
+    /// does not bound the read it guards. `AnalyzePictureComplexity` zeroes
+    /// `sScrollResult` before every `Set` (`wels_preprocess.cpp:863-865`), so
+    /// `bScrollFlag` is false on every call the encoder makes and the branch is dark.
     fn GomComplexityAnalysisInter(
         &mut self,
         pSrc: &SPixMap,
@@ -530,8 +500,7 @@ impl CComplexityAnalysisScreen {
         let iScrollMvX = self.m_ComplexityAnalysisParam.sScrollResult.iScrollMvX;
         let iScrollMvY = self.m_ComplexityAnalysisParam.sScrollResult.iScrollMvY;
 
-        // `iStrideX` is the reference's, `iStrideY` the source's — this kernel, unlike
-        // `ScrollDetectionCore`, does keep them apart.
+        // `iStrideX` is the reference's stride, `iStrideY` the source's.
         let iStrideX = planes.ref_stride;
         let iStrideY = planes.cur_stride;
         debug_assert_eq!(iStrideX, pRef.iStride[0] as usize);
@@ -633,10 +602,9 @@ mod screen_tests {
     }
 
     /// A flat frame predicts perfectly in both directions, so every macroblock past
-    /// the first costs nothing and the frame total is zero. What the test is really
-    /// pinning is the **bucket count**: 320x192 is 20x12 macroblocks, `GOM_H_SCC` is
-    /// 8, and the boundary rule `(j + 1) % 8 == 0 || j == bh - 1` fires at `j = 7`
-    /// and `j = 11` — two buckets, not `ceil(12 / 8)` rounded some other way.
+    /// the first costs nothing and the frame total is zero. 320x192 is 20x12
+    /// macroblocks and `iMbRowInGom` is 8, so the boundary rule
+    /// `(j + 1) % 8 == 0 || j == bh - 1` fires at `j = 7` and `j = 11`: two buckets.
     #[test]
     fn a_flat_frame_costs_nothing_and_fills_two_gom_buckets() {
         const W: usize = 320;
@@ -662,7 +630,7 @@ mod screen_tests {
         assert_eq!(gom[2], -1, "nothing was written past the buckets used");
     }
 
-    /// A vertical gradient — row `y` holds the value `y` — computed by hand.
+    /// A vertical gradient — row `y` holds the value `y`.
     ///
     /// 32x32 is 2x2 macroblocks and one bucket (`j == bh - 1` at `j = 1`). Of the
     /// four macroblocks, three cost nothing: `(0,0)` is skipped by the `if (i || j)`
@@ -672,9 +640,6 @@ mod screen_tests {
     ///
     ///     16 columns * sum(y - 15 for y in 16..=31) = 16 * (1 + 2 + ... + 16)
     ///                                              = 16 * 136 = 2176
-    ///
-    /// So the frame total is 2176 and the single bucket holds it. A port that lost
-    /// the `i > 0` / `j > 0` guards, or the `if (i || j)` one, moves this number.
     #[test]
     fn a_vertical_gradient_costs_only_its_first_column_of_macroblocks() {
         const W: usize = 32;
@@ -701,8 +666,8 @@ mod screen_tests {
 
     /// A P frame whose reference *is* the current frame: the collocated inter SAD is
     /// zero for every macroblock, so the three-way minimum is zero everywhere —
-    /// including at `(0,0)`, where the two intra costs are `i32::MAX` and only the
-    /// absence of an `if (i || j)` guard in the inter kernel gives the right answer.
+    /// including at `(0,0)`, where both intra costs are `i32::MAX` and the inter kernel
+    /// has no `if (i || j)` guard.
     #[test]
     fn an_inter_frame_against_itself_costs_nothing() {
         const W: usize = 320;
@@ -751,7 +716,7 @@ mod screen_tests {
             RET_INVALIDPARAM
         );
 
-        // A P frame with no reference: the C++'s `!iIdrFlag && pRef == NULL`.
+        // A P frame with no reference.
         c.Set(&param(0, 8));
         assert_eq!(
             c.Process(&map, None, &planes(&f, &[], W), &mut gom),
@@ -762,8 +727,6 @@ mod screen_tests {
 
     /// `Get` copies the **whole** block back, so `iGomNumInFrame` returns this
     /// plugin's bucket count and overwrites whatever the caller staged there.
-    /// `AnalyzePictureComplexity` stages `pWelsSvcRc->iGomSize`; the number that
-    /// survives is the plugin's.
     #[test]
     fn get_overwrites_the_staged_gom_count() {
         const W: usize = 320;

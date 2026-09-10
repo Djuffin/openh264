@@ -2,8 +2,8 @@
 
 //! Context-Adaptive Variable-Length Coding (CAVLC) Entropy Encoding Subsystem.
 //!
-//! Translated from `codec/encoder/core/inc/vlc_encoder.h`,
-//! `codec/encoder/core/src/encoder_data_tables.cpp`, and `codec/encoder/core/src/set_mb_syn_cavlc.cpp`.
+//! `codec/encoder/core/inc/vlc_encoder.h`,
+//! `codec/encoder/core/src/encoder_data_tables.cpp`, `codec/encoder/core/src/set_mb_syn_cavlc.cpp`.
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -20,11 +20,8 @@ pub enum ECtxBlockCat {
     CHROMA_AC = 4,
 }
 
-/// The encoder's write position.
-///
-/// `BsWriter` is a detached cursor — `{pos, cur_bits, left_bits}`, no buffer
-/// reference. The buffer belongs to whoever allocated it and arrives as
-/// `&mut [u8]` on every call. See `safe::bits` for the semantics.
+/// The encoder's write position: a detached cursor (`{pos, cur_bits, left_bits}`)
+/// holding no buffer reference — the buffer arrives as `&mut [u8]` on every call.
 pub use crate::safe::bits::BsWriter;
 
 /// CAVLC codeword table item.
@@ -759,7 +756,7 @@ pub fn BsFlush(buf: &mut [u8], pBs: &mut BsWriter) -> i32 {
     0
 }
 
-/// Calculate the bit length of an unsigned Exp-Golomb code.
+/// Bit length of an unsigned Exp-Golomb code: `2 * floor(log2(value + 1)) + 1`.
 #[inline(always)]
 pub fn BsSizeUE(kiValue: u32) -> u32 {
     if kiValue < 256 {
@@ -795,12 +792,6 @@ pub fn BsSizeSE(kiValue: i32) -> u32 {
 }
 
 /// Write an unsigned Exp-Golomb code (`ue(v)`).
-///
-/// The C++ takes the code length from `g_kuiGolombUELength` below 256 and from a
-/// two-step reduction above it; both compute `2 * floor(log2(value + 1)) + 1`,
-/// which is what `BsWriter::write_ue` reaches directly. `BsSizeUE` above spells
-/// the table form out for the mode-decision cost functions that want the length
-/// without writing anything.
 #[inline(always)]
 pub fn BsWriteUE(buf: &mut [u8], pBs: &mut BsWriter, kuiValue: u32) -> i32 {
     pBs.write_ue(buf, kuiValue);

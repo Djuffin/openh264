@@ -1,22 +1,14 @@
-//! Port of `codec/encoder/core/src/sample.cpp` — the SATD kernels and
+//! `codec/encoder/core/src/sample.cpp` — the SATD kernels and
 //! `WelsInitSampleSadFunc`, which installs the sample-cost tables the mode-decision
 //! layer scores every candidate with.
 //!
-//! The SAD kernels already live in `common/sad_common.rs` (`sad_common.cpp`); only
-//! the SATD half and the table filler are here.
-//!
-//! The `Combined3` entries are set to `NULL` by the scalar path and only ever
-//! assigned from SIMD kernels behind a `uiCpuFlag` test. Measured against
-//! `libopenh264.a` on this machine, `WelsCPUFeatureDetect` returns `0x00000000`, so
-//! the reference leaves all five NULL — matching this port, which has no SIMD.
+//! The SAD kernels live in `common/sad_common.rs` (`sad_common.cpp`); only the SATD
+//! half and the table filler are here.
 
 #![allow(non_snake_case, non_upper_case_globals)]
 // ---------------------------------------------------------------------------
-// Arithmetic parity: the whole butterfly is `i32`, exactly as the C++
-// (`int32_t pSampleMix[4][4]`) — total over all `u8` inputs
-// (|diff| <= 255, 16x Hadamard gain, `(sum + 1) >> 1` per 4x4 sub-block; the
-// per-sub-block rounding makes the composition order part of the contract,
-// mirrored below).
+// The whole butterfly is `i32` (`int32_t pSampleMix[4][4]`): |diff| <= 255 with a
+// 16x Hadamard gain, and `(sum + 1) >> 1` per 4x4 sub-block.
 // ---------------------------------------------------------------------------
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -33,7 +25,7 @@ pub fn satd_4x4<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i
 
     for (i, row) in mix.iter_mut().enumerate() {
         // `RecCursor::row` is const-sized and returns by value — a shared
-        // cell view cannot lend a row. Same four samples, same order.
+        // cell view cannot lend a row.
         let r1: [u8; 4] = c1.row_n::<4>(i as isize, 0);
         let r2: [u8; 4] = c2.row_n::<4>(i as isize, 0);
         for k in 0..4 {
@@ -72,7 +64,7 @@ pub fn satd_4x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i
 }
 
 /// C++: `WelsSampleSatd8x8_c` — four 4x4s: top-left, top-right, bottom-left,
-/// bottom-right (the C++'s summation order, kept).
+/// bottom-right.
 pub fn satd_8x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     let mut satd = satd_4x4(c1, c2);
     satd += satd_4x4(&c1.advance(4, 0), &c2.advance(4, 0));
@@ -107,27 +99,20 @@ use crate::encoder::svc_mode_decision::{
 use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
 use crate::common::cpu_core::{WELS_CPU_AVX2, WELS_CPU_SSE2};
-/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
-/// `simd::wide` under `--features wide`, and `simd::scalar` on a target with neither.
-/// Imported rather than spelled in full at each site because the kernels share their
-/// names with the scalars in this module — which is the point of the naming, and the
-/// reason the module qualifier has to stay.
+/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
+/// default, `simd::wide` under `--features wide`, and `simd::scalar` on a target with
+/// neither.
 use crate::simd::kernels;
 
-/// `sample.cpp:336`. Installs the scalar SAD/SATD/4-SAD tables and clears the five
-/// `Combined3` slots. The SIMD overrides that follow in the C++ are all behind
-/// `uiCpuFlag` tests that do not fire here.
+/// `sample.cpp:336`. Installs the scalar SAD/SATD/4-SAD tables, then overrides entries
+/// with SIMD kernels where `uiCpuFlag` and the hardware allow.
 ///
-/// **This is the only writer of the three tables, and `_uiCpuFlag` is unused** —
-/// so every slot is a compile-time constant from the first frame on, and a call
-/// site whose block index is itself a constant may call the kernel directly,
-/// byte-identically, without going through the table at all. The table exists for
-/// the runtime-indexed readers (the motion search hoists `[block_size]`, and
-/// `md_cost`/`me_cost`'s family selection).
+/// The only writer of the three tables, so every slot is fixed from the first frame on.
+/// The tables exist for the runtime-indexed readers: the motion search's `[block_size]`,
+/// and `md_cost`/`me_cost`'s family selection.
 pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
     let sdf = &mut pFuncList.sSampleDealingFuncs;
 
-    //pfSampleSad init
     sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| sample_sad::<16, 16, _>(a, b));
     sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| sample_sad::<16, 8, _>(a, b));
     sdf.pfSampleSad[BLOCK_8x16] = Some(|a, b| sample_sad::<8, 16, _>(a, b));
@@ -136,7 +121,6 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
     sdf.pfSampleSad[BLOCK_8x4] = Some(|a, b| sample_sad::<8, 4, _>(a, b));
     sdf.pfSampleSad[BLOCK_4x8] = Some(|a, b| sample_sad::<4, 8, _>(a, b));
 
-    //pfSampleSatd init
     sdf.pfSampleSatd[BLOCK_16x16] = Some(|a, b| satd_16x16(a, b));
     sdf.pfSampleSatd[BLOCK_16x8] = Some(|a, b| satd_16x8(a, b));
     sdf.pfSampleSatd[BLOCK_8x16] = Some(|a, b| satd_8x16(a, b));
@@ -158,15 +142,8 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
         sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| kernels::sad::sample_sad_16x8(a, b));
         sdf.pfSampleSad[BLOCK_8x16] = Some(|a, b| kernels::sad::sample_sad_8x16(a, b));
         sdf.pfSampleSad[BLOCK_8x8] = Some(|a, b| kernels::sad::sample_sad_8x8(a, b));
-        // **The three small shapes upstream leaves scalar on x86, and why they are not.**
-        // `BLOCK_4x4` is a gap against upstream, which installs `WelsSampleSad4x4_mmx`
-        // here (`sample.cpp`'s `X86_ASM` arm). `BLOCK_8x4` and `BLOCK_4x8` have no x86
-        // kernel upstream at all, so filling them puts this port ahead of it — which is
-        // safe to do because SAD is an exact integer cost: the parity tests in
-        // `simd::x86_64::sad` assert these agree with `sample_sad::<W, H>` bit for bit
-        // over five input distributions and four anchors, so mode decision sees the
-        // same numbers and picks the same modes. The kernels were already written and
-        // tested; only the table entry was missing.
+        // SAD is an exact integer cost, and these kernels agree with
+        // `sample_sad::<W, H>` bit for bit, so mode decision picks the same modes.
         sdf.pfSampleSad[BLOCK_4x4] = Some(|a, b| kernels::sad::sample_sad_4x4(a, b));
         sdf.pfSampleSad[BLOCK_8x4] = Some(|a, b| kernels::sad::sample_sad_8x4(a, b));
         sdf.pfSampleSad[BLOCK_4x8] = Some(|a, b| kernels::sad::sample_sad_4x8(a, b));
@@ -181,7 +158,6 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
             Some(|a, b, sad| kernels::sad::sample_sad_four_8x8(a, b, sad));
         sdf.pfSample4Sad[BLOCK_4x4] =
             Some(|a, b, sad| kernels::sad::sample_sad_four_4x4(a, b, sad));
-        // No upstream x86 kernel for these two shapes either; see the note above.
         sdf.pfSample4Sad[BLOCK_8x4] =
             Some(|a, b, sad| kernels::sad::sample_sad_four_8x4(a, b, sad));
         sdf.pfSample4Sad[BLOCK_4x8] =
@@ -192,29 +168,21 @@ pub fn WelsInitSampleSadFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32) {
         sdf.pfSampleSatd[BLOCK_8x16] = Some(|a, b| kernels::satd::satd_8x16(a, b));
         sdf.pfSampleSatd[BLOCK_16x8] = Some(|a, b| kernels::satd::satd_16x8(a, b));
         sdf.pfSampleSatd[BLOCK_16x16] = Some(|a, b| kernels::satd::satd_16x16(a, b));
-        // As above: no upstream x86 SATD for 8x4 or 4x8, and SATD is an exact integer
-        // cost, so installing the port's own is byte-neutral.
+        // SATD is an exact integer cost, so these two shapes score identically to the
+        // scalars above.
         sdf.pfSampleSatd[BLOCK_8x4] = Some(|a, b| kernels::satd::satd_8x4(a, b));
         sdf.pfSampleSatd[BLOCK_4x8] = Some(|a, b| kernels::satd::satd_4x8(a, b));
     }
 
-    // **Two conditions, and they are different questions.** `uiCpuFlag` is the host's
-    // policy — a caller may restrict it, and `svc_mode_decision.rs:2371` passes `0` —
-    // while `has_avx2()` is the hardware fact. The kernels below are
-    // `#[target_feature(enable = "avx2")]` underneath and run `vpsadbw` with no test of
-    // their own, so the flag alone is not enough to install them: nothing stops a caller
-    // passing a word it made up, and the result would be SIGILL on a pre-Haswell part.
-    //
-    // This is the altitude the test belongs at. It is asked once, here, when the table
-    // is built — not on every candidate the mode-decision loop scores.
+    // `uiCpuFlag` is the caller's policy (a caller may restrict it to `0`), `has_avx2()`
+    // the hardware fact. The kernels below are `#[target_feature(enable = "avx2")]` and
+    // run `vpsadbw` with no test of their own, so the flag alone is not enough: a made-up
+    // flag word would mean SIGILL on a pre-Haswell part. Asked once, when the table is
+    // built, not per candidate scored.
     if (uiCpuFlag & WELS_CPU_AVX2) != 0 && crate::simd::has_avx2() {
         sdf.pfSampleSad[BLOCK_16x16] = Some(|a, b| kernels::sad::sample_sad_16x16_avx2(a, b));
         sdf.pfSampleSad[BLOCK_16x8] = Some(|a, b| kernels::sad::sample_sad_16x8_avx2(a, b));
     }
-
-    // The five `pfIntra*Combined3*` slots were nulled here, as the C++ does. They
-    // were never anything else on any target this port builds for, and the fields
-    // are deleted.
 }
 
 #[cfg(test)]

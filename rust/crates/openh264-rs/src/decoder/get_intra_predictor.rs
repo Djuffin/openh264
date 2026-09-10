@@ -28,7 +28,7 @@ pub fn WelsClip1(iX: i32) -> u8 {
 // Kernels
 // ============================================================================
 //
-// **Every kernel here reads outside its own block** — the row above at
+// Every kernel here reads outside its own block — the row above at
 // `dy == -1` and the column to the left at `dx == -1`, and for the diagonal
 // modes the row above extends up to 8 (4x4) or 16 (8x8, 16x16) samples to the
 // right of the block's left edge. That is legal because the block always sits
@@ -59,9 +59,6 @@ fn left4(pred: &PlaneCursorMut<'_>) -> [u8; 4] {
 }
 
 /// Writes `rows[k]` of a 4x4 block from `list[off[k] .. off[k] + 4]`.
-///
-/// The window offsets are the mode's whole identity, which is why they stay
-/// explicit here rather than being folded into a formula.
 #[inline]
 fn write4x4_windows(pred: &mut PlaneCursorMut<'_>, list: &[u8], off: [usize; 4]) {
     for (dy, &o) in off.iter().enumerate() {
@@ -356,7 +353,7 @@ fn tap2(a: u8, b: u8) -> u8 {
 /// The eight filtered samples of the row above an 8x8 block.
 ///
 /// `tl_avail` decides whether the first sample may use the top-left corner;
-/// `tr_avail` whether the last may use `T8`. **`T8` is read only when `tr_avail`**.
+/// `tr_avail` whether the last may use `T8`, which is read only when `tr_avail`.
 fn i8x8_filter_top8(pred: &PlaneCursorMut<'_>, tl_avail: bool, tr_avail: bool) -> [u8; 8] {
     let t: [u8; 8] = pred.row(-1, 0, 8).try_into().unwrap();
     let mut f = [0u8; 8];
@@ -416,8 +413,8 @@ fn i8x8_filter_top16(pred: &PlaneCursorMut<'_>, tl_avail: bool) -> [u8; 16] {
 }
 
 /// Sixteen filtered samples for the `*Top` variants, where the block to the top-right
-/// is unavailable: only eight real samples exist and `T7` — **unfiltered** — stands in
-/// for the other eight.
+/// is unavailable: only eight real samples exist and `T7`, unfiltered, stands in for
+/// the other eight.
 fn i8x8_filter_top16_edge(pred: &PlaneCursorMut<'_>, tl_avail: bool) -> [u8; 16] {
     let t: [u8; 8] = pred.row(-1, 0, 8).try_into().unwrap();
     let mut f = [0u8; 16];
@@ -514,8 +511,8 @@ pub fn i8x8_luma_pred_ddl_top(pred: &mut PlaneCursorMut<'_>, tl_avail: bool, _tr
     i8x8_pred_ddl_body(pred, &f);
 }
 
-/// C++: `WelsI8x8LumaPredDDR_c`. `bTLAvail` is ignored by the C++ here — the corner is
-/// filtered unconditionally — and the parameter is kept only for the table's ABI.
+/// C++: `WelsI8x8LumaPredDDR_c`. `bTLAvail` is unused — the corner is filtered
+/// unconditionally — and the parameter is the function table's signature.
 pub fn i8x8_luma_pred_ddr(pred: &mut PlaneCursorMut<'_>, _tl_avail: bool, tr_avail: bool) {
     let ftl = i8x8_filter_tl(pred);
     let fl = i8x8_filter_left8(pred, true);
@@ -568,7 +565,7 @@ pub fn i8x8_luma_pred_vl_top(pred: &mut PlaneCursorMut<'_>, tl_avail: bool, _tr_
     i8x8_pred_vl_body(pred, &f);
 }
 
-/// C++: `WelsI8x8LumaPredVR_c`. As with DDR, `bTLAvail` is unused by the C++ body.
+/// C++: `WelsI8x8LumaPredVR_c`. As with DDR, `bTLAvail` is unused.
 pub fn i8x8_luma_pred_vr(pred: &mut PlaneCursorMut<'_>, _tl_avail: bool, tr_avail: bool) {
     let ftl = i8x8_filter_tl(pred);
     let fl = i8x8_filter_left8(pred, true);
@@ -634,7 +631,7 @@ pub fn i8x8_luma_pred_hu(pred: &mut PlaneCursorMut<'_>, tl_avail: bool, _tr_avai
     }
 }
 
-/// C++: `WelsI8x8LumaPredHD_c`. As with DDR and VR, `bTLAvail` is unused by the body.
+/// C++: `WelsI8x8LumaPredHD_c`. As with DDR and VR, `bTLAvail` is unused.
 pub fn i8x8_luma_pred_hd(pred: &mut PlaneCursorMut<'_>, _tl_avail: bool, tr_avail: bool) {
     let ftl = i8x8_filter_tl(pred);
     let fl = i8x8_filter_left8(pred, true);

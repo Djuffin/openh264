@@ -1,23 +1,16 @@
-//! SATD on `wide` lane types — the twin of `simd::x86_64::satd`.
+//! SATD on `wide` lane types.
 //!
-//! # A different layout, for a reason
-//!
-//! The intrinsic kernel keeps one row per register in the low four lanes, runs the
-//! row butterflies lane-wise, transposes with four `punpck`s, and butterflies again.
-//! `wide` has no word-lane unpack, so the transpose would be an array cast for LLVM
-//! to lower — and while [`super::lanes::transpose4_lo`] exists for the kernels that
-//! need it, this one does not: the 4x4 block fits two registers as `[row0 | row1]`
-//! and `[row2 | row3]`, and with that layout the vertical butterflies need only a
-//! half swap and the horizontal ones a quad rotate and an adjacent swap — all
-//! `pshufd`-class permutes.
+//! `wide` has no word-lane unpack, so instead of a transpose the 4x4 block is held in
+//! two registers as `[row0 | row1]` and `[row2 | row3]`. With that layout the vertical
+//! butterflies need only a half swap and the horizontal ones a quad rotate and an
+//! adjacent swap — all `pshufd`-class permutes.
 //!
 //! The horizontal pass produces each of its four outputs twice (once per half of a
 //! lane pair, with a sign that the absolute value erases), so the lane sum is twice
 //! the transform's `Σ|coeff|` and the kernel halves it before the final rounding.
 //!
-//! The 4x4 block every shape is built from cuts each operand once into a
-//! `RefSamples::span` and indexes its four rows inside it, so it pays one cut per
-//! operand where a `row_n` walk paid two checks per row. See `RefSamples::span`.
+//! Each shape's 4x4 block cuts each operand once into a `RefSamples::span` and
+//! indexes its four rows inside it: one cut per operand.
 
 #![forbid(unsafe_code)]
 
@@ -69,7 +62,7 @@ fn satd_4x4_impl<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> 
     let v = m + ms; // [s2 + s3 | same]
     let w = m - ms; // [s2 - s3 | negated]
 
-    // The intermediate rows, two per register, in the scalar's order.
+    // The intermediate rows, two per register, in transform order.
     let rows01 = HIGH_HALF.select(v, t); // [s0 + s1 | s2 + s3]
     let rows23 = HIGH_HALF.select(u, w); // [s2 - s3 | s0 - s1]
 

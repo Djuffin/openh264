@@ -50,7 +50,7 @@ pub const ERR_INFO_BS_INCOMPLETE: i32 = ERR_INFO_LOGIC_BASE + 9;
 
 pub const dsBitstreamError: i32 = 0x04;
 
-// Log levels — **re-exported, not redeclared**.
+// Log levels — re-exported, not redeclared.
 pub use crate::common::wels_trace::{
     WELS_LOG_DEBUG, WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING,
 };
@@ -851,8 +851,8 @@ pub fn WelsCalcDeqCoeffScalingList(pCtx: &mut SWelsDecoderContext) -> i32 {
 // Neighbor Availability Mapping
 // ============================================================================
 
-/// `bConstainedIntraPredFlag`, as a type. (The misspelling is upstream's, in both
-/// the PPS field and the `Constrain0`/`Constrain1` function names.)
+/// `bConstainedIntraPredFlag`, as a type. (The misspelling is the PPS field's, and the
+/// `Constrain0`/`Constrain1` function names'.)
 ///
 /// `Constrain0 = 0` is load-bearing: `SWelsDecoderContext` is built from a
 /// `MaybeUninit::zeroed()` shell (`decoder_context.rs`), so the zero pattern must be a
@@ -1110,15 +1110,13 @@ use crate::common::mc::{mc_chroma, mc_chroma_same, mc_luma, mc_luma_same};
 // resolves to the destination itself and runs `mc_luma_same`/`mc_chroma_same`
 // (`common/mc.rs`), which read and write through the one `&mut`.
 
-/// **Where a partition's prediction lands**: the block's sample coordinates in the
+/// Where a partition's prediction lands: the block's sample coordinates in the
 /// destination picture's luma and chroma planes.
 ///
-/// **Luma and chroma are tracked separately rather than derived from one
-/// another**, and `rec_mb.cpp:1014` is the reason: it applies the 8x8 sub-partition
-/// offset *twice* to the LIST_1 luma destination of a bi-predicted 4x4 block and
-/// once to its chroma. The C's two walks were independent, so the divergence was
-/// expressible; deriving `chroma = luma >> 1` would silently repair it, which is a
-/// behaviour change on a B-slice path.
+/// Luma and chroma are tracked separately rather than derived from one another,
+/// because they can diverge: `rec_mb.cpp:1014` applies the 8x8 sub-partition offset
+/// twice to the LIST_1 luma destination of a bi-predicted 4x4 block and once to its
+/// chroma, which `chroma = luma >> 1` could not express.
 #[derive(Clone, Copy)]
 struct McDst {
     luma: (isize, isize),
@@ -1158,27 +1156,24 @@ enum McSrc<'a> {
     Dst,
 }
 
-/// The C's `ERR_INFO_REFERENCE_PIC_LOST`, which all three of `GetRefPic`'s failure
-/// arms return.
+/// `ERR_INFO_REFERENCE_PIC_LOST`, which all three of `GetRefPic`'s failure arms
+/// return.
 #[inline]
 fn ref_pic_lost() -> i32 {
     GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST)
 }
 
-/// `GetRefPic`'s third arm: the C tested the three source cursors for null after
-/// filling them, which is exactly "this picture has an unallocated plane".
+/// `GetRefPic`'s third arm: whether the picture has all three planes allocated.
 #[inline]
 fn has_planes(pic: &SPicture) -> bool {
     !pic.plane(0).is_empty() && !pic.plane(1).is_empty() && !pic.plane(2).is_empty()
 }
 
-/// The reference `iRefIdx` selects in list `listIdx`, for a destination that **is**
-/// the picture the bracket holds — the P-slice path and the B path's LIST_0 half.
+/// The reference `iRefIdx` selects in list `listIdx`, for a destination that is the
+/// picture the bracket holds — the P-slice path and the B path's LIST_0 half.
 ///
-/// Matches `GetRefPic` in `rec_mb.cpp`, whose whole body was filling `sMCRefMember`'s
-/// source cursors and strides from the resolved picture. The three failure arms are
-/// the C's: a negative index, a handle that resolves to nothing, and a resolved
-/// picture with an empty plane.
+/// Matches `GetRefPic` in `rec_mb.cpp`. The three failure arms are a negative index, a
+/// handle that resolves to nothing, and a resolved picture with an empty plane.
 #[inline]
 fn ref_for_current<'a>(
     pRefs: PicRefs<'a>,
@@ -1191,16 +1186,15 @@ fn ref_for_current<'a>(
     }
     match pRefs.classify(ref_id(sRefPic, listIdx, iRefIdx as usize)) {
         RefSlot::Empty => Err(ref_pic_lost()),
-        // The C resolved this to `pCtx->pDec` and read on; so does the `Dst`
-        // arm, and the destination's own planes are the ones `has_planes` would have
-        // tested — the caller holds them mutably, so the test moves there.
+        // The destination's own planes are the ones `has_planes` would test, and the
+        // caller holds them mutably, so the test moves there.
         RefSlot::Current => Ok(McSrc::Dst),
         RefSlot::Other(pic) if has_planes(pic) => Ok(McSrc::Other(pic)),
         RefSlot::Other(_) => Err(ref_pic_lost()),
     }
 }
 
-/// [`ref_for_current`] for a destination that is **not** the bracket's picture: the
+/// [`ref_for_current`] for a destination that is not the bracket's picture: the
 /// B-slice scratch (`pCtx->pTempDec`), where the LIST_1 hypothesis lands.
 #[inline]
 fn ref_for_other<'s>(
@@ -1248,11 +1242,9 @@ fn BaseMC(
         (geom.1 + PADDING_LENGTH - 19) * 4,
     );
 
-    // The C added `(iFullMVx >> 2) + (iFullMVy >> 2) * iSrcLineLuma` to the source
-    // plane's origin; the stride is the plane's own, so what is left is the sample
-    // coordinate. Chroma is the same expression at `>> 3`, which is the eighth-pel
-    // vector's integer part — *not* half the luma one, because the two shifts round
-    // differently on negatives.
+    // The luma source coordinate is the quarter-pel vector's integer part. Chroma is
+    // the same expression at `>> 3`, the eighth-pel vector's integer part — not half
+    // the luma one, because the two shifts round differently on negatives.
     let (sy_luma, sx_luma) = ((iFullMVy >> 2) as isize, (iFullMVx >> 2) as isize);
     let (sy_chroma, sx_chroma) = ((iFullMVy >> 3) as isize, (iFullMVx >> 3) as isize);
 
@@ -1483,8 +1475,7 @@ pub fn GetInterPred(
     pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
     let iMBXY = pCurDqLayer.iMbXyIndex as usize;
-    // Copied, not borrowed: the same picture is written below, and these are the
-    // per-macroblock records the C++ hoisted into locals for the same reason.
+    // Copied, not borrowed: the same picture is written below.
     let iMBType = *pDec.pMbType.get(iMBXY);
     let mv_mb = *pDec.pMv[0].get(iMBXY);
     let ref_mb = *pDec.pRefIndex[0].get(iMBXY);
@@ -1545,8 +1536,7 @@ pub fn GetInterPred(
             );
         }
         MB_TYPE_8x8 | MB_TYPE_8x8_REF0 => {
-            // One window borrow at the loop head, where the C++ hoists
-            // `pCurDqLayer->pSubMbType[iMBXY]` into a `uint32_t (*)[4]`.
+            // One window borrow at the loop head.
             let pSubMbType = *pCurDqLayer.grid.sub_mb_type.get(iMBXY);
             for i in 0..4usize {
                 let iSubMBType = pSubMbType[i];
@@ -1720,16 +1710,11 @@ pub fn GetInterBPred(
             }
         }
     } else if IS_INTER_16x8(iMBType) {
-        // **Each partition combines its own two hypotheses, at its own coordinate.**
-        // `rec_mb.cpp:737-786`, which this mirrors arm for arm. Upstream 2.6.0 ran one
-        // `BaseMC` per active list into the *same* `pMCRefMem`, whose `pDst*`
-        // `GetRefPic` (`rec_mb.cpp:217`) never resets: on a bi-predicted partition the
-        // LIST_1 pass overwrote the LIST_0 hypothesis already written into the picture,
-        // so `BiPrediction` averaged LIST_1 with itself and LIST_0 was lost, and the
-        // `if (i)` destination step ran once per active list, so such a partition's
-        // average landed 8 rows below it in the macroblock beneath. Rec. 8.4.2.3
-        // combines predPartL0 and predPartL1 of *one* partition. This tree's
-        // `rec_mb.cpp` carries the fix; upstream does not.
+        // Each partition combines its own two hypotheses, at its own coordinate:
+        // Rec. 8.4.2.3 combines predPartL0 and predPartL1 of one partition
+        // (`rec_mb.cpp:737-786`). The LIST_1 pass therefore predicts into `pTempDec`
+        // rather than over the LIST_0 hypothesis, and the destination steps once per
+        // partition, not once per active list.
         for i in 0..2usize {
             let iPartIdx = i << 3;
             let at = mb.blk(0, (i as isize) << 3);
@@ -1759,7 +1744,7 @@ pub fn GetInterBPred(
             }
         }
     } else if IS_INTER_8x16(iMBType) {
-        // The 16x8 arm's fix, in columns (`rec_mb.cpp:787-831`).
+        // The 16x8 arm, in columns (`rec_mb.cpp:787-831`).
         for i in 0..2usize {
             let iPartIdx = i << 1;
             let at = mb.blk((i as isize) << 3, 0);
@@ -1800,9 +1785,8 @@ pub fn GetInterBPred(
             let iIIdx = ((i >> 1) << 3) + ((i & 1) << 1);
             let blk8 = mb.blk(iBlk8X as isize, iBlk8Y as isize);
 
-            // Both destinations start at the sub-block; the C copies `pMCRefMem` into
-            // `pTempMCRefMem` and then re-points only the `pDst*` fields, so the two
-            // agree here and diverge only in the 4x4 arm below.
+            // Both destinations start at the sub-block, and diverge only in the 4x4
+            // arm below.
             if IS_TYPE_L0(iSubMBType) && IS_TYPE_L1(iSubMBType) {
                 iRefIndex0 = pRef(LIST_0, iIIdx);
                 iRefIndex1 = pRef(LIST_1, iIIdx);
@@ -1871,10 +1855,9 @@ pub fn GetInterBPred(
                     iMVs = pMv(listIdx, iIIdx);
                     iRefIndex = pRef(listIdx, iIIdx);
                     mc0!(blk8, listIdx, iRefIndex, iXOffset, iYOffset, 8, 4, iMVs);
-                    // Fix relative to 2.6.0 (`rec_mb.cpp:940-944`): weight the top 8x4
-                    // before the destination advances. 8.4.2.3 applies weighted sample
-                    // prediction to every (sub-)macroblock partition; the reference
-                    // weighted only after the advance, leaving the top half unweighted.
+                    // 8.4.2.3 applies weighted sample prediction to every
+                    // (sub-)macroblock partition, so the top 8x4 is weighted before the
+                    // destination advances (`rec_mb.cpp:940-944`).
                     if bWeightedBipredIdcIs1 {
                         WeightPrediction(pwt.as_ref(), pDec, blk8, listIdx, iRefIndex as i32, 8, 4);
                     }
@@ -1945,8 +1928,8 @@ pub fn GetInterBPred(
                     iMVs = pMv(listIdx, iIIdx);
                     iRefIndex = pRef(listIdx, iIIdx);
                     mc0!(blk8, listIdx, iRefIndex, iXOffset, iYOffset, 4, 8, iMVs);
-                    // Fix relative to 2.6.0 (`rec_mb.cpp:994-998`): weight the left 4x8
-                    // before the destination advances. 8.4.2.3, as for B_L0_8x4 above.
+                    // The left 4x8 is weighted before the destination advances —
+                    // 8.4.2.3, as for B_L0_8x4 above (`rec_mb.cpp:994-998`).
                     if bWeightedBipredIdcIs1 {
                         WeightPrediction(pwt.as_ref(), pDec, blk8, listIdx, iRefIndex as i32, 4, 8);
                     }
@@ -1982,12 +1965,9 @@ pub fn GetInterBPred(
                         let iBlk4Y = ((j >> 1) << 2) as i32;
 
                         let at = blk8.blk(iBlk4X as isize, iBlk4Y as isize);
-                        // Both hypotheses belong at the same 4x4 block, which is what
-                        // `rec_mb.cpp:1023` now does. Upstream 2.6.0 indexed the LIST_1
-                        // *luma* destination with iBlk8X/iBlk8Y rather than
-                        // iBlk4X/iBlk4Y, applying the 8x8 step twice while its chroma
-                        // took the 4x4 step, so the two hypotheses of one 4x4 were
-                        // averaged from different samples.
+                        // Both hypotheses belong at the same 4x4 block
+                        // (`rec_mb.cpp:1023`): the LIST_1 luma destination takes the
+                        // 4x4 step, like its chroma, not the 8x8 one.
                         let tat = at;
 
                         iMVs = pMv(LIST_0, iIIdx + iJIdx);
@@ -2088,9 +2068,8 @@ pub fn WelsMbInterConstruction(
 
     WelsMbInterSampleConstruction(pCtx, pCurDqLayer, Some(pDec));
 
-    // `decode_slice.cpp:240`. The C++ guards this with `GetThreadCount (pCtx) <= 1`;
-    // the port's `GetThreadCount` is hard-coded 0, so the guard is always true and is
-    // not transcribed.
+    // `decode_slice.cpp:240`. Guarded by `GetThreadCount (pCtx) <= 1` in C++, which
+    // `GetThreadCount`'s hard-coded 0 makes always true.
     nonzero_count(
         pCurDqLayer
             .grid
@@ -2395,7 +2374,7 @@ pub fn WelsTargetMbConstruction(
 ) -> i32 {
     let iMbXy = pCurDqLayer.iMbXyIndex as usize;
 
-    // The C's `pDec == NULL` arm, as the `Option`.
+    // The `pDec == NULL` arm, as the `Option`.
     let Some(pDec) = pDec else {
         return ERR_NONE;
     };
@@ -2563,10 +2542,10 @@ pub fn WelsTargetSliceConstruction(
             return ERR_NONE;
         }
 
-        // Fix relative to 2.6.0, mirroring `decode_slice.cpp:169`: record this slice's per-8x8
-        // reference pictures before the filter-idc test below, so that a slice which does not filter
-        // its own edges still leaves behind what a neighbouring slice's boundary-strength derivation
-        // reads across the boundary (8.7.2.1).
+        // This slice's per-8x8 reference pictures are recorded before the filter-idc
+        // test below, so that a slice which does not filter its own edges still leaves
+        // behind what a neighbouring slice's boundary-strength derivation reads across
+        // the boundary (8.7.2.1).
         {
             let (pDec, view) = pic_split(pCtx);
             if let Some(pDec) = pDec {
@@ -2617,10 +2596,8 @@ fn DecodeMbCavlcPcm(
         let iMbY = dq.iMbY;
         let iMbXy = dq.iMbXyIndex as usize;
 
-        // The macroblock's top-left in plane coordinates. The C++ computes
-        // `(iMbX + iMbY * stride) << 4` — one linear offset off `pData[i]` — and the
-        // two halves of it are exactly `x = iMbX * 16` and `y = iMbY * 16`, which is
-        // what a padded plane is addressed by.
+        // The macroblock's top-left in plane coordinates: `x = iMbX * 16`,
+        // `y = iMbY * 16`.
         let (iPcmX, iPcmY) = ((iMbX as isize) << 4, (iMbY as isize) << 4);
         let (iPcmXC, iPcmYC) = ((iMbX as isize) << 3, (iMbY as isize) << 3);
 
@@ -2629,22 +2606,17 @@ fn DecodeMbCavlcPcm(
         *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA_PCM;
 
         // step 1: locate the bit-stream position (must align to an integer byte).
-        // `pCurBuf - iIndex` becomes `pos - iIndex`; the C++ computed a pointer here and a
-        // negative result was an out-of-bounds pointer with no check, so an underflow is a
-        // pre-existing overrun surfacing — `pos` is `usize` and the slice
-        // index below is what reports it.
+        // `pos` is `usize`, so an underflow of `pos - iIndex` is reported by the slice
+        // index below.
         let iPcmStart = (pBs.pos() as isize - iIndex as isize) as usize;
         pBs.set_pos(iPcmStart);
 
         // step 2: copy pixels from the bit-stream into the decoded picture.
         //
-        // **The 384 bytes are taken as one window.** The C++ walks a pointer off
-        // `pCurBuf - iIndex` and reads 384 bytes with no test at all, so a PCM
-        // macroblock announced within `iIndex` of the end of the RBSP reads past the
-        // allocation. Here the window either exists or the copy does not run — and
-        // the error the C++ eventually reports is unchanged either way, because
-        // `InitReadBits` below is handed `iPcmStart + 384` and fails on exactly that
-        // arithmetic.
+        // The 384 bytes are taken as one window: a PCM macroblock announced within
+        // `iIndex` of the end of the RBSP has no window, and the copy does not run.
+        // The reported error is unchanged either way, because `InitReadBits` below is
+        // handed `iPcmStart + 384` and fails on that arithmetic.
         let bParseOnly = pCtx.bParseOnly;
         if !bParseOnly {
             if let Some(pcm) = buf.get(iPcmStart..iPcmStart + 384) {
@@ -2919,9 +2891,8 @@ fn WelsDecodeMbCavlcResidual(
     let is_intra = IS_INTRA(mb_type);
     let iLumaQp = dq.grid.luma_qp.get(iMbXy);
 
-    // The cache is a `[u8; 48]` and the grid's row is an `[i8; 24]`, so the C's
-    // `ST32`/`ST16` writes are four- and two-element copies between two arrays whose
-    // elements differ only in signedness.
+    // The cache is a `[u8; 48]` and the grid's row is an `[i8; 24]`, so a store is a
+    // four- or two-element copy between arrays that differ only in signedness.
     let copy4 = |dst: &mut [i8], at: usize, src: &[u8; 48], from: usize| {
         for k in 0..4 {
             dst[at + k] = src[from + k] as i8;
@@ -3271,8 +3242,7 @@ pub fn WelsActualDecodeMbCavlcPSlice(
             }
 
             if *pResidualPredFlag == 0 {
-                // The arm's only statement was a write to `pInterPredictionDoneFlag`,
-                // which nothing in either tree reads. The `if` stays: its `else` is the error.
+                // Nothing to do here; the `if` exists for its `else`, the error path.
             } else {
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
             }
@@ -3495,9 +3465,8 @@ pub fn WelsDecodeMbCavlcPSlice(
         let iMbXy = dq.iMbXyIndex as usize;
         let mut uiCode = 0u32;
 
-        // Fix relative to 2.6.0, mirroring `decode_slice.cpp:2476`: as in `WelsDecodeMbCabacPSlice` —
-        // a P macroblock's unused list 1 gets its defined value here rather than the pooled picture's
-        // leftovers (8.4.2.1).
+        // A P macroblock's unused list 1 gets its defined value here rather than the
+        // pooled picture's leftovers (8.4.2.1), as in `WelsDecodeMbCabacPSlice`.
         pDec.pRefIndex[LIST_1].get_mut(iMbXy).fill(REF_NOT_IN_LIST);
         pDec.pMv[LIST_1].get_mut(iMbXy).fill([0; MV_A]);
 
@@ -3511,8 +3480,8 @@ pub fn WelsDecodeMbCavlcPSlice(
             }
         }
 
-        // C++ uses `if (pSlice->iMbSkipRun--)`: a coded macroblock leaves the
-        // counter at -1 so the next macroblock parses a fresh mb_skip_run.
+        // A coded macroblock leaves the counter at -1, so the next macroblock parses a
+        // fresh mb_skip_run.
         let bSkip = dq.sLayerInfo.sSliceInLayer.iMbSkipRun != 0;
         dq.sLayerInfo.sSliceInLayer.iMbSkipRun -= 1;
         if bSkip {
@@ -3667,8 +3636,7 @@ pub fn WelsActualDecodeMbCavlcBSlice(
             }
 
             if *pResidualPredFlag == 0 {
-                // The arm's only statement was a write to `pInterPredictionDoneFlag`,
-                // which nothing in either tree reads. The `if` stays: its `else` is the error.
+                // Nothing to do here; the `if` exists for its `else`, the error path.
             } else {
                 return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_UNSUPPORTED_ILP);
             }
@@ -3917,8 +3885,8 @@ pub fn WelsDecodeMbCavlcBSlice(
             }
         }
 
-        // C++ uses `if (pSlice->iMbSkipRun--)`: a coded macroblock leaves the
-        // counter at -1 so the next macroblock parses a fresh mb_skip_run.
+        // A coded macroblock leaves the counter at -1, so the next macroblock parses a
+        // fresh mb_skip_run.
         let bSkip = dq.sLayerInfo.sSliceInLayer.iMbSkipRun != 0;
         dq.sLayerInfo.sSliceInLayer.iMbSkipRun -= 1;
         if bSkip {
@@ -3937,9 +3905,6 @@ pub fn WelsDecodeMbCavlcBSlice(
             let is_complete1 = ppRefPicL1.is_some_and(|c| c || bIsPending);
             *pCtx.bMbRefConcealed =
                 pCtx.bRPLRError || *pCtx.bMbRefConcealed || !is_complete0 || !is_complete1;
-
-            // NOTE: unlike the CABAC B path, C keeps the `if (pCtx->bMbRefConcealed)
-            // return ERR_INFO_REFERENCE_PIC_LOST` block commented out here.
 
             // predict iMv
             let mut subMbType: SubMbType = 0;
@@ -4462,9 +4427,8 @@ fn WelsDecodeMbCabacResidualHelper(
         let uiCbpLuma;
         let uiCbpChroma;
 
-        // The cache is a `[u8; 48]` and the grid's row is an `[i8; 24]`, so the C's
-        // `ST32`/`ST16` writes are four- and two-element copies between two arrays
-        // whose elements differ only in signedness.
+        // The cache is a `[u8; 48]` and the grid's row is an `[i8; 24]`, so a store is
+        // a four- or two-element copy between arrays that differ only in signedness.
         let copy4 = |dst: &mut [i8], at: usize, src: &[u8; 48], from: usize| {
             for k in 0..4 {
                 dst[at + k] = src[from + k] as i8;
@@ -4528,8 +4492,7 @@ fn WelsDecodeMbCabacResidualHelper(
                 }
             }
 
-            // The zeroing stays where the C++ has it (`memset (pScaledTCoeff, 0,
-            // …)` before the delta-QP parse).
+            // The zeroing happens before the delta-QP parse.
             dq.grid.scaled_tcoeff.get_mut(iMbXy).fill(0);
 
             let mut iQpDelta = 0i32;
@@ -5067,12 +5030,12 @@ pub fn WelsDecodeMbCabacPSlice(
         *dq.grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
         *dq.grid.transform_size8x8_flag.get_mut(iMbXy) = false;
 
-        // Fix relative to 2.6.0, mirroring `decode_slice.cpp:1362`: 8.4.2.1 gives a P macroblock no
-        // list-1 prediction, and neither the skip short-cut below nor the inter paths write
-        // `pRefIndex[LIST_1]` or `pMv[LIST_1]` — they hold whatever this pooled picture carried from
-        // its previous use. A B slice below or right of this one compares list-1 motion whenever the
-        // reference pictures match, so give the unused list its defined value: "no reference" and a
-        // zero vector, exactly what a B macroblock that skips a list records.
+        // 8.4.2.1 gives a P macroblock no list-1 prediction, and neither the skip
+        // short-cut below nor the inter paths write `pRefIndex[LIST_1]` or
+        // `pMv[LIST_1]`, so they would hold whatever this pooled picture carried from
+        // its previous use. A B slice below or right of this one compares list-1 motion
+        // whenever the reference pictures match, so the unused list gets its defined
+        // value: "no reference" and a zero vector.
         pDec.pRefIndex[LIST_1].get_mut(iMbXy).fill(REF_NOT_IN_LIST);
         pDec.pMv[LIST_1].get_mut(iMbXy).fill([0; MV_A]);
 
@@ -5298,9 +5261,8 @@ pub fn WelsDecodeMbCabacBSlice(
             return ret;
         }
 
-        // `memset (pCurDqLayer->pDirect[iMbXy], 0, sizeof (int8_t) * 16)`: pDirect is
-        // `*mut [i8; 16]`, so the row index is iMbXy — scaling it by 16 walks 16 rows
-        // per macroblock and writes past the allocation into the neighbouring buffers.
+        // `pDirect` is `*mut [i8; 16]`, so the row index is `iMbXy`: scaling it by 16
+        // would walk 16 rows per macroblock and write past the allocation.
         dq.grid.direct.get_mut(iMbXy).fill(0);
 
         let bIsPending = pCtx.iThreadCount > 1;
@@ -5608,30 +5570,21 @@ pub fn WelsDecodeSlice(
     ERR_NONE
 }
 
-/// **The multi-threaded parse arm, and it is a *partial* translation, not a
-/// complete one.**
-///
-/// This is the `iThreadCount > 1` branch of `decoder_core.rs`'s slice loop, and
-/// `GetThreadCount` returns 0 unconditionally, so **nothing reaches it**. What is
-/// missing: the C++'s copy is 162 lines and this is 101, and the per-macroblock
-/// loop lacks the `pSliceIdc` write
-/// (`decode_slice.cpp:1708`), the `pNzc` copy into the picture, the `SetNonZeroCount`
-/// call, the per-MB deblocking call and the border-padding block — while
-/// `decoder_core.cpp:2595`'s re-point of `pMbCorrectlyDecodedFlag` at the picture's
-/// under `pThreadCtx != NULL` has no counterpart at all. `pSliceIdc` is what every
-/// neighbour-availability predicate compares, so at its -1 reset every neighbour
-/// reads as available and prediction crosses slice boundaries.
-///
-/// Switching decoder threading on is already a deliberate multi-site act —
-/// `GetThreadCount`'s `0` is load-bearing (`api/codec_api.rs` branches on `<= 0` to
-/// advance `uiDecodeTimeStamp`) — and this must be finished **before** it returns
-/// anything above 1.
+/// The multi-threaded parse arm — the `iThreadCount > 1` branch of
+/// `decoder_core.rs`'s slice loop. `GetThreadCount` returns 0 unconditionally, so
+/// nothing reaches it, and it is incomplete: the per-macroblock loop has no
+/// `pSliceIdc` write (`decode_slice.cpp:1708`), no `pNzc` copy into the picture, no
+/// `SetNonZeroCount` call, no per-MB deblocking call and no border-padding block, and
+/// `decoder_core.cpp:2595`'s re-point of `pMbCorrectlyDecodedFlag` has no counterpart.
+/// `pSliceIdc` is what every neighbour-availability predicate compares, so at its -1
+/// reset every neighbour reads as available and prediction crosses slice boundaries.
+/// This has to be finished before `GetThreadCount` returns anything above 1.
 pub fn WelsDecodeAndConstructSlice(
     pCtx: &mut SWelsDecoderContext,
     pCurDqLayer: &mut DqLayerState,
 ) -> i32 {
     {
-        // The `None` arm is the C's null `pNalCur`.
+        // The `None` arm is a null `pNalCur`.
         let Some(iNalCur) = pCtx.nal_cur else {
             return ERR_NONE;
         };
@@ -5866,20 +5819,16 @@ mod tests {
         }
     }
 
-    /// A stream that has **neighbours**.
+    /// A stream that has neighbours.
     ///
     /// `grid_48x32.264` is 3x2 macroblocks, so MB(1,1) has all four neighbours,
     /// MB(0,1) is missing only its left and MB(2,1) only its top-right: every
     /// availability combination the neighbour paths branch on. It is CABAC, High
-    /// profile with `transform_8x8_mode_flag` set, carries I, P **and** B slices,
-    /// and its source window pans so the MVs are non-zero. Built by
-    /// `rust/tools/make_narrow_assets.py`, which explains at length why this one
-    /// asset comes from libx264 and not from the C++ encoder: **OpenH264's encoder
-    /// has no `transform_8x8_mode_flag` to write**.
+    /// profile with `transform_8x8_mode_flag` set, carries I, P and B slices, and its
+    /// source window pans, so the MVs are non-zero.
     ///
-    /// The dimension assertion is not decoration. A regenerated asset that
-    /// silently came out 16x16 would still pass "a frame came out" while covering
-    /// nothing this test exists for.
+    /// The dimension assertion guards the coverage: an asset that came out 16x16 would
+    /// still pass "a frame came out".
     #[test]
     fn decode_slice_loop_runs_over_a_macroblock_grid_under_the_aliasing_checker() {
         {
@@ -5901,21 +5850,13 @@ mod tests {
 
     use crate::api::codec_api::abi_test_driver::drive_decoder_over;
 
-    /// **The error-concealment probe.**
+    /// The error-concealment probe.
     ///
-    /// `narrow_16x16_idr_lost.264` is 827 bytes and one macroblock per frame — the
-    /// cheapest stream in the tree that actually conceals, which is what makes a
-    /// full `Initialize` + 30-frame decode tractable under an interpreter. Its
-    /// second sequence has no IDR to open it, so the first P slice finds the
-    /// reference lists empty and the concealment path runs for real: measured,
-    /// `dsDataErrorConcealed` comes back set. Its output is pinned against the C++
-    /// decoder elsewhere (`test_asset_narrow_16x16_idr_lost`, and every truncation
-    /// of it in `malformed_parity/narrow_16x16_idr_lost.txt` agrees with `ecref`),
-    /// so here we require only that concealment ran — the instrument is Miri's
-    /// verdict on the path, not the bytes.
-    ///
-    /// The `dsDataErrorConcealed` assertion is the point. Without it this test
-    /// passes just as well on a decoder where concealment never runs.
+    /// `narrow_16x16_idr_lost.264` is 827 bytes and one macroblock per frame, which
+    /// keeps a full `Initialize` plus 30-frame decode tractable under an interpreter.
+    /// Its second sequence has no IDR to open it, so the first P slice finds the
+    /// reference lists empty and the concealment path runs. The assertion is that
+    /// `dsDataErrorConcealed` comes back set, not what the samples are.
     #[test]
     fn error_concealment_runs_under_the_aliasing_checker() {
         {
@@ -5936,12 +5877,11 @@ mod tests {
         }
     }
 
-    /// **The FMO probe.**
+    /// The FMO probe.
     ///
-    /// `fmo_2groups_64x64.264` is built by `rust/tools/make_fmo_asset.py` because no
-    /// stream in `res/` has more than one slice group. 16 macroblocks over two
-    /// interleaved groups, all I_PCM, one frame — the cheapest thing that makes the
-    /// map decide anything.
+    /// `fmo_2groups_64x64.264` is 16 macroblocks over two interleaved slice groups, all
+    /// I_PCM, one frame — the cheapest stream that makes the slice-group map decide
+    /// anything.
     #[test]
     fn fmo_slice_group_walk_runs_under_the_aliasing_checker() {
         {

@@ -1,41 +1,19 @@
 //! Malformed-stream error-code parity.
 //!
-//! Pins today's behaviour on the input class the conformance gates never reach:
-//! truncated NALs, emulation-prevention edges, degenerate NALs and corrupt NAL
-//! headers.
+//! Pins decoder behaviour on inputs the conformance tests do not reach: truncated
+//! NALs, emulation-prevention edges, degenerate NALs and corrupt NAL headers.
 //!
-//! The golden tables are regenerated only by a deliberate act:
+//! Each row records the exact `DecodeFrame2` return, the `iBufferStatus` of every call,
+//! the `NUM_OF_FRAMES_REMAINING_IN_BUFFER` answer at end of stream, the decoded-frame
+//! count, the first emitted frame's dimensions, and one SHA-1 over every emitted plane
+//! in emission order. `UPDATE_MALFORMED_GOLDEN=1` regenerates the golden tables.
 //!
-//! ```text
-//! UPDATE_MALFORMED_GOLDEN=1 cargo test --test malformed_stream_parity
-//! ```
+//! The corpus runs in a child process: a panic inside the decoder unwinds out of an
+//! `extern "C"` vtable thunk, which aborts, so each stream's test re-executes this
+//! binary as a worker that appends one row per entry as it goes. If the worker dies the
+//! parent records `ABORT` with the panic site and resumes at the next entry.
 //!
-//! and every regenerated line is a behaviour change that has to be justified in the
-//! commit that regenerates it.
-//!
-//! # What is recorded per corpus entry
-//!
-//! The exact `DecodeFrame2` return (`DECODING_STATE`, not "nonzero"), the
-//! `iBufferStatus` outcome of every call, the `NUM_OF_FRAMES_REMAINING_IN_BUFFER`
-//! answer at end of stream, the **decoded-frame count**, the dimensions of the first
-//! emitted frame, and one SHA-1 over every emitted plane in emission order.
-//!
-//! # Why the corpus runs in a child process
-//!
-//! A panic inside the decoder cannot be caught: the entry points are the `extern "C"`
-//! vtable thunks, so an unwind out of one is a `panic in a function that cannot
-//! unwind` — the process **aborts**. Each stream's test therefore re-executes this
-//! binary as a worker that appends one row per corpus entry to a file as it goes; if
-//! the worker dies, the parent knows exactly which entry killed it, records `ABORT`
-//! with the panic site, and resumes at the next one. The happy path costs one process
-//! spawn per stream.
-//!
-//! # Cost
-//!
-//! One `#[test]` per base stream, so the harness runs them in parallel and the
-//! corpus knobs below are the per-stream budget. The knobs bound the corpus
-//! deliberately; what they leave out is stated in each golden table's header rather
-//! than left to be inferred.
+//! One `#[test]` per base stream, so the knobs below are a per-stream budget.
 
 mod common;
 
@@ -54,11 +32,9 @@ use std::path::{Path, PathBuf};
 /// parameter sets and the first slices, which is where header parsing lives.
 const FINE_HEAD: usize = 6;
 
-/// Further boundaries, evenly spread over the rest of the stream and always
-/// including the **last** one, that get the same sweep. Spreading rather than
-/// sweeping every boundary is the deliberate cost bound: a truncation at boundary
-/// *k* costs *k* NAL decodes, so an all-boundaries sweep is quadratic in the NAL
-/// count.
+/// Further boundaries, evenly spread over the rest of the stream and always including
+/// the **last** one, that get the same sweep. A truncation at boundary *k* costs *k* NAL
+/// decodes, so sweeping every boundary would be quadratic in the NAL count.
 const FINE_SPREAD: usize = 6;
 
 /// The sweep itself — every truncation length within ±8 bytes of the boundary.
@@ -72,8 +48,7 @@ const COARSE_POINTS: usize = 16;
 const EPB_SITES: usize = 4;
 
 /// Header-corruption and synthetic-tail variants run against a prefix this many
-/// boundaries long, so their cost stays proportional to the head of the stream
-/// rather than to all of it.
+/// boundaries long, so their cost stays proportional to the head of the stream.
 const PREFIX_BOUNDARIES: usize = 8;
 
 /// Replacement bytes for the NAL header byte (`forbidden_zero_bit`, `nal_ref_idc`,
@@ -82,9 +57,9 @@ const PREFIX_BOUNDARIES: usize = 8;
 /// forbidden bit, and a referenced-IDR header on a non-IDR NAL.
 const HEADER_BYTES: &[u8] = &[0x00, 0x05, 0x07, 0x08, 0x1F, 0x65, 0x80];
 
-/// The base streams. Diversity, not breadth: CAVLC and CABAC, PCM, B-frames, VUI
-/// and subset-SPS parsing, an already-damaged pair, and one stream with a NAL count
-/// two orders of magnitude above the others.
+/// The base streams: CAVLC and CABAC, PCM, B-frames, VUI and subset-SPS parsing, an
+/// already-damaged pair, and one stream with a NAL count two orders of magnitude above
+/// the others.
 const BASE_STREAMS: &[&str] = &[
     "SarVui.264",
     "Static.264",
@@ -401,8 +376,7 @@ struct Run {
     dims: Option<(i32, i32)>,
 }
 
-/// Hard cap on the flush loop: a `remaining` answer above this is a defect, and the
-/// raw value is recorded in the table either way rather than silently clamped.
+/// Hard cap on the flush loop. The table records the raw `remaining` value, unclamped.
 const MAX_DRAIN: i32 = 24;
 
 unsafe fn feed(decoder: *mut ISVCDecoder, unit: &[u8], run: &mut Run, hasher: &mut Sha1Hasher) {
@@ -604,16 +578,13 @@ fn row(case: &Case, outcome: &Outcome) -> String {
 
 const COLUMN_HEADER: &str = "# columns: variant | bytes | calls | drain | frames | dims | planes_sha1 | ret_rle | bufstatus_rle";
 
-/// Emitted into every table so a reader knows these rows have an external
-/// referee and how to re-run it. The note says how to check, not what the check
-/// returned.
+/// Emitted into every table's header, naming how to re-check the rows against the C++.
 const REFEREE_NOTE: &str = "# referee: tools/ecref (the C++ decoder). Re-run every row of every table with\n\
      #   MALFORMED_DUMP_DIR=/tmp/corpus rust/tools/ecref/compare_all.sh\n\
      # which dumps this corpus and replays it through `ecref --stdin`. Rows are the\n\
      # port's output; where they agree with the C++ they are pinned to the C++'s answer.";
 
-/// Runs one corpus entry and renders its row — the unit both the worker and a direct
-/// (non-forking) run share.
+/// Runs one corpus entry and renders its row; shared by the worker and a direct run.
 fn run_case(case: &Case) -> String {
     let (run, digest) = decode_case(case);
     row(case, &Outcome::Ran(run, digest))
@@ -742,36 +713,23 @@ fn table(base: &str, data: &[u8], offsets: &[usize], cases: &[Case], test_name: 
     out
 }
 
-/// Rows whose plane hash is **expected** to differ from the C++ decoder's, with the
-/// reason, emitted into the table's header so regeneration cannot lose it.
-///
-/// **There are none.** `CABA2_SVA_B.264` used to carry seventeen: twelve
-/// `trunc.*` rows and five `hdr2.*` rows whose per-frame multisets matched the
-/// C++'s exactly but had one adjacent pair emitted in the opposite order. The
-/// cause was `ReleaseBufferedReadyPictureNoReorder`, which ordered buffered
-/// pictures by `uiDecodingTimeStamp` and, on a tie, by slot; the port broke the
-/// tie by POC instead. That function is gone from both codebases — the display
-/// layer sorts by (sequence, POC), which is Annex C output order — and
-/// `rust/tools/ecref/compare_all.sh` refereed all 2919 corpus rows against the
-/// C++ with zero divergences. Kept as the place a future one would be recorded.
+/// Rows whose plane hash is expected to differ from the C++ decoder's, with the reason,
+/// emitted into the table's header. There are none.
 fn expected_divergent_note(base: &str) -> Vec<&'static str> {
     let _ = base;
     Vec::new()
 }
 
 // ---------------------------------------------------------------------------
-// The corpus dump — how a row that is not a prefix truncation gets a referee
+// The corpus dump
 // ---------------------------------------------------------------------------
 
 /// Set to a directory to write the corpus's bytes instead of decoding it.
 ///
-/// A `trunc.*` entry is `stream[..n]`, so `ecref <stream> <n>` names it exactly;
-/// the `tail.*`, `hdr*.*` and degenerate entries are **built here** — a prefix
-/// plus a synthetic suffix, a prefix with one header byte overwritten, parameter
-/// sets lifted out of one stream and re-sequenced — and no `(file, length)` pair
-/// names any of them. The harness hands the bytes over: one file per entry plus a
-/// manifest carrying the feed mode, and `tools/ecref/compare.sh` replays every row
-/// through `ecref --stdin`.
+/// A `trunc.*` entry is `stream[..n]`, but the `tail.*`, `hdr*.*` and degenerate entries
+/// are built here — a prefix plus a synthetic suffix, a prefix with one header byte
+/// overwritten, parameter sets lifted out of one stream and re-sequenced — so no
+/// `(file, length)` pair names them and the bytes have to be handed over directly.
 const ENV_DUMP_DIR: &str = "MALFORMED_DUMP_DIR";
 
 /// Writes `<dir>/<stem>/<variant>.bin` per entry plus `<dir>/<stem>.manifest`
@@ -831,11 +789,10 @@ fn check_table(stem: &str, actual: &str) {
     assert!(
         aborts.is_empty(),
         "{} corpus entries killed the decoder process:\n{}\n\
-         A panic inside the decoder aborts (it unwinds out of an `extern \"C\"` thunk), so this \
-         is a pre-existing defect to record, not to repair (plan §7.6 S6/S12): write it up in \
-         docs/phase3_findings.md. If the two build profiles disagree on it, it is UB evidence \
-         (plan §7.2 gate 0) and the golden table cannot hold both — that is what F15 was, and \
-         the answer there was to fix the defect, not to keep withholding the rows.",
+         A panic inside the decoder aborts, because it unwinds out of an `extern \"C\"` thunk. \
+         If the debug and release profiles disagree on which entries abort, that is evidence of \
+         undefined behaviour and the golden table cannot hold both answers — fix the defect \
+         rather than withholding the rows.",
         aborts.len(),
         aborts.join("\n")
     );
@@ -855,13 +812,9 @@ fn check_table(stem: &str, actual: &str) {
             path.display()
         )
     });
-    // Compared per line, like the other two golden tables
-    // (`decoder_options_parity_test.rs:150`, `decoder_parseonly_parity_test.rs:206`).
-    // A whole-string `==` also compares the line terminators, which are not part of what
-    // this table records — it is error codes, frame counts and plane hashes. A checkout
-    // under `core.autocrlf=true` hands `read_to_string` a CRLF file for a golden written
-    // with LF, and all fifteen of these failed on Windows with an empty per-line diff,
-    // because the renderer below already splits on `lines()` and found nothing to show.
+    // Compared per line: a whole-string `==` would also compare the line terminators,
+    // which this table does not record and which a checkout under `core.autocrlf=true`
+    // rewrites.
     let (want, got): (Vec<&str>, Vec<&str>) =
         (expected.lines().collect(), actual.lines().collect());
     if want == got {
@@ -929,8 +882,8 @@ fn stem_of(name: &str) -> &str {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// The corpus builder walks start codes itself so it can talk about *offsets*; this
-/// pins that walk against the decoder-facing splitter it has to agree with.
+/// The corpus builder walks start codes itself to get *offsets*; this pins that walk
+/// against [`split_annexb_units`].
 #[test]
 fn start_code_scan_agrees_with_split_annexb_units() {
     for &name in BASE_STREAMS {
@@ -970,9 +923,8 @@ stream_case!(malformed_ba_mw_d_idr_lost, "BA_MW_D_IDR_LOST.264");
 stream_case!(malformed_ba_mw_d_p_lost, "BA_MW_D_P_LOST.264");
 // The resolution-change stream — see BASE_STREAMS.
 stream_case!(malformed_error_i_p, "Error_I_P.264");
-// Every stream above is 176x144 or wider. `narrow_16x16.264` is 711 bytes and one
-// macroblock per frame: the cheapest stream in the tree, and the only one whose
-// truncations reach the concealment paths with no neighbour to lean on.
+// Every stream above is 176x144 or wider. `narrow_16x16.264` is one macroblock per
+// frame: the only one whose truncations reach concealment with no neighbour to lean on.
 stream_case!(malformed_narrow_16x16, "narrow_16x16.264");
 stream_case!(malformed_narrow_16x16_idr_lost, "narrow_16x16_idr_lost.264");
 

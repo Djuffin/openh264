@@ -1,11 +1,11 @@
-//! Port of the memory-allocation and layer-initialisation half of
+//! The memory-allocation and layer-initialisation half of
 //! `codec/encoder/core/src/encoder_ext.cpp`.
 //!
-//! `wels_encoder_ext.rs` already holds the parameter validation and the
-//! parameter-set NAL writers from the same file; this module holds the rest of the
-//! core encoder: `AcquireLayersNals`, `AllocStrideTables`, `InitMbListD`,
-//! `InitDqLayers`, `RequestMemorySvc`, `GetMultipleThreadIdc`, `WelsInitEncoderExt`
-//! and `WelsEncoderEncodeExt`.
+//! `wels_encoder_ext.rs` holds the parameter validation and the parameter-set NAL
+//! writers from the same file; this module holds the rest of the core encoder:
+//! `AcquireLayersNals`, `AllocStrideTables`, `InitMbListD`, `InitDqLayers`,
+//! `RequestMemorySvc`, `GetMultipleThreadIdc`, `WelsInitEncoderExt` and
+//! `WelsEncoderEncodeExt`.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
 use crate::encoder::md::CostFamily;
@@ -192,8 +192,7 @@ pub fn AcquireLayersNals(
         let kSliceArgument = &ctx.param().sSpatialLayers[iDIndex as usize].sSliceArgument;
         let iOrgNumNals = iCountNumNals;
 
-        // Note (Sep. 2010, upstream): the memory over-use here counts little towards
-        // overall performance and should not be critical even on mobile.
+        // The memory over-use here counts little towards overall performance.
         if SM_SIZELIMITED_SLICE == kSliceArgument.uiSliceMode {
             iCountNumNals += MAX_SLICES_NUM as i32;
             // plus prefix NALs
@@ -257,7 +256,6 @@ pub fn AcquireLayersNals(
 /// Panics if the context's coding parameters have not been built yet: every
 /// dimension the tables are sized from is read through `ctx.param()`.
 pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 {
-    // The C++ local `sMbSizeMap` is an array of a small anonymous struct.
     #[derive(Clone, Copy, Default)]
     struct SMbSizeMap {
         iMbWidth: i32,
@@ -331,10 +329,8 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
     ctx.pStrideTab = Some(Box::new(SStrideTables::new(kiBlockCount, kiCoordLen)));
     let pPtr: &mut SStrideTables = ctx.pStrideTab.as_mut().unwrap();
 
-    // The C++ carves the block with four running `uint8_t*` cursors. They are
-    // *indices* into the two typed stores here, advanced by the same regions in
-    // the same order — the arithmetic below is the same walk, in the units the
-    // storage is made of.
+    // Four cursors, as indices into the two typed stores, advanced region by region in
+    // the units the storage is made of.
     let mut pBaseDec: u32 = 0; // iCountLayersNeedCs, in blocks
     let mut pBaseEnc: u32 = (iCountLayersNeedCs[0] + iCountLayersNeedCs[1]).max(0) as u32;
     let mut pBaseMbX: u32 = 0; // in i16 entries
@@ -426,7 +422,6 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
 
     // initialize pMbIndexX and pMbIndexY tables as below
 
-    // 4 loops for int16_t required, as introduced below
     let iMaxMbWidth = WELS_ALIGN(sMbSizeMap[(kiNumSpatialLayers - 1) as usize].iMbWidth, 4);
     let iRowSize = iMaxMbWidth * 2;
 
@@ -475,8 +470,7 @@ pub fn AllocStrideTables(ctx: &mut sWelsEncCtx, kiNumSpatialLayers: i32) -> i32 
             break;
         }
 
-        // The scratch becomes a row of the value `i` — the C++ builds it four
-        // halfwords at a time via two 32-bit stores; a fill is the same bytes.
+        // The scratch becomes a row of the value `i`.
         sTmpRow[..iMaxMbWidth as usize].fill(i as i16);
     }
 
@@ -573,12 +567,8 @@ fn InitMbInfo(kpMbIndexX: &[i16], kpMbIndexY: &[i16], pLayer: &mut SDqLayer) {
         if bRightTop {
             uiNeighborAvail |= TOPRIGHT_MB_POS;
         }
-        // merged from svc_hd_opt_b for multiple slices coding
         pMb.uiSliceIdc = uiSliceIdc;
         pMb.uiNeighborAvail = uiNeighborAvail;
-
-        // C++ recomputes uiNeighborAvail here for the base-MV neighbourhood, then
-        // discards it — the result is never stored.
     }
 }
 
@@ -619,9 +609,9 @@ pub fn InitMbListD(ctx: &mut sWelsEncCtx) -> i32 {
 
 /// `InitDqLayers` — encoder_ext.cpp:1008 (file-static inline).
 ///
-/// It allocates the reference lists and DQ layers,
-/// then `pSpsArray`/`pSubsetArray`/`pPPSArray`, and drives the parameter-set strategy
-/// to fill them and set `iSpsNum`/`iSubsetSpsNum`/`iPpsNum`.
+/// Allocates the reference lists and DQ layers, then
+/// `pSpsArray`/`pSubsetArray`/`pPPSArray`, and drives the parameter-set strategy to fill
+/// them and set `iSpsNum`/`iSubsetSpsNum`/`iPpsNum`.
 ///
 /// Expects a live context with `pSvcParam`, `pStrideTab`, `ppRefPicListExt`,
 /// `ppDqLayerList` and `pFuncList->pParametersetStrategy` set — each `expect`
@@ -774,8 +764,7 @@ pub fn InitDqLayers(
         iDlayerIndex += 1;
     }
 
-    // dynamically allocate parameter-set memory instead of the standard's maximum, to
-    // reduce size (3/18/2010)
+    // Allocate parameter-set memory dynamically rather than at the standard's maximum.
     if ctx.func_list().pParametersetStrategy.is_none() {
         return 1;
     }
@@ -836,10 +825,6 @@ pub fn InitDqLayers(
             bUseSubsetSps,
             kbEntropyCodingModeFlag,
         );
-        // The C++ takes `pPps = &pPPSArray[iPpsId]` here and hands it to
-        // `InitSlicePEncCtx`'s final parameter, which the port's callee never
-        // had (nothing reads it).
-
         let (kiSpsMbWidth, kiSpsMbHeight) = {
             let kpSps = if !bUseSubsetSps {
                 &ctx.sps_array()[iSpsId as usize]
@@ -1018,9 +1003,6 @@ pub fn RequestMemorySvc(
         iCountNals as usize,
     ));
 
-    // The C++ takes this block with `WelsMalloc` — *uninitialized* — and it is the
-    // only member of this function's set that does. `vec![0; n]` writes zeros the
-    // C++ does not.
     ctx.pFrameBs = vec![0u8; iTotalLength.max(0) as usize];
     ctx.iFrameBsSize = iTotalLength;
     ctx.iPosBsBuffer = 0;
@@ -1031,8 +1013,6 @@ pub fn RequestMemorySvc(
     // slice boundary has to restore the bytes as well as the coder state.
     if bDynamicSlice && ctx.param().iEntropyCodingModeFlag != 0 {
         for iIdx in 0..MAX_THREADS_NUM {
-            // `WelsMalloc` here was *uninitialized* (not `WelsMallocz`), so
-            // `vec![0; n]` writes zeros the C++ does not.
             ctx.pDynamicBsBuffer[iIdx] = vec![0u8; iMaxSliceBufferSize.max(0) as usize];
         }
     }
@@ -1058,9 +1038,7 @@ pub fn RequestMemorySvc(
         return 1;
     }
 
-    // Rate control module memory allocation; only malloc once for RC data (12/14/2009)
-    // Built one at a time rather than with `vec![x; n]`, which would need
-    // `SWelsSvcRc: Clone`, and the derive is not there.
+    // Rate control module memory allocation; allocated once.
     ctx.pWelsSvcRc = (0..kiNumDependencyLayers as usize)
         .map(|_| crate::encoder::rc::SWelsSvcRc::default())
         .collect();
@@ -1069,11 +1047,10 @@ pub fn RequestMemorySvc(
     let kbBgd = ctx.param().bEnableBackgroundDetection;
     let kiMaxNumRef = ctx.param().iMaxNumRefFrame;
     if ctx.param().iUsageType == SCREEN_CONTENT_REAL_TIME {
-        // `RequestMemoryVaaScreen` (encoder_ext.cpp:1478-1491): one `WelsMallocz` of
-        // `iNumRef * (iCountMaxMbNum << 2)` bytes, walked by sixteen row pointers at
-        // one stride — which is what `SBlockStaticIdcStore::alloc` is. The C++
-        // passes `iMaxNumRefFrame` as the row count and leaves the slots past it
-        // null; `select()` answers `None` past `rows`.
+        // `RequestMemoryVaaScreen` (encoder_ext.cpp:1478-1491): one allocation of
+        // `iNumRef * (iCountMaxMbNum << 2)` bytes, walked by sixteen row pointers at one
+        // stride — which is what `SBlockStaticIdcStore::alloc` is. `select()` answers
+        // `None` past `rows`.
         let rows = (kiMaxNumRef.max(0) as usize)
             .min(crate::encoder::wels_preprocess::SBlockStaticIdcStore::MAX_ROWS);
         let stride = (iCountMaxMbNum.max(0) as usize) << 2;
@@ -1091,7 +1068,7 @@ pub fn RequestMemorySvc(
     }
 
     if ctx.param().bEnableAdaptiveQuant {
-        // encoder_ext.cpp:1720, sAdaptiveQuantParam buffers. Not ported.
+        // encoder_ext.cpp:1720, sAdaptiveQuantParam buffers: unsupported.
         return ENC_RETURN_UNSUPPORTED_PARA;
     }
 
@@ -1120,19 +1097,13 @@ pub fn RequestMemorySvc(
 
     ctx.iMvdCostTableSize = kuiMvdInterTableSize;
     ctx.iMvdCostTableStride = kuiMvdInterTableStride;
-    // `MvdCostInit` walks two cursors one stride per row for 52 rows. `pNegMvd`
-    // starts at the table's base and ends exactly one past it, which is legal.
-    // `pPosMvd` starts `(kiSz + 1)` elements in and advances by the same stride,
-    // so after the 52nd row it lands `(kiSz + 1)` elements *beyond* the table —
-    // 1042 bytes on this configuration. The pointer is formed and never
-    // dereferenced, which is why nothing has ever observed it: it is UB in Rust
-    // and in C alike, and the C++ upstream forms the same pointer.
-    //
-    // The extra bytes are never read, never written and never addressed except
-    // by the one bump this exists to keep in bounds, so no encoded byte can move.
+    // `MvdCostInit` walks two cursors one stride per row for 52 rows. `pNegMvd` starts
+    // at the table's base and ends exactly one past it, which is legal. `pPosMvd` starts
+    // `(kiSz + 1)` elements in and advances by the same stride, so after the 52nd row it
+    // lands `(kiSz + 1)` elements beyond the table. The overshoot below keeps that in
+    // bounds; the extra bytes are never read or written, so no encoded byte can move.
     let kuiMvdCostTableOvershoot = 2 * ((kuiMvdInterTableStride >> 1) + 1);
-    // The size above is in *bytes* (the C++ `WelsMalloc` takes bytes and casts to
-    // `uint16_t*`), so the `Vec`'s length is that over two.
+    // The size above is in bytes, so the `Vec`'s length is that over two.
     ctx.pMvdCostTable = vec![
         0u16;
         (52 * kuiMvdCacheAlignedSize + kuiMvdCostTableOvershoot) as usize
@@ -1146,9 +1117,8 @@ pub fn RequestMemorySvc(
     };
     ctx.pDecPic = idDec;
 
-    // Nothing re-aims these, in this port or in the C++ — `encoder_ext.cpp` assigns
-    // them here and nowhere else — so the active set is position 0 for the
-    // encoder's whole life.
+    // Nothing re-aims these, so the active set is position 0 for the encoder's whole
+    // life.
     ctx.iSps = Some(SpsId(0));
     ctx.iPps = Some(PpsId(0));
 
@@ -1235,8 +1205,8 @@ pub fn InitSliceSettings(
 
 /// `GetMultipleThreadIdc` — encoder_ext.cpp:2199.
 ///
-/// The `X86_ASM` cache-line detection is not compiled on this target, so
-/// `iCacheLineSize` is 16 as in the `#else` branch.
+/// `iCacheLineSize` is always 16: the `X86_ASM` cache-line detection is not compiled
+/// here.
 pub fn GetMultipleThreadIdc(
     pLogCtx: SLogContext,
     pCodingParam: &mut SWelsSvcCodingParam,
@@ -1275,8 +1245,6 @@ pub fn GetMultipleThreadIdc(
 
 /// `WelsInitEncoderExt` — encoder_ext.cpp:2290.
 ///
-/// `MEMORY_MONITOR` and the `WelsLog` calls have no counterpart here.
-///
 /// The context handed back in `*ppCtx` is owned by the caller and is released with
 /// [`WelsUninitEncoderExt`], which unwinds the preprocessor's spatial pictures and
 /// the DQ layers before the box is dropped.
@@ -1310,8 +1278,7 @@ pub fn WelsInitEncoderExt(
 
     *ppCtx = None;
 
-    // C++ mallocs and memsets sWelsEncCtx; Box::new of a Default context is the
-    // equivalent, and Default is the all-zero/null state for every member.
+    // `Default` is the all-zero/null state for every member.
     let mut ctxBox = Box::new(sWelsEncCtx::default());
 
     ctxBox.sLogCtx = pLogCtx;
@@ -1354,8 +1321,8 @@ pub fn WelsInitEncoderExt(
     ctxBox.uiLastTimestamp = -1;
     ctxBox.bDeliveryFlag = true;
 
-    // `encoder_ext.cpp:2386` — the doubled `0x` is the reference's own: the
-    // format writes `0x%p` and `%p` prints its own prefix.
+    // The doubled `0x` is `encoder_ext.cpp:2386`'s own: the format writes `0x%p` and
+    // `%p` prints its own prefix.
     crate::common::wels_trace::WelsLog(
         pLogCtx,
         WELS_LOG_INFO,
@@ -1470,9 +1437,9 @@ pub fn GetSubSequenceId(pCtx: &mut sWelsEncCtx, eFrameType: EVideoFrameType) -> 
 /// `encoder_ext.cpp:2797`. Swap the current DQ layer with the next one and make the
 /// outgoing layer the reference.
 pub fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) {
-    // The outgoing layer's *position*, not its address: `iCurDqLayer` **is** the
-    // index. The `expect` cannot fire on a live path — the frame loop makes a
-    // layer current before any swap.
+    // The outgoing layer's position, not its address: `iCurDqLayer` is the index. The
+    // `expect` cannot fire on a live path — the frame loop makes a layer current before
+    // any swap.
     let kRefIdx = pCtx
         .iCurDqLayer
         .expect("WelsSwapDqLayers with no current layer");
@@ -1485,7 +1452,7 @@ pub fn WelsSwapDqLayers(pCtx: &mut sWelsEncCtx, kiNextDqIdx: i32) {
 /// `encoder_ext.cpp:2808`. Prefetch the reference picture after `WelsBuildRefList`.
 pub fn PrefetchReferencePicture(pCtx: &mut sWelsEncCtx, keFrameType: EVideoFrameType) {
     let kiSliceCount = current_layer_expect(pCtx).iMaxSliceNum;
-    // C++ declares `uint8_t uiRefIdx = -1;`, which wraps to 255.
+    // 255 is the C++'s `uint8_t uiRefIdx = -1`.
     let mut uiRefIdx: u8 = 0xff;
 
     debug_assert!(kiSliceCount > 0);
@@ -1539,7 +1506,6 @@ pub fn StackBackEncoderStatus(pEncCtx: &mut sWelsEncCtx, keFrameType: EVideoFram
     pEncCtx.out_mut().iNalIndex = 0; // reset NAL index
     pEncCtx.out_mut().iLayerBsIndex = 0; // reset index of Layer Bs
 
-    // Was `InitBits(&pOut->sBsWrite, pOut->pBsBuffer, pOut->uiSize)`.
     pEncCtx.out_mut().sBsWrite = BsWriter::new();
 
     if keFrameType == EVideoFrameType::videoFrameTypeP
@@ -1657,13 +1623,12 @@ pub fn WelsInitCurrentLayer(pCtx: &mut sWelsEncCtx, _kiWidth: i32, _kiHeight: i3
         .planes();
 
     // This is the last point in the frame at which the reconstruction picture is
-    // borrowed exclusively on the calling thread — everything after it is the
-    // macroblock loop, which forks. From here on *nothing* in the frame may take
-    // `&mut` on this picture again.
+    // borrowed exclusively on the calling thread — everything after it is the macroblock
+    // loop, which forks. From here on nothing in the frame may take `&mut` on this
+    // picture again.
     //
-    // Rebuilt every frame, unconditionally, because the pool may have handed
-    // `idDec` a different slot: a view is only ever valid for the frame that
-    // built it.
+    // Rebuilt every frame because the pool may have handed `idDec` a different slot: a
+    // view is only ever valid for the frame that built it.
     let sRecView = RecPicView::build(
         pCtx.ref_list_mut(kiCurDid as usize)
             .expect("the layer's reference list is allocated")
@@ -1849,8 +1814,6 @@ fn SetFastCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
     pFuncList.pfIntraFineMd = Some(WelsMdIntraFinePartitionVaa);
     let sdf = &mut pFuncList.sSampleDealingFuncs;
     sdf.pfMdCost = CostFamily::Sad;
-    // The C++ also aims three `pfIntra*Combined3` slots at their `*Sad` twins here;
-    // both sides were NULL on every target and the fields are deleted.
 }
 
 /// `encoder_ext.cpp:2630` (`static inline SetNormalCodingFunc`).
@@ -1858,12 +1821,11 @@ fn SetNormalCodingFunc(pFuncList: &mut SWelsFuncPtrList) {
     pFuncList.pfIntraFineMd = Some(WelsMdIntraFinePartition);
     let sdf = &mut pFuncList.sSampleDealingFuncs;
     sdf.pfMdCost = CostFamily::Satd;
-    // As `SetFastCodingFunc`: the three `Combined3` aims are deleted with the fields.
 }
 
 // `SetMeMethod` (`encoder_ext.cpp:2639-2662`) lives in
-// `svc_motion_estimate::SetMeMethod` — beside the four search families it
-// selects between, rather than here beside its caller.
+// `svc_motion_estimate::SetMeMethod`, beside the four search families it selects
+// between.
 
 /// `encoder_ext.cpp:2665`. Per-frame function-pointer selection. MUST be called after
 /// `pfWelsRcPictureInit()` and `WelsInitCurrentLayer()`.
@@ -1888,18 +1850,17 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
 
     // ---- the SCREEN_CONTENT_REAL_TIME block, first half (`encoder_ext.cpp:2708-2771`).
     //
-    // Its `SFeatureSearchPreparation` half — which reaches the layer, the
-    // reference list, the VAA block and the picture pools — runs **before** the
-    // table's `&mut` is taken, where the C++ runs it after. The table half stays
-    // at the C++'s position, below.
+    // The `SFeatureSearchPreparation` half — which reaches the layer, the reference
+    // list, the VAA block and the picture pools — runs before the table's `&mut` is
+    // taken. The table half is below.
     let kbScreenP =
         kiUsageType == SCREEN_CONTENT_REAL_TIME && keSliceType == EWelsSliceType::P_SLICE;
     let kbScreenI =
         kiUsageType == SCREEN_CONTENT_REAL_TIME && keSliceType != EWelsSliceType::P_SLICE;
     // `SLogContext` is `Copy`; the two `SetMeMethod` warnings need it while `fl` lives.
     let kLogCtx = pCtx.sLogCtx;
-    // `:2714-2716`. The scroll fields are the **extension's**; `iFrameSad` below is
-    // the **base block's**.
+    // `:2714-2716`. The scroll fields are the extension's; `iFrameSad` below is the
+    // base block's.
     let (kbScroll, kiScrollMvX, kiScrollMvY) = match pCtx.vaa_ext_ref() {
         Some(pVaaExt) => (
             pVaaExt.sScrollDetectInfo.bScrollDetectFlag,
@@ -1921,22 +1882,19 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
 
     // `:2730-2765`, the preparation half. Its two outputs feed the table writes.
     let (kbFmeSwitch, kbFmeInstalled) = if kbScreenP && kbHasPrep {
-        // The preparation box comes out of the layer and the reference's feature
-        // storage out of the reconstruction picture, so the picture's *planes* can
-        // be borrowed shared (`PerformFMEPreprocess` reads them) while its own
-        // storage is written through. Both go back below, inside this block, with
-        // no `return` in between: a box left taken out would be a silent behaviour
-        // change on the next frame — the features recomputed, or the switch never
-        // firing.
+        // The preparation box comes out of the layer and the reference's feature storage
+        // out of the reconstruction picture, so the picture's planes can be borrowed
+        // shared (`PerformFMEPreprocess` reads them) while its own storage is written
+        // through. Both go back below, inside this block, with no `return` in between: a
+        // box left taken out changes behaviour on the next frame.
         let mut prep = current_layer_expect_mut(pCtx)
             .pFeatureSearchPreparation
             .take();
         let mut out = (false, false);
         if let Some(p) = prep.as_deref_mut() {
             p.iHighFreMbCount = 0; // :2732
-            // `:2737-2739`. Both divisions are `int32_t`, as in the C++ — and the
-            // first numerator is the zero just written, so the percentage the
-            // reference still has a TODO about is always 0.
+            // `:2737-2739`. Both divisions are integer, and the first numerator is the
+            // zero just written, so the percentage is always 0.
             p.bFMESwitchFlag = CalcFMESwitchFlag(
                 p.uiFMEGoodFrameCount,
                 p.iHighFreMbCount * 100 / kiMbSize,
@@ -1945,11 +1903,8 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
             );
             let kbSwitch = p.bFMESwitchFlag;
 
-            // `:2742`: the storage is the **reconstruction's** on every path — under
-            // LTR only the plane source below moves. `:2743`
-            // (`pFeatureSearchPreparation->pRefBlockFeature = ..`) has no counterpart:
-            // the port does not carry that field, because the whole reference writes
-            // it and never reads it.
+            // `:2742`: the storage is the reconstruction's on every path — under LTR
+            // only the plane source below moves.
             let mut storage = kpRefPicId.and_then(|id| {
                 pCtx.ref_list_mut(kiLayerDid)
                     .and_then(|pRefList| pRefList.pic_mut(id).pScreenBlockFeatureStorage.take())
@@ -1960,11 +1915,11 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
                     // `:2744-2749`
                     let kernels = FmeKernels::of(pCtx.func_list());
                     // `:2746` — the original frame under LTR, the reconstruction
-                    // otherwise. Under LTR `pRefOri[0]` is a *source-pool* picture on
-                    // the screen path, whose `iFrameAverageQp` `UpdateOriginalPicInfo`
-                    // copied off the reconstruction at the previous frame's end;
-                    // without LTR it is the picture whose storage was just taken out,
-                    // which is why the planes are borrowed shared.
+                    // otherwise. Under LTR `pRefOri[0]` is a source-pool picture on the
+                    // screen path, whose `iFrameAverageQp` `UpdateOriginalPicInfo` copied
+                    // off the reconstruction at the previous frame's end; without LTR it
+                    // is the picture whose storage was just taken out, which is why the
+                    // planes are borrowed shared.
                     let pRef: Option<&SPicture> = if kbLtr {
                         kpRefOri0.and_then(|r| ctx_pic_ref(pCtx, r))
                     } else {
@@ -1993,11 +1948,9 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
         out
     } else {
         if kbScreenI {
-            // `:2766-2769` — reset some status when at I_SLICE. The C++ dereferences
-            // the preparation unconditionally here and may: `ParamValidation`
-            // refuses screen content above one spatial layer
-            // (`encoder_ext.cpp:274-279`), so the only DQ layer is the last one,
-            // which is the one that carries a preparation. The port asks anyway.
+            // `:2766-2769` — reset some status at I_SLICE. `ParamValidation` refuses
+            // screen content above one spatial layer (`encoder_ext.cpp:274-279`), so the
+            // only DQ layer is the last one, the one that carries a preparation.
             if let Some(p) = current_layer_expect_mut(pCtx)
                 .pFeatureSearchPreparation
                 .as_deref_mut()
@@ -2054,10 +2007,9 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
         fl.sSampleDealingFuncs.pfMeCost = CostFamily::Unset;
     }
 
-    // ---- the SCREEN_CONTENT_REAL_TIME block, table half (`encoder_ext.cpp:2710-2765`),
-    // at the C++'s own position. Its preparation half ran above the table's `&mut`;
-    // `kbFmeSwitch` and `kbFmeInstalled` are that half's two outputs, and every
-    // value below is a `Copy` scalar lifted with them.
+    // ---- the SCREEN_CONTENT_REAL_TIME block, table half (`encoder_ext.cpp:2710-2765`).
+    // Its preparation half ran above the table's `&mut`; `kbFmeSwitch` and
+    // `kbFmeInstalled` are that half's two outputs.
     if kbScreenP {
         //to init at each frame will be needed when dealing with hybrid content (camera+screen)
         //MD related func pointers
@@ -2070,10 +2022,8 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
             SetScrollingMvToMdNull
         });
 
-        // Indexed by `EStaticBlockIdc`, which is **not** `pfSearchMethod`'s index
-        // space. The P-slice block above filled all three with
-        // `WelsMotionEstimateSearch`; the C++ re-states `NO_STATIC` here and so
-        // does this.
+        // Indexed by `EStaticBlockIdc`, not `pfSearchMethod`'s index space. The P-slice
+        // block above filled all three with `WelsMotionEstimateSearch`.
         fl.pfMotionSearch[EStaticBlockIdc::NO_STATIC as usize] =
             Some(crate::encoder::svc_motion_estimate::WelsMotionEstimateSearch);
         fl.pfMotionSearch[EStaticBlockIdc::COLLOCATED_STATIC as usize] =
@@ -2086,8 +2036,7 @@ pub fn PreprocessSliceCoding(pCtx: &mut sWelsEncCtx) {
             ME_DIA_CROSS,
             &mut fl.sMeFuncs.pfSearchMethod[BLOCK_16x16],
         ) {
-            // Neither warning can fire — both constants are honoured cases — but
-            // both are ported, at WARNING as upstream has them.
+            // Neither warning can fire: both constants are honoured cases.
             crate::common::wels_trace::WelsLog(
                 kLogCtx,
                 WELS_LOG_WARNING,
@@ -2283,24 +2232,21 @@ pub fn WriteSavcParaset(
     ENC_RETURN_SUCCESS
 }
 
-/// `encoder_ext.cpp:3251` — the parameter-set writer for the three **listing**
-/// strategies.
+/// `encoder_ext.cpp:3251` — the parameter-set writer for the three listing strategies.
 ///
-/// Its comment upstream says "cover the logic of simulcast avc + sps_pps_listing",
-/// which understates it: the caller's test is `! (SPS_LISTING & eSpsPpsIdStrategy)`
-/// (`:3424`), a **bitmask** over `codec_app_def.h`'s 0x02 / 0x03 / 0x06, so all three
-/// listing strategies route here regardless of `bSimulcastAVC`.
+/// The caller's test is `! (SPS_LISTING & eSpsPpsIdStrategy)` (`:3424`), a bitmask over
+/// `codec_app_def.h`'s 0x02 / 0x03 / 0x06, so all three listing strategies route here
+/// regardless of `bSimulcastAVC`.
 ///
-/// What makes it different from [`WriteSavcParaset`] is that it writes *lists*: every
-/// one of `iSpsNum` SPSs and, after `UpdatePpsList` has expanded the array, every one
-/// of `iPpsNum` PPSs — per spatial layer, each list one `SLayerBSInfo`. That is the
-/// point of a listing strategy: the decoder is given the whole set up front, so a
+/// Unlike [`WriteSavcParaset`] it writes lists: every one of `iSpsNum` SPSs and, after
+/// `UpdatePpsList` has expanded the array, every one of `iPpsNum` PPSs — per spatial
+/// layer, each list one `SLayerBSInfo`. The decoder is given the whole set up front, so a
 /// mid-stream re-initialisation can go back to an id it has already seen without
 /// re-sending anything.
 ///
-/// It does **not** call `Update`: under a listing strategy the ids are the list's, not
-/// a rotation, and `Update` on those kinds is the inherited `CWelsParametersetIdConstant`
-/// body that memsets the whole offset block (see `ParasetIdKind`'s note on `Update`).
+/// It does not call `Update`: under a listing strategy the ids are the list's, not a
+/// rotation, and `Update` on those kinds memsets the whole offset block (see
+/// `ParasetIdKind`'s note on `Update`).
 ///
 /// # Panics
 /// Panics if `pOut.sNalLen` is shorter than the parameter-set counts
@@ -2473,7 +2419,7 @@ pub fn PrepareEncodeFrame(
                         WriteSsvcParaset(pCtx, iSpatialNum, pFbi, iLbi, iLayerNum, iFrameSize);
                 }
             } else {
-                // The three listing strategies, all of them: the C's test is
+                // All three listing strategies: the test is
                 // `! (SPS_LISTING & eSpsPpsIdStrategy)`, a bitmask over 0x02/0x03/0x06.
                 pCtx.iEncoderError =
                     WriteSavcParaset_Listing(pCtx, iSpatialNum, pFbi, iLbi, iLayerNum, iFrameSize);
@@ -2483,8 +2429,7 @@ pub fn PrepareEncodeFrame(
     eFrameType
 }
 
-/// `encoder_ext.cpp:2415`. TUNE back if a picture-partition decision algorithm based
-/// on past behaviour becomes available.
+/// `encoder_ext.cpp:2415`. One partition per thread.
 pub fn PicPartitionNumDecision(pCtx: &mut sWelsEncCtx) -> i32 {
     let mut iPartitionNum = 1;
     if pCtx.param().iMultipleThreadIdc > 1 {
@@ -2536,12 +2481,11 @@ pub fn WelsInitCurrentQBLayerMltslc(pCtx: &mut sWelsEncCtx) {
 
 /// `UpdateSlicepEncCtxWithPartition` — encoder_ext.cpp:2430.
 ///
-/// Splits the frame into `iPartitionNum` macroblock ranges and stamps
-/// `pOverallMbMap` with the partition index. `iPartitionNum` is clamped to
-/// `MAX_THREADS_NUM`, the capacity of the four partition arrays, so the write
-/// loop and the trailing clear loop share one bound — see the clamp for why that
-/// bound differs from the C++. Note the trailing loop clears the *whole* of those
-/// arrays, not just the entries beyond `iPartitionNum` that this call wrote.
+/// Splits the frame into `iPartitionNum` macroblock ranges and stamps `pOverallMbMap`
+/// with the partition index. `iPartitionNum` is clamped to `MAX_THREADS_NUM`, the capacity
+/// of the four partition arrays, so the write loop and the trailing clear loop share one
+/// bound. The trailing loop clears the whole of those arrays, not just the entries beyond
+/// `iPartitionNum` that this call wrote.
 pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum: i32) {
     let pSliceCtx = &mut pCurDq.sSliceEncCtx;
     let kiMbNumInFrame = pSliceCtx.iMbNumInFrame;
@@ -2554,10 +2498,9 @@ pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum:
     if iPartitionNum <= 0 {
         iPartitionNum = 1;
     } else if iPartitionNum > MAX_THREADS_NUM as i32 {
-        // Deliberate divergence: the C++ clamps to AVERSLICENUM_CONSTRAINT (35), but
-        // the four partition arrays written below are [_; MAX_THREADS_NUM]. Upstream
-        // writes out of bounds for any iPartitionNum in 5..=35. Identical for every
-        // input upstream defines: the sole caller passes iMultipleThreadIdc, already
+        // Clamped to MAX_THREADS_NUM, the capacity of the four partition arrays written
+        // below — not to AVERSLICENUM_CONSTRAINT (35), which would run out of bounds for
+        // any iPartitionNum in 5..=35. The sole caller passes iMultipleThreadIdc, already
         // WELS_CLIP3'd to MAX_THREADS_NUM in GetMultipleThreadIdc.
         iPartitionNum = MAX_THREADS_NUM as i32;
     }
@@ -2606,10 +2549,8 @@ pub fn UpdateSlicepEncCtxWithPartition(pCurDq: &mut SDqLayer, mut iPartitionNum:
 
 /// `WelsInitCurrentDlayerMltslc` — encoder_ext.cpp:2482.
 ///
-/// The I-slice block only logs a warning when `uiSliceSizeConstraint` is too
-/// small for the resolution; it does not clamp or fail, so nothing in the
-/// bitstream depends on it. It is transcribed anyway because `uiFrmByte`'s
-/// arithmetic is unsigned and the shift is data-dependent.
+/// The I-slice block only logs a warning when `uiSliceSizeConstraint` is too small for
+/// the resolution; it does not clamp or fail, so nothing in the bitstream depends on it.
 ///
 /// # Panics
 /// Panics if the frame's current DQ layer has not been stamped.
@@ -2650,7 +2591,7 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
             / current_layer_expect(pCtx)
                 .sSliceEncCtx
                 .iMaxSliceNumConstraint as u32;
-        // C++ only WelsLogs a warning here when uiSliceSizeConstraint is smaller.
+        // Only a warning here when uiSliceSizeConstraint is smaller.
     }
 
     WelsInitCurrentQBLayerMltslc(pCtx);
@@ -2679,9 +2620,9 @@ pub fn DynSliceRealloc(pCtx: &mut sWelsEncCtx, pFbi: &mut SFrameBSInfo, iLbi: us
 ///
 /// The dynamic-slicing coding loop: keeps emitting slices until the partition's
 /// macroblocks are exhausted, where "exhausted" is measured by
-/// `LastCodedMbIdxOfPartition`, which `AddSliceBoundary` advances — not by a
-/// slice counter. `iSliceIdx` steps by `iActiveThreadsNum`, so slice indices are
-/// **not** contiguous when more than one partition is in play.
+/// `LastCodedMbIdxOfPartition`, which `AddSliceBoundary` advances — not by a slice
+/// counter. `iSliceIdx` steps by `iActiveThreadsNum`, so slice indices are not contiguous
+/// when more than one partition is in play.
 ///
 /// # Panics
 /// Panics if the frame's current DQ layer has not been stamped.
@@ -2856,7 +2797,6 @@ pub fn WelsCodeOnePicPartition(
     *pLayerSize = iPartitionBsSize;
     *pNalIdxInLayer = iNalIdxInLayer;
 
-    // slice based packing???
     pFbi.sLayerInfo[iLbi].uiLayerType = VIDEO_CODING_LAYER;
     pFbi.sLayerInfo[iLbi].uiSpatialId = pCtx.uiDependencyId;
     pFbi.sLayerInfo[iLbi].uiTemporalId = pCtx.uiTemporalId;
@@ -2882,12 +2822,10 @@ pub fn WelsEncoderEncodeExt(
         let p = pCtx.param();
         p.sSpatialLayers[p.iSpatialLayerNum as usize - 1].fFrameRate
     };
-    // The reconstruction picture the PSNR block measures, **as a handle**.
-    //
-    // The snapshot itself is load-bearing: `pCtx.pDecPic` cannot be re-read at
-    // the PSNR block, because `UpdateRefList` runs in between and ends in
-    // `EndofUpdateRefList` -> `PrefetchNextBuffer`, which reassigns it to the
-    // *next* frame's target.
+    // The reconstruction picture the PSNR block measures, as a handle. The snapshot is
+    // load-bearing: `pCtx.pDecPic` cannot be re-read at the PSNR block, because
+    // `UpdateRefList` runs in between and ends in `EndofUpdateRefList` ->
+    // `PrefetchNextBuffer`, which reassigns it to the next frame's target.
     let mut fsnr: Option<RecPicId>;
     let mut iLayerNum = 0i32;
     let mut iLayerSize;
@@ -3032,9 +2970,9 @@ pub fn WelsEncoderEncodeExt(
             .sSliceArgument
             .uiSliceMode
         {
-            // **The consumer half of the load-balancing loop.** The producer,
-            // `CalcSliceComplexRatio`, runs at the end of this same layer body under
-            // the same four-term guard.
+            // The consumer half of the load-balancing loop. The producer,
+            // `CalcSliceComplexRatio`, runs at the end of this same layer body under the
+            // same four-term guard.
             SliceModeEnum::SM_FIXEDSLCNUM_SLICE => {
                 if pCtx.param().iMultipleThreadIdc > 1
                     && pCtx.param().bUseLoadBalancing
@@ -3328,7 +3266,6 @@ pub fn WelsEncoderEncodeExt(
             if iSliceCount <= 1 {
                 return ENC_RETURN_UNEXPECTED;
             }
-            //note: the old codes are removed at commit: 3e0ee69
             pFbi.sLayerInfo[iLbi].pBsBuf = pCtx.frame_bs_cur();
             pFbi.sLayerInfo[iLbi].uiLayerType = VIDEO_CODING_LAYER;
             pFbi.sLayerInfo[iLbi].uiSpatialId = pCtx.uiDependencyId;
@@ -3356,7 +3293,6 @@ pub fn WelsEncoderEncodeExt(
             // THREAD_FULLY_FIRE_MODE && SM_SIZELIMITED_SLICE
             let kiPartitionCnt = pCtx.iActiveThreadsNum as i32;
 
-            //TODO: use a function to remove duplicate code here and ln3994
             let iLayerBsIdx = pCtx.out().iLayerBsIndex;
             let pLbi = &mut pFbi.sLayerInfo[iLayerBsIdx as usize];
             pLbi.pBsBuf = pCtx.frame_bs_cur();
@@ -3564,11 +3500,8 @@ pub fn WelsEncoderEncodeExt(
             }
         }
 
-        // update scc related
-        //
-        // Position is the C++'s (`encoder_ext.cpp:3891-3897`): after
-        // `pDecPic->iFrameAverageQp` is stamped, before the reference list is
-        // updated.
+        // update scc related — `encoder_ext.cpp:3891-3897`: after
+        // `pDecPic->iFrameAverageQp` is stamped, before the reference list is updated.
         let pfUpdateFMESwitch = pCtx.func_list().pfUpdateFMESwitch;
         if let Some(f) = pfUpdateFMESwitch {
             f(current_layer_expect_mut(pCtx));
@@ -3581,13 +3514,10 @@ pub fn WelsEncoderEncodeExt(
             break;
         }
 
-        // MinCr check is a diagnostic log in C++ with no state change; omitted.
-
-        // encoder_ext.cpp:3927-3980. Note the asymmetry, which is the reference's
-        // and not a transcription slip: each plane is *computed* when either
-        // `pSvcParam->bPsnrX` or `pSrcPic->bPsnrX` is set, but only *reported*
-        // when `pSrcPic->bPsnrX` is set. Asking through SEncParamExt alone
-        // therefore costs the full-frame scan and reports nothing.
+        // encoder_ext.cpp:3927-3980. Note the asymmetry: each plane is computed when
+        // either `pSvcParam->bPsnrX` or `pSrcPic->bPsnrX` is set, but only reported when
+        // `pSrcPic->bPsnrX` is set. Asking through SEncParamExt alone therefore costs the
+        // full-frame scan and reports nothing.
         let mut fSnrY: f32 = 0.0;
         let mut fSnrU: f32 = 0.0;
         let mut fSnrV: f32 = 0.0;
@@ -3691,18 +3621,12 @@ pub fn WelsEncoderEncodeExt(
             iFrameSize += iPaddingNalSize;
         }
 
-        // The producer half of the load-balancing loop, at the C++'s own site:
-        // `encoder_ext.cpp:4064-4073`, end of the per-layer body, after the padding
-        // block and immediately above the `eLastNalPriority` stamp — and under the
-        // C++'s own four-term guard, which is the same one the consumer arm above
-        // already reproduces. The workers stamped `uiSliceConsumeTime` on their way
-        // through `EncodeOneSliceInJob` (`bRecordsTime`, which is
-        // `bUseLoadBalancing`); this turns those times into the `iSliceComplexRatio`
-        // that next frame's `DynamicAdjustSlicing` reads.
-        //
-        // The `MT_DEBUG`-only `TrackSliceComplexities` that follows it in the C++ has
-        // no counterpart here and needs none: `MT_DEBUG` is off in every build either
-        // project makes.
+        // The producer half of the load-balancing loop (`encoder_ext.cpp:4064-4073`):
+        // end of the per-layer body, under the same four-term guard as the consumer arm
+        // above. The workers stamped `uiSliceConsumeTime` on their way through
+        // `EncodeOneSliceInJob` (`bRecordsTime`, which is `bUseLoadBalancing`); this turns
+        // those times into the `iSliceComplexRatio` that next frame's
+        // `DynamicAdjustSlicing` reads.
         if pCtx.param().sSpatialLayers[iCurDid as usize]
             .sSliceArgument
             .uiSliceMode
@@ -3761,14 +3685,11 @@ pub fn WelsEncoderEncodeExt(
     }
 
     if ENC_RETURN_CORRECTED == pCtx.iEncoderError {
-        // `iSpatialIdx == iSpatialNum` here — the loop above ran to completion —
-        // so this addresses the slot *after* the last one the frame wrote.
-        // Upstream indexes it anyway (`encoder_ext.cpp:4109-4110`).
-        //
-        // The map is `[SSpatialPicIndex; 4]`; at 1, 2 or 3 the read is in bounds
-        // and `get` returns the same byte it always did. The fifth slot answers
-        // `0` — what an unwritten `SSpatialPicIndex` holds, which is what the
-        // in-bounds cases read anyway.
+        // `iSpatialIdx == iSpatialNum` here — the loop above ran to completion — so this
+        // addresses the slot after the last one the frame wrote
+        // (`encoder_ext.cpp:4109-4110`). The map is `[SSpatialPicIndex; 4]`; at 1, 2 or 3
+        // the read is in bounds, and the fifth slot answers `0`, what an unwritten
+        // `SSpatialPicIndex` holds.
         let iDid = pCtx
             .sSpatialIndexMap
             .get(iSpatialIdx as usize)
@@ -3891,8 +3812,7 @@ mod tests {
 
             assert!(!(*pCtx).pSpsArray.is_empty(), "pSpsArray still unallocated");
             assert!(!(*pCtx).pPPSArray.is_empty(), "pPPSArray still unallocated");
-            // The configuration needs no subset SPS, and the C++ allocated nothing
-            // at all for it.
+            // The configuration needs no subset SPS.
             assert!(
                 (*pCtx).pSubsetArray.is_empty(),
                 "pSubsetArray was not needed"
@@ -3919,8 +3839,7 @@ mod tests {
         }
     }
 
-    /// The DQ layers, reference lists and macroblock list
-    /// exist, which is what `pCurDqLayer` is selected from.
+    /// The DQ layers, reference lists and macroblock list exist.
     #[test]
     #[allow(unsafe_code)]
     fn request_memory_svc_builds_the_dq_layers() {
@@ -3962,7 +3881,7 @@ mod tests {
             assert_eq!(
                 (*pCtx).eRefStrategy,
                 RefStrategyKind::TemporalLayer,
-                "the gate configuration is camera content without LTR"
+                "camera content without LTR selects the temporal-layer strategy"
             );
 
             WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));

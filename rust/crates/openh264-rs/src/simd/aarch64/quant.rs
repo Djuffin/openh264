@@ -3,29 +3,17 @@
 //! `WelsDequantIHadamard4x4_AArch64_neon` and `WelsGetNoneZeroCount_AArch64_neon`,
 //! all in `codec/encoder/core/arm64/reconstruct_aarch64_neon.S`.
 //!
-//! # Where this departs from the asm, and why
+//! # Overflow and sign
 //!
-//! `NEWQUANT_COEF_EACH_16BITS` is `saba` (a wrapping `ff + |coef|` in word lanes),
-//! `smull` (a *signed* multiply by `mf`) and `shrn #16`. That is exact only while
-//! `ff + |coef|` stays below 32768; past it the sum wraps negative and the signed
-//! product goes wrong. The C — and this port's scalar — computes `(ff + |coef|) * mf`
-//! in `int`, and the range is reachable: a luma DC block after the forward Hadamard
-//! can sit at 32640 with `ff` up to 1534 on top. So the sum here is an unsigned
-//! saturating add (`uqadd`, which never actually saturates: 32768 + 1534 is well
-//! inside `u16`) and the multiply is `umull`, and the pair agrees with the scalar
-//! over the whole `i16` range, which `quant_matches_the_scalar_at_the_extremes` holds.
+//! `NEWQUANT_COEF_EACH_16BITS` computes `(ff + |coef|) * mf >> 16`. The biased magnitude
+//! can leave the signed 16-bit range — a luma DC block after the forward Hadamard can
+//! sit at 32640 with `ff` up to 1534 on top — so the bias is an unsigned saturating add
+//! (`uqadd`, which never actually saturates: 32768 + 1534 is well inside `u16`) and the
+//! multiply is `umull`.
 //!
-//! The sign step is spelled the scalar's way too. The asm restores the sign with
-//! `cmgt coef, #0` / `bif` / `shl` / `sub` — `q - 2q` for every coefficient that is
-//! *not* positive, zero included. The scalar negates only where `coef < 0`. The two
-//! differ only when `coef == 0` and `(ff * mf) >> 16` is non-zero, which no table in
-//! the codec produces (the dead-zone offset is a fraction of a quantiser step), but
-//! the scalar is the contract, so the select here is on `coef < 0`.
-//!
-//! Everything else is the asm: the `mul` of the dequantisers, the widening
-//! butterflies and `uzp` transposes of the forward Hadamard, and the `uzp`/`zip`/
-//! `rev32` dance of the inverse one, which keeps both rows of a register in play at
-//! once and is transcribed step for step.
+//! The sign is restored where `coef < 0`, not where `coef <= 0`. The two differ only
+//! when `coef == 0` and `(ff * mf) >> 16` is non-zero, which no table in the codec
+//! produces, the dead-zone offset being a fraction of a quantiser step.
 #![allow(unsafe_code)]
 
 use core::arch::aarch64::*;
@@ -37,7 +25,7 @@ use super::lanes::{ld4_i16, ld8_i16, st8_i16};
 // ============================================================================
 
 /// Dead-zone quantisation of eight coefficients: the signed result and the unsigned
-/// magnitude — `NEWQUANT_COEF_EACH_16BITS_MAX`, with the widths the header explains.
+/// magnitude — `NEWQUANT_COEF_EACH_16BITS_MAX`, at the widths the header explains.
 #[inline]
 #[target_feature(enable = "neon")]
 fn quant_8_with_mag(v: int16x8_t, ff: uint16x8_t, mf: uint16x8_t) -> (int16x8_t, uint16x8_t) {
@@ -115,7 +103,7 @@ fn quant_four_4x4_max_neon(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8], ma
 /// `WelsQuant4x4_AArch64_neon`.
 #[inline]
 pub fn quant_4x4(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
-    // SAFETY: NEON is baseline on aarch64; see the module header.
+    // SAFETY: NEON is baseline on aarch64.
     unsafe { quant_4x4_neon(dct, ff, mf) }
 }
 
@@ -212,20 +200,17 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
 ///
 /// # Layout
 ///
-/// The asm gathers the sixteen DCs with `ld1 {v.h}[i]` at a 32-byte step into four
-/// vectors — `v0 = [0 4 8 12]`, `v1 = [1 5 9 13]`, `v2 = [2 6 10 14]`,
-/// `v3 = [3 7 11 15]` in its own numbering — which is: lane `k` of vector `j` holds
-/// the `j`th input of the scalar's row `k`, the row whose `idx` is
-/// `((i & 8) << 4) + ((i & 4) << 3)` for `i = 4k`, i.e. 0, 32, 128, 160. The row
-/// pass is then lane-wise in `.4s` (`saddl`/`ssubl` widen on the way in), the
-/// `uzp1`/`uzp2` pairs transpose so the column pass is lane-wise too, and
-/// `sqrshrn #1` is the scalar's `((x + 1) >> 1).clamp(-32768, 32767)` in one
-/// instruction.
+/// The sixteen DCs are gathered at a 32-byte step into four vectors, so lane `k` of
+/// vector `j` holds the `j`th input of row `k` — the row at offset
+/// `((i & 8) << 4) + ((i & 4) << 3)` for `i = 4k`, i.e. 0, 32, 128, 160. The row pass is
+/// then lane-wise in `.4s` (`saddl`/`ssubl` widen on the way in), the `uzp1`/`uzp2` pairs
+/// transpose so the column pass is lane-wise too, and `sqrshrn #1` is
+/// `((x + 1) >> 1).clamp(-32768, 32767)` in one instruction.
 #[inline]
 #[target_feature(enable = "neon")]
 fn hadamard_t4_dc_neon(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
-    // Lane k = scalar row k. Within a row: A = dct[idx], B = dct[idx + 16],
-    // C = dct[idx + 64], D = dct[idx + 80] — the scalar's d0, d16, d64, d80.
+    // Lane k = row k. Within a row: A = dct[idx], B = dct[idx + 16],
+    // C = dct[idx + 64], D = dct[idx + 80].
     let va = ld4_i16(&[dct[0], dct[32], dct[128], dct[160]]);
     let vb = ld4_i16(&[dct[16], dct[48], dct[144], dct[176]]);
     let vc = ld4_i16(&[dct[64], dct[96], dct[192], dct[224]]);
@@ -321,7 +306,7 @@ fn transpose_2x8(v0: int16x8_t, v1: int16x8_t) -> (int16x8_t, int16x8_t) {
 }
 
 /// `WelsDequantIHadamard4x4_AArch64_neon`: rows, transpose, columns scaled by `mf`,
-/// transpose back. The multiply sits after the second pass, as the scalar's does.
+/// transpose back. The multiply sits after the second pass.
 #[inline]
 #[target_feature(enable = "neon")]
 fn dequant_ihadamard_4x4_neon(res: &mut [i16; 16], mf: u16) {
@@ -428,10 +413,8 @@ mod tests {
         }
     }
 
-    /// The header's reason for `uqadd`/`umull` over the asm's `saba`/`smull`: every
-    /// QP's factors against coefficients at the ends of the range, where the
-    /// biased magnitude leaves `i16` and a signed multiply would go wrong. The
-    /// scalar is the reference, over its full input space.
+    /// Every QP's factors against coefficients at the ends of the range, where the
+    /// biased magnitude leaves `i16` and a signed multiply would go wrong.
     #[test]
     fn quant_matches_the_scalar_at_the_extremes() {
         let extremes = [
@@ -533,9 +516,9 @@ mod tests {
     }
 
     // ========================================================================
-    // The two luma-DC Hadamard kernels, over the full `i16` input range: the
-    // ihadamard is `int16_t` end to end and its overflow is observable output, and
-    // `hadamard_t4_dc`'s clamp is only reachable from large inputs.
+    // The two luma-DC Hadamard kernels, over the full `i16` input range: ihadamard
+    // overflow is observable output, and `hadamard_t4_dc`'s clamp is only reachable
+    // from large inputs.
     // ========================================================================
 
     fn lcg_full_i16(seed: &mut u64) -> i16 {
@@ -606,9 +589,8 @@ mod tests {
         }
     }
 
-    /// The wrapping is load-bearing — the C++ is `int16_t` throughout — so pin that
-    /// the kernel wraps rather than saturates, with inputs chosen to overflow every
-    /// intermediate.
+    /// Pins that the kernel wraps rather than saturates, with inputs chosen to
+    /// overflow every intermediate.
     #[test]
     fn dequant_ihadamard_4x4_wraps_like_the_scalar() {
         for &v in &[i16::MIN, i16::MAX, -1, 1] {
@@ -622,10 +604,8 @@ mod tests {
         }
     }
 
-    /// The transpose is the one step with no arithmetic to check it, so drive it
-    /// with a block whose every coefficient is its own index — after both passes the
-    /// scalar's answer is the oracle, but a permutation mistake shows as a
-    /// recognisable shuffle rather than as noise.
+    /// Drives the transpose with a block whose every coefficient is its own index, so
+    /// a permutation mistake shows as a recognisable shuffle rather than as noise.
     #[test]
     fn dequant_ihadamard_4x4_on_an_index_ramp() {
         let mut want: [i16; 16] = core::array::from_fn(|i| i as i16 * 100 - 700);

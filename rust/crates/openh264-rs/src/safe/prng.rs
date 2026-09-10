@@ -1,22 +1,12 @@
 #![forbid(unsafe_code)]
-// NOTE: this file is compiled twice, on purpose.
-//   * as `crate::safe::prng` under `#[cfg(test)]`, for the in-module unit tests;
-//   * as `common::prng` in `tests/`, via `#[path = "../../src/safe/prng.rs"]`,
-//     for the differential integration tests.
-// It must therefore stay free-standing: no `crate::` paths, no `super::`.
-//
-// It must also contain NO `#[cfg(test)] mod tests`: `cfg(test)` is on in an
-// integration-test crate too, so tests declared here would compile into every
-// `tests/` binary that pulls in `tests/common/`. This generator's own tests live
-// in `safe::prng_tests` (`src/safe/mod.rs`) instead.
+// Compiled twice: as `crate::safe::prng` under `#[cfg(test)]`, and as `common::prng`
+// in `tests/` via `#[path = "../../src/safe/prng.rs"]`. It must therefore stay
+// free-standing — no `crate::` or `super::` paths — and must contain no
+// `#[cfg(test)] mod tests`, since `cfg(test)` is on in integration-test crates too and
+// such tests would compile into every `tests/` binary. Its own tests live in
+// `safe::prng_tests` (`src/safe/mod.rs`).
 
 //! A deterministic PRNG for property-style tests.
-//!
-//! The property-style tests roll their own generator instead of reaching for
-//! `proptest`/`quickcheck`. The tests run under Miri, where a shrinking framework
-//! would be unaffordably slow, and a fixed seed printed in the assertion message
-//! reproduces a failure exactly — in either test layer, since both include this
-//! same file.
 //!
 //! xorshift64\* (Vigna 2016). Not cryptographic; it only has to be reproducible and
 //! to spread bits well enough that the differential tests hit boundary cases.
@@ -29,8 +19,8 @@ pub struct Prng {
 }
 
 impl Prng {
-    /// Creates a generator from `seed`. Zero is remapped, since xorshift64 has zero
-    /// as a fixed point.
+    /// Creates a generator from `seed`. Zero is remapped; xorshift64 has zero as a
+    /// fixed point.
     pub fn new(seed: u64) -> Self {
         Self {
             state: if seed == 0 {
@@ -42,8 +32,7 @@ impl Prng {
         }
     }
 
-    /// The seed this generator was created with — print it in assertion messages so
-    /// a failing case can be replayed.
+    /// The seed this generator was created with — print it to replay a failing case.
     pub fn seed(&self) -> u64 {
         self.seed
     }
@@ -65,8 +54,7 @@ impl Prng {
         (self.next_u64() >> 56) as u8
     }
 
-    /// Uniform-ish value in `0..n`. Biased by at most 2^-32 for the small `n` these
-    /// tests use, which is irrelevant to their purpose.
+    /// Uniform-ish value in `0..n`. Modulo bias is at most 2^-32 for small `n`.
     pub fn below(&mut self, n: u32) -> u32 {
         assert!(n > 0, "below(0)");
         self.next_u32() % n

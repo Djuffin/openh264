@@ -9,9 +9,8 @@
 //! `i16x8`/`i32x4` ops, and the prediction add and clip are a widen, an add and a
 //! `packuswb`.
 //!
-//! The IDCT's vertical pass runs in `i32x4` for the reason the intrinsic file gives:
-//! the horizontal pass truncates to `i16`, so the column sums overflow sixteen bits
-//! and must not wrap where the scalar saturates.
+//! The IDCT's vertical pass runs in `i32x4`: the horizontal pass truncates to `i16`, so
+//! the column sums overflow sixteen bits and must not wrap where the scalar saturates.
 
 #![forbid(unsafe_code)]
 
@@ -104,8 +103,8 @@ fn idct_row(r0: i16, r1: i16, r2: i16, r3: i16) -> i32x4 {
     let t1 = r0 - r2;
     let t2 = (r1 >> 1i32) - r3;
     let t3 = r1 + (r3 >> 1i32);
-    // The horizontal pass truncates to `i16`, as the C++'s `int16_t` array does;
-    // the truncation is observable and the scalar keeps it.
+    // The horizontal pass truncates to `i16`, as the C++'s `int16_t` array does; the
+    // truncation is observable.
     i32x4::new([
         (t0 + t3) as i16 as i32,
         (t1 + t2) as i16 as i32,
@@ -328,11 +327,10 @@ mod tests {
         ((*seed >> 32i32) & 0xFF) as u8
     }
 
-    /// Coefficients over the **full `i16` range**, which is what the decoder hands the
-    /// IDCT: `rs` comes from the bitstream by way of dequantisation, not from this
-    /// port's own quantiser. A narrower cap keeps the vertical pass inside the range
-    /// where 16- and 32-bit lanes agree, and passes on a kernel that is wrong — see
-    /// `compute_idct_residuals`.
+    /// Coefficients over the full `i16` range, which is what the decoder hands the IDCT:
+    /// `rs` comes from the bitstream by way of dequantisation. A narrower cap would keep
+    /// the vertical pass inside the range where 16- and 32-bit lanes agree, and so pass a
+    /// kernel that is wrong.
     fn lcg_i16(seed: &mut u64) -> i16 {
         *seed = seed
             .wrapping_mul(6364136223846793005)
@@ -422,13 +420,11 @@ mod tests {
         }
     }
 
-    /// The exact case the 16-bit vertical pass got wrong, pinned so a future
-    /// "optimisation" back to `epi16` fails here instead of in someone's stream.
-    ///
-    /// `rs[0] = rs[8] = 20000` with a zero prediction puts `t1 = s0 + s8 = 40000` into
-    /// the vertical butterfly. In `i32` that is `(32 + 40000) >> 6 = 625`, clipped to
-    /// 255. In 16-bit lanes it wrapped to `-25536`, `>> 6 = -399`, and `packus`
-    /// saturated it to 0 — black where the scalar produces white.
+    /// The vertical pass must run in `i32` lanes, not `i16`: `rs[0] = rs[8] = 20000` with
+    /// a zero prediction puts `t1 = s0 + s8 = 40000` into the vertical butterfly, which
+    /// in `i32` is `(32 + 40000) >> 6 = 625`, clipped to 255. In 16-bit lanes it wraps to
+    /// `-25536`, `>> 6 = -399`, and `packus` saturates it to 0 — black where the scalar
+    /// produces white.
     #[test]
     fn idct_vertical_pass_does_not_wrap_at_16_bits() {
         let (w, h, pad, stride) = (16usize, 16usize, 16usize, 64usize);
@@ -520,15 +516,12 @@ mod tests {
     // The reconstruction-seam entry points.
     //
     // Each runs an `_sse2` kernel against `idct_t4_rec_c` / `idct_t4_rec_in_place_c` /
-    // `idct_rec_i16x16_dc_c`, which cannot route back here. Note the
-    // `*_matches_the_plane_cursor_form` tests in `encoder/decode_mb_aux.rs` are *not*
-    // this: on x86_64 both of their sides dispatch into this file, so they pin the
-    // `RecCursor`-vs-`PlaneCursorMut` equivalence and not SSE2 against scalar.
+    // `idct_rec_i16x16_dc_c`, which cannot route back here.
     //
     // The multi-block forms are referenced against the scalar applied per block at the
     // sub-offsets, not against this file's own four-block loop, so a transposed
-    // `(dx, dy)` in the hand-written `off`/`advance` arithmetic fails rather than being
-    // a shared assumption. Whole allocations are compared, never just the block.
+    // `(dx, dy)` in the `off`/`advance` arithmetic fails rather than being a shared
+    // assumption. Whole allocations are compared, never just the block.
     // ========================================================================
 
     /// Two planes of identical geometry filled with the same noise, padding included —

@@ -1,28 +1,23 @@
 //! The VAA statistics kernels on `wide` lane types — the twin of
-//! [`super::super::x86_64::vaa`], and of the NEON port in
-//! [`super::super::aarch64::vaa`]. See either for what the five kernels compute and
-//! for the walk they share with [`crate::processing::vaacalc`], which is the
-//! reference all three must match byte for byte.
+//! [`super::super::x86_64::vaa`] and of the NEON port in
+//! [`super::super::aarch64::vaa`]. See either for what the five kernels compute and for
+//! the walk they share with [`crate::processing::vaacalc`].
 //!
-//! # The instruction that is missing
+//! # No `psadbw`
 //!
 //! `psadbw` (and its `uabd`/`uadalp` pair on NEON) reduces sixteen absolute byte
-//! differences to two per-quadrant sums in one instruction, and it is what makes the
-//! intrinsic kernels short. `wide` 1.7 has no wrapper for it, so this pays the same
-//! bill `sad.rs` does: the difference is `max - min` on `u8x16`, each byte half is
-//! zero-extended to an `i16x8` (`punpcklbw`/`punpckhbw` against zero), and the two
-//! halves are accumulated separately — which is convenient here, because the low
-//! half *is* the left quadrant and the high half the right. Six ops per row where
-//! the intrinsic uses one, and one `pmaddwd`-against-ones reduce per quadrant at the
-//! end.
+//! differences to two per-quadrant sums in one instruction. `wide` 1.7 has no wrapper
+//! for it, so this pays the same bill `sad.rs` does: the difference is `max - min` on
+//! `u8x16`, each byte half is zero-extended to an `i16x8` (`punpcklbw`/`punpckhbw`
+//! against zero), and the two halves are accumulated separately — convenient here,
+//! because the low half *is* the left quadrant and the high half the right. Six ops per
+//! row where the intrinsic uses one, and one `pmaddwd`-against-ones reduce per quadrant
+//! at the end. The two squared sums cost nothing: `i16x8::dot` is `pmaddwd`, which both
+//! intrinsic sets use to widen a square on the way in.
 //!
-//! The two squared sums are the one place the portable API costs nothing:
-//! `i16x8::dot` **is** `pmaddwd`, which is exactly what both intrinsic sets use to
-//! widen a square on the way in.
-//!
-//! Lane bounds are the intrinsics'. An `i16x8` accumulator takes one byte per lane
-//! per row over the eight rows of a half-macroblock, so it peaks at 2040; the
-//! `i32x4` square accumulators peak at `128 * 255^2 = 8.3M` over a half-macroblock.
+//! Lane bounds are the intrinsics'. An `i16x8` accumulator takes one byte per lane per
+//! row over the eight rows of a half-macroblock, so it peaks at 2040; the `i32x4` square
+//! accumulators peak at `128 * 255^2 = 8.3M` over a half-macroblock.
 #![forbid(unsafe_code)]
 
 use wide::bytemuck::cast;
@@ -37,12 +32,9 @@ use super::lanes::{hsum_i16, load16, widen_hi, widen_lo};
 /// The six output arrays the five kernels write between them, one entry per
 /// macroblock each.
 ///
-/// **Every kernel names all six and writes the ones its flags select.** The three
-/// flags are const, so the writes a kernel does not make are not compiled and the
-/// slices behind them are never indexed — which is why the entry points pass
-/// `&mut []` for those. Handing the walk the arrays rather than a per-macroblock
-/// struct is what keeps a macroblock's results in registers: a struct handed to a
-/// callback by reference has to be materialised on the stack and read back.
+/// Every kernel names all six and writes the ones its flags select. The three flags are
+/// const, so the writes a kernel does not make are not compiled and the slices behind
+/// them are never indexed — which is why the entry points pass `&mut []` for those.
 struct Outputs<'a> {
     sad8x8: &'a mut [[i32; 4]],
     sd8x8: &'a mut [[i32; 4]],
@@ -143,9 +135,8 @@ fn half_mb<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
             hsum_i16(cur_sum[1]) - hsum_i16(ref_sum[1]),
         ];
         // No horizontal byte max in the API, and none in SSE2 either — upstream's
-        // `WELS_MAX_REG_SSE2` is three shift-and-max pairs. Once per half-macroblock,
-        // over sixteen bytes already in registers, a fold over the array is the same
-        // work without the shifts.
+        // `WELS_MAX_REG_SSE2` is three shift-and-max pairs. Over sixteen bytes already in
+        // registers, a fold over the array is the same work without the shifts.
         let m: [u8; 16] = cast(mad);
         out.mad = [
             m[..8].iter().copied().max().unwrap_or(0),

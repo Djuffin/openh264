@@ -7,63 +7,46 @@
 //! macroblocks in raster order, each split into four 8x8 quadrants (top-left,
 //! top-right, bottom-left, bottom-right); `sad`, `sd` and `mad` are reported per
 //! quadrant and `sum`, `sqsum` and `sqdiff` per macroblock. As in
-//! [`crate::processing::vaacalc`], which is the reference these must match byte for
-//! byte, the five kernels are one body with three const flags rather than five
-//! copies: a flag that is off emits none of its arithmetic.
+//! [`crate::processing::vaacalc`], the five kernels are one body with three const
+//! flags rather than five copies: a flag that is off emits none of its arithmetic.
 //!
-//! # The asm's shape, and what is kept of it
+//! # Lane layout
 //!
-//! Rows are sixteen bytes wide and cover *both* quadrants of a half-macroblock, so
-//! the asm never splits a register: it accumulates each row with `uadalp`, which
-//! sums **adjacent byte pairs** into eight 16-bit lanes, and lanes 0..3 are then
-//! exactly bytes 0..7 — the left quadrant — with lanes 4..7 the right. Every
-//! per-quadrant quantity rides in one register that way until the macroblock ends,
-//! and that is kept here. So are the rest of the asm's choices: `uabd` for the
-//! differences, a running `umax` for `mad`, `umull` into `uadalp` for the two
-//! squared sums, and `sd` as sum(cur) - sum(ref). What the reduce at the end of a
-//! macroblock is spelled with is the one place this differs — see below.
+//! Rows are sixteen bytes wide and cover both quadrants of a half-macroblock, so no
+//! register is ever split: each row accumulates with `uadalp`, which sums adjacent
+//! byte pairs into eight 16-bit lanes, so lanes 0..3 are bytes 0..7 — the left
+//! quadrant — and lanes 4..7 the right. Every per-quadrant quantity rides in one
+//! register that way until the macroblock ends. The differences are `uabd`, `mad` is
+//! a running `umax`, the two squared sums are `umull` into `uadalp`, and `sd` is
+//! sum(cur) - sum(ref).
 //!
-//! Lane widths are the asm's and cannot overflow. A 16-bit `uadalp` lane takes two
-//! bytes per row, so over the eight rows of a half it holds at most 4080 and over
-//! sixteen 8160; a whole quadrant's SAD is at most `64 * 255 = 16320`, which is why
-//! the reduce widens to 32 bits before it adds the two halves. The 32-bit square
-//! accumulators peak at `256 * 255^2 = 16.6M` over a whole macroblock.
+//! Lane widths cannot overflow. A 16-bit `uadalp` lane takes two bytes per row, so
+//! over the eight rows of a half it holds at most 4080 and over sixteen 8160; a
+//! whole quadrant's SAD is at most `64 * 255 = 16320`, which is why the reduce widens
+//! to 32 bits before adding the two halves. The 32-bit square accumulators peak at
+//! `256 * 255^2 = 16.6M` over a whole macroblock.
 //!
-//! # Where this departs from the asm
+//! # Two departures from the asm
 //!
-//! - **The width loop counts macroblocks, not bytes.** The asm's inner loop is
-//!   `sub w11, w11, #16 ; cbnz w11`, which only terminates when `pic_width` is a
-//!   multiple of 16. The port loops `pic_width >> 4` times, as `VAACalcSad*_c` and
-//!   [`crate::processing::vaacalc::vaa_span`] do, so a width that is not a multiple
-//!   of 16 walks the same macroblocks the scalar walks. The *step* between
-//!   macroblock rows is the asm's and the C's alike — `(pic_stride << 4) -
-//!   pic_width` after sixteen bytes per macroblock — including the quirk that a
-//!   ragged width shifts every macroblock row left by the remainder.
+//! - **The width loop counts macroblocks, not bytes.** The asm's inner loop only
+//!   terminates when `pic_width` is a multiple of 16. This loops `pic_width >> 4`
+//!   times, as `VAACalcSad*_c` and [`crate::processing::vaacalc::vaa_span`] do, so a
+//!   ragged width walks the same macroblocks the scalar walks. The step between
+//!   macroblock rows is `(pic_stride << 4) - pic_width` after sixteen bytes per
+//!   macroblock, including the quirk that a ragged width shifts every macroblock row
+//!   left by the remainder.
 //! - **The four quadrant results are folded pairwise, not with four cross-lane
-//!   reduces.** The asm ends each macroblock with `uaddlv`/`umaxv` per quadrant,
-//!   `ins v.d[0], v.d[1]` to bring the upper half down, and an `st4` that scatters
-//!   four scalar registers into four consecutive words. Here one `uaddlp` per half
-//!   folds eight 16-bit lanes into four 32-bit ones — lanes 0, 1 still the left
-//!   quadrant and 2, 3 the right — and one `addp` of the two halves lands
-//!   `[top-left, top-right, bottom-left, bottom-right]` in a single register, stored
-//!   with one `st1`. `mad` is the same shape with three `umaxp`, and `sd` is
-//!   `sub` of the two reduced registers rather than `usubl`/`usubl2` before `addv`.
-//!   Same sums and same maxima in the same 32-bit width — additions regrouped, and
-//!   a maximum is associative — but nothing crosses to the integer registers, where
-//!   the asm's shape costs sixteen `fmov`s per macroblock.
-//! - **One accumulator per quantity per half, as the asm has, and not the split
-//!   `sad.rs` needed.** That file's header records a 16x16 SAD written as one
-//!   thirty-two-deep `uabal` chain running at half the scalar's speed. This walk is
-//!   not exposed the same way: a chain here is eight `uadalp` long, the two halves
-//!   are independent, and the variants that do most of the work have five or six
-//!   such chains in flight. Splitting each accumulator in two by row parity was
-//!   tried and measured identical — LLVM reassociates the pair back into one chain
-//!   — so the simpler form, which is also the asm's, is what is here. The plain
-//!   `vaa_calc_sad` variant is bound by its thirty-two row loads, not by either.
+//!   reduces.** One `uaddlp` per half folds eight 16-bit lanes into four 32-bit ones
+//!   — lanes 0, 1 still the left quadrant and 2, 3 the right — and one `addp` of the
+//!   two halves lands `[top-left, top-right, bottom-left, bottom-right]` in a single
+//!   register, stored with one `st1`. `mad` is the same shape with three `umaxp`, and
+//!   `sd` is `sub` of the two reduced registers. Same sums and maxima in the same
+//!   32-bit width, additions regrouped, and nothing crosses to the integer
+//!   registers.
 //!
 //! Every read stays inside `vaa_span(pic_width, pic_height, pic_stride)` bytes of
 //! each plane — the last macroblock's window is `15 * stride + 16` bytes and no row
-//! below the last macroblock row is touched — which is what lets
+//! below the last macroblock row is touched — which lets
 //! `CVAACalculation::Process` trim both planes to that length and turn a geometry
 //! bug into a panic instead of a read past the plane.
 #![allow(unsafe_code)]
@@ -79,13 +62,10 @@ use super::lanes::{ld16, low4};
 /// The six output arrays the five kernels write between them, one entry per
 /// macroblock each.
 ///
-/// **Every kernel names all six and writes the ones its flags select.** The three
-/// flags are const, so the writes a kernel does not make are not compiled, and the
-/// slices behind them are never indexed — which is why the entry points pass `&mut
-/// []` for those. Handing the walk the arrays rather than a per-macroblock struct is
-/// what keeps a macroblock's results in registers: a struct handed to a callback by
-/// reference has to be materialised on the stack and read back, which is the same
-/// round trip through memory that [`reduce_quads`] exists to avoid.
+/// Every kernel names all six and writes the ones its flags select. The three flags
+/// are const, so the writes a kernel does not make are not compiled and the slices
+/// behind them are never indexed — which is why the entry points pass `&mut []` for
+/// those.
 struct Outputs<'a> {
     sad8x8: &'a mut [[i32; 4]],
     sd8x8: &'a mut [[i32; 4]],
@@ -95,12 +75,11 @@ struct Outputs<'a> {
     sqdiff16x16: &'a mut [i32],
 }
 
-/// One half-macroblock's accumulators, **unreduced**.
+/// One half-macroblock's accumulators, unreduced.
 ///
 /// Sixteen-byte rows cover both quadrants at once, so every 16-bit accumulator here
 /// holds the left quadrant in lanes 0..4 and the right in lanes 4..8 — the pairing
-/// `uadalp` gives for free, and the reason the asm never splits a register. Reducing
-/// is [`reduce_quads`]'s job, once per macroblock rather than once per half.
+/// `uadalp` gives for free. Reducing is [`reduce_quads`]'s job, once per macroblock.
 #[derive(Clone, Copy)]
 struct HalfAcc {
     sad: uint16x8_t,
@@ -116,9 +95,7 @@ struct HalfAcc {
 ///
 /// `uaddlp` folds each half's eight lanes into four 32-bit ones — lanes 0, 1 are
 /// still the left quadrant and 2, 3 the right — and `addp` of the two halves folds
-/// those into exactly the four words the C++ writes, in the C++'s order. Nothing
-/// leaves the vector unit: this reaches the asm's `st4 {v20.s ... v23.s}[0]` in two
-/// instructions instead of four cross-lane reduces and four `fmov`s.
+/// those into the four output words, in order.
 ///
 /// Bounds: a half's lane holds at most `8 * 2 * 255 = 4080`, so a pair is 8160 and a
 /// quadrant total 16320.
@@ -141,7 +118,7 @@ fn st_quads(out: &mut [i32; 4], v: uint32x4_t) {
 ///
 /// `SAD_SD_MAD_8x16BYTES`, `SAD_SSD_BGD_8x16BYTES_1/_2`, `SAD_SSD_8x16BYTES_1/_2`
 /// and `SAD_VAR_8x16BYTES_1/_2` are all this loop with a different subset of the
-/// accumulators live, which is what the three flags select.
+/// accumulators live, which the three flags select.
 #[inline]
 #[target_feature(enable = "neon")]
 fn half_mb<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
@@ -149,17 +126,15 @@ fn half_mb<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     refp: &[u8],
     stride: usize,
 ) -> HalfAcc {
-    // Trim both planes to **exactly** the eight rows this half reads, once, before
-    // the loop, for the reason `vaacalc.rs`'s `half_mb_stats` gives: handed an open
-    // tail LLVM cannot relate `k * stride` to the length and re-checks every row.
+    // Trim both planes to exactly the eight rows this half reads, once, before the
+    // loop: with an open tail LLVM cannot relate `k * stride` to the length and
+    // re-checks every row.
     let cur = &cur[..7 * stride + 16];
     let refp = &refp[..7 * stride + 16];
 
-    // One accumulator per quantity, as the asm has; see the header for why the row
-    // parity split `sad.rs` needs is not needed here. The squared sums are the
-    // exception, and not for latency: `umull` widens eight bytes at a time, so the
-    // low and high halves of a row produce two `.8h` vectors that cannot be added
-    // before `uadalp` widens them again.
+    // One accumulator per quantity. The squared sums are the exception: `umull`
+    // widens eight bytes at a time, so the low and high halves of a row produce two
+    // `.8h` vectors that cannot be added before `uadalp` widens them again.
     let mut sad = vdupq_n_u16(0);
     let mut cur_sum = vdupq_n_u16(0);
     let mut ref_sum = vdupq_n_u16(0);
@@ -233,13 +208,12 @@ fn mb_stats<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
         }
         if BGD {
             let r = reduce_quads(top.refs, bot.refs);
-            // The asm's `usubl`/`addv` pair, the other way round: both are
-            // `sum(cur) - sum(ref)` per quadrant in 32 bits, and neither side
-            // exceeds `64 * 255`.
+            // `sum(cur) - sum(ref)` per quadrant in 32 bits; neither side exceeds
+            // `64 * 255`.
             let sd = vsubq_s32(vreinterpretq_s32_u32(c), vreinterpretq_s32_u32(r));
             st_quads(&mut out.sd8x8[mb], vreinterpretq_u32_s32(sd));
             // Three `umaxp` fold `[top | bottom]` down to the four quadrant maxima
-            // in bytes 0..4, where the asm uses four `umaxv` and two `ins`.
+            // in bytes 0..4.
             let m = vpmaxq_u8(top.mad, bot.mad);
             let m = vpmaxq_u8(m, m);
             let m = vpmaxq_u8(m, m);
@@ -257,11 +231,8 @@ fn mb_stats<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
 
 /// The picture walk, macroblock by macroblock, returning the frame's total SAD.
 ///
-/// The same walk as `vaacalc.rs`'s `walk_picture`, step quirk included — see this
-/// module's header for why the width loop counts macroblocks where the asm counts
-/// bytes. The frame total accumulates a macroblock's four quadrants at a time, which
-/// is the C++'s order with its three inner additions done in the vector unit; the
-/// sum is the same because integer addition is associative.
+/// The same walk as `vaacalc.rs`'s `walk_picture`, step quirk included. The frame
+/// total accumulates a macroblock's four quadrants at a time, in the vector unit.
 #[inline]
 #[target_feature(enable = "neon")]
 fn walk<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
@@ -434,8 +405,8 @@ mod tests {
     use crate::processing::vaacalc as reference;
     use crate::processing::vaacalc::vaa_span;
 
-    /// Planes of **exactly** `vaa_span` bytes, so a kernel that reads one byte past
-    /// what the walk is allowed to touch panics here instead of silently working.
+    /// Planes of exactly `vaa_span` bytes, so a kernel that reads one byte past what
+    /// the walk may touch panics here instead of silently working.
     fn planes(w: i32, h: i32, stride: i32, f: impl Fn(usize) -> (u8, u8)) -> (Vec<u8>, Vec<u8>) {
         let n = vaa_span(w, h, stride);
         let mut cur = vec![0u8; n];
@@ -534,9 +505,9 @@ mod tests {
         );
     }
 
-    /// The geometries the encoder actually hands these kernels, plus strides wider
-    /// than the width. Planes are exactly `vaa_span` long, so this is also the
-    /// over-read test: a kernel that reads past the walk's last sample panics.
+    /// The geometries the encoder hands these kernels, plus strides wider than the
+    /// width. Planes are exactly `vaa_span` long, so this is also the over-read test:
+    /// a kernel that reads past the walk's last sample panics.
     #[test]
     fn parity_over_geometries() {
         for &(w, h, stride) in &[
@@ -638,9 +609,7 @@ mod tests {
 
     /// The step quirk: a width that is not a multiple of 16 shifts every macroblock
     /// row left by the remainder, and the kernels must reproduce it rather than
-    /// correct it — `vaacalc.rs`'s
-    /// `calc_sad_reproduces_the_step_quirk_at_a_width_that_is_not_a_multiple_of_16`
-    /// is the scalar half of this.
+    /// correct it.
     #[test]
     fn parity_at_a_width_that_is_not_a_multiple_of_16() {
         for &(w, h, stride) in &[(40, 32, 64), (24, 48, 32), (72, 32, 80), (33, 32, 64)] {

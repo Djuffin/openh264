@@ -1,7 +1,5 @@
 //! SATD — `WelsSampleSatd*_AArch64_neon`, `codec/encoder/core/arm64/pixel_aarch64_neon.S`.
 //!
-//! # Two kernels, not one
-//!
 //! `WelsSampleSatd4x4_AArch64_neon` holds the block as `[row0 | row1]` and
 //! `[row2 | row3]`, butterflies vertically with a half swap, and finishes the
 //! horizontal pass with `trn` pairs, `abs` and `saba` — the full `Σ|H·X·H|`, then
@@ -19,9 +17,8 @@
 //! a pairwise sum at most 2040, and a four-row group contributes two `smax` vectors,
 //! so a 16x16 block's eight groups peak at `8 * 2 * 2040 = 32640` per lane.
 //!
-//! Each operand is cut once into a `RefSamples::span` and its rows are indexed inside
-//! it, so a block pays one cut per operand where a `row_n` walk paid two checks per
-//! row. See `RefSamples::span`; the SAD kernels next door carry the measurement.
+//! Each operand is cut once into a `RefSamples::span`, so a block pays one bounds check
+//! per operand rather than two per row.
 #![allow(unsafe_code)]
 
 use core::arch::aarch64::*;
@@ -47,7 +44,6 @@ fn rows4x4<S: RefSamples>(c: &S) -> (uint8x8_t, uint8x8_t) {
 fn satd_4x4_neon<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     let (a01, a23) = rows4x4(c1);
     let (b01, b23) = rows4x4(c2);
-    // usubl: {0,1,2,3,4,5,6,7} and {8,...,15} of the difference.
     let d01 = vreinterpretq_s16_u16(vsubl_u8(a01, b01));
     let d23 = vreinterpretq_s16_u16(vsubl_u8(a23, b23));
 
@@ -75,10 +71,10 @@ fn satd_4x4_neon<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> 
     (sum + 1) >> 1
 }
 
-/// The `SATD_8x4` macro's arithmetic on four rows of eight differences: the vertical
-/// butterflies, then the `trn`/`abs`/`sabd`/`smax` stage described in the header.
-/// Each lane of the result is `max(|p|, |q|)` or `max(|r|, |s|)` of one row and one
-/// four-column half, summed over the macro's two `smax` vectors.
+/// `SATD_8x4` on four rows of eight differences: the vertical butterflies, then the
+/// `trn`/`abs`/`sabd`/`smax` stage described in the header. Each lane of the result is
+/// `max(|p|, |q|)` or `max(|r|, |s|)` of one row and one four-column half, summed over
+/// the two `smax` vectors.
 #[inline]
 #[target_feature(enable = "neon")]
 fn group8(d0: int16x8_t, d1: int16x8_t, d2: int16x8_t, d3: int16x8_t) -> int16x8_t {
@@ -110,8 +106,8 @@ fn group8(d0: int16x8_t, d1: int16x8_t, d2: int16x8_t, d3: int16x8_t) -> int16x8
     vaddq_s16(vmaxq_s16(v4, v5), vmaxq_s16(v6, v7))
 }
 
-/// `WelsSampleSatd8x8_AArch64_neon` and `8x16`, and the 8x4 shape upstream does
-/// not have: `H / 4` groups of `SATD_8x4`, accumulated and reduced once.
+/// `WelsSampleSatd8x8_AArch64_neon` and `8x16`: `H / 4` groups of `SATD_8x4`,
+/// accumulated and reduced once.
 #[inline]
 #[target_feature(enable = "neon")]
 fn satd_8w<A: RefSamples + Copy, B: RefSamples + Copy, const H: usize>(c1: &A, c2: &B) -> i32 {
@@ -119,8 +115,7 @@ fn satd_8w<A: RefSamples + Copy, B: RefSamples + Copy, const H: usize>(c1: &A, c
     let (s1, s2) = (c1.span::<8, H>(0, 0), c2.span::<8, H>(0, 0));
     let mut acc = vdupq_n_s16(0);
     for g in 0..H / 4 {
-        // One four-row window per group: only a constant row offset inside a span
-        // folds, and this loop is not always unrolled. See `simd::aarch64::sad`.
+        // One four-row window per group: only a constant row offset inside a span folds.
         let (w1, w2) = (s1.window::<8>(4 * g, 4), s2.window::<8>(4 * g, 4));
         let mut d = [vdupq_n_s16(0); 4];
         for (i, row) in d.iter_mut().enumerate() {
@@ -133,7 +128,7 @@ fn satd_8w<A: RefSamples + Copy, B: RefSamples + Copy, const H: usize>(c1: &A, c
 }
 
 /// `WelsSampleSatd16x16_AArch64_neon` and `16x8`: `SATD_16x4` is `SATD_8x4` on the
-/// low and high halves of each row, and this is spelled that way.
+/// low and high halves of each row.
 #[inline]
 #[target_feature(enable = "neon")]
 fn satd_16w<A: RefSamples + Copy, B: RefSamples + Copy, const H: usize>(c1: &A, c2: &B) -> i32 {
@@ -163,17 +158,17 @@ fn satd_16w<A: RefSamples + Copy, B: RefSamples + Copy, const H: usize>(c1: &A, 
 /// `WelsSampleSatd4x4_AArch64_neon`.
 #[inline]
 pub fn satd_4x4<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
-    // SAFETY: NEON is baseline on aarch64; see the module header.
+    // SAFETY: NEON is baseline on aarch64.
     unsafe { satd_4x4_neon(c1, c2) }
 }
 
-/// No upstream kernel: one `SATD_8x4` group.
+/// One `SATD_8x4` group.
 #[inline]
 pub fn satd_8x4<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     unsafe { satd_8w::<A, B, 4>(c1, c2) }
 }
 
-/// No upstream kernel: two 4x4s top-to-bottom, in the scalar's order.
+/// Two 4x4 blocks, top then bottom.
 #[inline]
 pub fn satd_4x8<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A, c2: &B) -> i32 {
     satd_4x4(c1, c2) + satd_4x4(&c1.advance(0, 4), &c2.advance(0, 4))
@@ -304,11 +299,8 @@ mod tests {
         (*seed >> 32) as u8
     }
 
-    /// The wide kernels take a different route to the answer than the scalar — the
-    /// `smax` identity, and one `.8h` accumulator for a whole 16x16 — so drive every
-    /// shape over noise, ramps, and the two extremes that fill the lanes: all-`0xFF`
-    /// against all-`0x00` is the largest `Σ|coeff|` a block can have, and it is where
-    /// a lane that summed past `i16` would show.
+    /// Every shape over noise, ramps, and the extremes: all-`0xFF` against all-`0x00` is
+    /// the largest `Σ|coeff|` a block can have, where a lane summing past `i16` shows.
     #[test]
     fn satd_parity_over_anchors_and_distributions() {
         let n = 64 * 64;

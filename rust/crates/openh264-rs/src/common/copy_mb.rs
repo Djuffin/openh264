@@ -27,9 +27,6 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 //! # Fixed-shape macroblock copies (`copy_mb.h` / `copy_mb.cpp`)
-//!
-//! Translated from `codec/common/inc/copy_mb.h` and
-//! `codec/common/src/copy_mb.cpp`.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]

@@ -2,7 +2,7 @@
 
 //! Reference picture buffer management, list construction, reordering, and DPB lifecycle.
 //!
-//! Translated from `codec/decoder/core/inc/manage_dec_ref.h` and `codec/decoder/core/src/manage_dec_ref.cpp`.
+//! `codec/decoder/core/inc/manage_dec_ref.h`, `codec/decoder/core/src/manage_dec_ref.cpp`.
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -79,12 +79,9 @@ pub use crate::decoder::pic_queue::PicId;
 
 /// Shifts `len` entries of one DPB list from `src` to `dst`, overlap-safe.
 ///
-/// The `min` is the array's own bound made explicit and is **not** an arithmetic
-/// change — on every path where the C's `memmove` stayed inside the list it
-/// trims nothing. Where it would not have (`uiShortRefCount` reaching
-/// `MAX_DPB_COUNT`, `iMaxRefIdx` likewise — both bitstream-derived and neither
-/// clamped on the way in), the C wrote one entry past the end of the list into
-/// the field behind it; this drops that entry instead.
+/// `len` is clamped to the list bounds, so a shift that would run past the end drops
+/// the overflowing entries. `uiShortRefCount` and `iMaxRefIdx` are bitstream-derived and
+/// unclamped on the way in, so they can reach `MAX_DPB_COUNT`.
 #[inline]
 fn shift_dpb_entries(list: &mut [Option<PicId>], src: usize, dst: usize, len: usize) {
     let len = len
@@ -293,7 +290,6 @@ pub fn AddShortTermToList(
     pic.bUsedAsRef = true;
     pic.bIsLongRef = false;
     pic.iLongTermFrameIdx = -1;
-    // The comparison value for the duplicate-frame-num scan below.
     let iPicFrameNum = pic.iFrameNum;
 
     let short_count = ref_set(pCtx, bTmpRefSet).uiShortRefCount[LIST_0] as usize;
@@ -504,8 +500,7 @@ pub fn SlidingWindow(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) -> i32 {
 ///
 /// Matches `static int32_t RemainOneBufferInDpbForEC (PWelsDecoderContext pCtx, PRefPic pRefPic)`.
 pub fn RemainOneBufferInDpbForEC(pCtx: &mut SWelsDecoderContext, bTmpRefSet: bool) -> i32 {
-    // The loop below *depends* on a re-entrant call changing `uiLongRefCount`, so
-    // its condition has to read the live field.
+    // The loop below mutates `uiLongRefCount`, so its condition reads the live field.
     let num_ref_frames =
         active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).map_or(1, |sps| sps.iNumRefFrames as u8);
 
@@ -552,11 +547,8 @@ pub fn RemainOneBufferInDpbForEC(pCtx: &mut SWelsDecoderContext, bTmpRefSet: boo
 ///
 /// Matches `static int32_t WelsCheckAndRecoverForFutureDecoding (PWelsDecoderContext pCtx)`.
 //
-// `clippy::absurd_extreme_comparisons`: the guard below is `manage_dec_ref.cpp:151`
-// verbatim — `uiShortRefCount[0] + uiLongRefCount[0] <= 0` on two `uint8_t`s, where
-// C's integer promotion makes the sum an `int` and the `<` half is dead there too.
-// Both trees mean `== 0`. (The sum cannot overflow the `u8` it stays in here:
-// both counts are bounded by `MAX_DPB_COUNT`.)
+// `clippy::absurd_extreme_comparisons`: the guard's `<= 0` on the sum of two `u8` counts
+// means `== 0`. The sum cannot overflow, as both counts are bounded by `MAX_DPB_COUNT`.
 #[allow(clippy::absurd_extreme_comparisons)]
 pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i32 {
     if (pCtx.sRefPic.uiShortRefCount[LIST_0] + pCtx.sRefPic.uiLongRefCount[LIST_0] <= 0)
@@ -598,10 +590,9 @@ pub fn WelsCheckAndRecoverForFutureDecoding(pCtx: &mut SWelsDecoderContext) -> i
                     || ec_mode == ERROR_CON_SLICE_MV_COPY_CROSS_IDR
                     || ec_mode == ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE;
 
-                // The three arms: gray-fill when there is nothing to copy from,
-                // log-and-skip when the source *is* the destination (`Current`),
-                // copy otherwise. A `Current` slot outside the cross-IDR modes
-                // gray-fills.
+                // Copy from the previous picture when the dimensions match and the mode
+                // is cross-IDR; log and skip when source and destination are the same
+                // slot; gray-fill otherwise.
                 let spans = |pic: &SPicture| {
                     [
                         (0usize, (pic.linesize(0) * pic.iHeightInPixel) as usize),
@@ -1046,14 +1037,11 @@ pub fn WelsReorderRefList(
             .sSliceHeaderExt
             .sSliceHeader
             .uiRefCount[listIdx];
-        // Fix relative to 2.6.0, mirroring `manage_dec_ref.cpp:407`: the command loop below and
-        // the scan and shift extents it shares were bounded by `iPicQueueNumber`
-        // (num_ref_frames + 2). 8.2.4.3 runs one command per entry of the list being modified,
-        // and that list is num_ref_idx_lX_active long, which duplicated references push past
-        // num_ref_frames + 2: the commands past the seventh were dropped and the tail of the list
-        // kept its initial content. Cover num_ref_idx_lX_active as well. `ParseRefPicList-
-        // Reordering` rejects a stream with more than `uiRefCount` commands, and `uiRefCount`
-        // itself is rejected above MAX_REF_PIC_COUNT, so the extents stay inside `pRefList`.
+        // 8.2.4.3 runs one command per entry of the list being modified, and that list is
+        // num_ref_idx_lX_active long, which duplicated references can push past
+        // `iPicQueueNumber` (num_ref_frames + 2) — so the extent covers both.
+        // `ParseRefPicListReordering` rejects more than `uiRefCount` commands, and rejects
+        // `uiRefCount` above MAX_REF_PIC_COUNT, so the extents stay inside `pRefList`.
         let iMaxRefIdx = (pCtx.iPicQueueNumber as usize)
             .max(iRefCount.max(0) as usize)
             .min(MAX_REF_PIC_COUNT);
@@ -1174,8 +1162,7 @@ pub fn WelsReorderRefList(
                 let i_idx = found_i as usize;
                 let pPic = pCtx.sRefPic.pRefList[listIdx][i_idx];
 
-                // Both arms shift the same span by one; only the length differs
-                // (`manage_dec_ref.cpp` spells the memmove out twice).
+                // Both arms shift the same span by one; only the length differs.
                 if i_idx != iReorderingIndex {
                     let move_len = if i_idx > iReorderingIndex {
                         i_idx - iReorderingIndex
@@ -1251,12 +1238,9 @@ pub fn WelsReorderRefList2(
             let mut iPredFrameNum = iCurFrameNum;
             let mut i = 0usize;
             while reorder_syn.sReorderingSyn[listIdx][i].uiReorderingOfPicNumsIdc != 3 {
-                // Fix relative to 2.6.0, mirroring `manage_dec_ref.cpp:522`: this bound was
-                // `iPicQueueNumber` (num_ref_frames + 2). 8.2.4.3 runs the commands over a list
-                // num_ref_idx_lX_active entries long, which duplicated references push past
-                // num_ref_frames + 2; the commands beyond that were dropped and the tail of the
-                // list was filled by the padding loop at the end of this function with copies of
-                // the last entry instead of the commanded pictures.
+                // 8.2.4.3 runs the commands over a list num_ref_idx_lX_active entries long,
+                // so the bound is `iRefCount` rather than `iPicQueueNumber`
+                // (num_ref_frames + 2): duplicated references can push the list past the latter.
                 if iCount >= iRefCount {
                     break;
                 }
@@ -1352,9 +1336,6 @@ pub fn WelsMarkAsRef(
 ) -> i32 {
     // `dec!()` is the current picture: the thread arm re-borrows the caller's
     // picture, the pool arm re-resolves the handle.
-    //
-    // `pLastDec` is the threading arm and both callers pass `None`; it is what
-    // `isThreadCtx` reads.
     macro_rules! dec {
         () => {
             match pLastDec {

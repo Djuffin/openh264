@@ -2,8 +2,6 @@
 //! pixel averaging, chroma MC, the three half-pel Wiener filters and the quarter-pel
 //! luma composite built from them.
 //!
-//! # What is emulated
-//!
 //! `pavgb` — the rounded byte average — has no `wide` wrapper and `u8x16` has no
 //! shift, so [`avg_u8`] uses the identity `(a + b + 1) >> 1 == (a | b) - ((a ^ b) >> 1)`
 //! with the halving done as a word shift and the bit that crosses into the next
@@ -29,10 +27,9 @@ use crate::safe::plane::{BlockRows, PlaneCursorMut, RefSamples};
 // Block shapes
 // ============================================================================
 
-/// Rows per window cut — the twin of `simd::aarch64::mc::ROW_GROUP`, and for the
-/// same reason: a filter body is well past the unroller's threshold at sixteen rows,
-/// so `y * stride` stays symbolic and every per-row bounds check with it. One window
-/// per group of four restores the constant offsets. See
+/// Rows per window cut. A filter body is well past the unroller's threshold at sixteen
+/// rows, so `y * stride` stays symbolic and every per-row bounds check with it; one
+/// window per group of four restores the constant offsets. See
 /// [`PlaneSpanMut::window_mut`](crate::safe::plane::PlaneSpanMut::window_mut).
 const ROW_GROUP: usize = 4;
 
@@ -145,7 +142,7 @@ fn chroma_row<R: BlockRows, const W: usize>(out: &mut [u8; W], r0: &R, r1: &R, w
 }
 
 /// The bilinear chroma filter over one const-shape block. Widths 8 and 4 take the
-/// lane path; width 2 is scalar, as the intrinsic kernels have it.
+/// lane path; width 2 is scalar.
 #[inline(always)]
 fn chroma_block<
     S: RefSamples + Copy,
@@ -227,14 +224,11 @@ pub fn mc_chroma<S: RefSamples + Copy>(
     mc_chroma_frac(src, dst, mv_x, mv_y, width, height)
 }
 
-/// The fractional half of [`mc_chroma`], **out of line on purpose**.
+/// The fractional half of [`mc_chroma`], out of line.
 ///
-/// The whole-sample vector is the common chroma case and it is a block copy; with the
-/// bilinear dispatch in the same body the entry point was too large to inline, so
-/// `mc_copy`'s width and height arrived as run-time values at a call site that had
-/// them as constants, and the copy paid two jump tables it should not have. Split,
-/// the entry point is a test and a copy — small enough to inline — and this is one
-/// call on the path that does real work.
+/// The whole-sample vector is the common chroma case and it is a block copy, so with the
+/// fractional path split out the entry point is a test and a copy: small enough to inline,
+/// with `mc_copy`'s width and height constant at the call site.
 #[inline(never)]
 fn mc_chroma_frac<S: RefSamples + Copy>(
     src: &S,
@@ -286,10 +280,9 @@ fn filter_6tap_shifted(p0: i16x8, p1: i16x8, p2: i16x8, p3: i16x8, p4: i16x8, p5
 /// words.
 ///
 /// The taps are read as `N`-wide rows of the window rather than sliced out of one
-/// `W + 5`-wide row: [`BlockRows::row`] hands a row over by value, so a row wider
-/// than the load would be spilled to the stack and read back six times, where inside
-/// a window each tap's offset is a constant and the load goes straight to the plane
-/// or the cell view.
+/// `W + 5`-wide row: [`BlockRows::row`] hands a row over by value, so a wider row would
+/// be spilled to the stack and read back six times. Inside a window each tap's offset is
+/// constant and the load goes straight to the plane or the cell view.
 #[inline(always)]
 fn htaps<R: BlockRows, const N: usize>(r: &R, col: usize) -> [i16x8; 6] {
     core::array::from_fn(|k| widen_lo(load_w::<N>(&r.row::<N>(0, col + k))))
@@ -400,8 +393,8 @@ fn vrow<const N: usize>(r: &[u8; N]) -> [i16x8; 2] {
     [widen_lo(v), if N == 16 { widen_hi(v) } else { i16x8::ZERO }]
 }
 
-/// The vertical filter at one width, with the five-row window carried in registers
-/// and one new row read per output row, as the intrinsic kernel does.
+/// The vertical filter at one width, with the five-row window carried in registers and
+/// one new row read per output row.
 #[inline(always)]
 fn ver_lanes<
     S: RefSamples + Copy,
@@ -515,9 +508,8 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
 // Centre: McHorVer22
 // ============================================================================
 
-/// `McHorVer22` over one const-shape block: the vertical 6-tap into 16-bit
-/// intermediates over one `SW`-wide window per row, then the scalar horizontal pass
-/// over those, as the intrinsic kernel has it.
+/// `McHorVer22` over one const-shape block: the vertical 6-tap into 16-bit intermediates
+/// over one `SW`-wide window per row, then the scalar horizontal pass over those.
 #[inline(always)]
 fn cen_block<
     S: RefSamples + Copy,
@@ -559,7 +551,7 @@ fn cen_block<
             j += 1;
         }
 
-        // Step 2: the horizontal 6-tap over `iTmp`, in scalar, as the intrinsic kernel.
+        // Step 2: the horizontal 6-tap over `iTmp`, in scalar.
         let out = d.row_mut::<W>(y, 0);
         for (o, w) in out.iter_mut().zip(iTmp[..SW].windows(6)) {
             *o =
@@ -569,7 +561,7 @@ fn cen_block<
 }
 
 /// The run-time-shape twin — cold; see [`McLeaves`]. The `width <= 17` contract is
-/// the C++'s and is what sizes `iTmp`.
+/// what sizes `iTmp`.
 fn cen_any<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -739,9 +731,8 @@ pub fn mc_luma<S: RefSamples + Copy>(
 mod tests {
     use super::*;
     use crate::safe::plane::PlaneCursor;
-    // These MUST be the `_c` scalar kernels, not the same-named dispatchers:
-    // the dispatchers route to the very kernels under test, which would
-    // make every assertion below a tautology.
+    // These MUST be the `_c` scalar kernels, not the same-named dispatchers: the
+    // dispatchers route to the kernels under test, making every assertion a tautology.
     use crate::common::mc::McLeaves;
     use crate::common::mc::{
         mc_chroma_with_frag_mv, mc_hor_ver02_c as scalar_hor_ver02,
@@ -1095,15 +1086,11 @@ mod tests {
         }
     }
 
-    /// **The `_AVERAGE_WITH_` forms of the two direct filters agree with the
-    /// composites they would replace.**
+    /// The `_AVERAGE_WITH_` forms of the two direct filters agree with the composites
+    /// they would replace.
     ///
-    /// [`McLeaves::FUSED_QPEL`] is off for this set, so `mc_luma` takes the composite
-    /// at quarter-pel `(1, 0)`, `(3, 0)`, `(0, 1)` and `(0, 3)` and the `AVG` arms of
+    /// [`McLeaves::FUSED_QPEL`] is off for this set, so the `AVG` arms of
     /// [`McLeaves::hor`] and [`McLeaves::ver`] are never instantiated by the codec.
-    /// They are still part of the trait and still have to be right, so drive them
-    /// here: the fused form is a rounded average against one of the filter's own
-    /// taps, and that is what the composite computes with an averaging pass.
     #[test]
     fn the_fused_quarter_pel_arms_agree_with_the_composites() {
         let base = filled_plane();

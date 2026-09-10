@@ -1,24 +1,14 @@
-//! Port of `codec/encoder/core/src/svc_base_layer_md.cpp` — the base-layer
-//! mode-decision layer.
+//! Base-layer mode decision — `codec/encoder/core/src/svc_base_layer_md.cpp`.
 //!
-//! This module carries the **intra (I-slice) half**: the tables, the neighbour-mode
-//! predictor, and the `WelsMdIntraInit` -> `WelsMdIntraMb` chain that
-//! `WelsISliceMdEnc` (`svc_encode_slice.cpp:562`/`:566`) drives, plus
-//! `WelsMdInterInit`, `WelsMdInterMbRefinement` and `WelsMdFirstIntraMode`.
+//! The intra (I-slice) half lives here: the tables, the neighbour-mode predictor, the
+//! `WelsMdIntraInit` -> `WelsMdIntraMb` chain driven by `WelsISliceMdEnc`, plus
+//! `WelsMdInterInit`, `WelsMdInterMbRefinement` and `WelsMdFirstIntraMode`. The inter
+//! half is split across `svc_mode_decision.rs` (`WelsMdP16x16`,
+//! `WelsMdBackgroundMbEnc`, `WelsMdInterSecondaryModesEnc`) and `svc_encode_slice.rs`
+//! (`WelsMdInterMbLoop`).
 //!
-//! The rest of the C++ file's inter half is ported too, but lives elsewhere:
-//! `WelsMdP16x16`, `WelsMdBackgroundMbEnc` and `WelsMdInterSecondaryModesEnc` in
-//! `svc_mode_decision.rs`, and `WelsMdInterMbLoop` in `svc_encode_slice.rs`.
-//!
-//! ## Deviation: the `Combined3` SIMD fast paths are not translated
-//!
-//! `WelsMdI16x16`, `WelsMdI4x4` and `WelsMdIntraChroma` each open with a branch taken
-//! only when the corresponding `sSampleDealingFuncs.pfIntra*Combined3` slot is
-//! non-null. Those slots are set exclusively from SIMD kernels in `sample.cpp`
-//! (`_sse*`, `_neon`, `_AArch64_neon`, `_mmi`, `_lasx`), all of them behind a
-//! `uiCpuFlag` test. This port has no SIMD kernels at all, so the slots are always
-//! NULL here too. The scalar branches below are therefore the ones that decide
-//! output bytes.
+//! The `sSampleDealingFuncs.pfIntra*Combined3` slots are never populated, so the
+//! scalar branches below are the ones that decide output bytes.
 
 #![allow(non_snake_case, non_upper_case_globals, non_camel_case_types)]
 #![forbid(unsafe_code)]
@@ -91,15 +81,13 @@ pub const C_PRED_DC_T: i8 = 5;
 pub const C_PRED_DC_128: i8 = 6;
 
 // ============================================================================
-// Tables — `svc_base_layer_md.cpp:48-244`
+// Tables
 // ============================================================================
 
-/// `svc_base_layer_md.cpp:59`. `I4_PRED_MODE_EXTEND` is never defined anywhere in
-/// `codec/` — it appears only in the `#ifndef` guards — so the `#ifndef` arm is the
-/// live one here and in `g_kiIntra4AvailMode` below.
+/// Number of I4x4 modes available per availability code.
 pub const g_kiIntra4AvailCount: [u8; 16] = [1, 3, 2, 4, 1, 3, 2, 7, 1, 3, 4, 6, 1, 3, 4, 9];
 
-/// `svc_base_layer_md.cpp:68`. Indexed by
+/// The I4x4 modes available per availability code, indexed by
 /// `left_avail | (top_avail<<1) | (left_top_avail<<2) | (right_top_avail<<3)`.
 pub const g_kiIntra4AvailMode: [[i8; 16]; 16] = [
     // 0000
@@ -408,7 +396,7 @@ pub const g_kiIntra4AvailMode: [[i8; 16]; 16] = [
     ],
 ];
 
-/// `svc_base_layer_md.cpp:200`.
+/// The chroma prediction modes available per availability code, with the count last.
 pub const g_kiIntraChromaAvailMode: [[i8; 5]; 8] = [
     [
         C_PRED_DC_128,
@@ -432,14 +420,14 @@ pub const g_kiIntraChromaAvailMode: [[i8; 5]; 8] = [
     [C_PRED_V, C_PRED_H, C_PRED_DC, C_PRED_P, 4],
 ];
 
-/// `svc_base_layer_md.cpp:212`.
+/// X offset in the macroblock of each 4x4 block, in raster-of-8x8 scan order.
 pub const g_kiCoordinateIdx4x4X: [i8; 16] = [0, 4, 0, 4, 8, 12, 8, 12, 0, 4, 0, 4, 8, 12, 8, 12];
 
-/// `svc_base_layer_md.cpp:218`.
+/// Y offset in the macroblock of each 4x4 block, in raster-of-8x8 scan order.
 pub const g_kiCoordinateIdx4x4Y: [i8; 16] = [0, 0, 4, 4, 0, 0, 4, 4, 8, 8, 12, 12, 8, 8, 12, 12];
 
-/// `svc_base_layer_md.cpp:223`. Maps `uiNeighborIntra` and the 4x4 block index to the
-/// availability code that indexes `g_kiIntra4AvailCount` / `g_kiIntra4AvailMode`.
+/// Maps `uiNeighborIntra` and the 4x4 block index to the availability code that indexes
+/// `g_kiIntra4AvailCount` / `g_kiIntra4AvailMode`.
 pub const g_kiNeighborIntraToI4x4: [[i8; 16]; 16] = [
     [0, 1, 10, 7, 1, 1, 15, 7, 10, 15, 10, 7, 15, 7, 15, 7],
     [1, 1, 15, 7, 1, 1, 15, 7, 15, 15, 15, 7, 15, 7, 15, 7],
@@ -459,15 +447,15 @@ pub const g_kiNeighborIntraToI4x4: [[i8; 16]; 16] = [
     [15, 15, 15, 7, 15, 15, 15, 7, 15, 15, 15, 7, 15, 7, 15, 7],
 ];
 
-/// `svc_base_layer_md.cpp:242`. Folds the six "restricted" I4x4 mode ids
-/// (`DC_L`, `DC_T`, `DC_128`, `DDL_TOP`, `VL_TOP`) back onto the nine coded ones.
+/// Folds the restricted I4x4 mode ids (`DC_L`, `DC_T`, `DC_128`, `DDL_TOP`, `VL_TOP`)
+/// back onto the nine coded ones.
 pub const g_kiMapModeI4x4: [i8; 14] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 2, 2, 2, 3, 7];
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-/// `svc_base_layer_md.cpp:246`.
+/// Predicts an I4x4 mode from the left and top neighbours' modes.
 pub fn PredIntra4x4Mode(pIntraPredMode: &[i8; 48], iIdx4: i32) -> i32 {
     let iTopMode = pIntraPredMode[(iIdx4 - 8) as usize];
     let iLeftMode = pIntraPredMode[(iIdx4 - 1) as usize];
@@ -484,35 +472,27 @@ pub fn PredIntra4x4Mode(pIntraPredMode: &[i8; 48], iIdx4: i32) -> i32 {
 // Intra mode decision
 // ============================================================================
 
-/// `svc_base_layer_md.cpp:259`. Re-points the cached per-macroblock plane pointers and
-/// reloads the intra neighbour cache. Called once per macroblock by `WelsISliceMdEnc`
-/// *before* the re-encoding loop, so it must not depend on the QP.
+/// Re-points the cached per-macroblock plane pointers and reloads the intra neighbour
+/// cache. Called once per macroblock by `WelsISliceMdEnc` before the re-encoding loop,
+/// so it must not depend on the QP.
 pub fn WelsMdIntraInit(mbs: &mut MbSplit<'_, SMB>, pMbCache: &mut SMbCache) {
-    // One `cur()` for the two coordinates, and no layer: this resolved the frame's
-    // current layer and then read nothing off it.
     let cur = mbs.cur();
     let kiMbX = cur.iMbX as i32;
     let kiMbY = cur.iMbY as i32;
 
-    // step 3. locating current pEnc and pDec
     pMbCache.SPicData.iMbX = kiMbX;
     pMbCache.SPicData.iMbY = kiMbY;
 
-    //step 2. initial pWelsMd
     mbs.cur_mut().uiCbp = 0;
 
-    //step 4: locating scaled_tcoeff
-
-    //step 1. load neighbor cache
     FillNeighborCacheIntra(pMbCache, mbs);
-    // in WelsMdI16x16() will be changed, so re-init here!
-    // Init with default, maybe change in WelsMdI16x16 and svc_md_i16x16_sad:
-    // luma is the first 256-byte half of `sMemPredMb` and chroma the second.
+    // Re-init: `WelsMdI16x16` and `svc_md_i16x16_sad` may change this. Luma is the
+    // first 256-byte half of `sMemPredMb` and chroma the second.
     pMbCache.uiMemPredLumaHalf = 0;
 }
 
-/// `svc_base_layer_md.cpp:418`. The full 16-mode-per-block I4x4 search, used on the
-/// non-`LOW_COMPLEXITY` path via [`WelsMdIntraFinePartition`].
+/// The full 16-mode-per-block I4x4 search, used on the non-`LOW_COMPLEXITY` path via
+/// [`WelsMdIntraFinePartition`].
 pub extern "C" fn WelsMdI4x4(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -618,13 +598,11 @@ pub extern "C" fn WelsMdI4x4(
     iCosti4x4
 }
 
-/// The `ST32`/`LD32` tail shared verbatim by `WelsMdI4x4` (`svc_base_layer_md.cpp:540`)
-/// and `WelsMdI4x4Fast` (`:859`): publish the four right-column and three
-/// bottom-row I4x4 prediction modes into the macroblock so the *next* macroblock's
-/// `FillNeighborCacheIntra` can read them.
+/// Publishes the four right-column and three bottom-row I4x4 prediction modes into the
+/// macroblock so the next macroblock's `FillNeighborCacheIntra` can read them. Shared by
+/// [`WelsMdI4x4`] and [`WelsMdI4x4Fast`].
 #[inline]
 fn StoreIntra4x4PredModeToMb(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
-    // ST32 (pCurMb->pIntra4x4PredMode, LD32 (&pMbCache->iIntraPredMode[33]));
     let pMbMode = &mut pCurMb.iIntra4x4PredMode;
     let pCacheMode = &pMbCache.iIntraPredMode;
     pMbMode[0..4].copy_from_slice(&pCacheMode[33..37]);
@@ -633,9 +611,9 @@ fn StoreIntra4x4PredModeToMb(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     pCurMb.iIntra4x4PredMode[6] = pMbCache.iIntraPredMode[28];
 }
 
-/// `svc_base_layer_md.cpp:548`. The `LOW_COMPLEXITY` I4x4 search: instead of scoring
-/// every available mode it scores DC/H/V, then follows whichever of the vertical or
-/// horizontal families won into at most four more modes.
+/// The `LOW_COMPLEXITY` I4x4 search: instead of scoring every available mode it scores
+/// DC/H/V, then follows whichever of the vertical or horizontal families won into at
+/// most four more modes.
 pub extern "C" fn WelsMdI4x4Fast(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -681,8 +659,8 @@ pub extern "C" fn WelsMdI4x4Fast(
         let mut iBestMode: i8;
         let mut iBestCost: i32;
 
-        // `lambda[iPredMode == g_kiMapModeI4x4[iCurMode]]`, hoisted so the mode-scoring
-        // below reads like the C++ one-liner it is translating.
+        // Predicts `mode` into `dst_off` of `sMemPredBlk4` and returns its SATD plus
+        // `lambda[iPredMode == g_kiMapModeI4x4[mode]]`.
         macro_rules! score {
             ($mode:expr, $dst_off:expr) => {{
                 let m: i8 = $mode;
@@ -707,7 +685,6 @@ pub extern "C" fn WelsMdI4x4Fast(
                 ((1 - iBestPredBufferNum) << 4) as usize
             };
         }
-        // `if (iCurCost < iBestCost) { best = cur; iBestPredBufferNum = 1 - …; }`
         macro_rules! take_if_better {
             ($mode:expr, $cost:expr) => {
                 if $cost < iBestCost {
@@ -839,12 +816,9 @@ pub extern "C" fn WelsMdI4x4Fast(
     iCosti4x4
 }
 
-/// The 8x8 chroma predictor for `mode`, reached without `pfGetChromaPred`.
-///
-/// As [`I16x16LumaPred`](crate::encoder::svc_mode_decision::I16x16LumaPred): the
-/// arms are what the table holds mode by mode, and that is not one family —
-/// `WelsInitIntraPredFuncs` overwrites only `DC`, `H`, `V` and `P` under the SIMD
-/// bit, the two one-sided DC variants and the 128 fallback having no kernel.
+/// The 8x8 chroma predictor for `mode`, dispatched per mode rather than through
+/// `pfGetChromaPred`: `DC`, `H`, `V` and `P` have SIMD kernels, the two one-sided DC
+/// variants and the 128 fallback do not.
 #[inline(always)]
 fn ChromaPred(iMode: i32, pPred: &mut [u8; 64], cRec: &RecCursor<'_>) {
     use crate::encoder::get_intra_predictor as gip;
@@ -860,8 +834,8 @@ fn ChromaPred(iMode: i32, pPred: &mut [u8; 64], cRec: &RecCursor<'_>) {
     }
 }
 
-/// `svc_base_layer_md.cpp:867`. Picks the 8x8 chroma prediction mode over Cb and Cr
-/// jointly and leaves the winning prediction in `pBestPredIntraChroma`.
+/// Picks the 8x8 chroma prediction mode over Cb and Cr jointly and leaves the winning
+/// prediction in `pBestPredIntraChroma`.
 pub extern "C" fn WelsMdIntraChroma(
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: &SDqLayer,
@@ -890,8 +864,8 @@ pub extern "C" fn WelsMdIntraChroma(
         let iCurMode = kpAvailMode[i] as i32;
         debug_assert!((0..7).contains(&iCurMode));
 
-        // `pDstChma` is `sMemPredMb` at the chroma half's `iChmaIdx` 128-byte side;
-        // as an offset it is that side's start, and the Cr block sits 64 beyond it.
+        // The chroma half's `iChmaIdx` 128-byte side of `sMemPredMb`; the Cr block
+        // sits 64 bytes beyond the Cb one.
         let kiDstOff = kiPredOff + 128 * iChmaIdx;
         ChromaPred(
             iCurMode,
@@ -928,7 +902,7 @@ pub extern "C" fn WelsMdIntraChroma(
     iBestCost
 }
 
-/// `svc_base_layer_md.cpp:932`. The non-`LOW_COMPLEXITY` `pfIntraFineMd`.
+/// The non-`LOW_COMPLEXITY` `pfIntraFineMd`.
 pub fn WelsMdIntraFinePartition(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -944,9 +918,8 @@ pub fn WelsMdIntraFinePartition(
     pWelsMd.iCostLuma
 }
 
-/// `svc_base_layer_md.cpp:942`. The `LOW_COMPLEXITY` `pfIntraFineMd`. Skips the I4x4
-/// search entirely for macroblocks whose intra variance is below
-/// `INTRA_VARIANCE_SAD_THRESHOLD`.
+/// The `LOW_COMPLEXITY` `pfIntraFineMd`. Skips the I4x4 search entirely for macroblocks
+/// whose intra variance is below `INTRA_VARIANCE_SAD_THRESHOLD`.
 pub fn WelsMdIntraFinePartitionVaa(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -968,9 +941,8 @@ pub fn WelsMdIntraFinePartitionVaa(
     pWelsMd.iCostLuma
 }
 
-/// `svc_base_layer_md.cpp:956`. The whole intra mode decision for one macroblock:
-/// score I16x16, then let `WelsMdIntraSecondaryModesEnc` try I4x4 and chroma and
-/// reconstruct whichever won.
+/// The whole intra mode decision for one macroblock: score I16x16, then let
+/// `WelsMdIntraSecondaryModesEnc` try I4x4 and chroma and reconstruct whichever won.
 ///
 /// [`WelsMdIntraInit`] must have run for this macroblock.
 pub fn WelsMdIntraMb(
@@ -992,11 +964,11 @@ pub fn WelsMdIntraMb(
 }
 
 // ============================================================================
-// The inter (P-slice) half of `svc_base_layer_md.cpp`
+// Inter (P-slice) mode decision
 // ============================================================================
 
-/// `encoder_data_tables.cpp:41`, declared in `mb_cache.h:59`. Byte offset of each
-/// 4x4 block inside a 16x16 prediction buffer, in raster-scan-of-4x4 order.
+/// Byte offset of each 4x4 block inside a 16x16 prediction buffer, in
+/// raster-scan-of-4x4 order.
 pub const g_kuiSmb4AddrIn256: [u8; 16] = [
     0,
     4,
@@ -1016,7 +988,7 @@ pub const g_kuiSmb4AddrIn256: [u8; 16] = [
     16 * 12 + 12,
 ];
 
-/// `svc_base_layer_md.cpp:1543`.
+/// Byte offset of each 8x8 block inside a motion-refinement buffer.
 pub const g_kiPixStrideIdx8x8: [i32; 4] = [
     0,
     ME_REFINE_BUF_WIDTH_BLK8,
@@ -1024,8 +996,8 @@ pub const g_kiPixStrideIdx8x8: [i32; 4] = [
     ME_REFINE_BUF_STRIDE_BLK8 + ME_REFINE_BUF_WIDTH_BLK8,
 ];
 
-/// `svc_base_layer_md.cpp:321`. Per-macroblock inter setup: neighbour cache, the
-/// reference-plane pointers, and the integer MV clamp for this macroblock position.
+/// Per-macroblock inter setup: neighbour cache, the reference-plane pointers, and the
+/// integer MV clamp for this macroblock position.
 pub fn WelsMdInterInit(
     sc: &MdSliceCtx<'_>,
     mbi: &MbSideInfo,
@@ -1033,33 +1005,28 @@ pub fn WelsMdInterInit(
     pSlice: &mut SSlice,
     mbs: &mut MbSplit<'_, SMB>,
 ) {
-    // Everything this used to resolve — the layer, the function list, the VAA block,
-    // the reconstruction view twice and the reference picture — is the slice's, and
-    // arrives resolved.
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let cur = mbs.cur();
     let kiMbX = cur.iMbX as i32;
     let kiMbY = cur.iMbY as i32;
     let kiMbXY = cur.iMbXY;
 
-    //step 1. load neighbor cache
     (sc.func.pfFillInterNeighborCache)(
         &mut *pMbCache,
         &*mbs,
         &sc.vaa.pVaaBackgroundMbFlag[..],
         sc.rec.mb_skip_sad(),
-    ); //BGD spatial pFunc
+    );
 
-    //step 4. locating current p_ref
     pMbCache.SPicData.iMbX = kiMbX;
     pMbCache.SPicData.iMbY = kiMbY;
 
-    // `uiRefMbType[iMbXY]` of the layer's reference picture, stamped with the
-    // cursors: this was an `Option` unwrap, a `Vec` deref and a bounds check.
+    // `uiRefMbType[iMbXY]` of the layer's reference picture.
     pMbCache.uiRefMbType = mbi.ref_mb_type;
     pMbCache.bCollocatedPredFlag = false;
 
-    //comment: sometimes, mode decision process may skip the md_p16x16 and md_pskip function,
+    // Mode decision may skip both `WelsMdP16x16` and `WelsMdPSkip`, so the MV is zeroed
+    // here rather than left over from the previous macroblock.
     mbs.cur_mut().sP16x16Mv = SMVUnitXY { iMvX: 0, iMvY: 0 };
     sc.rec
         .mv_list()
@@ -1076,7 +1043,7 @@ pub fn WelsMdInterInit(
     );
 }
 
-/// `svc_base_layer_md.cpp:1023`.
+/// Scores the two 16x8 partitions.
 pub extern "C" fn WelsMdP16x8<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
@@ -1129,7 +1096,7 @@ pub extern "C" fn WelsMdP16x8<'a>(
     iCostP16x8
 }
 
-/// `svc_base_layer_md.cpp:1053`.
+/// Scores the two 8x16 partitions.
 pub extern "C" fn WelsMdP8x16<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
@@ -1182,7 +1149,7 @@ pub extern "C" fn WelsMdP8x16<'a>(
     iCostP8x16
 }
 
-/// `svc_base_layer_md.cpp:1238`. The non-VAA (`!LOW_COMPLEXITY`) fine partition search.
+/// The non-VAA (`!LOW_COMPLEXITY`) fine partition search.
 pub fn WelsMdInterFinePartition<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
@@ -1210,8 +1177,7 @@ pub fn WelsMdInterFinePartition<'a>(
     }
 }
 
-/// `svc_base_layer_md.cpp:1270`. The VAA-guided fine partition search — the
-/// `LOW_COMPLEXITY` path the gate configuration takes.
+/// The VAA-guided fine partition search, the `LOW_COMPLEXITY` path.
 ///
 /// `pEncCtx->pVaa->sVaaCalcInfo.pSad8x8` must be populated and
 /// `pfGetMbSignFromInterVaa` assigned.
@@ -1291,19 +1257,14 @@ pub fn WelsMdInterFinePartitionVaa<'a>(
     pWelsMd.iCostLuma = iBestCost;
 }
 
-/// `svc_base_layer_md.cpp:1423`. Motion-compensates the P_SKIP predictor and decides
-/// whether the macroblock can be coded as P_SKIP.
+/// Motion-compensates the P_SKIP predictor and decides whether the macroblock can be
+/// coded as P_SKIP.
 pub fn WelsMdPSkipEnc(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool {
-    // The slice context and the three source cursors this reads: what used to be a
-    // `current_layer_expect`, a `func_list`, a `layer_enc_view_expect`, a
-    // `layer_ref_view_expect` *build*, three `layer_ref_pic*` resolutions, six
-    // `cursor` calls and three slot unwraps, per macroblock — and, until now, a copy
-    // of all nine cursors to reach three of them.
     let sc = *pWelsMd.sc();
     let mbi = pWelsMd.mbi;
     let (cEncLuma, cEncCb, cEncCr) = {
@@ -1352,8 +1313,8 @@ pub fn WelsMdPSkipEnc(
     let kiMbXChroma = (pCurMb.iMbX as isize) << 3;
     let kiMbYChroma = (pCurMb.iMbY as isize) << 3;
 
-    // The reference cursors are at the *motion-compensated* position, so they are
-    // not the macroblock's own — but the view they are cut from is the slice's.
+    // The reference cursors below are at the motion-compensated position, not the
+    // macroblock's own.
     let pRefPicture = sc
         .refv
         .expect("the layer's reference view is built for this frame");
@@ -1372,9 +1333,8 @@ pub fn WelsMdPSkipEnc(
         (sc.sad16)(&cEncLuma, &cSkipLuma)
     };
 
-    // `iStrideUV` was `(mvY >> 1) * strideUV + (mvX >> 1)` off the chroma macroblock
-    // origin; in samples that is `(mvX >> 1, mvY >> 1)` from the same origin, and
-    // `sQpelMvp` is already `sMvp >> 2`, so both are `sMvp >> 3`.
+    // Chroma offsets are `(mvX >> 1, mvY >> 1)` in samples from the chroma macroblock
+    // origin; `sQpelMvp` is already `sMvp >> 2`, so both are `sMvp >> 3`.
     {
         let cRefCb = pRefPicture.plane(1).cursor(
             kiMbXChroma + (sQpelMvp.iMvX as isize >> 1),
@@ -1448,8 +1408,7 @@ pub fn WelsMdPSkipEnc(
     false
 }
 
-/// The block `WelsMdPSkipEnc` runs verbatim at both of its `return true` sites
-/// (`svc_base_layer_md.cpp:1489` and `:1521`).
+/// Commits the P_SKIP decision: zero reference indices, the skip MV, and the luma cost.
 #[inline]
 fn AcceptPskip(
     pWelsMd: &mut SWelsMD<'_>,
@@ -1462,7 +1421,6 @@ fn AcceptPskip(
     let sc = *pWelsMd.sc();
     let cEncLuma = pWelsMd.mbc().enc_y;
 
-    // ST32 (pCurMb->pRefIndex, 0)
     pCurMb.iRefIndex = [0; MB_BLOCK8x8_NUM];
     (sc.func.pfUpdateMbMv)(&mut pCurMb.sMv, *sMvp);
 
@@ -1480,8 +1438,8 @@ fn AcceptPskip(
     sc.rec.mv_list().set(pCurMb.iMbXY as usize, *sMvp);
 }
 
-/// `svc_base_layer_md.cpp:1573`. Quarter-pel refinement of whichever partitioning the
-/// integer search chose, plus the chroma motion compensation for each partition.
+/// Quarter-pel refinement of whichever partitioning the integer search chose, plus the
+/// chroma motion compensation for each partition.
 pub fn WelsMdInterMbRefinement(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -1505,12 +1463,10 @@ pub fn WelsMdInterMbRefinement(
     let kiOffCr = kiOffCb + 64;
 
     /// One chroma motion compensation, per partition. `$plane` is 1 (Cb) or 2 (Cr);
-    /// `($dx, $dy)` is the partition's own chroma offset **plus** the motion vector's
+    /// `($dx, $dy)` is the partition's own chroma offset plus the motion vector's
     /// integer chroma part, in samples from the macroblock's chroma origin; `$off` is
-    /// the destination's byte offset inside `sMemPredMb`, whose prediction rows are
-    /// 8 samples apart.
-    ///
-    /// The destination slice is exactly the block's span, `($h - 1) * 8 + $w`.
+    /// the destination's byte offset inside `sMemPredMb`, whose prediction rows are 8
+    /// samples apart. The destination slice spans exactly `($h - 1) * 8 + $w` bytes.
     macro_rules! mc_chroma_at {
         ($plane:expr, $off:expr, $dx:expr, $dy:expr, $mv:expr, $w:expr, $h:expr) => {{
             let cRef = pRefPicture
@@ -1613,9 +1569,7 @@ pub fn WelsMdInterMbRefinement(
                 iBestSatdCost += pWelsMd.sMe.sMe16x8[i].uiSatdCost as i32;
 
                 //chroma
-                // `iRefBlk4Stride` was `(i << 2) * strideUV` — a pure row offset, so
-                // the partition sits `4 * i` rows down and in column 0; the
-                // destination's `i << 5` is `4 * i` rows at stride 8, the same place.
+                // The partition sits `4 * i` chroma rows down, in column 0.
                 let iBlk4Y = (i as i32) << 2;
                 let sMv = pWelsMd.sMe.sMe16x8[i].sMv;
                 let dx = sMv.iMvX as i32 >> 3;
@@ -1662,9 +1616,7 @@ pub fn WelsMdInterMbRefinement(
                 iBestSatdCost += pWelsMd.sMe.sMe8x16[i].uiSatdCost as i32;
 
                 //chroma
-                // `iRefBlk4Stride` was `iIdx` (= 4 * i) added to a byte pointer with no
-                // stride factor — a pure *column* offset — and the destination used the
-                // same number, which at stride 8 is also column `4 * i` of row 0.
+                // The partition sits in chroma column `4 * i`, in row 0.
                 let iBlk4X = iIdx; // 4 * i
                 let sMv = pWelsMd.sMe.sMe8x16[i].sMv;
                 let dx = iBlk4X + (sMv.iMvX as i32 >> 3);
@@ -1721,20 +1673,16 @@ pub fn WelsMdInterMbRefinement(
                         let iBlk4Y = ((i as i32) >> 1) << 2;
                         let dx = iBlk4X + (sMv.iMvX as i32 >> 3);
                         let dy = iBlk4Y + (sMv.iMvY as i32 >> 3);
-                        // `iDstBlk4Stride` was `(iBlk4Y << 3) + iBlk4X`, which is the
-                        // coordinate `(iBlk4X, iBlk4Y)` at stride 8.
+                        // Coordinate `(iBlk4X, iBlk4Y)` at stride 8.
                         let iDstOff = ((iBlk4Y << 3) + iBlk4X) as usize;
                         mc_chroma_at!(1, kiOffCb + iDstOff, dx, dy, sMv, 4, 4); //Cb
                         mc_chroma_at!(2, kiOffCr + iDstOff, dx, dy, sMv, 4, 4); //Cr
                     }
-                    // In the port, every writer of `uiSubMbType` sets
-                    // `SUB_MB_TYPE_8x8`; in upstream the only writers are inside
-                    // `WelsMdInterFinePartitionVaaOnScreen`'s
-                    // `#if 0 //Disable for sub8x8 modes for now`
-                    // (`svc_mode_decision.cpp:634-661`).
+                    // Every writer of `uiSubMbType` sets `SUB_MB_TYPE_8x8`; no
+                    // sub-8x8 partitioning is searched.
                     _ => unreachable!(
                         "sub-8x8 partition {:#x} — the sub-8x8 search is #if 0 upstream \
-                         and unwritten here (D-dead-2/F122)",
+                         and unwritten here",
                         pCurMb.uiSubMbType[i]
                     ),
                 }
@@ -1750,8 +1698,8 @@ pub fn WelsMdInterMbRefinement(
     }
 }
 
-/// `svc_base_layer_md.cpp:1829`. Costs I16x16 against the current inter cost and, if
-/// intra wins, runs the whole intra encode for this macroblock.
+/// Costs I16x16 against the current inter cost and, if intra wins, runs the whole intra
+/// encode for this macroblock.
 pub fn WelsMdFirstIntraMode(
     pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
@@ -1761,8 +1709,6 @@ pub fn WelsMdFirstIntraMode(
     let sc = *pWelsMd.sc();
     let pFunc = sc.func;
 
-    // The luma pair `WelsMdI16x16` reads, by field: the struct copy this used to take
-    // moved all nine cursors — 288 bytes through `memmove` — to hand over two.
     let (cRecLuma, cEncLuma) = {
         let mbc = pWelsMd.mbc();
         (mbc.rec_y, mbc.enc_y)
@@ -1782,7 +1728,6 @@ pub fn WelsMdFirstIntraMode(
 
         pFunc.pfIntraFineMd.expect("pfIntraFineMd unset")(pEncCtx, pWelsMd, pCurMb, pMbCache);
 
-        //add pEnc&rec to MD--2010.3.15
         if IS_INTRA16x16(pCurMb.uiMbType) {
             pCurMb.uiCbp = 0;
             WelsEncRecI16x16Y(pEncCtx, pCurMb, pMbCache);
@@ -1790,7 +1735,7 @@ pub fn WelsMdFirstIntraMode(
 
         //chroma
         pWelsMd.iCostChroma = WelsMdIntraChroma(pFunc, sc.layer, pMbCache, pWelsMd.iLambda);
-        WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache); //add pEnc&rec to MD--2010.3.15
+        WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache);
         pCurMb.uiChromPredMode = pMbCache.uiChmaI8x8Mode as u32;
         pCurMb.iSadCost = 0;
         return true; //intra_mb_type is best
@@ -1799,8 +1744,8 @@ pub fn WelsMdFirstIntraMode(
     false
 }
 
-/// `svc_base_layer_md.cpp:1858`. The P-slice per-macroblock entry point; C++ assigns
-/// it to `pfInterMd` in `WelsCodePSlice` (`svc_encode_slice.cpp:736`).
+/// The P-slice per-macroblock entry point, installed as `pfInterMd` by
+/// `WelsCodePSlice`.
 pub fn WelsMdInterMb<'a>(
     pEncCtx: &'a sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'a>,
@@ -1883,8 +1828,7 @@ pub fn WelsMdInterMb<'a>(
     WelsMdInterSecondaryModesEnc(pEncCtx, pWelsMd, pSlice, mbs.cur_mut(), bSkip);
 }
 
-/// `svc_base_layer_md.cpp:1937`. Re-classifies a zero-CBP 16x16 as P_SKIP when its MV
-/// equals the skip predictor.
+/// Re-classifies a zero-CBP 16x16 as P_SKIP when its MV equals the skip predictor.
 pub fn WelsMdInterDoubleCheckPskip(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     if MB_TYPE_16x16 == pCurMb.uiMbType && 0 == pCurMb.uiCbp {
         if 0 == pCurMb.iRefIndex[0] {
@@ -1899,7 +1843,7 @@ pub fn WelsMdInterDoubleCheckPskip(pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     }
 }
 
-/// `LD32` on a motion vector — the 32-bit word an `SMVUnitXY` occupies.
+/// The 32-bit word an `SMVUnitXY` occupies, for comparing two MVs in one operation.
 #[inline]
 fn LD32_MV_PUB(pMv: &SMVUnitXY) -> u32 {
     let x = pMv.iMvX.to_ne_bytes();
@@ -1907,12 +1851,11 @@ fn LD32_MV_PUB(pMv: &SMVUnitXY) -> u32 {
     u32::from_ne_bytes([x[0], x[1], y[0], y[1]])
 }
 
-/// `svc_base_layer_md.cpp:1964`. Transforms, quantises and reconstructs the chosen
-/// inter macroblock, then copies the prediction into the CS planes.
+/// Transforms, quantises and reconstructs the chosen inter macroblock, then copies the
+/// prediction into the CS planes.
 pub fn WelsMdInterEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mut SMB) {
     let pCurDqLayer = current_layer_expect(pEncCtx);
 
-    //add pEnc&rec to MD--2010.3.15
     pCurMb.uiCbp = 0;
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
     WelsPMbChromaEncode(pEncCtx, pSlice, pCurMb);
@@ -1938,8 +1881,7 @@ pub fn WelsMdInterEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, pCurMb: &mu
     );
 }
 
-/// `svc_base_layer_md.cpp:1987`. Records the skip SAD and the coded macroblock type
-/// for the next frame's predictors.
+/// Records the skip SAD and the coded macroblock type for the next frame's predictors.
 ///
 /// Both arrays must have room for `pCurMb->iMbXY`.
 pub fn WelsMdInterSaveSadAndRefMbType(pRecView: &RecPicView, pCurMb: &SMB, pMd: &SWelsMD<'_>) {
@@ -1959,17 +1901,15 @@ pub fn WelsMdInterSaveSadAndRefMbType(pRecView: &RecPicView, pCurMb: &SMB, pMd: 
     pRecView.ref_mb_type().set(kiMbXY, kmtCurMbtype);
 }
 
-/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+/// Cached gate for the debug dump; see `encoder::dump_enabled`.
 static FP_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Every `g_kiIntra4AvailMode` row must list exactly `g_kiIntra4AvailCount` modes
-    /// before its `I4_PRED_INVALID` padding; `WelsMdI4x4` walks the row by the count.
-    /// `I4_PRED_INVALID` and `I4_PRED_V` are both 0 in C++, so the check is on the
-    /// count agreeing with the transcription, not on scanning for a sentinel.
+    /// Every `g_kiIntra4AvailMode` row lists exactly `g_kiIntra4AvailCount` modes before
+    /// its `I4_PRED_INVALID` padding; `WelsMdI4x4` walks the row by the count.
     #[test]
     fn intra4_avail_count_matches_mode_table() {
         // Rows whose count is 1 are the DC_128-only rows.
@@ -1979,8 +1919,7 @@ mod tests {
                 assert_eq!(g_kiIntra4AvailMode[idx][0], I4_PRED_DC_128, "row {idx}");
             }
         }
-        // Spot-check the two rows the gate configuration spends most of its time in:
-        // 0000 (first MB of the frame, nothing available) and 1111 (interior).
+        // Rows 0000 (nothing available) and 1111 (interior) in full.
         assert_eq!(g_kiIntra4AvailCount[0], 1);
         assert_eq!(g_kiIntra4AvailCount[15], 9);
         assert_eq!(
@@ -2013,7 +1952,7 @@ mod tests {
     }
 
     /// `PredIntra4x4Mode` returns 2 (DC) when either neighbour is unavailable, and the
-    /// smaller of the two mode ids otherwise (`svc_base_layer_md.cpp:246`).
+    /// smaller of the two mode ids otherwise.
     #[test]
     fn pred_intra4x4_mode_matches_reference() {
         let mut modes = [0i8; 48];

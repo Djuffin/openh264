@@ -4,7 +4,7 @@
 
 //! Decoder bitstream reading and RBSP/EBSP serialization utilities.
 //!
-//! Translated from `codec/decoder/core/inc/bit_stream.h` and `codec/decoder/core/src/bit_stream.cpp`.
+//! `codec/decoder/core/inc/bit_stream.h`, `codec/decoder/core/src/bit_stream.cpp`.
 
 // Error codes matching `codec/decoder/core/inc/error_code.h`
 pub const ERR_NONE: i32 = 0;
@@ -23,41 +23,32 @@ use crate::safe::bits::BsCursor;
 
 /// The reader's slop, in bytes past the logical end of the RBSP.
 ///
-/// `dump_bits_aux` permits the read cursor to sit **one** byte past `pEndBuf` and then
-/// loads **two** bytes there, so the largest index the family can touch is `len + 2`.
-/// The 4-byte initial prime is bounded by the same number, because `InitReadBits`
-/// refuses to start at or past `pEndBuf - iEndOffset`, i.e. at `len - 1` at the
-/// latest. Three bytes of readable slack past the RBSP therefore covers every read
-/// the family can make, at any position, for any operation.
+/// `dump_bits_aux` permits the read cursor to sit one byte past `pEndBuf` and then loads
+/// two bytes there, so the largest index reachable is `len + 2`. The 4-byte initial prime
+/// is bounded by the same number: `InitReadBits` refuses to start at or past
+/// `pEndBuf - iEndOffset`, i.e. at `len - 1` at the latest.
 pub const READER_SLOP: usize = 3;
 
-/// The decoder's raw-bitstream accumulation buffer — replacement for
-/// `SDataBuffer { pHead, pEnd, pStartPos, pCurPos }`.
+/// The decoder's raw-bitstream accumulation buffer — `SDataBuffer { pHead, pEnd,
+/// pStartPos, pCurPos }`.
 ///
-/// Owns the bytes `WelsDecodeBs` accumulates (EPB-stripped NAL payloads) and the
-/// write position. Everything else is **derived at call time**: the readable extent
-/// behind any offset is `buf.len() - start`, computed by
-/// [`window_from`](Self::window_from) against the buffer as it is *now*. Nothing
-/// stores a length the buffer can outgrow.
+/// Owns the EPB-stripped NAL payloads and the write position. The readable extent behind
+/// an offset is `buf.len() - start`, derived at call time by
+/// [`window_from`](Self::window_from), so nothing stores a length the buffer can outgrow.
 ///
-/// The backing store is kept at its full allocated size and zero-filled —
-/// `WelsMalloczHelper`'s semantics: the C allocation was zeroed, and the reader's
-/// slop past the last NAL read those bytes. The slop bytes behind every NAL except
-/// the last are the next NAL's real stream bytes by construction; behind the last
-/// they are the same in-bounds zeroed/stale tail the raw code read. `buf.len()` is
-/// initialized bytes — **never** spare `Vec` capacity.
+/// The backing store is kept at its full allocated size and zero-filled, so the reader's
+/// [`READER_SLOP`] past the last NAL stays in bounds. `buf.len()` is initialized bytes,
+/// never spare `Vec` capacity.
 #[derive(Debug, Default)]
 pub struct RawDataBuffer {
     buf: Vec<u8>,
-    /// The write position — was `pCurPos - pHead`.
+    /// The write position — `pCurPos - pHead`.
     cur: usize,
 }
 
 impl RawDataBuffer {
     /// A zero-filled buffer of `len` bytes — `WelsMalloczHelper`'s allocation, owned.
-    ///
-    /// Fails like the C helper did (a null return became `ERR_INFO_OUT_OF_MEMORY`)
-    /// instead of aborting inside `Vec`'s infallible growth.
+    /// Returns `Err` on allocation failure rather than aborting.
     pub fn try_new_zeroed(len: usize) -> Result<Self, ()> {
         let mut buf = Vec::new();
         buf.try_reserve_exact(len).map_err(|_| ())?;
@@ -72,7 +63,7 @@ impl RawDataBuffer {
         Self { buf, cur }
     }
 
-    /// Allocation size in bytes — was `pEnd - pHead` / `iMaxBsBufferSizeInByte`.
+    /// Allocation size in bytes — `pEnd - pHead` / `iMaxBsBufferSizeInByte`.
     #[inline]
     pub fn len(&self) -> usize {
         self.buf.len()
@@ -83,15 +74,14 @@ impl RawDataBuffer {
         self.buf.is_empty()
     }
 
-    /// The write position — was `pCurPos - pHead`.
+    /// The write position — `pCurPos - pHead`.
     #[inline]
     pub fn cur(&self) -> usize {
         self.cur
     }
 
-    /// Bytes writable at [`cur`](Self::cur) — was `pEnd - pCurPos`, in comparison-safe
-    /// form: `cur <= len` is structural (every mutation preserves it), and if it were
-    /// ever broken the answer is 0, not a wrapped `usize`.
+    /// Bytes writable at [`cur`](Self::cur) — `pEnd - pCurPos`. `cur <= len` is
+    /// structural; a broken invariant saturates to 0 rather than wrapping.
     #[inline]
     pub fn remaining(&self) -> usize {
         debug_assert!(self.cur <= self.buf.len());
@@ -106,10 +96,9 @@ impl RawDataBuffer {
 
     /// Grows the buffer, keeping its contents and zero-filling the new tail.
     ///
-    /// This is `ExpandBsBuffer`'s growth policy, verbatim: the new size is
-    /// `max(src_len * MAX_BUFFERED_NUM, len << 1)`.
-    ///
-    /// Failure maps to the C path (`ERR_INFO_OUT_OF_MEMORY`) rather than aborting.
+    /// `ExpandBsBuffer`'s growth policy: the new size is
+    /// `max(src_len * MAX_BUFFERED_NUM, len << 1)`. Returns `Err` on allocation
+    /// failure.
     pub fn grow(&mut self, src_len: usize) -> Result<(), ()> {
         let new_len = std::cmp::max(
             src_len * crate::decoder::decoder_core::MAX_BUFFERED_NUM,
@@ -118,9 +107,8 @@ impl RawDataBuffer {
         self.grow_to(new_len)
     }
 
-    /// Grows to exactly `new_len` (used to keep `sSavedData` the same size as
-    /// `sRawData`, as `ExpandBsBuffer` did). A `new_len` at or below the current size
-    /// is a no-op, matching the C's grow-only reallocation.
+    /// Grows to exactly `new_len` (keeps `sSavedData` the same size as `sRawData`).
+    /// A `new_len` at or below the current size is a no-op: growth only.
     pub fn grow_to(&mut self, new_len: usize) -> Result<(), ()> {
         if new_len <= self.buf.len() {
             return Ok(());
@@ -133,12 +121,12 @@ impl RawDataBuffer {
     }
 
     /// Appends one NAL payload at the write position, stripping emulation-prevention
-    /// bytes (`00 00 03` → `00 00`) exactly as `WelsDecodeBs`'s copy loop did.
-    /// Returns `(start, len)` of the stripped payload within the buffer.
+    /// bytes (`00 00 03` → `00 00`) as `WelsDecodeBs`'s copy loop does. Returns
+    /// `(start, len)` of the stripped payload within the buffer.
     ///
-    /// The caller has already ensured `remaining() >= payload.len() + 4` (the
-    /// rewind/grow dance in `WelsDecodeBs`); the destination slice is taken once up
-    /// front, so a violated contract panics on the slice take, not byte-by-byte.
+    /// The caller must ensure `remaining() >= payload.len() + 4`; the destination
+    /// slice is taken once up front, so a violated contract panics there rather than
+    /// byte-by-byte.
     pub fn append_ebsp_stripped(&mut self, payload: &[u8]) -> (usize, usize) {
         let start = self.cur;
         let dst = &mut self.buf[start..start + payload.len()];
@@ -162,13 +150,12 @@ impl RawDataBuffer {
     }
 
     /// Zeroes the four reserved bytes at `at` — `pDstNal[iDstIdx .. iDstIdx+4] = 0`,
-    /// which `WelsDecodeBs` writes before **every** `ParseNalHeader` call
-    /// (`decoder.cpp:874` and `:875`). They are the guard bytes a refill is allowed to
-    /// load past an RBSP end *and* the bytes a zero-length NAL's header is read out of.
+    /// which `WelsDecodeBs` writes before every `ParseNalHeader` call
+    /// (`decoder.cpp:874`/`:875`). They are the guard bytes a refill is allowed to load
+    /// past an RBSP end, and the bytes a zero-length NAL's header is read out of.
     ///
-    /// Short-buffer safety: the caller has already ensured `remaining() >= len + 4`
-    /// before appending, so `at + 4 <= len()` holds; the clamp keeps a violated
-    /// contract from panicking where the C wrote through a raw pointer.
+    /// The caller must ensure `remaining() >= len + 4` before appending, so
+    /// `at + 4 <= len()` holds; the clamp keeps a violated contract from panicking.
     #[inline]
     pub fn zero_reserved(&mut self, at: usize) {
         let end = (at + 4).min(self.buf.len());
@@ -177,16 +164,14 @@ impl RawDataBuffer {
         }
     }
 
-    /// **Parse-only's raw append** — `sSavedData`'s half of `WelsDecodeBs`'s
-    /// two-buffer copy, and the one thing
-    /// [`append_ebsp_stripped`](Self::append_ebsp_stripped) must *not* do.
+    /// Parse-only's raw append — `sSavedData`'s half of `WelsDecodeBs`'s two-buffer
+    /// copy, and the one thing [`append_ebsp_stripped`](Self::append_ebsp_stripped)
+    /// must not do.
     ///
-    /// `sRawData` holds the **RBSP**: emulation-prevention bytes are gone, which is
-    /// what every syntax reader below wants and what makes those bytes useless as
-    /// output. Parse-only hands its caller a bitstream to feed to another decoder, so
-    /// it must hand back the **EBSP** — the escaped bytes as they arrived. Upstream
-    /// keeps the second copy in `pSavedData` for exactly this
-    /// (`decoder.cpp:773-778`, `au_parser.cpp:340`/`:375`).
+    /// `sRawData` holds the RBSP, with emulation-prevention bytes stripped, which is
+    /// what the syntax readers want. Parse-only hands its caller a bitstream to feed to
+    /// another decoder, so it must hand back the EBSP — the escaped bytes as they
+    /// arrived — which is what `pSavedData` holds (`au_parser.cpp:340`/`:375`).
     ///
     /// Returns the start offset of the appended bytes — `pNalPos` as an offset.
     pub fn append_raw(&mut self, bytes: &[u8]) -> usize {
@@ -201,8 +186,7 @@ impl RawDataBuffer {
     /// inside the allocation by starting over at the head.
     ///
     /// Answers whether `need` bytes now fit: `false` means the buffer is smaller than
-    /// one NAL and the caller must refuse rather than write. Upstream has no such
-    /// answer — it wraps and writes anyway — so this is the one place the two differ.
+    /// one NAL and the caller must refuse rather than write.
     pub fn wrap_for(&mut self, need: usize) -> bool {
         if self.cur + need > self.buf.len() {
             self.cur = 0;
@@ -216,13 +200,11 @@ impl RawDataBuffer {
         &self.buf
     }
 
-    /// The readable window behind offset `start`: everything from `start` to the end
-    /// of the allocation — was `readable_from`'s `pEnd - p`, now derived from the
-    /// owner at call time. `start <= len` holds for every offset the decoder mints
-    /// ([`append_ebsp_stripped`](Self::append_ebsp_stripped) returns positions inside
-    /// the buffer, and growth never shrinks it); the clamp routes a broken invariant
-    /// to an empty window — every read then fails with `ERR_INFO_READ_OVERFLOW` —
-    /// rather than introducing a panic where the raw code read allocation bytes.
+    /// The readable window behind offset `start`: everything from `start` to the end of
+    /// the allocation, derived from the owner at call time. `start <= len` holds for
+    /// every offset the decoder mints, and growth never shrinks the buffer; the clamp
+    /// routes a broken invariant to an empty window — every read then fails with
+    /// `ERR_INFO_READ_OVERFLOW` — rather than panicking.
     #[inline(always)]
     pub fn window_from(&self, start: usize) -> &[u8] {
         debug_assert!(
@@ -234,17 +216,15 @@ impl RawDataBuffer {
         &self.buf[start.min(self.buf.len())..]
     }
 
-    /// The **RBSP window** for a reader: the first [`BsCursor::len`] bytes of its
-    /// readable window. This is what the CABAC engine reads through: `len` is the
-    /// logical end of the RBSP — the C++ `pBuffEnd` the engine's end ladder measures
-    /// against — so `win.len()` *is* the ladder's selector and the engine computes no
-    /// extent of its own.
+    /// The RBSP window for a reader: the first [`BsCursor::len`] bytes of its readable
+    /// window. This is what the CABAC engine reads through — `len` is the logical end
+    /// of the RBSP (the C++ `pBuffEnd` its end ladder measures against), so `win.len()`
+    /// is the ladder's selector and the engine computes no extent of its own.
     ///
     /// `window.len() >= cursor.len()` holds structurally — `WelsDecodeBs` refuses to
-    /// append a payload without four bytes to spare, EPB stripping only shrinks it,
-    /// and growth only widens the window — so the `min` is dead; the `debug_assert`
-    /// keeps that checkable, and the clamp keeps a violated contract on the error
-    /// path instead of adding a new panic.
+    /// append a payload without four bytes to spare, EPB stripping only shrinks it, and
+    /// growth only widens the window — so the `min` is dead; the clamp keeps a violated
+    /// contract on the error path instead of panicking.
     #[inline(always)]
     pub fn rbsp_window(&self, reader: &BsReader) -> &[u8] {
         let win = self.window_from(reader.start);
@@ -266,22 +246,20 @@ impl RawDataBuffer {
 /// A NAL's read state: where its bytes start in the owning [`RawDataBuffer`], plus
 /// the detached [`BsCursor`].
 ///
-/// `start` is a position — an offset into the owner, which survives the owner's
-/// growth by definition — and every window is derived from the owner at call time.
-/// Consumers take `(buf: &[u8], cursor: &mut BsCursor)`, produced by
-/// [`split`](Self::split).
+/// `start` is an offset into the owner, so it survives the owner's growth; every window
+/// is derived from the owner at call time. Consumers take
+/// `(buf: &[u8], cursor: &mut BsCursor)`, produced by [`split`](Self::split).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BsReader {
     /// Offset of this NAL's payload in the owning [`RawDataBuffer`].
     pub start: usize,
-    /// The position and accumulator. All the arithmetic lives here.
+    /// The position and accumulator.
     pub cursor: BsCursor,
 }
 
 impl BsReader {
-    /// Splits into the two halves the consumers take: the bytes, and the position.
-    /// The window is derived from `raw`, not from stored state, and is exactly as
-    /// wide as the raw reader's was (`pEnd - p`).
+    /// Splits into the two halves the consumers take: the bytes, and the position. The
+    /// window is derived from `raw`, not from stored state.
     #[inline(always)]
     pub fn split<'a>(&'a mut self, raw: &'a RawDataBuffer) -> (&'a [u8], &'a mut BsCursor) {
         (raw.window_from(self.start), &mut self.cursor)
@@ -291,8 +269,7 @@ impl BsReader {
 /// Initializes bitstream reading registers and performs buffer boundary checks.
 ///
 /// Matches `int32_t InitReadBits (PBitStringAux pBitString, intX_t iEndOffset)` in
-/// `bit_stream.cpp`; the body is [`BsCursor::init_read_bits`], which does the same
-/// comparison in offset arithmetic.
+/// `bit_stream.cpp`; the body is [`BsCursor::init_read_bits`].
 pub fn InitReadBits(buf: &[u8], cursor: &mut BsCursor, iEndOffset: isize) -> i32 {
     match cursor.init_read_bits(buf, iEndOffset) {
         Ok(()) => ERR_NONE,
@@ -303,10 +280,9 @@ pub fn InitReadBits(buf: &[u8], cursor: &mut BsCursor, iEndOffset: isize) -> i32
 /// Initializes the bit reader structure with an input RBSP buffer.
 ///
 /// Matches `int32_t DecInitBits (PBitStringAux pBitString, const uint8_t* kpBuf, const int32_t kiSize)`
-/// in `bit_stream.cpp`. The body is [`BsCursor::init`] over the window derived from
-/// the owning buffer at `start` — was `readable_from`'s `pEnd - p`, now
-/// [`RawDataBuffer::window_from`]. The `(kiSize + 7) >> 3 <= 0` case returns
-/// [`ERR_INFO_INVALID_ACCESS`] from `init`.
+/// in `bit_stream.cpp`. The body is [`BsCursor::init`] over the window derived from the
+/// owning buffer at `start` ([`RawDataBuffer::window_from`]). The
+/// `(kiSize + 7) >> 3 <= 0` case returns [`ERR_INFO_INVALID_ACCESS`] from `init`.
 pub fn DecInitBits(pReader: &mut BsReader, raw: &RawDataBuffer, start: usize, kiSize: i32) -> i32 {
     match BsCursor::init(raw.window_from(start), kiSize) {
         Ok(cursor) => {
@@ -349,10 +325,8 @@ pub fn rbsp_to_ebsp(src: &[u8], dst: &mut [u8]) -> usize {
 mod tests {
     use super::*;
 
-    /// The reader reads `READER_SLOP` bytes past the RBSP it is handed, and the
-    /// decoder's raw buffer always has the slack (`WelsDecodeBs` sizes every payload
-    /// with four bytes to spare). These tests supply it rather than relying on the
-    /// reader not reaching that far.
+    /// The reader reads [`READER_SLOP`] bytes past the RBSP it is handed; these tests
+    /// supply the slack the decoder's raw buffer always has.
     fn with_slop(payload: &[u8]) -> Vec<u8> {
         let mut v = payload.to_vec();
         v.extend_from_slice(&[0u8; READER_SLOP]);
@@ -370,19 +344,17 @@ mod tests {
         assert_eq!(bs.cursor.cur_bits(), 0xAABBCCDD);
         assert_eq!(bs.cursor.left_bits(), -16);
         assert_eq!(bs.cursor.bits(), 64);
-        // `pCurBuf`/`pEndBuf` are `pos`/`len` now — the same two numbers, as offsets.
         assert_eq!(bs.cursor.pos(), 4);
         assert_eq!(bs.cursor.len(), 8);
         assert_eq!(bs.start, 0);
-        // And the derived window is exactly the declared footprint.
+        // The derived window is exactly the declared footprint plus the slop.
         assert_eq!(raw.window_from(bs.start).len(), 8 + READER_SLOP);
     }
 
     #[test]
     fn test_dec_init_bits_empty_window() {
-        // A window with no bytes fails `init`'s 4-byte prime with READ_OVERFLOW
-        // rather than reading anything, and a non-positive size keeps
-        // INVALID_ACCESS parity.
+        // A window with no bytes fails `init`'s 4-byte prime with READ_OVERFLOW rather
+        // than reading anything; a non-positive size gives INVALID_ACCESS.
         let raw = RawDataBuffer::default();
         let mut bs = BsReader::default();
         assert_eq!(DecInitBits(&mut bs, &raw, 0, 32), ERR_INFO_READ_OVERFLOW);
@@ -403,12 +375,9 @@ mod tests {
         assert_eq!(raw.cur(), 0);
     }
 
-    /// Grows the buffer mid-AU and asserts parse continuity. A reader over an early
-    /// NAL is mid-read when a later NAL forces growth; because the reader stores an
-    /// offset and every window is derived from the owner at call time, the values it
-    /// decodes after the growth are identical to a control run with no growth.
-    /// Growth genuinely reallocates: the initial size is small and the appended NAL
-    /// is bigger than the whole buffer.
+    /// A reader mid-read over an early NAL keeps decoding the same values when a later
+    /// NAL forces the buffer to grow, because it stores an offset and derives its window
+    /// from the owner at call time.
     #[test]
     fn p5_reader_survives_growth_mid_au() {
         // A payload of ascending bytes: ue(v) reads below give known values.
@@ -429,9 +398,9 @@ mod tests {
             }
         }
 
-        // Growth run: same payload at the same offset, but the buffer is grown —
-        // twice, the second time by more than 8x so `grow`'s `max` takes each arm
-        // once — after the reader has consumed part of the stream.
+        // Growth run: same payload at the same offset, grown twice after the reader has
+        // consumed part of the stream — the second time by more than 8x, so `grow`'s
+        // `max` takes each arm once.
         let mut raw = RawDataBuffer::try_new_zeroed(48).unwrap();
         let (start, len) = raw.append_ebsp_stripped(&payload);
         assert_eq!(len, payload.len());
@@ -450,11 +419,9 @@ mod tests {
         assert_eq!(raw.len(), 128);
         raw.grow(20).unwrap(); // len << 1 = 256 > 160 = 20 * 8
         assert_eq!(raw.len(), 256);
-        // Whether the allocator moves the block or expands it in place is its
-        // business (release builds have been seen doing either for this pattern);
-        // the property pinned here — reads through an offset-based reader are
-        // identical across the growth — must hold in both cases, so the address is
-        // deliberately not asserted.
+        // The allocator may move the block or expand it in place, so the address is
+        // deliberately not asserted; the property is that reads through an offset-based
+        // reader are identical across the growth either way.
         for _ in 0..8 {
             let (buf, cursor) = rd.split(&raw);
             vals.push(cursor.get_ue(buf).unwrap());

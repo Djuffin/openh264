@@ -4,31 +4,19 @@
 //! The codec trace, shared by both codecs.
 //!
 //! `codec/common/inc/utils.h` declares `SLogContext` and `WelsLog`;
-//! `codec/common/inc/welsCodecTrace.h` declares the `welsCodecTrace` object that
-//! the two boundary classes own; `codec/api/wels/codec_api.h` declares
-//! `WelsTraceCallback`, the function the *caller* installs. Both codecs include
-//! all three in C++, so this port has one copy of each here rather than one per
-//! module.
+//! `codec/common/inc/welsCodecTrace.h` declares the `welsCodecTrace` object the two
+//! boundary classes own; `codec/api/wels/codec_api.h` declares `WelsTraceCallback`,
+//! the function the caller installs.
 //!
-//! **The one structural departure from the reference.** In C++
-//! `SLogContext::pfLog` is `StaticCodecTrace` and `pLogCtx` is *the
-//! `welsCodecTrace` object itself*: the sink is a trampoline that finds the user's
-//! callback by following a back-pointer, which is what lets a `SetOption` after
-//! `Initialize` reach the copy of `SLogContext` that lives inside the codec
-//! context. That back-pointer cannot be written here. The trace object is a member
-//! of the boundary object, every entry point reaches the boundary object through
-//! `&mut`, and a `&mut` retag of the owner invalidates any pointer previously
-//! derived from the member.
+//! `SLogContext` carries what the sink needs rather than a back-pointer to the trace
+//! object: the trace object is a member of the boundary object, and a `&mut` retag of
+//! the owner invalidates any pointer derived from a member. It holds the user's
+//! callback, the user's context, the instance address for the message tag, and the
+//! level to filter at. A later `SetOption` reaches a codec context's copy by
+//! re-stamping that copy, one line at each of the six option arms.
 //!
-//! So `SLogContext` carries what the sink needs instead of a route to it: the
-//! user's callback, the user's context, the instance address for the message tag,
-//! and the level to filter at. The indirection the back-pointer bought — a later
-//! `SetOption` reaching the context's copy — is bought instead by *re-stamping*
-//! that copy when the option is set, which is one line at each of the six option
-//! arms.
-//!
-//! **The default sink is `welsStderrTrace` at `WELS_LOG_WARNING`, which is
-//! upstream's.** A caller who wants silence installs a quiet callback.
+//! The default sink is `welsStderrTrace` at `WELS_LOG_WARNING`; a caller who wants
+//! silence installs a quiet callback.
 
 use std::ffi::CString;
 
@@ -36,14 +24,10 @@ pub use crate::api::codec_api::{TraceUserCtx, WelsTraceCallback};
 
 /// `codec_app_def.h:323-331` — the trace levels, and `WELS_LOG_DEFAULT`.
 ///
-/// **These are a bit mask upstream, not consecutive integers**: `1 << 0 .. 1 << 5`.
-/// The level is the second argument of the caller's own trace callback and the
-/// value `SetOption(ENCODER_OPTION_TRACE_LEVEL, ..)` is compared against
-/// (`m_iTraceLevel < iLevel`, `welsCodecTrace.cpp:76`).
-///
-/// The threshold keeps working because the values stay monotonic, and nothing in
-/// either codec does arithmetic on them — they are compared and matched only.
-/// `WELS_LOG_LEVEL_COUNT` is a *count*, not a mask member, and stays 6.
+/// A bit mask, not consecutive integers: `1 << 0 .. 1 << 5`. The level is the second
+/// argument of the caller's trace callback and the value the trace-level option is
+/// compared against (`m_iTraceLevel < iLevel`). The values are only compared and
+/// matched, never arithmetic. `WELS_LOG_LEVEL_COUNT` is a count, not a mask member.
 pub const WELS_LOG_QUIET: i32 = 0;
 pub const WELS_LOG_ERROR: i32 = 1 << 0;
 pub const WELS_LOG_WARNING: i32 = 1 << 1;
@@ -54,19 +38,15 @@ pub const WELS_LOG_RESV: i32 = 1 << 5;
 pub const WELS_LOG_LEVEL_COUNT: i32 = 6;
 pub const WELS_LOG_DEFAULT: i32 = WELS_LOG_WARNING;
 
-/// `utils.h:45`. The reference truncates both the tag and the formatted message at
-/// this width; so does [`WelsLog`].
+/// `utils.h:45`. Both the tag and the formatted message are truncated at this width.
 pub const MAX_LOG_SIZE: usize = 1024;
 
 /// `TagLogContext` — `utils.h:53`.
 ///
-/// The copy that travels: `WelsInitEncoderExt` stores one in `sWelsEncCtx::sLogCtx`
-/// and the decoder's `WelsDecoderDefaults` stores one in
-/// `SWelsDecoderContext::sLogCtx`, so that code far below the boundary can log
-/// without reaching back up to it. See the module comment for why this one carries
-/// the callback rather than a route to the object that holds it.
+/// The copy that travels: both codec contexts store one in `sLogCtx`, so code far
+/// below the boundary can log without reaching back up to it.
 ///
-/// The two callback fields are crate-private — that is what keeps [`WelsLog`] safe:
+/// The two callback fields are crate-private, which is what keeps [`WelsLog`] safe:
 ///
 /// ```compile_fail,E0451
 /// # unsafe extern "C" fn sink(_: *mut std::ffi::c_void, _: i32, _: *const std::ffi::c_char) {}
@@ -76,32 +56,24 @@ pub const MAX_LOG_SIZE: usize = 1024;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SLogContext {
-    /// The callback the caller installed, or `None` — the reference's
-    /// `pfLog`/`m_fpTrace` pair collapsed into the half that is observable.
+    /// The callback the caller installed, or `None`.
     pub(crate) pfLog: WelsTraceCallback,
-    /// **C-ABI**: the caller's opaque context, handed back to `pfLog` untouched.
-    /// Never dereferenced by this crate.
+    /// The caller's opaque context, handed back to `pfLog` untouched. Never
+    /// dereferenced by this crate.
     pub(crate) pLogCtx: TraceUserCtx,
-    /// The boundary object's address, for the message tag's `this = 0x…` only.
-    /// An address and not a pointer: `utils.cpp:51` formats it with `%p` and does
-    /// nothing else with it.
+    /// The boundary object's address, for the message tag's `this = 0x…` only. An
+    /// address and not a pointer: it is formatted with `%p` and used for nothing else.
     pub pCodecInstance: usize,
-    /// The level to filter at. `welsCodecTrace::CodecTrace` holds this in the
-    /// trace object and reaches it through the back-pointer; here it travels with
-    /// the rest.
+    /// The level to filter at.
     pub iTraceLevel: i32,
-    /// **Explicit tail padding.** `iTraceLevel` took the size to 28 and the
-    /// alignment took it back to 32. Always zero.
+    /// Explicit tail padding: `iTraceLevel` takes the size to 28 and alignment takes
+    /// it to 32. Always zero.
     pub _reserved: u32,
 }
 
 impl Default for SLogContext {
-    /// **All zeros, deliberately.** In C++ this struct is a member of a context the
-    /// codec `memset`s, and the level it filters at lives in the `welsCodecTrace`
-    /// the back-pointer reaches — so a zeroed `SLogContext` is the reference's own
-    /// initial state. `WELS_LOG_DEFAULT` is set where the reference sets
-    /// it, in [`welsCodecTrace`]'s constructor, and travels from there by the
-    /// stamp.
+    /// All zeros. `WELS_LOG_DEFAULT` is set in [`welsCodecTrace`]'s constructor and
+    /// travels from there by the stamp.
     fn default() -> Self {
         Self {
             pfLog: None,
@@ -116,12 +88,9 @@ impl Default for SLogContext {
 /// `void WelsLog (SLogContext*, int32_t iLevel, const char* kpFmt, ...)` —
 /// `utils.cpp:51`, with `welsCodecTrace::CodecTrace`'s level filter folded in.
 ///
-/// The reference splits the work: `WelsLog` builds the `[OpenH264] this = …, Error:`
-/// tag and hands the *format string* plus a `va_list` to the sink, and the sink
-/// filters on level and formats. Rust has no portable `va_list`, so every call site
-/// in this port formats first and passes a `&str`; the filter and the tag are both
-/// here, and the observable — one call to the caller's callback per delivered
-/// message, with the level and the tagged text — is the same.
+/// Call sites format the message themselves and pass a `&str`; the level filter and
+/// the `[OpenH264] this = …` tag are both applied here, and the caller's callback is
+/// invoked once per delivered message.
 pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
     let Some(pfLog) = ctx.pfLog else {
         return;
@@ -137,13 +106,9 @@ pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
         WELS_LOG_DEBUG => "Debug:",
         _ => "Detail:",
     };
-    // The reference's tag is `"[OpenH264] this = 0x%p, Error:"`, and `%p` prints its
-    // own `0x` on every platform this port targets — so upstream's line really does
-    // read `this = 0x0x16b5d7000`. The doubled prefix is not reproduced.
     let mut line = format!("[OpenH264] this = 0x{:x}, {tag}{msg}", ctx.pCodecInstance);
-    // `WelsSnprintf`/`WelsStrcat` bound the reference's tag and message at
-    // `MAX_LOG_SIZE` each; one bound over the whole line is the same guarantee for
-    // a caller whose buffer is `MAX_LOG_SIZE`.
+    // The whole line is bounded at `MAX_LOG_SIZE`, which is the same guarantee for a
+    // caller whose buffer is that size.
     if line.len() >= MAX_LOG_SIZE {
         let mut end = MAX_LOG_SIZE - 1;
         while !line.is_char_boundary(end) {
@@ -151,9 +116,7 @@ pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
         }
         line.truncate(end);
     }
-    // A message with an interior NUL cannot be a C string; the reference cannot
-    // produce one (its inputs are `printf` formats) and neither can this port's call
-    // sites, so this is a guard and not a policy.
+    // A message with an interior NUL cannot be a C string; no call site produces one.
     let Ok(cline) = CString::new(line) else {
         return;
     };
@@ -162,27 +125,19 @@ pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
 
 /// `welsCodecTrace` — `welsCodecTrace.h:41`.
 ///
-/// The reference's four members are `m_iTraceLevel`, `m_fpTrace`, `m_pTraceCtx` and
-/// `m_sLogCtx`, the first three of which the sink reaches through `m_sLogCtx`'s
-/// back-pointer. With the back-pointer gone (module comment) they *are*
-/// `m_sLogCtx`, and this object is the one place the caller's settings live before
-/// they are stamped into a codec context.
+/// The one place the caller's trace settings live before they are stamped into a
+/// codec context.
 #[derive(Debug)]
 pub struct welsCodecTrace {
     pub m_sLogCtx: SLogContext,
 }
 
-/// `welsStderrTrace` — `welsCodecTrace.cpp:49`, which is one `fprintf`.
+/// `welsStderrTrace` — `welsCodecTrace.cpp:49`, one `fprintf`.
 ///
-/// The default sink, installed by the constructor below. It is an `extern "C" fn`
-/// because it occupies the same slot a caller's own callback does: `SetTraceCallback`
-/// replaces it, and `GetOption(*_TRACE_CALLBACK)` hands its address back, so it has
-/// to be the same type as anything a consumer could install.
-///
-/// The default trace sink itself lives in the C-ABI island — see
-/// [`crate::api::codec_api::welsStderrTrace`]. Re-exported here because this is the
-/// module every caller reaches it through, and because `SLogContext`'s own default
-/// names it.
+/// The default sink, installed by the constructor below. An `extern "C" fn` because it
+/// occupies the same slot a caller's own callback does: `SetTraceCallback` replaces it
+/// and `GetOption(*_TRACE_CALLBACK)` hands its address back. Defined in the C-ABI
+/// island — [`crate::api::codec_api::welsStderrTrace`] — and re-exported here.
 pub use crate::api::codec_api::welsStderrTrace;
 
 impl Default for welsCodecTrace {

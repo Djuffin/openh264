@@ -4,7 +4,7 @@
 //
 // This file has no C++ counterpart.
 
-//! The **reconstruction seam**.
+//! The reconstruction seam.
 //!
 //! Every multi-threaded worker of the encoder writes into *one* reconstruction
 //! picture: the three pixel planes, and the four per-macroblock side arrays
@@ -16,11 +16,11 @@
 //! side-array borrow is a `Unique` retag over the whole array whichever single
 //! index it goes on to write.
 //!
-//! So the picture is reached, for the fork's whole scope, through **one shared
-//! interior-mutable view** built before the fork from the picture's exclusive
+//! So the picture is reached, for the fork's whole scope, through one shared
+//! interior-mutable view built before the fork from the picture's exclusive
 //! borrow. Consumers hold `&RecPicView` and write through `&self`.
 //!
-//! # The soundness argument, stated once
+//! # The soundness argument
 //!
 //! [`RecPicView::build`] takes `&mut SPicture`, so for the view's lifetime
 //! nothing else may borrow the picture. From it the view captures, per
@@ -29,19 +29,16 @@
 //! (`SharedCells::cells`, the one place raw parts cross into cell land), so no
 //! access is a child of any other and none of them can pop a sibling.
 //!
-//! Writes then go through [`Cell`] with **no synchronisation at all**, which is
+//! Writes then go through [`Cell`] with no synchronisation at all, which is
 //! sound **iff** no two workers touch the same byte.
 //!
-//! Publication to post-join readers is the scope join, which is a
-//! happens-before edge: everything a worker wrote before the fork's `scope`
-//! returns — the worker pool's (`worker_pool.rs`), which keeps
-//! `std::thread::scope`'s guarantee — is visible to whatever reads the picture
-//! after it.
-//!
-//! # What is *not* claimed
+//! Publication to post-join readers is the scope join, a happens-before edge:
+//! everything a worker wrote before the fork's `scope` returns — the worker
+//! pool's (`worker_pool.rs`), which keeps `std::thread::scope`'s guarantee — is
+//! visible to whatever reads the picture after it.
 //!
 //! The view does not make overlapping writes safe, and it does not check
-//! disjointness at run time — bounds are checked, ownership is not. It is
+//! disjointness at run time: bounds are checked, ownership is not. It is
 //! exactly as sound as the slice partition.
 
 use std::cell::Cell;
@@ -52,28 +49,24 @@ use crate::safe::plane::{RowBuf, SampleCursor};
 
 /// The one place a captured base/length pair becomes a cell slice.
 ///
-/// Held by value in every view below, so the whole seam has exactly one
-/// `UnsafeCell`-crossing accessor (`SharedCells::cells`) and exactly one place
-/// raw parts are captured (`SharedCells::from_parts`, which
-/// `SharedCells::capture` and the plane build both route through).
+/// Held by value in every view below, so the seam has exactly one
+/// `UnsafeCell`-crossing accessor (`SharedCells::cells`) and exactly one place raw
+/// parts are captured (`SharedCells::from_parts`).
 #[derive(Debug)]
 pub struct SharedCells<T: Copy> {
-    /// The allocation's base, read out of the `Vec` header at capture time
-    /// (never through a slice — a `&mut [T]` would be a `Unique` retag over the
-    /// whole buffer, which is the bug this type exists to avoid).
+    /// The allocation's base, read out of the `Vec` header at capture time — never
+    /// through a slice, since `&mut [T]` is a `Unique` retag over the whole buffer.
     base: *mut T,
     len: usize,
 }
 
 impl<T: Copy> SharedCells<T> {
-    /// **The one place raw parts are captured.** Everything else in the module
-    /// routes through here.
+    /// The one place raw parts are captured; everything else routes through here.
     ///
     /// `base` must be the allocation's own root address, read out of a header
     /// (`Vec::as_mut_ptr`, `PaddedPlane::root_ptr`) and **never** through a
     /// slice: `&mut [T]` is a `Unique` retag over the whole buffer, so a base
-    /// taken that way is a child that the next such borrow pops. That is the
-    /// same trap `PaddedPlane::root_ptr` documents, one level up.
+    /// taken that way is a child that the next such borrow pops.
     #[inline]
     fn from_parts(base: *mut T, len: usize) -> Self {
         Self { base, len }
@@ -85,8 +78,8 @@ impl<T: Copy> SharedCells<T> {
         Self::from_parts(v.as_mut_ptr(), v.len())
     }
 
-    /// An empty capture — the port's spelling of the null the C++ leaves where
-    /// a picture was allocated without `bNeedMbInfo` (`picture_handle.cpp:104`).
+    /// An empty capture, for a picture allocated without `bNeedMbInfo`
+    /// (`picture_handle.cpp:104`).
     #[inline]
     fn empty() -> Self {
         Self::from_parts(std::ptr::NonNull::dangling().as_ptr(), 0)
@@ -94,14 +87,12 @@ impl<T: Copy> SharedCells<T> {
 
     /// The captured storage, as cells.
     ///
-    /// **Why the `unsafe` inside is sound.** The base/length pair was taken at
-    /// [`from_parts`](Self::from_parts) from
-    /// storage borrowed exclusively at that moment — a `&mut Vec<T>` through
-    /// [`capture`](Self::capture), or a `PaddedPlane`'s `root_ptr`/`buf_len` pair
-    /// — and the module contract keeps that exclusive borrow the last one for the
-    /// view's whole lifetime, so the range is allocated and no `&mut` to it
-    /// exists. A `Cell` retag is `SharedReadWrite`, which performs no memory
-    /// access, so this call cannot itself race.
+    /// The base/length pair was taken at [`from_parts`](Self::from_parts) from storage
+    /// borrowed exclusively at that moment — a `&mut Vec<T>` through
+    /// [`capture`](Self::capture), or a `PaddedPlane`'s `root_ptr`/`buf_len` pair — and
+    /// the module contract keeps that exclusive borrow the last one for the view's whole
+    /// lifetime, so the range is allocated and no `&mut` to it exists. A `Cell` retag is
+    /// `SharedReadWrite`, which performs no memory access, so this call cannot race.
     #[allow(unsafe_code)]
     #[inline]
     fn cells(&self) -> &[Cell<T>] {
@@ -119,19 +110,16 @@ impl<T: Copy> SharedCells<T> {
     }
 }
 
-/// **The seam's one promise.**
+/// The seam's one promise.
 ///
 /// A captured base address is `!Sync` by inference, and every view in this
 /// module is built on one — so this single `impl` is what lets a worker hold
 /// `&RecPicView` across the fork's `scope`. What makes the sharing sound is not
 /// the `impl`: each worker touches only its own macroblocks' bytes and entries.
-/// The `impl` is where that claim is written down, and it is placed on the type
-/// that holds the raw parts rather than on the picture view, because the parts
-/// are what is being promised about.
 ///
-/// Note what does **not** become `Sync`: [`RecCursor`] holds `&[Cell<u8>]` and
-/// stays thread-local by inference, so a worker must make its own from the
-/// shared plane rather than being handed one.
+/// [`RecCursor`] does **not** become `Sync`: it holds `&[Cell<u8>]` and stays
+/// thread-local by inference, so a worker must make its own from the shared plane
+/// rather than being handed one.
 #[allow(unsafe_code)]
 unsafe impl<T: Copy> Sync for SharedCells<T> {}
 
@@ -153,18 +141,17 @@ fn idx(center: usize, dx: isize, dy: isize, stride: usize) -> usize {
 }
 
 impl SharedPlane {
-    /// The one constructor, and **the one place the stride bound is checked**.
+    /// The one constructor, and the one place the stride bound is checked.
     ///
     /// `stride` must fit in a `u32`, for the reason
     /// [`PlaneCursor::new`](crate::safe::plane::PlaneCursor::new) gives: it is what
     /// makes `y * stride` provably unable to wrap, and so what lets
     /// [`RefSamples::span`](crate::safe::plane::RefSamples::span) narrow the stride
     /// and the compiler drop a block's per-row bounds checks. Every picture line size
-    /// in the codec is an `int32_t` in the C++, so nothing real is ruled out.
+    /// in the codec is an `int32_t`, so nothing real is ruled out.
     ///
-    /// Checked **here, per plane**, rather than in [`cursor`](Self::cursor): a plane
-    /// is built three times per picture view and a cursor is built several times per
-    /// macroblock, and the invariant is the plane's either way.
+    /// Checked here, per plane, rather than in [`cursor`](Self::cursor): a cursor is
+    /// built several times per macroblock, and the invariant is the plane's either way.
     ///
     /// # Panics
     /// If `stride > u32::MAX`.
@@ -205,11 +192,8 @@ impl SharedPlane {
     /// A cursor anchored at logical `(x, y)` — the shared analogue of
     /// `PaddedPlane::cursor_mut`, and the type the reconstruction kernels take.
     ///
-    /// The stride bound the spans rely on is the plane's, and [`new`](Self::new)
-    /// checks it — a cursor is built several times per macroblock and could not
-    /// afford to re-check it. See
-    /// [`PlaneCursor::new`](crate::safe::plane::PlaneCursor::new) for what the bound
-    /// buys.
+    /// The stride bound the spans rely on is the plane's, checked in [`new`](Self::new);
+    /// see [`PlaneCursor::new`](crate::safe::plane::PlaneCursor::new) for what it buys.
     #[inline]
     pub fn cursor(&self, x: isize, y: isize) -> RecCursor<'_> {
         debug_assert!(
@@ -226,11 +210,10 @@ impl SharedPlane {
 
 /// A roving anchor into a [`SharedPlane`], addressed in offsets from its centre.
 ///
-/// Shaped after `PlaneCursorMut` so a converted kernel reads the same, with one
-/// difference that is the point of the type: **`set`/`write_row` take `&self`**.
-/// The cursor value itself is owned by whoever made it, so a kernel may still
-/// take `&mut RecCursor` and advance it; what it may never do is hand out a
-/// `&mut [u8]` into the plane.
+/// Shaped after `PlaneCursorMut`, with one difference that is the point of the
+/// type: **`set`/`write_row` take `&self`**. The cursor value itself is owned by
+/// whoever made it, so a kernel may take `&mut RecCursor` and advance it; what it
+/// may never do is hand out a `&mut [u8]` into the plane.
 #[derive(Debug, Clone, Copy)]
 pub struct RecCursor<'a> {
     cells: &'a [Cell<u8>],
@@ -266,11 +249,9 @@ impl<'a> RecCursor<'a> {
     /// `h` consecutive rows of `N` samples each, starting at `(dx0, dy0)` — the
     /// cell mirror of [`PlaneCursor::row_windows`](crate::safe::plane::PlaneCursor::row_windows).
     ///
-    /// **Why this can lend where [`row`](Self::row) cannot.** `row` returns by
-    /// value because a shared view cannot hand out `&[u8]` into its cells. It can
-    /// hand out `&[Cell<u8>]`, though — that is the point of a cell — so the block
-    /// walk keeps the shape `PlaneCursor::row_windows` was built for: **one bounds
-    /// check per block per side**, not two per row.
+    /// Where [`row`](Self::row) must return by value, this can lend: a shared view
+    /// cannot hand out `&[u8]` into its cells, but it can hand out `&[Cell<u8>]`, so
+    /// the block walk keeps **one bounds check per block per side**, not two per row.
     ///
     /// # Panics
     /// If the block leaves the buffer, at the first slicing.
@@ -292,13 +273,10 @@ impl<'a> RecCursor<'a> {
     /// the stride to walk it by — the same span [`row_windows`](Self::row_windows)
     /// carves up, handed over whole.
     ///
-    /// For a kernel that does its own address arithmetic. `row_windows` re-slices
-    /// per row, which costs a bounds check each and, because `chunks` divides by
-    /// a run-time stride, a `div` to count them; a kernel that strides through
-    /// the span itself pays neither. The returned slice is exactly
-    /// `(h - 1) * stride + w` bytes, so row `y` column `x` is at `y * stride + x`
-    /// for every `y < h` and `x < w`, and that is the invariant an `unsafe`
-    /// caller may rely on.
+    /// For a kernel that does its own address arithmetic, where `row_windows` re-slices
+    /// per row. The returned slice is exactly `(h - 1) * stride + w` bytes, so row `y`
+    /// column `x` is at `y * stride + x` for every `y < h` and `x < w`, and that is the
+    /// invariant an `unsafe` caller may rely on.
     ///
     /// # Panics
     /// If the block leaves the buffer.
@@ -312,11 +290,9 @@ impl<'a> RecCursor<'a> {
     /// Writes `N` samples into row `dy` starting at `dx0` — **one store, not `N`**.
     ///
     /// `Cell::set` is a plain write and the row's length is a constant, so the `N`
-    /// stores merge into one `N`-byte vector store; `examples/simd_probe.rs`'s
-    /// `probe_write_row_16` is a bounds check and a single `str q0`. That is the whole
-    /// reason [`PlaneSamples::set_row_n`](crate::safe::plane::PlaneSamples::set_row_n)
-    /// is overridden onto this rather than left on the trait's per-sample default,
-    /// which is what every line the deblocking kernels write used to cost.
+    /// stores merge into one `N`-byte vector store; that is why
+    /// [`PlaneSamples::set_row_n`](crate::safe::plane::PlaneSamples::set_row_n) is
+    /// overridden onto this rather than left on the trait's per-sample default.
     ///
     /// The seam's bulk write wherever a destination row is reached on its own:
     /// [`copy_rows_shared`], and `set_row_n` for the deblocking kernels.
@@ -340,12 +316,11 @@ impl<'a> RecCursor<'a> {
     /// If `stride` exceeds `u32::MAX`; see
     /// [`PlaneCursor::new`](crate::safe::plane::PlaneCursor::new).
     ///
-    /// `Cell::from_mut(..).as_slice_of_cells()` is the standard library's own door
-    /// from an exclusive borrow to shared-mutable cells. It is what lets a per-worker
-    /// scratch array on `SMbCache` feed the very kernel a shared picture plane feeds,
-    /// so a dispatch slot needs **one** operand type rather than two — which a
-    /// function-pointer table cannot express any other way, being unable to be
-    /// generic.
+    /// `Cell::from_mut(..).as_slice_of_cells()` is the standard library's door from an
+    /// exclusive borrow to shared-mutable cells. It lets a per-worker scratch array on
+    /// `SMbCache` feed the very kernel a shared picture plane feeds, so a dispatch slot
+    /// needs **one** operand type rather than two — which a function-pointer table
+    /// cannot express otherwise, being unable to be generic.
     #[inline]
     pub fn over_owned(buf: &'a mut [u8], center: usize, stride: usize) -> Self {
         assert!(stride <= u32::MAX as usize, "stride {stride} exceeds u32");
@@ -392,12 +367,9 @@ impl<'a> CellSpan<'a> {
     /// Cuts the `w`x`h` block at `start` out of `cells`.
     ///
     /// The length and the row offsets are computed from **one** narrowed stride, which
-    /// is what ties them together for the compiler; see
+    /// is what ties them together for the compiler; the narrowing is unchecked because
+    /// the bound is a cursor invariant, asserted where a cursor is made. See
     /// [`PlaneSpan::cut`](crate::safe::plane::PlaneSpan).
-    ///
-    /// The narrowing is unchecked here for the reason
-    /// [`PlaneSpan::cut`](crate::safe::plane::PlaneSpan) gives: the bound is a cursor
-    /// invariant, asserted where a cursor is made.
     ///
     /// # Panics
     /// If the block leaves `cells`.
@@ -423,8 +395,8 @@ impl<'a> CellSpan<'a> {
     /// Cells are writable through a shared reference, so one span type serves a
     /// kernel that reads and one that writes; what the seam withholds is `&mut [u8]`,
     /// and this cannot produce it. Row `y` is at `y * stride` of the *same* narrowed
-    /// stride the cut used, which is what lets the compiler place it inside the span
-    /// and drop the check — see [`RefSamples::span`](crate::safe::plane::RefSamples::span).
+    /// stride the cut used, which lets the compiler place it inside the span and drop
+    /// the check.
     ///
     /// # Panics
     /// If the row leaves the span, which a caller writing the block the span was cut
@@ -472,10 +444,8 @@ impl crate::safe::plane::PlaneSamples for RecCursor<'_> {
         RecCursor::set(self, dx, dy, v)
     }
 
-    /// **The override that matters.** The trait's default is a `set` per sample, and
-    /// on this cursor that is `N` bounds-checked cell stores — which is what every
-    /// line the deblocking kernels write used to cost. [`RecCursor::write_row`] is
-    /// one store; see its doc for why the array reference is what buys that.
+    /// The trait's default is a `set` per sample, which on this cursor is `N`
+    /// bounds-checked cell stores; [`RecCursor::write_row`] is one store.
     #[inline]
     fn set_row_n<const N: usize>(&mut self, dy: isize, dx0: isize, val: &[u8; N]) {
         RecCursor::write_row::<N>(self, dy, dx0, val)
@@ -574,22 +544,17 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
 /// of its rows, so `&mut [u8]` over it would claim the neighbouring slice's
 /// columns as well. Rows go in by value instead.
 ///
-/// Every one of the reconstruction copy sites has an *arena* source — the
-/// macroblock cache's `sSkipMb`, `sMemPredMb` or `sMemPredBlk4`, all plain owned
-/// arrays, and all **packed at `W`**, which is why the source is a slice rather than
-/// a second cursor and why it carries no stride of its own.
-///
-/// # Two checks, not two per row
+/// Every reconstruction copy site has an *arena* source — the macroblock cache's
+/// `sSkipMb`, `sMemPredMb` or `sMemPredBlk4`, all plain owned arrays and all **packed
+/// at `W`**, which is why the source is a slice rather than a second cursor and carries
+/// no stride of its own.
 ///
 /// The height is a const parameter and both operands are cut **once**: `W * H` bytes
 /// of the source, and `(H - 1) * stride + W` cells of the destination through
 /// [`RecCursor::block_span`]. Inside, row `y` is at `y * W` and `y * stride`, and with
 /// the destination stride narrowed to a `u32` — a cursor invariant, asserted where a
-/// cursor is made — the compiler can place every one of those rows inside its cut and
-/// drops the per-row checks. It is the argument
-/// [`PlaneSpan::cut`](crate::safe::plane::PlaneSpan) makes, applied to a copy whose
-/// height is known: at `h` as a run-time argument nothing follows from `y < h` and the
-/// checks stay, which is what these sixteen rows used to pay.
+/// cursor is made — the compiler places every one of those rows inside its cut and
+/// drops the per-row checks.
 ///
 /// # Panics
 /// If `src` is shorter than `W * H`, or the block runs off the plane. Both are
@@ -611,9 +576,8 @@ pub fn copy_block_to_view<const W: usize, const H: usize>(src: &[u8], dst: &RecC
 /// writable: `sMvList`, `pRefMbQp`, `pMbSkipSad`, `uiRefMbType`.
 ///
 /// Each worker writes only its own macroblocks' entries, so the index sets are
-/// disjoint for the same reason the pixel sets are — but a `&mut Vec<T>` says
-/// nothing of the kind, which is why these are here beside the planes rather
-/// than left on the `&mut SPicture` route.
+/// disjoint for the same reason the pixel sets are — but a `&mut Vec<T>` says nothing
+/// of the kind, which is why these sit beside the planes.
 #[derive(Debug)]
 pub struct SharedMbArray<T: Copy> {
     cells: SharedCells<T>,
@@ -648,8 +612,7 @@ impl<T: Copy> SharedMbArray<T> {
 /// per-macroblock arrays, all shared and all writable through `&self`.
 ///
 /// Built once per frame on the calling thread, before anything forks; read by
-/// every worker through the layer. See the module docs for the soundness
-/// argument this type is the subject of.
+/// every worker through the layer. See the module docs for the soundness argument.
 #[derive(Debug)]
 pub struct RecPicView {
     planes: [SharedPlane; 3],
@@ -662,8 +625,8 @@ pub struct RecPicView {
 impl RecPicView {
     /// Captures the picture for the frame.
     ///
-    /// `&mut SPicture` is load-bearing: it is the exclusive borrow the whole
-    /// module contract rests on, and it is taken here once, before the fork.
+    /// `&mut SPicture` is load-bearing: it is the exclusive borrow the module contract
+    /// rests on, taken here once, before the fork.
     pub fn build(pic: &mut SPicture) -> Self {
         let [y, u, v] = pic.planes_mut3();
         let planes = [y, u, v].map(|p| {
@@ -740,10 +703,10 @@ impl SampleCursor for RecCursor<'_> {
 /// `W` bytes of each of `height` rows, from one shared cursor to another.
 ///
 /// The shared-seam twin of `mc::copy_rows`, and the kernel behind every `pfCopyNxM`
-/// slot. Both operands are [`RecCursor`] because the slot's two callers
-/// disagree about storage — the background path copies picture-to-picture, the
-/// mode-decision path copies an owned prediction scratch into a picture plane — and
-/// `RecCursor::over_owned` brings the scratch to the same type without a raw.
+/// slot. Both operands are [`RecCursor`] because the slot's two callers disagree about
+/// storage — the background path copies picture-to-picture, the mode-decision path
+/// copies an owned prediction scratch into a picture plane — and `RecCursor::over_owned`
+/// brings the scratch to the same type without a raw pointer.
 #[inline(always)]
 pub fn copy_rows_shared<const W: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>, height: usize) {
     for dy in 0..height as isize {
@@ -759,16 +722,11 @@ pub fn copy_rows_shared<const W: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>
 ///
 /// `VaaBackgroundMbDataUpdate` copies previous-source into current-source through
 /// raw roots, in-fork, per macroblock, and the destination is the very picture
-/// `pEncData` reads. `bEnableBackgroundDetection` is `true` by default
-/// (`param_svc.rs:293`), so that is the ordinary configuration, not a corner.
-///
-/// A whole-plane `&[u8]` claims **every byte** of the plane, so it races a concurrent
-/// write to any of them: a shared `&T` claims the whole struct — it races any
-/// concurrent write to any byte inside.
-///
-/// So the source planes are reached exactly as the reconstruction planes are: through
-/// [`SharedPlane`], whose cells make a concurrent write lawful by construction, and
-/// whose [`RecCursor`] never lends a slice.
+/// `pEncData` reads; `bEnableBackgroundDetection` is `true` by default, so that is the
+/// ordinary configuration. A whole-plane `&[u8]` claims **every byte** of the plane, so
+/// it races a concurrent write to any of them. The source planes are therefore reached
+/// exactly as the reconstruction planes are: through [`SharedPlane`], whose cells make a
+/// concurrent write lawful by construction and whose [`RecCursor`] never lends a slice.
 ///
 /// Built through `&SPicture` — unlike [`RecPicView`] it makes no exclusive claim, so
 /// its constructor is public and unrestricted: several readers of one picture need no
@@ -810,13 +768,11 @@ impl RoPicView {
 /// A standalone plane view over one `PaddedPlane`, with the same shape
 /// [`RecPicView::build`] gives each of its three.
 ///
-/// **Test-only, and deliberately so**: it is the differential tests' way to put a
-/// seam cursor and a `PlaneCursorMut` over the same storage, which is how every
-/// `RecCursor` kernel in `decode_mb_aux` is checked against its `PlaneCursorMut`
-/// twin. Production code reaches planes through `RecPicView::build`'s
-/// `&mut SPicture` and nothing else — that exclusive borrow is the module
-/// contract, and a public constructor from a single plane would let a caller take
-/// two views of one picture without the compiler objecting.
+/// Test-only: it is how a seam cursor and a `PlaneCursorMut` are put over the same
+/// storage. Production code reaches planes through `RecPicView::build`'s
+/// `&mut SPicture` and nothing else — that exclusive borrow is the module contract, and
+/// a public constructor from a single plane would let a caller take two views of one
+/// picture without the compiler objecting.
 #[cfg(test)]
 pub(crate) fn shared_plane_for_test(p: &mut crate::safe::plane::PaddedPlane) -> SharedPlane {
     let (origin, stride, len) = (p.origin(), p.stride(), p.buf_len());
@@ -847,16 +803,9 @@ mod tests {
         assert_eq!(c.at(-5, -4), 77);
     }
 
-    /// **The new row accessors must agree with the old ones, sample for sample.**
-    ///
-    /// `RefSamples` has two run-time row readers so the SAD family and
-    /// `common/mc.rs` can serve a shared cell view and a plain plane from one
-    /// body: `row_blocks` (the folded const-size block walk) and `row_view` (the
-    /// run-time-length row, borrowed for a plane and owned for a cell view). Each
-    /// exists only to move *where* the read comes from, never *what* is read — so
-    /// this asserts the three routes over one buffer give identical bytes:
-    /// `PlaneCursor`'s inherent `row`, the trait's `row_blocks`, and the trait's
-    /// `row_view`, on both cursor types.
+    /// `RefSamples`' row readers move *where* a read comes from, never *what* is read:
+    /// `PlaneCursor`'s inherent `row`, the trait's `row_blocks` and its `row_view` give
+    /// identical bytes over one buffer, on both cursor types.
     #[test]
     fn the_row_accessors_agree_across_both_cursor_types() {
         use crate::safe::plane::{BlockRows, RefSamples};
@@ -952,11 +901,10 @@ mod tests {
         }
     }
 
-    /// **The probe the seam's one `Sync` impl exists for, and the mid-row case in
-    /// miniature.** Two scoped threads write *the same rows* at different
-    /// columns — the shape no `&mut [u8]` can express — through one shared view.
-    /// Under Miri's data-race detector (on by default) this passes only because
-    /// the byte sets are disjoint.
+    /// The mid-row case in miniature: two scoped threads write *the same rows* at
+    /// different columns — the shape no `&mut [u8]` can express — through one shared
+    /// view. Under Miri's data-race detector this passes only because the byte sets are
+    /// disjoint.
     #[test]
     fn two_threads_write_disjoint_stripes_of_one_row() {
         let mut plane = PaddedPlane::new(32, 4, 8, 48);
@@ -1036,15 +984,11 @@ mod tests {
         }
     }
 
-    /// **The block copy places every row where the per-sample walk would, and
-    /// nothing anywhere else.**
-    ///
-    /// `copy_block_to_view` gained a const height and two cut spans so its per-row
-    /// bounds checks fold; that is a codegen change, and the thing a codegen change
-    /// can break is *where* the rows land. So this compares the whole plane — padding
-    /// included — against a `set`-per-sample reference, at three strides and all three
-    /// shapes the encoder uses, anchored off `(0, 0)` so a copy that ignored its
-    /// anchor or ran a row long has somewhere to land.
+    /// `copy_block_to_view` places every row where a per-sample walk would and nothing
+    /// anywhere else: the whole plane, padding included, against a `set`-per-sample
+    /// reference, at three strides and all three shapes the encoder uses, anchored off
+    /// `(0, 0)` so a copy that ignored its anchor or ran a row long has somewhere to
+    /// land.
     #[test]
     fn the_block_copy_lands_exactly_where_a_per_sample_walk_would() {
         fn check<const W: usize, const H: usize>(stride: usize) {
@@ -1086,11 +1030,10 @@ mod tests {
         }
     }
 
-    /// `RecCursor` overrides `PlaneSamples::set_row_n` to reach
-    /// [`RecCursor::write_row`] instead of the trait's per-sample default — the
-    /// override the deblocking kernels' write side is. It must move the same bytes to
-    /// the same places, including at a negative column offset, which is how a vertical
-    /// edge writes back its inner taps.
+    /// `RecCursor::set_row_n` reaches [`RecCursor::write_row`] rather than the trait's
+    /// per-sample default, and must move the same bytes to the same places — including
+    /// at a negative column offset, which is how a vertical edge writes back its inner
+    /// taps.
     #[test]
     fn the_row_setter_writes_what_a_sample_setter_would() {
         use crate::safe::plane::PlaneSamples;
@@ -1117,9 +1060,8 @@ mod tests {
         }
     }
 
-    /// `SharedCells::empty` is the null the C++ leaves where a picture was
-    /// built without `bNeedMbInfo`, and the guard every consumer of those four
-    /// arrays already spells as `is_empty()`.
+    /// `SharedCells::empty` stands for a picture built without `bNeedMbInfo`, and every
+    /// consumer of those four arrays guards on `is_empty()`.
     #[test]
     fn an_absent_side_array_reports_empty_rather_than_dangling() {
         let mut none: Vec<i32> = Vec::new();

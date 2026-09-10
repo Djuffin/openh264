@@ -1,20 +1,16 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-//! Port of `codec/processing/src/scenechangedetection/` — the plugin reached
-//! through `METHOD_SCENE_CHANGE_DETECTION_VIDEO`.
+//! `codec/processing/src/scenechangedetection/` — the plugin reached through
+//! `METHOD_SCENE_CHANGE_DETECTION_VIDEO`.
 //!
 //! `CWelsPreProcessVideo::DetectSceneChange` (`wels_preprocess.cpp:600`) calls it
 //! for every P frame when `bEnableSceneChangeDetect` is set, which `FillDefault`
 //! leaves **on**. `DecideFrameType` turns a `LARGE_CHANGED_SCENE` verdict into an
 //! IDR, subject to `iFrameIndex >= (VGOP_SIZE << 1)`.
 //!
-//! The C++ is a template, `CSceneChangeDetection<T>`, over two detector functors.
-//! [`CSceneChangeDetection`] is the video one,
-//! `METHOD_SCENE_CHANGE_DETECTION_VIDEO`; [`CSceneChangeDetectionScreen`] is
-//! `METHOD_SCENE_CHANGE_DETECTION_SCREEN`, which the screen preprocessor runs once
-//! per available reference on every P frame. The two functors differ in what they
-//! *write*, not only in how they measure — the screen one fills a block-static map
-//! the video one has no parameter for.
+//! [`CSceneChangeDetection`] is the video detector; [`CSceneChangeDetectionScreen`] is
+//! `METHOD_SCENE_CHANGE_DETECTION_SCREEN`, which the screen preprocessor runs once per
+//! available reference on every P frame and which also fills a block-static map.
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -26,9 +22,7 @@ use crate::safe::plane::PlaneCursor;
 use crate::simd::kernels::sad::sample_sad_8x8;
 
 /// The two luma planes this detector walks, routed from the pool pictures that own
-/// them. `DenoisePlanes` is the same shape one plugin over
-/// (`processing/denoise.rs:220`); this one is read-only and luma-only, which is all
-/// `CSceneChangeDetectorVideo` ever touches.
+/// them.
 ///
 /// Each slice starts at its plane's logical origin and runs to the end of the padded
 /// allocation, so a block at `(x, y)` is at byte `y * stride + x`.
@@ -63,7 +57,7 @@ impl CSceneChangeDetection {
         RET_SUCCESS
     }
 
-    /// `CSceneChangeDetection::Get` — copies the whole result struct back.
+    /// `CSceneChangeDetection::Get`.
     pub fn Get(&self, param: &mut SSceneChangeResult) -> i32 {
         *param = self.m_sSceneChangeParam;
         RET_SUCCESS
@@ -72,9 +66,7 @@ impl CSceneChangeDetection {
     /// `CSceneChangeDetection::Process` — `SceneChangeDetection.h:215`, with
     /// `CSceneChangeDetectorVideo::operator()` inlined.
     ///
-    /// `pSrcPixMap` carries the geometry (it is the VP's own parameter block); the
-    /// pixels arrive as [`ScdPlanes`], and the block walk is slice indexing over two
-    /// [`PlaneCursor`]s.
+    /// `pSrcPixMap` carries the geometry; the pixels arrive as [`ScdPlanes`].
     pub fn Process(&mut self, pSrcPixMap: &SPixMap, planes: &ScdPlanes<'_>) -> i32 {
         if planes.cur.is_empty() || planes.refp.is_empty() {
             return RET_INVALIDPARAM;
@@ -94,9 +86,7 @@ impl CSceneChangeDetection {
         self.m_sSceneChangeParam.iFrameComplexity = 0;
         self.m_sSceneChangeParam.eSceneChangeIdc = ESceneChangeIdc::SIMILAR_SCENE;
 
-        // CSceneChangeDetectorVideo::operator() — SceneChangeDetection.h:113. The C++
-        // walks two row cursors and steps them by `stride << 3`; the offsets below are
-        // the same arithmetic with the multiplication written out.
+        // CSceneChangeDetectorVideo::operator() — SceneChangeDetection.h:113.
         for j in 0..iBlock8x8Height {
             for i in 0..iBlock8x8Width {
                 let cur = PlaneCursor::new(
@@ -130,13 +120,12 @@ impl CSceneChangeDetection {
 /// `BuildSceneChangeDetection` for `METHOD_SCENE_CHANGE_DETECTION_SCREEN`
 /// (`SceneChangeDetection.cpp:44-46`).
 ///
-/// Two things the video detector does not do. It **classifies** every 8x8 block into
-/// the caller's block-static map — collocated-static, scrolled-static, or moving — and
-/// the mode decision reads that map to skip macroblocks (`SetBlockStaticIdcToMd`,
-/// `JudgeStaticSkip`, `JudgeScrollSkip`). And it accumulates `iFrameComplexity`, which
-/// the reference-selection judgement in `DetectSceneChangeScreen` sorts candidate
-/// references by. Its "large scene change" ratio is 0.80 rather than the video
-/// detector's 0.85; the medium ratio is the same 0.50.
+/// Beyond the video detector it classifies every 8x8 block into the caller's
+/// block-static map — collocated-static, scrolled-static, or moving — which the mode
+/// decision reads to skip macroblocks (`SetBlockStaticIdcToMd`, `JudgeStaticSkip`,
+/// `JudgeScrollSkip`), and it accumulates `iFrameComplexity`, which
+/// `DetectSceneChangeScreen` sorts candidate references by. Its large-scene-change ratio
+/// is 0.80 rather than the video detector's 0.85; the medium ratio is the same 0.50.
 #[derive(Default)]
 pub struct CSceneChangeDetectionScreen {
     pub m_sSceneChangeParam: SSceneChangeResult,
@@ -149,8 +138,7 @@ impl CSceneChangeDetectionScreen {
         RET_SUCCESS
     }
 
-    /// `CSceneChangeDetection::Get` — `SceneChangeDetection.h:251`. The whole result
-    /// struct, as the C++ assignment copies it.
+    /// `CSceneChangeDetection::Get` — `SceneChangeDetection.h:251`.
     pub fn Get(&self, param: &mut SSceneChangeResult) -> i32 {
         *param = self.m_sSceneChangeParam;
         RET_SUCCESS
@@ -159,19 +147,15 @@ impl CSceneChangeDetectionScreen {
     /// `CSceneChangeDetection::Process` — `SceneChangeDetection.h:215-249` — with
     /// `CSceneChangeDetectorScreen::operator()` (`:158-191`) inlined.
     ///
-    /// **The block-static row travels as `&mut [u8]`.** The C++ reads
-    /// `m_sSceneChangeParam.pStaticBlockIdc` — a `uint8_t*` copied in through `Set` —
-    /// and post-increments it once per block. Here the *selector* stays in
-    /// [`SSceneChangeResult::pStaticBlockIdc`] for the bookkeeping the judgement code
-    /// does with it, and the caller resolves it to the row with
-    /// `SBlockStaticIdcStore::row_mut`. A row shorter than the block grid is
-    /// `RET_INVALIDPARAM` and **nothing is written** — where the C++ would run off the
-    /// end of the allocation, or write through `NULL` when the selector names no row.
+    /// `pStaticBlockIdc` is the block-static row for this frame, written in raster order
+    /// over the 8x8 block grid; the selector naming it stays in
+    /// [`SSceneChangeResult::pStaticBlockIdc`], and the caller resolves it with
+    /// `SBlockStaticIdcStore::row_mut`. A row shorter than the grid returns
+    /// `RET_INVALIDPARAM` with **nothing written**.
     ///
-    /// **The scroll test is `(!iScrollMvX || !iScrollMvY)`** — *at least one component
-    /// zero*, not both. This scroll detector never produces a non-zero `iScrollMvX`,
-    /// so the disjunct that can be false is unreachable from the encoder. The bounds
-    /// check that follows it agrees with the read it guards: both add the vector.
+    /// The scroll test `(!iScrollMvX || !iScrollMvY)` requires *at least one component
+    /// zero*, not both. The bounds check that follows agrees with the read it guards:
+    /// both add the vector.
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
@@ -201,8 +185,6 @@ impl CSceneChangeDetectionScreen {
         self.m_sSceneChangeParam.eSceneChangeIdc = ESceneChangeIdc::SIMILAR_SCENE;
 
         // CSceneChangeDetectorScreen::operator() — SceneChangeDetection.h:152-191.
-        // The three scroll fields are read out of the parameter block once, as the
-        // C++'s three locals at `:153-155` are.
         let bScrollDetectFlag = self.m_sSceneChangeParam.sScrollResult.bScrollDetectFlag;
         let iScrollMvX = self.m_sSceneChangeParam.sScrollResult.iScrollMvX;
         let iScrollMvY = self.m_sSceneChangeParam.sScrollResult.iScrollMvY;
@@ -233,15 +215,13 @@ impl CSceneChangeDetectionScreen {
                     && (iBlockPointY + iScrollMvY <= iHeight - 8)
                 {
                     // `pRefTmp + iScrollMvY * iRefStride + iScrollMvX` (`:170`) — plus
-                    // on both axes. The complexity plugin's inter kernel subtracts on
-                    // Y for the same vector; both are upstream's, and they differ.
+                    // on both axes.
                     //
-                    // **Signed throughout, because the vector is.** A downward scroll
-                    // gives a negative `iScrollMvY`, and folding that into the
-                    // `usize` anchor a component at a time would wrap — silently in
-                    // release, and as an overflow panic in debug. The four bounds
-                    // tests above guarantee the *sum* lands inside the plane, which is
-                    // exactly what `try_from` checks here.
+                    // Signed throughout, because the vector is: a downward scroll gives
+                    // a negative `iScrollMvY`, and folding that into the `usize` anchor
+                    // one component at a time would wrap. The four bounds tests above
+                    // guarantee the *sum* lands inside the plane, which is what
+                    // `try_from` checks.
                     let iRefScrollOff = (j * 8 * planes.ref_stride + i * 8) as isize
                         + iScrollMvY as isize * planes.ref_stride as isize
                         + iScrollMvX as isize;
@@ -264,8 +244,6 @@ impl CSceneChangeDetectionScreen {
                     self.m_sSceneChangeParam.iMotionBlockNum +=
                         (iSad > HIGH_MOTION_BLOCK_THRESHOLD) as i32;
                 }
-                // `*(pStaticBlockIdc)++ = uiBlockIdcTmp` — the C++ walks the row with a
-                // post-increment, which is raster order over the block grid.
                 pStaticBlockIdc[j * iBlock8x8Width + i] = uiBlockIdcTmp as u8;
             }
         }
@@ -361,9 +339,6 @@ mod screen_tests {
     /// bottom row of blocks, whose scrolled source would start at `iHeight`, fails
     /// the `iBlockPointY + iScrollMvY <= iHeight - 8` test and falls to the
     /// accumulate arm — `NO_STATIC` unless it happens to be collocated-equal.
-    ///
-    /// This is the whole point of the plugin: the same content one block lower is
-    /// *not* a scene change.
     #[test]
     fn a_scrolled_frame_is_scrolled_static_except_at_the_bottom_edge() {
         const W: usize = 64;
@@ -404,10 +379,9 @@ mod screen_tests {
         assert_eq!(r.iMotionBlockNum, BW as i32, "one moving block row of {BW}");
     }
 
-    /// A **downward** scroll — a negative `iScrollMvY`. The anchor arithmetic is
-    /// signed for this: folding a negative vector into the `usize` offset a component
-    /// at a time wraps, which is an overflow panic in debug and a wrong read in
-    /// release. Here the top block row is the one outside the bounds.
+    /// A **downward** scroll — a negative `iScrollMvY`, where folding the vector into the
+    /// `usize` offset one component at a time would wrap. Here the top block row is the
+    /// one outside the bounds.
     #[test]
     fn a_negative_scroll_vector_reads_the_right_blocks() {
         const W: usize = 64;
@@ -469,9 +443,7 @@ mod screen_tests {
     }
 
     /// A row one byte short of the block grid is `RET_INVALIDPARAM` and *nothing* is
-    /// written — where the C++, handed the same short allocation, would walk off the
-    /// end of it. The C++'s other undefined case, a `NULL` `pStaticBlockIdc`, is the
-    /// caller's `None` and is refused there.
+    /// written.
     #[test]
     fn a_short_block_static_row_is_refused_without_a_write() {
         const W: i32 = 64;

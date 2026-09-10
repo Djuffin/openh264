@@ -64,15 +64,10 @@ fn test_decoder_capability_query() {
 /// Decodes one asset and compares the SHA-1 of its output planes against the
 /// C++ decoder's.
 ///
-/// `hash_concealed` selects which frames count. The default (`false`) is this
-/// file's long-standing rule — only frames returned `dsErrorFree` — and it
-/// agrees with `h264dec` on every stream that decodes without concealment,
-/// which is all of them above. `true` is `h264dec`'s own rule, every frame it
-/// writes out (`iBufferStatus == 1`, whatever the decoding state), and it is
-/// what an asset that *deliberately* conceals has to be judged by: under the
-/// default rule the concealed frames would drop out of the hash silently, and a
-/// stream whose whole purpose is a concealment path would compare only its
-/// clean prefix.
+/// `hash_concealed` selects which frames count: `false` hashes only frames returned
+/// `dsErrorFree`, `true` hashes every frame written out (`iBufferStatus == 1`,
+/// whatever the decoding state). A stream that deliberately conceals needs `true`,
+/// or its concealed frames drop out of the hash.
 fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_concealed: bool) {
     let mut repo_root = std::path::PathBuf::from("../../../");
     if !repo_root.join("res").exists() {
@@ -131,17 +126,12 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
                 decoded_frames += 1;
             }
 
-            // The null `DecodeFrame2` that `h264dec` follows every NAL with:
-            // `h264dec.cpp:418-430` on the `-legacy` path — its own zeroed
-            // `SBufferInfo`, and whatever frame it returns written out, which is
-            // the shape here — and `DecodeFrameNoDelay` (`welsDecoderExt.cpp:720-725`)
-            // otherwise. It constructs the access unit the NAL completed instead
-            // of leaving it pending, and that is observable: a same-id PPS
-            // arriving next is parked in the spare slot for
-            // `WriteBackActiveParameters` rather than overwriting `sPpsBuffer[id]`
-            // in place under the pending picture (`au_parser.cpp:1458` against
-            // `:1465`). Every hash below is the C++ decoder's, so
-            // the calls that produced them belong here too.
+            // A null `DecodeFrame2` after every NAL (`h264dec.cpp:418-430`)
+            // constructs the access unit the NAL completed instead of leaving it
+            // pending. That is observable: a same-id PPS arriving next is parked in
+            // the spare slot for `WriteBackActiveParameters` rather than overwriting
+            // `sPpsBuffer[id]` in place under the pending picture
+            // (`au_parser.cpp:1458` against `:1465`).
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
             let dec_ret = ISVCDecoder::DecodeFrame2(
@@ -203,9 +193,8 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
 
         assert!(decoded_frames > 0, "No frames decoded for {}", file_name);
         let calculated_hash = hasher.digest();
-        // Frame counts before hashes: a hash mismatch whose frame count also moved is
-        // a different defect from one whose count held, and the message is the only
-        // place a reader of a failing run can learn which.
+        // The frame count rides in the message: a count that also moved is a
+        // different defect from one that held.
         assert_eq!(
             calculated_hash, expected_hash,
             "SHA-1 hash mismatch for bitstream asset {} ({decoded_frames} frames decoded)",
@@ -227,7 +216,7 @@ macro_rules! asset_test {
 }
 
 /// As [`asset_test!`], for a stream that conceals: every frame the decoder
-/// outputs counts, which is what the C++ golden contains.
+/// outputs counts.
 macro_rules! asset_test_concealed {
     ($test_name:ident, $filename:expr, $hash:expr) => {
         #[test]
@@ -432,12 +421,6 @@ asset_test!(
     "test_qcif_cabac.264",
     "587d1d05943f3cd416bf69469975fdee05361e69"
 );
-// This hash used to be a documented deviation from the C++: the stream keeps two
-// pictures buffered at end of stream, upstream's flush path gave them the same
-// uiDecodingTimeStamp, and `ReleaseBufferedReadyPictureNoReorder` then fell back to
-// slot order and emitted POC 8 before POC 6. That function is gone from both
-// codebases — the display layer sorts by (sequence, POC) and nothing else — so this
-// is `h264dec`'s own output again, like every other hash here.
 asset_test!(
     test_asset_test_scalinglist_jm,
     "test_scalinglist_jm.264",
@@ -503,19 +486,14 @@ asset_test!(
 // Narrow frames
 //
 // `ExpandReferencingPicture` takes a different arm for `iWidth >> 1 < 16`, i.e.
-// a frame narrower than 32 luma pixels.
-//
-// The three streams below are encoded by the C++ encoder from a window panned
-// across `CiscoVT2people_320x192_12fps.yuv` — panned so the MVs are non-zero and
-// point outside a 16-pixel frame, which is the only way an expanded border
-// reaches the output. Goldens are the C++ decoder's, as everywhere in this file.
+// a frame narrower than 32 luma pixels. The streams below have non-zero MVs
+// pointing outside the frame, the only way an expanded border reaches the output.
 //
 //  * 16x16 — the minimum legal frame width; `iWidthUV` 8, the divergent arm.
 //  * 24x18 — coded 32x32 and cropped, so `iWidthUV` is exactly 16: the other
-//    side of the same branch, one step away, plus frame cropping.
+//    side of the same branch, plus frame cropping.
 //  * 16x16 with a lost IDR — reaches `WelsInitRefList`'s error-concealment
-//    prefetch. See the header comment on `test_asset_narrow_16x16_idr_lost`
-//    for its construction.
+//    prefetch.
 asset_test!(
     test_asset_narrow_16x16,
     "narrow_16x16.264",
@@ -548,10 +526,8 @@ asset_test_concealed!(
 // top-right. CABAC, High profile with the 8x8 transform, I/P/B slices, and a
 // panned source window so the MVs are non-zero.
 //
-// It is the one asset here built by ffmpeg/libx264 rather than by the C++
-// encoder, and `rust/tools/make_narrow_assets.py` carries the reason: **OpenH264's
-// encoder has no `transform_8x8_mode_flag` to write**. The golden below is the
-// C++ *decoder*'s output, exactly as every other row here.
+// Built with ffmpeg/libx264 because OpenH264's encoder has no
+// `transform_8x8_mode_flag` to write.
 asset_test!(
     test_asset_grid_48x32,
     "grid_48x32.264",
@@ -562,9 +538,7 @@ asset_test!(
 // Error concealment
 //
 // `BA_MW_D_P_LOST` is the conformance `BA_MW_D` with a P slice dropped, so each
-// affected picture is decoded with a hole. The golden is the **C++ decoder's**,
-// taken with `rust/tools/ecref` under the same `ERROR_CON_SLICE_COPY` these tests
-// use.
+// affected picture is decoded with a hole, under `ERROR_CON_SLICE_COPY`.
 //
 // `_IDR_LOST`: with the IDR gone there is no complete non-ECed IDR to clear
 // `bFreezeOutput`.
@@ -582,15 +556,12 @@ asset_test_concealed!(
 // ---------------------------------------------------------------------------
 // Flexible macroblock ordering
 //
-// `rust/tools/make_fmo_asset.py` builds this one for the purpose: 64x64, two slice
-// groups interleaved 1-1 (`slice_group_map_type` 0), one slice per group, every
-// macroblock I_PCM with a distinct flat luma value. Slice 0 walks macroblocks
-// 0, 2, 4, … and slice 1 walks 1, 3, 5, …; a raster-order `FmoNextMb` walks
-// 0, 1, 2, … instead, so every macroblock after each slice's first lands in the
-// wrong place. I_PCM makes the frame *be* the values the generator wrote, so the
-// failure is legible rather than a diffuse hash change.
-//
-// The golden is the C++ decoder's.
+// 64x64, two slice groups interleaved 1-1 (`slice_group_map_type` 0), one slice per
+// group, every macroblock I_PCM with a distinct flat luma value. Slice 0 walks
+// macroblocks 0, 2, 4, … and slice 1 walks 1, 3, 5, …; a raster-order `FmoNextMb`
+// walks 0, 1, 2, … instead, so every macroblock after each slice's first lands in
+// the wrong place. I_PCM makes the frame be the coded values, so a failure is
+// legible rather than a diffuse hash change.
 asset_test!(
     test_asset_fmo_2groups_64x64,
     "fmo_2groups_64x64.264",
@@ -604,22 +575,18 @@ asset_test!(
 // reader of `g_kuiMatrixV` (`common_tables.cpp:64`): it builds
 // `pDequant_coeff8x8[i][q][y]` as `iScalingList8x8[i][y] * g_kuiMatrixV[q % 6][y /
 // 8][y % 8]`. The table is therefore reachable only from a stream that both
-// signals a scaling matrix and codes 8x8 transform blocks, and no asset here did
-// both — `test_scalinglist_jm.264` above signals one with
-// `transform_8x8_mode_flag = 0`, so it dequantizes 4x4 only.
+// signals a scaling matrix and codes 8x8 transform blocks; `test_scalinglist_jm.264`
+// above signals one with `transform_8x8_mode_flag = 0`, so it dequantizes 4x4 only.
 //
-// Both assets are built by ffmpeg/libx264 (`-x264-params 8x8dct=1:cqm=jvt`), for
-// the reason `rust/tools/make_narrow_assets.py` gives for `grid_48x32.264`:
+// Both assets are built by ffmpeg/libx264 (`-x264-params 8x8dct=1:cqm=jvt`), since
 // OpenH264's encoder has no `transform_8x8_mode_flag` to write. x264 carries
-// `cqm=jvt` in the **PPS** (`pic_scaling_matrix_present_flag = 1`) and leaves
-// lists 6 and 7 to the fall-back rule, which is what makes them non-flat.
+// `cqm=jvt` in the PPS (`pic_scaling_matrix_present_flag = 1`) and leaves lists 6
+// and 7 to the fall-back rule, which is what makes them non-flat.
 //
 //  * `_intra` — all-intra, CABAC: list 6 through `ParseResidualBlockCabac8x8`
 //    (`parse_mb_syn_cabac.cpp:1399`).
 //  * `_inter` — I+P, CAVLC: lists 6 and 7 through `WelsResidualBlockCavlc8x8`
 //    (`parse_mb_syn_cavlc.cpp:979`).
-//
-// The goldens are the C++ decoder's, and `ffmpeg -f rawvideo` agrees with both.
 asset_test!(
     test_asset_cqm8x8_intra_176x144,
     "cqm8x8_intra_176x144.264",
@@ -642,9 +609,8 @@ asset_test!(
 // constructed, and `au_parser.cpp:1458` parks the new PPS in the spare slot for
 // `WriteBackActiveParameters` (`decoder_core.cpp:2216`) to install afterwards.
 //
-// The harness above resolves that the way `h264dec` does — a null
-// `DecodeFrame2` after every NAL — so this hash is a claim about the whole
-// mechanism, and it is the SHA-1 of `h264dec`'s own raw output on this stream.
+// The harness's null `DecodeFrame2` after every NAL decides which of the two paths
+// each picture takes.
 asset_test!(
     test_asset_cacqp3_sony_d,
     "CACQP3_Sony_D.jsv",

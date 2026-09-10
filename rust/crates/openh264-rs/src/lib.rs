@@ -1,7 +1,6 @@
 //! Low-level C ABI type definitions matching OpenH264 C interface.
 #![deny(unsafe_code)]
-// The naming allows are a requirement, not debt: this crate is a line-by-line port
-// and every identifier is diffable against the C++ it came from (`CODING_STYLE`).
+// Identifiers keep the C++ names.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(
     dead_code,

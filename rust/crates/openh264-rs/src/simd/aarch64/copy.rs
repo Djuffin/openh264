@@ -2,17 +2,13 @@
 //! `codec/common/arm64/copy_mb_aarch64_neon.S`.
 //!
 //! Each is `ld1`/`st1` of one row per instruction, four rows per macro, walking both
-//! strides. The asm keeps an aligned pair (`ld1 {v.2d}`) beside the unaligned one
-//! (`ld1 {v.16b}`) for the two 16x16 slots; on AArch64 the two forms differ only in
-//! their element size and neither faults on misalignment, so one kernel serves both
-//! slots here, as it does in the x86_64 set. The 8-wide copies are `ld1 {v.d}[0]`,
-//! which is the `vld1_u8` below.
+//! strides. The aligned (`ld1 {v.2d}`) and unaligned (`ld1 {v.16b}`) 16x16 forms
+//! differ only in element size and neither faults on misalignment, so one kernel
+//! serves both slots. The 8-wide copies are `ld1 {v.d}[0]`, the `vld1_u8` below.
 //!
-//! What these save over the scalar slot bodies is the same thing the x86_64 file
-//! describes: `copy_rows_shared` re-derives and re-checks each row's cells, while a
-//! kernel takes the block's whole span through `block_span` — one check per operand
-//! — and strides through it itself, which is exactly the asm's `SIGN_EXTENSION` plus
-//! post-indexed `ld1` prologue.
+//! A kernel takes the block's whole span through `block_span` — one bounds check per
+//! operand — and strides through it itself, where `copy_rows_shared` re-derives and
+//! re-checks each row's cells.
 #![allow(unsafe_code)]
 
 use core::arch::aarch64::*;
@@ -39,10 +35,9 @@ unsafe fn copy_rows16(
     src_stride: usize,
     h: usize,
 ) {
-    // `&[Cell<u8>]` is a shared reference to `UnsafeCell` contents, which is what
-    // makes writing through a pointer derived from it sound — the same door
-    // `Cell::as_ptr` opens for a single cell, widened to the slice's provenance so a
-    // 16-byte store stays inside it.
+    // `&[Cell<u8>]` is a shared reference to `UnsafeCell` contents, so writing
+    // through a pointer derived from it is sound, with the slice's provenance
+    // covering a 16-byte store.
     let s = src.as_ptr() as *const u8;
     let d = dst.as_ptr() as *mut u8;
     for y in 0..h {
@@ -76,9 +71,8 @@ unsafe fn copy_rows8(
 
 /// `W` bytes of each of `h` rows, from one shared cursor to another.
 ///
-/// Panics through `block_span` if either block leaves its buffer, before any
-/// pointer is formed — which is what lets the kernels above be `unsafe` only
-/// over an already-validated span.
+/// Panics through `block_span` if either block leaves its buffer, before any pointer
+/// is formed, so the kernels above are `unsafe` only over a validated span.
 #[inline(always)]
 fn copy_block<const W: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>, h: usize) {
     let s = src.block_span(0, 0, W, h);
@@ -135,9 +129,9 @@ mod tests {
     }
 
     /// Runs one shape through both the scalar slot body and the kernel here over
-    /// identical planes, and requires the **whole plane** to match afterwards — not
-    /// just the block. A kernel that ran a row long, or that walked the wrong stride,
-    /// lands outside the block and only a whole-plane compare sees it.
+    /// identical planes, and requires the whole plane to match afterwards, not just
+    /// the block: a kernel that ran a row long or walked the wrong stride lands
+    /// outside the block.
     fn check(
         w: usize,
         h: usize,
@@ -182,9 +176,9 @@ mod tests {
         check(8, 8, 8, WelsCopy8x8_c, copy_8x8);
     }
 
-    /// The two operands do **not** have to share a stride: `WelsMdBackgroundMbEnc`
-    /// hands `pfCopy16x16Aligned` a picture plane as the destination and a
-    /// stride-16 scratch array as the source.
+    /// The two operands need not share a stride: `WelsMdBackgroundMbEnc` hands
+    /// `pfCopy16x16Aligned` a picture plane as the destination and a stride-16
+    /// scratch array as the source.
     #[test]
     fn copy_walks_each_operand_on_its_own_stride() {
         for &(dw, sw) in &[(64usize, 16usize), (16, 64), (33, 16), (16, 16)] {
@@ -215,11 +209,9 @@ mod tests {
         }
     }
 
-    /// The span's **length** is the whole of the kernels' bounds safety, and nothing
-    /// downstream reads it — they stride from `as_ptr()`. A span that is too short
-    /// can only show up as a panic that does not happen, and it takes a block sized
-    /// to the gap to see it: this one overruns its buffer by less than one row's
-    /// width, which a span that forgot to add `w` for the last row would accept.
+    /// The span's length is the whole of the kernels' bounds safety — they stride
+    /// from `as_ptr()` and never read it. This block overruns its buffer by less
+    /// than one row's width, which a span missing the last row's width would accept.
     #[test]
     #[should_panic(expected = "out of range")]
     fn copy_rejects_a_block_whose_last_row_overruns() {

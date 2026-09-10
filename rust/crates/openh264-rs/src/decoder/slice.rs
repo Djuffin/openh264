@@ -2,10 +2,10 @@
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
-//! H.264 / AVC and SVC Slice Header and Control Architecture.
+//! H.264/AVC and SVC slice header and control structures —
+//! `codec/decoder/core/inc/slice.h`.
 //!
-//! Translated from `codec/decoder/core/inc/slice.h`.
-//! Corresponds to ITU-T H.264 Section 7.3.3 and Annex G (SVC) Section G.7.3.3.4.
+//! ITU-T H.264 Section 7.3.3 and Annex G (SVC) Section G.7.3.3.4.
 
 use crate::decoder::decoder_context::SpsRef;
 
@@ -33,9 +33,7 @@ pub const REORDER_SHORT_ADD: u16 = 1;
 pub const REORDER_LONG: u16 = 2;
 pub const REORDER_END: u16 = 3;
 
-/// H.264 slice coding types.
-///
-/// Matches `enum EWelsSliceType` in `codec/common/inc/wels_common_defs.h`.
+/// H.264 slice coding types — `EWelsSliceType` in `codec/common/inc/wels_common_defs.h`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum EWelsSliceType {
@@ -48,9 +46,7 @@ pub enum EWelsSliceType {
     UNKNOWN_SLICE = 5,
 }
 
-/// Scalable extension slice types.
-///
-/// Matches `enum ESliceTypeExt` in `codec/common/inc/wels_common_defs.h`.
+/// Scalable extension slice types — `ESliceTypeExt` in `codec/common/inc/wels_common_defs.h`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum ESliceTypeExt {
@@ -60,9 +56,7 @@ pub enum ESliceTypeExt {
     EI_SLICE = 2,
 }
 
-/// Reference picture list indices.
-///
-/// Matches `enum EListIndex` in `codec/common/inc/wels_common_defs.h`.
+/// Reference picture list indices — `EListIndex` in `codec/common/inc/wels_common_defs.h`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum EListIndex {
@@ -81,10 +75,8 @@ pub struct SReorderingSyntax {
     pub uiReorderingOfPicNumsIdc: u16,
 }
 
-/// Reference picture list reordering syntax.
-///
-/// Refer to ITU-T H.264 Section 7.3.3.1 and JVT-X201wcm Page 64.
-/// Matches `TagRefPicListReorderSyntax` / `SRefPicListReorderSyn`.
+/// Reference picture list reordering syntax — `SRefPicListReorderSyn`.
+/// ITU-T H.264 Section 7.3.3.1.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct TagRefPicListReorderSyntax {
@@ -128,10 +120,8 @@ impl Default for SPredWeightList {
     }
 }
 
-/// Prediction weight table syntax.
-///
-/// Refer to ITU-T H.264 Section 7.3.3.2 and JVT-X201wcm Page 65.
-/// Matches `TagPredWeightTabSyntax` / `SPredWeightTabSyn`.
+/// Prediction weight table syntax — `SPredWeightTabSyn`.
+/// ITU-T H.264 Section 7.3.3.2.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct TagPredWeightTabSyntax {
@@ -168,10 +158,8 @@ pub struct SMmcoRef {
     pub iMaxLongTermFrameIdx: i32,
 }
 
-/// Decoded reference picture marking syntax.
-///
-/// Refer to ITU-T H.264 Section 7.3.3.3 and JVT-X201wcm Page 66.
-/// Matches `TagRefPicMarking` / `SRefPicMarking`.
+/// Decoded reference picture marking syntax — `SRefPicMarking`.
+/// ITU-T H.264 Section 7.3.3.3.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct TagRefPicMarking {
@@ -204,10 +192,8 @@ pub struct SMmcoBase {
     pub uiLongTermPicNum: u32,
 }
 
-/// Decoded reference base picture marking syntax.
-///
-/// Refer to ITU-T H.264 Annex G Section G.7.3.3.4 and JVT-X201wcm Page 396.
-/// Matches `TagRefBasePicMarkingSyn` / `SRefBasePicMarking`.
+/// Decoded reference base picture marking syntax — `SRefBasePicMarking`.
+/// ITU-T H.264 Annex G Section G.7.3.3.4.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct TagRefBasePicMarkingSyn {
@@ -226,10 +212,8 @@ impl Default for TagRefBasePicMarkingSyn {
     }
 }
 
-/// Header of slice syntax elements.
-///
-/// Refer to ITU-T H.264 Section 7.3.3 and JVT-X201wcm Page 63.
-/// Matches `TagSliceHeaders` / `SSliceHeader`.
+/// Header of slice syntax elements — `SSliceHeader`.
+/// ITU-T H.264 Section 7.3.3.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct TagSliceHeaders {
@@ -250,9 +234,8 @@ pub struct TagSliceHeaders {
     pub iSliceBetaOffset: i32,
     pub iSliceGroupChangeCycle: i32,
 
-    /// The active parameter sets as ids, not aliases; `sps_of`/`pps_of` rebuild the
-    /// address at each use. `None` is the null they hold before
-    /// `ParseSliceHeaderSyntaxs` fills them.
+    /// The active parameter sets as ids, resolved by `sps_of`/`pps_of` at each use.
+    /// `None` until `ParseSliceHeaderSyntaxs` fills them.
     pub sps_ref: Option<SpsRef>,
     pub pps_id: Option<i32>,
     pub iSpsId: i32,
@@ -320,15 +303,13 @@ impl Default for TagSliceHeaders {
     }
 }
 
-/// Slice header in scalable extension syntax.
-///
-/// Refer to ITU-T H.264 Annex G Section G.7.3.3.4 and JVT-X201wcm Page 394.
-/// Matches `TagSliceHeaderExt` / `SSliceHeaderExt`.
+/// Slice header in scalable extension syntax — `SSliceHeaderExt`.
+/// ITU-T H.264 Annex G Section G.7.3.3.4.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct TagSliceHeaderExt {
     pub sSliceHeader: SSliceHeader,
-    /// The subset SPS id, not an alias; `subset_sps_of` resolves it.
+    /// The subset SPS id, resolved by `subset_sps_of`.
     pub subset_sps_id: Option<i32>,
 
     pub uiDisableInterLayerDeblockingFilterIdc: u32,
@@ -392,9 +373,7 @@ impl Default for TagSliceHeaderExt {
     }
 }
 
-/// Active slice context and state tracking.
-///
-/// Matches `TagSlice` / `SSlice`.
+/// Active slice context and state tracking — `SSlice`.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct TagSlice {
@@ -472,8 +451,7 @@ pub fn calc_poc_msb(
 }
 
 /// Computes the implicit bi-prediction scaling factor and weight matrix entry.
-///
-/// Matches `CreateImplicitWeightTable` logic in `decoder_core.cpp`.
+/// `CreateImplicitWeightTable` in `decoder_core.cpp`.
 #[inline]
 pub fn calc_implicit_weight(poc_curr: i32, poc_ref0: i32, poc_ref1: i32) -> i32 {
     let tb = (poc_curr - poc_ref0).clamp(-128, 127);

@@ -1,10 +1,7 @@
 //! Deblocking — `DeblockLuma{Lt4,Eq4}{V,H}_AArch64_neon` and
 //! `DeblockChroma{Lt4,Eq4}{V,H}_AArch64_neon`, `codec/common/arm64/deblocking_aarch64_neon.S`.
 //!
-//! # Byte lanes, not words
-//!
-//! Where the x86_64 kernels widen every sample to a word and clip with `max`/`min`
-//! against 255, the asm stays in byte lanes throughout, and so does this. The
+//! Byte lanes throughout, not words: the
 //! filter conditions are `uabd` and `cmhi` on bytes (`MASK_MATRIX`); the weak
 //! filter's `p1`/`q1` delta is `urhadd`/`uhadd` then `usubl`/`sqxtn` into a
 //! signed byte, clipped with `smax`/`smin` against `±tc0`; the `p0`/`q0` delta is
@@ -15,15 +12,14 @@
 //! selects between the strong, weak and unfiltered samples, which is the scalar's
 //! `if` tree as masks.
 //!
-//! The 16-line kernels take their six (or eight, or four) tap rows as `[u8; 16]`
-//! arrays; the edge-direction wrappers at the bottom gather those rows from the
-//! cursor and write back only the taps the filter may change, exactly as the x86_64
-//! wrappers do, and their preconditions apply here too. For a vertical edge that is
-//! a transpose each way. The asm does it in the load unit, with `ld3`/`ld4`/`st4`
-//! lane loads straight from the picture, which `PlaneSamples` cannot express; here
-//! the lines are gathered as eight-byte rows and turned into tap vectors by an 8x8
-//! byte transpose — `trn1`/`trn2` on bytes, then halfwords, then words — which is
-//! its own inverse and so also brings them back.
+//! The 16-line kernels take their six (or eight, or four) tap rows as `[u8; 16]` arrays;
+//! the edge-direction wrappers at the bottom gather those rows from the cursor and write
+//! back only the taps the filter may change, under the same preconditions as the x86_64
+//! wrappers. For a vertical edge that is a transpose each way: the asm does it in the load
+//! unit with `ld3`/`ld4`/`st4` lane loads, which `PlaneSamples` cannot express, so here the
+//! lines are gathered as eight-byte rows and turned into tap vectors by an 8x8 byte
+//! transpose — `trn1`/`trn2` on bytes, then halfwords, then words — which is its own
+//! inverse and so also brings them back.
 #![allow(unsafe_code)]
 
 use core::arch::aarch64::*;
@@ -247,9 +243,9 @@ fn transpose8x8(r: [uint8x8_t; 8]) -> [uint8x8_t; 8] {
 /// A vertical luma edge's sixteen lines, taps `-4 .. 4` of each, as eight tap
 /// vectors of sixteen lines: two 8x8 transposes, one per half.
 ///
-/// The lines come out of **one** span rather than sixteen `row_n` calls — the same
-/// block, one bounds check instead of sixteen; see [`RefSamples::span`]. The cut is
-/// the exact bounding box of what the taps read, so the reach is unchanged.
+/// The lines come out of one span rather than sixteen `row_n` calls — one bounds check
+/// instead of sixteen; see [`RefSamples::span`]. The cut is the exact bounding box of what
+/// the taps read, so the reach is unchanged.
 #[inline]
 #[target_feature(enable = "neon")]
 fn gather_luma_lines(pix: &impl RefSamples) -> [[u8; 16]; 8] {
@@ -501,13 +497,11 @@ fn chroma_eq4_16(
 // The edge-direction wrappers
 // ============================================================================
 //
-// # Preconditions
-//
-// The scalar twin is stride-agnostic — it addresses in flat byte offsets — so any
-// `(step_x, step_y)` pair is meaningful to it. These wrappers address in 2D through
-// the cursor instead (`row_n::<N>(dy, dx)`), so the direction guard testing
-// `step_y == 1` / `step_x == 1` is only half the contract: the *other* step must
-// also be the cursor's own stride, which the `debug_assert!`s keep true.
+// Preconditions: the scalar twin addresses in flat byte offsets, so any `(step_x, step_y)`
+// pair is meaningful to it. These wrappers address in 2D through the cursor
+// (`row_n::<N>(dy, dx)`), so the direction guard testing `step_y == 1` / `step_x == 1` is
+// only half the contract: the other step must also be the cursor's own stride, which the
+// `debug_assert!`s keep true.
 
 /// `DeblockLumaLt4V_AArch64_neon` / `DeblockLumaLt4H_AArch64_neon`.
 pub fn deblock_luma_lt4(
@@ -747,24 +741,15 @@ pub fn deblock_chroma_eq4(
 // coefficient count, else `1` where the two motion vectors differ by at least a whole
 // sample in either component, else `0`.
 //
-// # Three departures from the asm, each named where it is
+// The column-major rearrangement of the counts is one `tbl` — the asm's `ins`/`zip1`
+// permutation in one instruction. The counts are combined with `orr` and tested against
+// zero, which is the scalar's `(a | b) != 0` and cannot overflow a lane, so it holds for
+// raw counts as well as normalised ones. The motion-vector difference is a saturating
+// subtraction each way and the larger of the two, not `sabd`; see [`mv_ge4`].
 //
-// * The column-major rearrangement of the counts is one `tbl` rather than the asm's
-//   two `ins`/`zip1` pairs — the same permutation, a quarter of the instructions.
-// * The counts are combined with `orr` and tested against zero, where the asm adds
-//   and compares. Both answer "is either non-zero", which is what the scalar's
-//   `(a | b) != 0` asks; `orr` cannot overflow a lane, so it holds for raw counts as
-//   well as normalised ones.
-// * The motion-vector difference is a saturating subtraction each way and the larger
-//   of the two, where the asm uses `sabd`. See [`mv_ge4`].
-//
-// The asm reaches its neighbours by pointer arithmetic off the current macroblock
-// (`pCurMb - 1`, `pCurMb - iMbStride`) and so assumes one contiguous macroblock array
-// and a single reference frame — which is why upstream installs it only under
-// `SINGLE_REF_FRAME`. Here both neighbours arrive as plain arrays the caller looked
-// up through the macroblock window, so neither assumption is made; the absent-
-// neighbour case is `None` and is *defined* to give zero, rather than the asm's stale
-// register that its caller happens to overwrite.
+// Both neighbours arrive as plain arrays the caller looked up through the macroblock
+// window, so nothing assumes one contiguous macroblock array or a single reference frame,
+// and an absent neighbour (`None`) is defined to give zero.
 
 use crate::encoder::encoder_context::SMVUnitXY;
 
@@ -835,11 +820,10 @@ fn gather_mv4(mv: &[SMVUnitXY; 16], idx: [usize; 4]) -> int16x8_t {
 /// `BS_COMPARE_MV`: for four vector pairs, a set mask where either component differs
 /// by four or more — the whole-sample threshold `MB_BS_MV`/`SMB_EDGE_MV` test.
 ///
-/// `|a - b| >= 4` is spelled as a saturating subtraction each way and the larger of
-/// the two, not as the asm's `sabd`: `sabd` wraps for a difference past `i16::MAX`,
-/// where saturation clamps to `i16::MAX` — still at or above 4 — so this answers the
-/// scalar's `i32` question over the whole `i16` range rather than only over the
-/// motion range the encoder happens to produce.
+/// `|a - b| >= 4` is a saturating subtraction each way and the larger of the two, not
+/// `sabd`: `sabd` wraps for a difference past `i16::MAX`, where saturation clamps to
+/// `i16::MAX` — still at or above 4 — so this answers the scalar's `i32` question over the
+/// whole `i16` range.
 #[inline]
 #[target_feature(enable = "neon")]
 fn mv_ge4(a: int16x8_t, b: int16x8_t) -> uint16x8_t {
@@ -880,17 +864,13 @@ fn bs_mask(edge_present: bool, inside: u8) -> uint8x16_t {
 /// `inside` is ANDed into the interior edges, and is where the three macroblock kinds
 /// differ: `0xFF` for a partitioned inter macroblock (`DeblockingBSInsideMBNormal`),
 /// `0x02` for `MB_TYPE_16x16`, whose rule is the coefficient term alone
-/// (`DeblockingBSInsideMBAvsbase`), and `0x00` for `MB_TYPE_SKIP`, which has no
-/// interior edges. On the data the encoder actually produces the last two masks
-/// change nothing — a 16x16 partition replicates one vector to all sixteen blocks, so
-/// the vector term is already zero, and a skip macroblock has neither coefficients
-/// nor differing vectors — and `deblocking::tests::the_kind_masks_are_no_ops_on_the`
-/// `_data_the_encoder_produces` is that claim. They are applied anyway, because "the
-/// encoder cannot produce it" is not a property of this kernel.
+/// (`DeblockingBSInsideMBAvsbase`), and `0x00` for `MB_TYPE_SKIP`, which has no interior
+/// edges. On the data the encoder produces the last two masks change nothing — a 16x16
+/// partition replicates one vector to all sixteen blocks, so the vector term is already
+/// zero, and a skip macroblock has neither coefficients nor differing vectors — but they
+/// are applied regardless.
 ///
-/// Nothing here reads a reference index. Neither does the scalar it must match, and
-/// neither does the asm — which is why upstream guards its installation with
-/// `SINGLE_REF_FRAME`.
+/// Nothing here reads a reference index; neither does the scalar it must match.
 pub fn bs_calc(
     cur_nzc: &[i8; 24],
     cur_mv: &[SMVUnitXY; 16],
@@ -1011,7 +991,7 @@ fn bs_calc_neon(
 }
 
 // ============================================================================
-// Unit Tests & Parity Verification
+// Tests
 // ============================================================================
 
 #[cfg(test)]
@@ -1168,11 +1148,10 @@ mod tests {
         }
     }
 
-    /// The byte-lane arithmetic has no headroom to hide in, so sweep it: smooth
-    /// planes at several noise amplitudes (so the conditions hold on most lines and
-    /// fail on some), every direction, and `alpha`/`beta`/`tc` over their whole
-    /// tables — `alpha` to 255, `beta` to 18, `tc` from -1 to 25 — including the
-    /// zero and negative `tc` that gate lines off.
+    /// Sweeps smooth planes at several noise amplitudes (so the conditions hold on most
+    /// lines and fail on some), every direction, and `alpha`/`beta`/`tc` over their whole
+    /// tables — `alpha` to 255, `beta` to 18, `tc` from -1 to 25 — including the zero and
+    /// negative `tc` that gate lines off.
     #[test]
     fn deblock_parity_sweep() {
         let mut seed = 0x0DDB_1A5E_5BAD_5EEDu64;
@@ -1325,9 +1304,9 @@ mod tests {
         }
     }
 
-    /// The saturating add/sub trick against samples already at the rails: an edge
-    /// between a black and a white block, where `p0 + delta` and `q0 - delta` leave
-    /// `[0, 255]` and the scalar's `WelsClip1` is what has to be matched.
+    /// The saturating add/sub against samples already at the rails: an edge between a
+    /// black and a white block, where `p0 + delta` and `q0 - delta` leave `[0, 255]` and
+    /// the scalar's `WelsClip1` is what has to be matched.
     #[test]
     fn deblock_clips_at_the_rails_like_the_scalar() {
         let stride = 64;

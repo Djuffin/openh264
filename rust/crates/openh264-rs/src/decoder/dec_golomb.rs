@@ -2,15 +2,12 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
-//! Exponential-Golomb entropy decoding and bitstream parsing routines.
-//!
-//! Rust translation of:
-//! - `codec/decoder/core/inc/dec_golomb.h`
-//! - Associated documentation in `rust/docs/dec_golomb.h.md`
+//! Exponential-Golomb entropy decoding and bitstream parsing routines —
+//! `codec/decoder/core/inc/dec_golomb.h`.
 
 use crate::safe::bits::{BsCursor, trailing_bits};
 
-// Error and status return codes matching OpenH264 error_code.h
+// Error and status return codes — `error_code.h`.
 pub const ERR_NONE: i32 = 0;
 pub const ERR_INVALID_PARAMETERS: i32 = 1;
 pub const ERR_MALLOC_FAILED: i32 = 2;
@@ -114,8 +111,6 @@ pub fn UBITS(iCurBits: u32, iNumBits: i32) -> u32 {
 }
 
 /// Reads arbitrary `iNumBits` (1..32) from the bitstream.
-///
-/// Matches `int32_t BsGetBits (PBitStringAux pBs, int32_t iNumBits, uint32_t* pCode)` in `dec_golomb.h`.
 #[inline(always)]
 pub fn BsGetBits(buf: &[u8], pBs: &mut BsCursor, iNumBits: i32, pCode: &mut u32) -> i32 {
     match pBs.get_bits(buf, iNumBits) {
@@ -128,8 +123,6 @@ pub fn BsGetBits(buf: &[u8], pBs: &mut BsCursor, iNumBits: i32, pCode: &mut u32)
 }
 
 /// Counts the bit length of the prefix for `uiValue`.
-///
-/// Matches `uint32_t GetPrefixBits (uint32_t uiValue)` in `dec_golomb.h`.
 #[inline(always)]
 pub fn GetPrefixBits(mut uiValue: u32) -> u32 {
     let mut iNumBit: u32 = 0;
@@ -152,16 +145,12 @@ pub fn GetPrefixBits(mut uiValue: u32) -> u32 {
 }
 
 /// Reads a single bit from the bitstream.
-///
-/// Matches `uint32_t BsGetOneBit (PBitStringAux pBs, uint32_t* pCode)` in `dec_golomb.h`.
 #[inline(always)]
 pub fn BsGetOneBit(buf: &[u8], pBs: &mut BsCursor, pCode: &mut u32) -> u32 {
     BsGetBits(buf, pBs, 1, pCode) as u32
 }
 
 /// Fast lookup-table calculation of the number of leading zero bits in `iCurBits`.
-///
-/// Matches `int32_t GetLeadingZeroBits (uint32_t iCurBits)` in `dec_golomb.h`.
 #[inline(always)]
 pub fn GetLeadingZeroBits(iCurBits: u32) -> i32 {
     let mut uiValue = UBITS(iCurBits, 8);
@@ -188,8 +177,6 @@ pub fn GetLeadingZeroBits(iCurBits: u32) -> i32 {
 }
 
 /// Decodes an unsigned Exponential-Golomb (`ue(v)`) code from the bitstream.
-///
-/// Matches `uint32_t BsGetUe (PBitStringAux pBs, uint32_t* pCode)` in `dec_golomb.h`.
 #[inline(always)]
 pub fn BsGetUe(buf: &[u8], pBs: &mut BsCursor, pCode: &mut u32) -> u32 {
     match pBs.get_ue(buf) {
@@ -202,8 +189,6 @@ pub fn BsGetUe(buf: &[u8], pBs: &mut BsCursor, pCode: &mut u32) -> u32 {
 }
 
 /// Decodes a signed Exponential-Golomb (`se(v)`) code from the bitstream.
-///
-/// Matches `int32_t BsGetSe (PBitStringAux pBs, int32_t* pCode)` in `dec_golomb.h`.
 #[inline(always)]
 pub fn BsGetSe(buf: &[u8], pBs: &mut BsCursor, pCode: &mut i32) -> i32 {
     match pBs.get_se(buf) {
@@ -216,12 +201,9 @@ pub fn BsGetSe(buf: &[u8], pBs: &mut BsCursor, pCode: &mut i32) -> i32 {
 }
 
 /// Decodes a truncated Exponential-Golomb (`te(v)`) code constrained by range `iRange`.
-///
-/// Matches `int32_t BsGetTe0 (PBitStringAux pBs, int32_t iRange, uint32_t* pCode)` in `dec_golomb.h`.
 #[inline(always)]
 pub fn BsGetTe0(buf: &[u8], pBs: &mut BsCursor, iRange: i32, pCode: &mut u32) -> i32 {
-    // `iRange == 1` consumes nothing: two call sites rely on being allowed to pass a
-    // range of 1 with a spent reader.
+    // `iRange == 1` consumes no bits, so it is answered even with a spent reader.
     if iRange == 1 {
         *pCode = 0;
         return ERR_NONE;
@@ -236,24 +218,19 @@ pub fn BsGetTe0(buf: &[u8], pBs: &mut BsCursor, iRange: i32, pCode: &mut u32) ->
 }
 
 /// Counts the number of trailing zero bits following the `rbsp_stop_one_bit` in `pBuf`.
-///
-/// Matches `int32_t BsGetTrailingBits (uint8_t* pBuf)` in `dec_golomb.h`. The body is
-/// [`crate::safe::bits::trailing_bits`].
 #[inline(always)]
 pub fn BsGetTrailingBits(pBuf: &u8) -> i32 {
     trailing_bits(*pBuf)
 }
 
 /// Checks whether additional RBSP syntax elements remain before `rbsp_trailing_bits()`.
-///
-/// Matches `bool CheckMoreRBSPData (PBitStringAux pBsAux)` in `dec_golomb.h`.
 #[inline(always)]
 pub fn CheckMoreRBSPData(pBsAux: &BsCursor) -> bool {
     // A state query, not a read: no buffer needed.
     pBsAux.check_more_rbsp_data()
 }
 
-// Validation & error-checking macros translated from C++
+// Validation & error-checking macros
 
 #[macro_export]
 macro_rules! WELS_READ_VERIFY {

@@ -1,11 +1,10 @@
-//! **The two preprocessing plugins are accepted *and run***.
-//!
-//! Denoise on must not produce the same bytes as denoise off; a two-layer encode
-//! must not produce the same bytes as a one-layer encode of the same source.
+//! The two preprocessing plugins are accepted and run: denoise on must not produce the
+//! same bytes as denoise off, and a two-layer encode must not produce the same bytes as
+//! a one-layer encode of the same source.
 
 use openh264_rs::api::codec_api::*;
 
-/// The gate's own single-layer configuration, which must stay accepted.
+/// The baseline single-layer configuration, which must stay accepted.
 fn base_params(enc: *mut ISVCEncoder, w: i32, h: i32) -> SEncParamExt {
     let mut p = SEncParamExt::default();
     unsafe {
@@ -44,10 +43,9 @@ fn init_code(mutate: impl FnOnce(&mut SEncParamExt)) -> i32 {
     }
 }
 
-/// A source frame with **structure at every scale**: a coarse gradient the
-/// downsampler preserves, plus a fine per-pixel dither the denoiser is built to
-/// remove. A flat frame would be a fixed point of both filters and every comparison
-/// below would be vacuously equal.
+/// A source frame with structure at every scale: a coarse gradient the downsampler
+/// preserves, plus a fine per-pixel dither the denoiser removes. A flat frame would be a
+/// fixed point of both filters, making every comparison below vacuously equal.
 fn textured_frame(w: i32, h: i32) -> Vec<u8> {
     let (w, h) = (w as usize, h as usize);
     let luma = w * h;
@@ -142,7 +140,7 @@ fn scrolled(base: &[u8], w: usize, h: usize, rows: usize) -> Vec<u8> {
     out
 }
 
-/// [`encode_bytes`] over a **scrolling** source: frame `i` is [`textured_frame`]
+/// [`encode_bytes`] over a scrolling source: frame `i` is [`textured_frame`]
 /// rolled up by `i * rows_per_frame` lines. Rate control is off and the QP fixed,
 /// so the coded size reflects how well the encoder predicted the motion rather
 /// than a bitrate target both configurations would hit alike.
@@ -206,7 +204,7 @@ fn encode_scrolling(
     }
 }
 
-/// **`SCREEN_CONTENT_REAL_TIME` is accepted at init.**
+/// `SCREEN_CONTENT_REAL_TIME` is accepted at init.
 #[test]
 fn screen_content_is_accepted_at_init() {
     assert_eq!(
@@ -244,9 +242,8 @@ fn screen_content_ltr_without_lossless_link_is_accepted_at_init() {
     );
 }
 
-/// A screen-content sequence encodes to completion. It deliberately asserts nothing
-/// about the bytes: `screen_content_scrolling_source_codes_smaller_than_camera`
-/// below is the row that does.
+/// A screen-content sequence encodes to completion; nothing is asserted about the
+/// bytes.
 #[test]
 fn screen_content_encodes_a_sequence() {
     let screen = encode_bytes(320, 192, 12, |p| {
@@ -258,9 +255,7 @@ fn screen_content_encodes_a_sequence() {
     );
 }
 
-/// The control: the configuration every gate in this project uses is still accepted.
-/// Without this row the assertions below could be passing because *everything*
-/// works by accident.
+/// Control row: the default single-layer configuration is still accepted.
 #[test]
 fn the_gates_own_single_layer_configuration_is_still_accepted() {
     assert_eq!(init_code(|_| {}), CM_RESULT_SUCCESS);
@@ -293,8 +288,7 @@ fn a_downsampled_spatial_layer_is_accepted_and_encoded() {
     // `BaseEncoderTest`'s own layer rule (`test/api/BaseEncoderTest.cpp:34-64`):
     // layer i is the input halved `n - 1 - i` times, the target bitrate is
     // multiplied by the layer count, and every layer carries that bitrate.
-    // Skipping the bitrate scaling makes `ParamValidationExt` refuse the block —
-    // which is a real check, not this test's business to route around silently.
+    // Skipping the bitrate scaling makes `ParamValidationExt` refuse the block.
     let two_layers = |p: &mut SEncParamExt| {
         let template = p.sSpatialLayers[0];
         p.iSpatialLayerNum = 2;
@@ -304,8 +298,8 @@ fn a_downsampled_spatial_layer_is_accepted_and_encoded() {
             p.sSpatialLayers[i].iVideoHeight = 192 >> (1 - i);
             p.sSpatialLayers[i].iSpatialBitrate = p.iTargetBitrate;
         }
-        // *After* the per-layer assignment, exactly as `BaseEncoderTest` does it:
-        // each layer carries the base rate and only the overall target scales.
+        // After the per-layer assignment: each layer carries the base rate and only
+        // the overall target scales.
         p.iTargetBitrate *= 2;
     };
     assert_eq!(init_code(two_layers), CM_RESULT_SUCCESS);
@@ -320,10 +314,9 @@ fn a_downsampled_spatial_layer_is_accepted_and_encoded() {
         one.len()
     );
 
-    // And the single-layer form of the same thing: one layer, smaller than the
-    // source picture. `JudgeNeedOfScaling` downsamples this too — it is the path
-    // where `pScaledInputPicture` is allocated and the *top* layer is the
-    // downsample target.
+    // The single-layer form: one layer smaller than the source picture.
+    // `JudgeNeedOfScaling` downsamples this too — the path where
+    // `pScaledInputPicture` is allocated and the top layer is the downsample target.
     assert_eq!(
         init_code(|p| {
             p.sSpatialLayers[0].iVideoWidth = 160;
@@ -346,13 +339,11 @@ fn a_downsampled_spatial_layer_is_accepted_and_encoded() {
     );
 }
 
-/// Four spatial layers at 1280x720 — `EncoderOutputTest/7`'s shape, and the case
-/// that distinguishes a correct downsampler from an obvious-but-wrong one.
+/// Four spatial layers at 1280x720 — `EncoderOutputTest/7`'s shape.
 ///
-/// The reference reaches each layer by **cascaded halving through a scratch buffer**,
-/// not by the quarter/one-third kernels that `CDownsampling::Process`'s first arm
-/// would suggest — that arm is the out-of-memory fallback, not the normal path.
-/// Three halvings happen here.
+/// Each layer is reached by cascaded halving through a scratch buffer, not by the
+/// quarter/one-third kernels of `CDownsampling::Process`'s first arm — that arm is the
+/// out-of-memory fallback. Three halvings happen here.
 #[test]
 fn four_spatial_layers_at_720p_are_accepted_and_encoded() {
     let four = |p: &mut SEncParamExt| {
@@ -377,9 +368,9 @@ fn four_spatial_layers_at_720p_are_accepted_and_encoded() {
     );
 }
 
-/// A layer **larger** than the input rect is not downsampled, and must not be
-/// refused: `ParamTranscode` rounds layer dimensions up to a multiple of 16 while
-/// leaving `iPicWidth` alone, so 140x96 legitimately becomes a 144x96 layer.
+/// A layer larger than the input rect is not downsampled, and must not be refused:
+/// `ParamTranscode` rounds layer dimensions up to a multiple of 16 while leaving
+/// `iPicWidth` alone, so 140x96 legitimately becomes a 144x96 layer.
 #[test]
 fn a_layer_rounded_up_to_a_macroblock_multiple_is_not_a_downsample() {
     unsafe {
@@ -394,19 +385,15 @@ fn a_layer_rounded_up_to_a_macroblock_multiple_is_not_a_downsample() {
     }
 }
 
-/// **The screen-content algorithms ran.** A source that scrolls eight lines per frame
-/// codes *materially smaller* under `SCREEN_CONTENT_REAL_TIME` than under
+/// The screen-content algorithms ran: a source that scrolls eight lines per frame codes
+/// materially smaller under `SCREEN_CONTENT_REAL_TIME` than under
 /// `CAMERA_VIDEO_REAL_TIME`, at the same fixed QP with rate control off.
 ///
-/// **Why the comparison is this one and not "the bytes differ".** Camera and screen
-/// bytes have differed — the two usage types already disagree about MV range, QP range
-/// and reference count — so an `assert_ne!` here would have passed with every screen
-/// algorithm dormant, and would not have meant what it said. What cannot happen without
-/// the dispatch block is *exploiting the scroll*: `DetectSceneChangeScreen` finds the
-/// displacement, `PreprocessSliceCoding`'s screen block installs `SetScrollingMvToMd`
-/// and `WelsMotionEstimateSearchScrolled`, and the search starts at the right vector
-/// instead of hunting for it. That shows up as size, which is why size is what is
-/// asserted. The inequality is checked too, as the weaker half.
+/// Size, not mere inequality, is the property: camera and screen bytes differ anyway over
+/// MV range, QP range and reference count, while only the screen dispatch block exploits
+/// the scroll — `DetectSceneChangeScreen` finds the displacement and
+/// `PreprocessSliceCoding` installs `SetScrollingMvToMd` and
+/// `WelsMotionEstimateSearchScrolled`, so the search starts at the right vector.
 #[test]
 fn screen_content_scrolling_source_codes_smaller_than_camera() {
     let camera = encode_scrolling(320, 192, 12, 8, |p| {

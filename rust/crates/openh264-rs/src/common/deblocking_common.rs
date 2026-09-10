@@ -3,8 +3,7 @@
 
 //! H.264 / AVC In-Loop Adaptive Deblocking Filter Primitives.
 //!
-//! Translated from `codec/common/inc/deblocking_common.h` and
-//! `codec/common/src/deblocking_common.cpp`.
+//! C++: `codec/common/src/deblocking_common.cpp`.
 
 // ============================================================================
 // Arithmetic and Clipping Helpers
@@ -39,34 +38,26 @@ pub fn WelsClip1(iX: i32) -> u8 {
 // Safe kernels
 // ============================================================================
 
-// The C++ encodes vertical-vs-horizontal filtering in its argument order: every
-// edge kernel takes `(iStrideX, iStrideY)`, reads its taps at multiples of
-// `iStrideX`, and advances to the next line by `iStrideY`; the `V` wrappers pass
-// `(iStride, 1)` and the `H` wrappers `(1, iStride)`. The safe kernels port that
-// trick honestly rather than splitting into per-direction bodies: they take
-// `(step_x, step_y)` in **bytes** and index `i * step_y + j * step_x` around the
-// cursor's anchor through checked math. The cursor's own stride is the plane's
-// real stride (it is `step_x` for a V call and `step_y` for an H call); the
-// kernels do all their addressing in flat byte offsets via `at(off, 0)` /
-// `set(off, 0, _)`, exactly as the C++ does around its `pPix`.
+// Direction is encoded in the step arguments: every edge kernel takes `(step_x, step_y)`
+// in **bytes**, reads its taps at multiples of `step_x` around the cursor's anchor, and
+// advances a line by `step_y`, addressing `i * step_y + j * step_x` as a flat byte offset
+// through `at(off, 0)` / `set(off, 0, _)`. A V call passes `(stride, 1)`, an H call
+// `(1, stride)`.
 //
-// Arithmetic parity: everything is `i32` over `u8` samples and `|tc0| <= 26`, so
-// no intermediate can leave `i32` range. One truncation is load-bearing and
-// faithful: the bS<4 kernels store `p1 + clip` and `q1 + clip` (range
-// `[-26, 281]`) with a plain `as u8`, which wraps exactly like the C++'s implicit
-// int-to-uint8_t conversion. `WelsClip1` is applied only where the C++ applies it
-// (p0'/q0').
+// Arithmetic is `i32` over `u8` samples with `|tc0| <= 26`, so no intermediate can
+// leave `i32` range. The bS<4 kernels store `p1 + clip` and `q1 + clip` (range
+// `[-26, 281]`) with a plain `as u8`, which wraps. `WelsClip1` is applied to
+// `p0'`/`q0'` only.
 
 use crate::safe::plane::PlaneSamples;
 
-/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
-/// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
-/// site because the kernels share their names with the scalars in this module — which
-/// is the point of the naming, and the reason the module qualifier has to stay.
+/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
+/// default, `simd::wide` under `--features wide`. Stays module-qualified: the kernels
+/// share their names with the scalars here.
 use crate::simd::kernels;
 
-/// C++: `DeblockLumaLt4_c`, `codec/common/src/deblocking_common.cpp` — the
-/// normal/weak (bS < 4) luma filter across 16 lines of one macroblock edge.
+/// C++: `DeblockLumaLt4_c` — the normal/weak (bS < 4) luma filter across 16 lines of
+/// one macroblock edge.
 ///
 /// `pix` is anchored at the first line's `q0`. Taps `j ∈ [-3, 2]` (`p2..q2`) are
 /// read at `j * step_x`; `p1..q1` may be written; lines advance by `step_y`.
@@ -127,8 +118,8 @@ pub fn deblock_luma_lt4_scalar(
     }
 }
 
-/// C++: `DeblockLumaEq4_c`, `codec/common/src/deblocking_common.cpp` — the strong
-/// (bS == 4, intra boundary) luma filter across 16 lines of one macroblock edge.
+/// C++: `DeblockLumaEq4_c` — the strong (bS == 4, intra boundary) luma filter across
+/// 16 lines of one macroblock edge.
 ///
 /// `pix` is anchored at the first line's `q0`. Taps `j ∈ [-4, 3]` (`p3..q3`) may
 /// be read at `j * step_x` (`p3`/`q3` only on the strong-filter branch); `p2..q2`
@@ -208,7 +199,7 @@ pub fn deblock_luma_eq4_scalar(
 }
 
 /// One line of the weak chroma filter, shared by the two-plane and single-plane
-/// (`*2_c`) variants — the body the C++ repeats verbatim for Cb, Cr and CbCr.
+/// (`*2_c`) variants.
 #[inline(always)]
 fn chroma_lt4_line(
     pix: &mut impl PlaneSamples,
@@ -249,13 +240,13 @@ fn chroma_eq4_line(pix: &mut impl PlaneSamples, b: isize, step_x: isize, alpha: 
     }
 }
 
-/// C++: `DeblockChromaLt4_c`, `codec/common/src/deblocking_common.cpp` — the
-/// weak (bS < 4) chroma filter across 8 lines, on separate Cb and Cr planes.
+/// C++: `DeblockChromaLt4_c` — the weak (bS < 4) chroma filter across 8 lines, on
+/// separate Cb and Cr planes.
 ///
 /// Both cursors are anchored at their plane's first-line `q0`. Taps
 /// `j ∈ [-2, 1]` are read at `j * step_x`; `p0`/`q0` may be written; lines
-/// advance by `step_y`. `tc[i >> 1]` gates each line — note `> 0` here where the
-/// luma gate is `>= 0`, faithful to the C++.
+/// advance by `step_y`. `tc[i >> 1]` gates each line: `> 0` here, where the luma
+/// gate is `>= 0`.
 pub fn deblock_chroma_lt4(
     cb: &mut impl PlaneSamples,
     cr: &mut impl PlaneSamples,
@@ -287,9 +278,8 @@ pub fn deblock_chroma_lt4_scalar(
     }
 }
 
-/// C++: `DeblockChromaEq4_c`, `codec/common/src/deblocking_common.cpp` — the
-/// strong (bS == 4) chroma filter across 8 lines, on separate Cb and Cr planes.
-/// Reach as [`deblock_chroma_lt4`].
+/// C++: `DeblockChromaEq4_c` — the strong (bS == 4) chroma filter across 8 lines, on
+/// separate Cb and Cr planes. Reach as [`deblock_chroma_lt4`].
 pub fn deblock_chroma_eq4(
     cb: &mut impl PlaneSamples,
     cr: &mut impl PlaneSamples,
@@ -316,9 +306,8 @@ pub fn deblock_chroma_eq4_scalar(
     }
 }
 
-/// C++: `DeblockChromaLt42_c`, `codec/common/src/deblocking_common.cpp` — the
-/// weak chroma filter on a single combined CbCr buffer (one plane, 8 lines).
-/// Reach and gating as [`deblock_chroma_lt4`].
+/// C++: `DeblockChromaLt42_c` — the weak chroma filter on a single combined CbCr buffer
+/// (one plane, 8 lines). Reach and gating as [`deblock_chroma_lt4`].
 pub fn deblock_chroma_lt42(
     cbcr: &mut impl PlaneSamples,
     step_x: isize,
@@ -336,8 +325,8 @@ pub fn deblock_chroma_lt42(
     }
 }
 
-/// C++: `DeblockChromaEq42_c`, `codec/common/src/deblocking_common.cpp` — the
-/// strong chroma filter on a single combined CbCr buffer (one plane, 8 lines).
+/// C++: `DeblockChromaEq42_c` — the strong chroma filter on a single combined CbCr
+/// buffer (one plane, 8 lines).
 pub fn deblock_chroma_eq42(
     cbcr: &mut impl PlaneSamples,
     step_x: isize,
@@ -351,8 +340,7 @@ pub fn deblock_chroma_eq42(
     }
 }
 
-/// C++: `WelsNonZeroCount_c`, `codec/common/src/deblocking_common.cpp` —
-/// normalises the 24-entry non-zero-count cache to 0/1 (`!!nzc[i]`).
+/// C++: `WelsNonZeroCount_c` — normalises the 24-entry non-zero-count cache to 0/1.
 pub fn nonzero_count(nzc: &mut [i8; 24]) {
     for v in nzc.iter_mut() {
         *v = (*v != 0) as i8;

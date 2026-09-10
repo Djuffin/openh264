@@ -26,13 +26,12 @@
 // ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-//! # OpenH264 Encoder: NAL Unit Encapsulation Engine
+//! NAL unit encapsulation.
 //!
-//! Translated from `codec/encoder/core/inc/nal_encap.h` and `codec/encoder/core/src/nal_encap.cpp`.
+//! C++: `codec/encoder/core/src/nal_encap.cpp`.
 //!
-//! Handles NAL unit start position demarcations, unescaped RBSP payload accounting,
-//! Annex B start code prefix injection (`0x00000001`), standard 1-byte AVC and 4-byte SVC
-//! extension NAL headers, emulation prevention byte escaping (`0x000003`), and SVC prefix NAL serialization.
+//! Annex B start code prefixes (`0x00000001`), 1-byte AVC and 4-byte SVC extension NAL
+//! headers, emulation prevention escaping (`0x000003`), and SVC prefix NAL serialization.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 // ============================================================================
@@ -68,11 +67,11 @@ pub use crate::safe::bits::BsWriter;
 // hands the application stays valid while the encoder keeps writing lengths.
 use std::sync::atomic::{AtomicI32, Ordering};
 
-/// Raw payload data descriptor for a NAL unit before encapsulation.
+/// Raw payload descriptor for a NAL unit before encapsulation.
 ///
-/// The payload is `iStartPos .. iStartPos + iPayloadSize` of a buffer this record
-/// does not name: the caller of [`WelsEncodeNal`] names the buffer — the frame's
-/// `pOut->sBsBuffer` for the frame list, the thread buffer for a slice's list.
+/// The payload is `iStartPos .. iStartPos + iPayloadSize` of a buffer this record does
+/// not name: the caller of [`WelsEncodeNal`] supplies it — the frame's `pOut->sBsBuffer`
+/// for the frame list, the thread buffer for a slice's list.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SWelsNalRaw {
@@ -91,11 +90,10 @@ impl Default for SWelsNalRaw {
     }
 }
 
-/// Top-level frame bitstream output container and NAL descriptor list manager.
+/// Frame bitstream output buffer and its NAL descriptor list.
 ///
-/// The `sNalList` entries carry offsets into `sBsBuffer` and no pointer: see
-/// `SWelsNalRaw` — the caller of `WelsEncodeNal` passes `&sBsBuffer[..]` beside
-/// the entry.
+/// The `sNalList` entries carry offsets into `sBsBuffer`, never pointers; the caller of
+/// `WelsEncodeNal` passes `&sBsBuffer[..]` beside the entry.
 #[derive(Debug)]
 pub struct SWelsEncoderOutput {
     pub sBsBuffer: Vec<u8>,
@@ -107,12 +105,10 @@ pub struct SWelsEncoderOutput {
     /// Where the current layer's NAL lengths start in [`sNalLen`](Self::sNalLen),
     /// the safe half of `SLayerBSInfo::pNalLengthInByte`.
     ///
-    /// The ABI struct the application walks carries a `*mut i32` per layer, each
-    /// the previous layer's pointer advanced by that layer's NAL count. The
-    /// storage behind every one of them is this struct's own `sNalLen`, so the
-    /// pointer is a *derived* value and the position is the real state. The
-    /// encoder reads and writes lengths by index; the pointer is stamped from
-    /// this by [`nal_len_ptr`](Self::nal_len_ptr) wherever the ABI needs it.
+    /// The ABI struct the application walks carries a `*mut i32` per layer, each the
+    /// previous layer's pointer advanced by that layer's NAL count, and all of them point
+    /// into this struct's own `sNalLen`. This index is the authoritative state; the
+    /// pointer is derived from it by [`nal_len_ptr`](Self::nal_len_ptr).
     pub iNalLenBase: usize,
 }
 
@@ -131,9 +127,7 @@ impl Default for SWelsEncoderOutput {
 }
 
 impl SWelsEncoderOutput {
-    /// The frame output, constructed on the heap with its buffers sized.
-    ///
-    /// `WelsMallocz` zeroed what it returned, so the buffers start zeroed too.
+    /// The frame output, constructed on the heap with its buffers sized and zeroed.
     pub fn new_boxed(kiBsLen: usize, kiCountNals: usize) -> Box<Self> {
         Box::new(Self {
             sBsBuffer: vec![0u8; kiBsLen],
@@ -146,8 +140,8 @@ impl SWelsEncoderOutput {
         })
     }
 
-    /// The current layer's NAL-length slot **as the C-ABI pointer the application
-    /// walks** — `sNalLen`'s tail from [`iNalLenBase`](Self::iNalLenBase).
+    /// The current layer's NAL-length slot as the C-ABI pointer the application
+    /// walks — `sNalLen`'s tail from [`iNalLenBase`](Self::iNalLenBase).
     ///
     /// A base equal to the array's length yields the one-past-the-end address,
     /// which the application never dereferences (its `iNalCount` is zero there).
@@ -157,7 +151,7 @@ impl SWelsEncoderOutput {
         self.sNalLen[kiBase..].as_ptr().cast::<i32>().cast_mut()
     }
 
-    /// The NAL length at `kiIdx` **within the current layer** — the safe form of
+    /// The NAL length at `kiIdx` within the current layer — the safe form of
     /// `*pNalLengthInByte.add(kiIdx)`.
     #[inline]
     pub fn nal_len_at(&self, kiIdx: usize) -> i32 {
@@ -166,9 +160,9 @@ impl SWelsEncoderOutput {
 
     /// [`nal_len_at`](Self::nal_len_at)'s write half.
     ///
-    /// `Relaxed` is the right ordering: these slots are published to the
-    /// application by `EncodeFrame`'s own return, which is the synchronisation
-    /// edge, and no worker reads another worker's slot.
+    /// `Relaxed` suffices: these slots are published to the application by
+    /// `EncodeFrame`'s own return, which is the synchronisation edge, and no worker
+    /// reads another worker's slot.
     #[inline]
     pub fn set_nal_len_at(&self, kiIdx: usize, kiLen: i32) {
         let kiBase = self.iNalLenBase;
@@ -185,11 +179,9 @@ impl SWelsEncoderOutput {
 
 /// Thread-local bitstream state allocated per slice.
 ///
-/// `pBs` is an `Option<Vec<u8>>` where the C++ has a `CMemoryAlign` block:
-/// `InitSliceBsBuffer` fills it when the slice writes independently and leaves it
-/// `None` when the slice shares the frame's buffer, and `is_some()` is the one bit
-/// `slice_writer`/`slice_bs_buffer` read. `uiSize` is the *thread* buffer's length
-/// and stays beside the writer that is positioned in it.
+/// `pBs` is `Some` when the slice writes independently and `None` when it shares the
+/// frame's buffer; `slice_writer`/`slice_bs_buffer` read only that bit. `uiSize` is
+/// the thread buffer's length.
 #[derive(Debug)]
 pub struct SWelsSliceBs {
     pub pBs: Option<Vec<u8>>,
@@ -221,8 +213,7 @@ impl Default for SWelsSliceBs {
 // Bitstream Helper Functions
 // ============================================================================
 
-// One writer family, `vlc_encoder.rs`'s, which is the transliteration of the C++
-// `codec/common/inc/golomb_common.h`.
+// The writer family, from `vlc_encoder.rs` — C++ `codec/common/inc/golomb_common.h`.
 pub use crate::encoder::vlc_encoder::{
     BsFlush, BsGetBitsPos, BsRbspTrailingBits, BsWriteBits, BsWriteOneBit,
 };
@@ -262,7 +253,6 @@ pub fn WelsUnloadNal(pEncoderOuput: &mut SWelsEncoderOutput) {
     let iIdx = pWelsEncoderOuput.iNalIndex as usize;
     let pRawNal = &mut pWelsEncoderOuput.sNalList[iIdx];
 
-    /* count payload size of raw NAL */
     pRawNal.iPayloadSize = kiEndPos - pRawNal.iStartPos;
 
     pWelsEncoderOuput.iNalIndex += 1;
@@ -292,22 +282,17 @@ pub extern "C" fn WelsUnloadNalForSlice(pSliceBs: &mut SWelsSliceBs) {
     let pRawNal = &mut pSlice.sNalList[*pIdx as usize];
     let kiEndPos = BsGetBitsPos(&pSlice.sBsWrite) >> 3;
 
-    /* count payload size of raw NAL */
     pRawNal.iPayloadSize = kiEndPos - pRawNal.iStartPos;
     *pIdx += 1;
 }
 
-/// Encapsulates an unescaped raw NAL payload into an Annex B compliant byte stream (EBSP).
+/// Encapsulates an unescaped raw NAL payload into an Annex B byte stream (EBSP): the
+/// 4-byte start code prefix, the 1-byte base NAL header or 4-byte SVC extension header,
+/// then the payload with emulation prevention bytes (`0x03`) inserted.
 ///
-/// Prepends the 4-byte start code prefix (`0x00000001`), packs the 1-byte base NAL header
-/// or 4-byte SVC extension header, and performs emulation prevention byte insertion (`0x03`).
-///
-/// The payload is `src[raw.iStartPos .. raw.iStartPos + raw.iPayloadSize]`: the
-/// record carries the offset and the caller names the buffer it is an offset
-/// into — the frame's `pOut->sBsBuffer` for the frame NAL list, the thread buffer
-/// for a slice's own list. `ext` is the SVC extension header, needed exactly when
-/// the NAL type is a prefix or an extension slice; the C++ took it as `void*` and
-/// cast back to the one type here.
+/// The payload is `src[raw.iStartPos .. raw.iStartPos + raw.iPayloadSize]`. `ext` is the
+/// SVC extension header, required exactly when the NAL type is a prefix or an extension
+/// slice.
 #[inline]
 pub fn WelsEncodeNal(
     raw: &SWelsNalRaw,
@@ -331,8 +316,8 @@ pub fn WelsEncodeNal(
         return ENC_RETURN_UNEXPECTED;
     }
 
-    // Since for each 0x000 need a 0x03, the needed length will not exceed (iAssumedNeededLength + iAssumedNeededLength / 3).
-    // Here adjusted to >> 1 to omit division.
+    // Every `00 00 00` costs one `0x03`, so the escaped length cannot exceed
+    // `iAssumedNeededLength + iAssumedNeededLength / 3`; `>> 1` bounds it without a division.
     if dst_len < (iAssumedNeededLength + (iAssumedNeededLength >> 1)) {
         return ENC_RETURN_MEMALLOCERR;
     }
@@ -343,7 +328,6 @@ pub fn WelsEncodeNal(
 
     *out_len = 0;
 
-    // 4-byte Annex B start code prefix: 0x00 0x00 0x00 0x01
     let kuiStartCodePrefix: [u8; 4] = [0, 0, 0, 1];
     dst[iDstPos..iDstPos + 4].copy_from_slice(&kuiStartCodePrefix);
     iDstPos += 4;
@@ -355,8 +339,7 @@ pub fn WelsEncodeNal(
     iDstPos += 1;
 
     if kbNALExt {
-        // The C++ dereferenced its `void*` here unconditionally; every caller
-        // that emits a prefix or extension NAL passes the layer's header.
+        // Every caller that emits a prefix or extension NAL passes the layer's header.
         let sNalExt =
             ext.expect("a prefix or extension NAL is encoded with its SVC extension header");
 
@@ -377,7 +360,6 @@ pub fn WelsEncodeNal(
     // Emulation prevention escaping loop
     for &byte_val in payload {
         if iZeroCount == 2 && byte_val <= 3 {
-            // Add emulation prevention byte 0x03
             dst[iDstPos] = 3;
             iDstPos += 1;
             iZeroCount = 0;
@@ -445,17 +427,13 @@ mod tests {
         assert_eq!(ret, ENC_RETURN_SUCCESS);
         assert!(dst_len > 0);
 
-        // Check start code prefix: 00 00 00 01
         assert_eq!(&dst_buffer[0..4], &[0x00, 0x00, 0x00, 0x01]);
 
-        // Check 1-byte NAL header: (3 << 5) | 1 = 0x61
+        // NAL header: (3 << 5) | 1 = 0x61
         assert_eq!(dst_buffer[4], (3 << 5) | 1);
 
-        // Check escaped bytes:
-        // [0x00, 0x00, 0x01] -> [0x00, 0x00, 0x03, 0x01]
-        // [0xAA]
-        // [0x00, 0x00, 0x00] -> [0x00, 0x00, 0x03, 0x00]
-        // [0xBB]
+        // The escaping: [0x00, 0x00, 0x01] -> [0x00, 0x00, 0x03, 0x01], [0xAA],
+        // [0x00, 0x00, 0x00] -> [0x00, 0x00, 0x03, 0x00], [0xBB].
         let expected_payload = [0x00, 0x00, 0x03, 0x01, 0xAA, 0x00, 0x00, 0x03, 0x00, 0xBB];
         assert_eq!(
             &dst_buffer[5..5 + expected_payload.len()],
@@ -491,7 +469,6 @@ mod tests {
 
         assert_eq!(ret, ENC_RETURN_SUCCESS);
 
-        // Start code: 00 00 00 01
         assert_eq!(&dst_buffer[0..4], &[0x00, 0x00, 0x00, 0x01]);
 
         // Base NAL header: (2 << 5) | 20 = 0x40 | 0x14 = 0x54
@@ -506,7 +483,6 @@ mod tests {
         // Ext Byte 3: (3 << 5) | (1 << 3) | 0x07 = 0x60 | 0x08 | 0x07 = 0x6F
         assert_eq!(dst_buffer[7], 0x6F);
 
-        // Payload bytes
         assert_eq!(&dst_buffer[8..10], &[0x12, 0x34]);
         assert_eq!(dst_len, 10);
     }
@@ -518,7 +494,7 @@ mod tests {
         raw_nal.iPayloadSize = 100;
         raw_nal.sNalExt.sNalUnitHeader.eNalUnitType = EWelsNalUnitType::NAL_UNIT_CODED_SLICE;
 
-        let mut dst_buffer = [0u8; 10]; // Much too small
+        let mut dst_buffer = [0u8; 10];
         let mut dst_len: i32 = 0;
 
         let ret = WelsEncodeNal(
@@ -546,7 +522,7 @@ mod tests {
         );
         assert_eq!(slice_bs.sNalList[0].iStartPos, 0);
 
-        // Simulate writing 16 bits (2 bytes)
+        // 16 bits, so the payload size lands at 2 bytes.
         BsWriteBits(&mut bs_buf, &mut slice_bs.sBsWrite, 16, 0xABCD);
         BsFlush(&mut bs_buf, &mut slice_bs.sBsWrite);
 

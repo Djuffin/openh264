@@ -4,7 +4,7 @@
 
 //! Sum of Absolute Differences (SAD) distortion calculation engine.
 //!
-//! Translated from `codec/common/inc/sad_common.h` and `codec/common/src/sad_common.cpp`.
+//! C++: `codec/common/inc/sad_common.h`, `codec/common/src/sad_common.cpp`.
 
 pub use crate::encoder::md::PSampleSadSatdCostFunc;
 pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
@@ -31,12 +31,8 @@ pub fn WELS_ABS(iX: i32) -> i32 {
 
 //=================== Safe kernels =====================//
 
-// The C kernels build the larger shapes out of the smaller ones —
-// `WelsSampleSad16x16_c` sums four 8x8 quadrants, `WelsSampleSad8x4_c` sums two 4x4
-// halves — and these kernels compute each shape in one pass instead. The summands are
-// the same set of `|a - b|` terms and `i32` addition is associative, so the only way
-// regrouping could change the result is overflow; the largest shape sums 16 x 16 terms
-// of at most 255, i.e. 65 280, four orders of magnitude inside `i32`.
+// Each shape is summed in a single pass. The largest accumulates 16 x 16 terms of at
+// most 255, i.e. 65 280, so the `i32` accumulator cannot overflow.
 
 #[cfg(test)]
 use crate::safe::plane::PlaneCursor;
@@ -44,11 +40,6 @@ use crate::safe::plane::RefSamples;
 
 /// Sum of absolute differences between a `W` x `H` block at `sample1` and one at
 /// `sample2` displaced by `(dx, dy)`.
-///
-/// The displacement is what the four-point kernels need and is a parameter rather than
-/// four rebased cursors because `PlaneCursor::advance` re-runs the anchor assertion:
-/// folding the offset into the row lookup keeps the four probes at one bounds check
-/// per block each.
 #[inline(always)]
 fn sad_at<const W: usize, const H: usize, S: RefSamples>(
     sample1: &S,
@@ -57,19 +48,10 @@ fn sad_at<const W: usize, const H: usize, S: RefSamples>(
     dy: isize,
 ) -> i32 {
     let mut sum: i32 = 0;
-    // One bounds check per block per side, not two per row per side. Through a shim
-    // neither the stride nor the buffer length is a compile-time value, so a per-row
-    // `row()` walk cannot fold its checks and a 16x8 emits 32 branches before reading
-    // a sample — see `PlaneCursor::row_windows`.
-    //
-    // **Why this is `row_blocks` and not `RefSamples::span`,** which is what every
-    // SIMD kernel switched to. `span` hands rows over *by value*, and this loop wants
-    // them borrowed: reading 8-wide rows out of `[u8; 8]` temporaries instead of out
-    // of the plane cost this kernel 10.1 -> 17.6 ns on an 8x8 and 34.2 -> 69.0 ns on a
-    // four-point 8x8, because the copy is what LLVM vectorises rather than the
-    // difference. The vector kernels have no such problem — their row *is* a register
-    // — so they take the span and its checkless rows, and the reference keeps the
-    // block walk, whose one-check-per-block it already had.
+    // `row_blocks` costs one bounds check per block per side, not one per row, and
+    // borrows its rows out of the plane. `RefSamples::span` hands rows over by value,
+    // and copying them into temporaries costs this scalar kernel more than the
+    // difference itself; vector kernels take `span`, whose row is already a register.
     let rows1 = sample1.row_blocks::<W>(0, 0, H);
     let rows2 = sample2.row_blocks::<W>(dy, dx, H);
     for (a, b) in rows1.zip(rows2) {
@@ -96,8 +78,7 @@ pub fn sample_sad<const W: usize, const H: usize, S: RefSamples>(sample1: &S, sa
 ///
 /// `sample1` is read over its nominal block only. `sample2` is read one row above and
 /// one row below it, and one column either side: `x` in `-1 .. W + 1`, `y` in
-/// `-1 .. H + 1`. That reach is the whole reason this kernel takes a plane cursor and
-/// not a block slice — the diamond's arms leave the block.
+/// `-1 .. H + 1`.
 #[inline(always)]
 pub fn sample_sad_four<const W: usize, const H: usize, S: RefSamples>(
     sample1: &S,
