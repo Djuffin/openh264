@@ -26,59 +26,48 @@ use core::arch::x86_64::*;
 /// non-zero whatever its magnitude: `_mm_packs_epi16` maps `v` to
 /// `clamp(v, -128, 127)`, which is `0` only for `v == 0`. A truncating narrow
 /// would lose every multiple of 256.
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 fn nonzero_mask(dct: &[i16; 16]) -> u32 {
     unsafe {
         let zero = _mm_setzero_si128();
-        let v0 = _mm_loadu_si128(dct.as_ptr() as *const __m128i);
-        let v1 = _mm_loadu_si128(dct.as_ptr().add(8) as *const __m128i);
+        let ptr = dct.as_ptr() as *const __m128i;
+        let v0 = _mm_loadu_si128(ptr);
+        let v1 = _mm_loadu_si128(ptr.add(1));
         let packed = _mm_packs_epi16(v0, v1);
         let is_zero = _mm_cmpeq_epi8(packed, zero);
-        !(_mm_movemask_epi8(is_zero) as u32) & 0xFFFF
+        (!(_mm_movemask_epi8(is_zero) as u32)) & 0xFFFF
     }
-}
-
-/// Highest set bit of `m`, or `-1` when `m` is zero — "scan down while the
-/// coefficient is zero", which is what both of the scalar's inner loops do.
-#[inline(always)]
-fn highest_set(m: u32) -> i32 {
-    31 - m.leading_zeros() as i32
 }
 
 /// JVT-O079 CAVLC bit-cost estimate: for each run of zeros between non-zero
 /// coefficients (scanning from the high end), add the run-length penalty.
 ///
 /// C++: `WelsCalculateSingleCtr4x4_sse2`, `codec/encoder/core/x86/score.asm:263`.
-///
-/// The asm builds the same non-zero mask this does and then reads the answer out of three
-/// 256-entry tables, which are the scalar's run-length sum precomputed. The mask is the
-/// part worth vectorising — it is what costs the scalar sixteen data-dependent branches —
-/// so it is built with SSE2 and the sum is then a walk over set bits, one iteration per
-/// non-zero coefficient rather than one per coefficient.
-///
-/// The result depends on `dct` only through this mask, which is what lets
-/// `single_ctr_matches_the_scalar_for_every_mask` check all 65536 of them.
-#[target_feature(enable = "sse2")]
-fn calculate_single_ctr_4x4_sse2_impl(dct: &[i16; 16]) -> i32 {
+#[inline(always)]
+pub fn calculate_single_ctr_4x4(dct: &[i16; 16]) -> i32 {
     use crate::encoder::encode_mb_aux::KI_TRUN_TABLE;
 
     let nz = nonzero_mask(dct);
+    if nz == 0 {
+        return 0;
+    }
 
     let mut single_ctr: i32 = 0;
-    // The scalar's first loop: skip the trailing zeros above the top coefficient.
-    let mut idx = highest_set(nz);
+    let mut curr_idx = 31 - nz.leading_zeros() as i32;
+    let mut m = nz ^ (1 << curr_idx);
 
-    while idx >= 0 {
-        // Step past that coefficient, then measure the run of zeros below it.
-        idx -= 1;
-        let run_start = idx;
-        let below = if idx < 0 {
-            0
+    while curr_idx >= 0 {
+        let run = if m != 0 {
+            let next_idx = 31 - m.leading_zeros() as i32;
+            m ^= 1 << next_idx;
+            let r = curr_idx - next_idx - 1;
+            curr_idx = next_idx;
+            r
         } else {
-            nz & ((1u32 << (idx + 1)) - 1)
+            let r = curr_idx;
+            curr_idx = -1;
+            r
         };
-        idx = highest_set(below);
-        let run = run_start - idx;
         if (run as usize) < KI_TRUN_TABLE.len() {
             single_ctr += KI_TRUN_TABLE[run as usize];
         }
@@ -87,19 +76,14 @@ fn calculate_single_ctr_4x4_sse2_impl(dct: &[i16; 16]) -> i32 {
     single_ctr
 }
 
-/// See [`calculate_single_ctr_4x4_sse2_impl`].
-#[inline]
-pub fn calculate_single_ctr_4x4(dct: &[i16; 16]) -> i32 {
-    unsafe { calculate_single_ctr_4x4_sse2_impl(dct) }
-}
-
 // ============================================================================
 // Unit Tests
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
-    use crate::encoder::encode_mb_aux::calculate_single_ctr_4x4;
+    use super::*;
+    use crate::encoder::encode_mb_aux::calculate_single_ctr_4x4 as scalar_calculate_single_ctr_4x4;
 
     /// `calculate_single_ctr_4x4` reads its input only through `== 0`, so its result is a
     /// function of the 16-bit non-zero mask alone — and all 65536 of them fit in a test.
@@ -109,7 +93,7 @@ mod tests {
             let dct: [i16; 16] = core::array::from_fn(|i| ((mask >> i) & 1) as i16);
             assert_eq!(
                 calculate_single_ctr_4x4(&dct),
-                calculate_single_ctr_4x4(&dct),
+                scalar_calculate_single_ctr_4x4(&dct),
                 "mask {mask:#06x}"
             );
         }
@@ -126,7 +110,7 @@ mod tests {
                 dct[pos] = v;
                 assert_eq!(
                     calculate_single_ctr_4x4(&dct),
-                    calculate_single_ctr_4x4(&dct),
+                    scalar_calculate_single_ctr_4x4(&dct),
                     "value {v} at {pos}"
                 );
             }
