@@ -22,6 +22,51 @@ this tree is not, and the port matches the patched tree:
 * `manage_dec_ref.cpp`'s two reference-list modification routines processed at
   most `num_ref_frames + 2` commands and padded the rest, instead of running one
   per entry of a list `num_ref_idx_lX_active` long (8.2.4.3).
+* `rec_mb.cpp`'s `GetInterBPred` advanced the destination before applying explicit
+  weights, so only the second half of a uni-predicted 8x4 or 4x8 B sub-partition was
+  weighted, where 8.4.2.3 weights every partition.
+* `welsDecoderExt.cpp` put pictures out by a heuristic — buffer nothing until a B
+  slice has been seen, then emit whatever is within two of the last written POC —
+  instead of the bumping process of Annex C, so a conforming stream's pictures could
+  come out permuted.
+
+### Picture output order
+
+The last of those is the one that changes what a caller sees, so it is worth
+spelling out. Upstream's display layer holds a decoded picture back only once a B
+slice has appeared (`bHasBSlice`), and then emits the smallest buffered POC when it
+is within one of the last written POC, or when the decoder has already moved past
+it; otherwise it emits in decoding order. On a stream whose anchors are coded
+before the B pictures they bracket, that decides to emit a P picture before the B
+pictures that precede it in output order have been seen, and the pictures come out
+in the wrong order — measurably, against the JVT gold, on `CVBS3_Sony_C`,
+`CACQP3_Sony_D`, `CVWP2_TOSHIBA_E`, `CVWP3_TOSHIBA_E` and `CABAST3_Sony_E`.
+
+This tree runs the specification's process instead. Pictures are emitted in
+(coded video sequence, POC) order — sequences in decoding order, POC ascending
+within each, a new sequence at every IDR, SPS change and `memory_management_control_operation`
+equal to 5 — and one is emitted per completed picture as soon as C.4.5.3 says the
+DPB has no empty frame buffer, where the DPB size is A.3.1's over Table A-1
+(`MaxDpbMbs / PicSizeInMbs`, capped at 16, overridden by the VUI's
+`max_dec_frame_buffering`, never below `max_num_ref_frames`). A stream whose VUI
+carries `max_num_reorder_frames` also emits as soon as more than that many pictures
+are waiting, which is E.2.1's guarantee and keeps such a stream at its encoder's
+latency rather than its level's.
+
+Three families skip the buffer entirely and are handed each picture the moment it
+is decoded, as the layer always did for baseline: profile 66 and 83; any
+`pic_order_cnt_type` other than 0 (type 2 has output order equal to decoding order
+by definition, and this decoder derives no POC for type 1); and a VUI that says
+`max_num_reorder_frames` is 0 — which is what this project's own encoder writes, so
+openh264-encoded streams keep zero latency.
+
+The price is latency, and it is the JM's and `ffmpeg -strict strict`'s price too: a
+Main or High stream with `pic_order_cnt_type` 0 and no VUI now has its pictures held
+for up to `dpb_size - references_held` completed pictures, even when it turns out to
+contain no B slices at all, because nothing in such a stream says a B picture is not
+coming. Ten of this tree's assets are in that position — same order, same bytes,
+delivered later. The decoded picture pool grows to `dpb_size + max_num_ref_frames + 3`
+for streams that reorder, and is unchanged for the rest.
 
 The one property everything here is organised around: **for the same input and
 the same parameters, the port produces the same bytes as the C++**. Every

@@ -8,22 +8,27 @@
 //!   against ffmpeg's own decode of the same bitstream. These are skipped when
 //!   ffmpeg is not on `PATH`.
 //!
-//! Six tests here are `#[ignore]`d because upstream openh264 itself does not
+//! Two tests here are `#[ignore]`d because upstream openh264 itself does not
 //! decode them bit-exactly. They are kept (run them with
 //! `cargo test -- --ignored`) because they document real conformance gaps, and
 //! each one's reason names the defect rather than the family.
 //!
-//! **Picture output order** accounts for five of the six on its own:
-//! `ReleaseBufferedReadyPictureReorder` does not reorder until a B slice has been
-//! seen, then works from a POC-distance heuristic. On three of those five —
-//! `test_CVBS3_Sony_C`, `test_CVWP3_TOSHIBA_E`, `test_CACQP3_Sony_D` — every
-//! picture is now bit-exact and the permutation is all that is left. The other
-//! two carry a residual as well: `test_CABAST3_Sony_E` the cross-slice bS
-//! derivation (`DeblockingBSliceBsMarginalMBAvcbase` resolves a neighbour's
-//! ref_idx through the current slice's lists), `test_CVWP2_TOSHIBA_E` something
-//! in explicit weighted prediction — its motion is right, measured per 4x4
-//! against a clean-room decoder. The sixth, the multi-slice ffmpeg clip, is
-//! one 8x8 sub-partition of one macroblock and is not attributed.
+//! **Picture output order is no longer one of them.** The display layer used to
+//! hold a picture back until a B slice had been seen and then emit from a
+//! POC-distance heuristic; this tree replaces that with the bumping process of
+//! Annex C — output is (coded video sequence, POC) order, one picture per
+//! completed picture, with the DPB size of A.3.1 and the VUI's
+//! `max_num_reorder_frames` deciding when a picture is safe to emit. That, with
+//! explicit weighted prediction reaching both halves of an 8x4 or 4x8 B
+//! sub-partition (`rec_mb.cpp`'s `GetInterBPred`), activated four of the six
+//! tests that were ignored here before: `test_CVBS3_Sony_C`,
+//! `test_CACQP3_Sony_D`, `test_CVWP3_TOSHIBA_E` and `test_CVWP2_TOSHIBA_E`.
+//!
+//! What is left is one defect apiece. `test_CABAST3_Sony_E` is the cross-slice bS
+//! derivation — `DeblockingBSliceBsMarginalMBAvcbase` resolves a neighbour's
+//! ref_idx through the current slice's lists — and its output order is now right;
+//! `test_ffmpeg_multi_slice_variable_size` is one 8x8 sub-partition of one
+//! macroblock at a slice boundary, and is not attributed.
 //!
 //! Things that used to be on that list are not any more, and the difference is
 //! worth keeping straight. High-profile 8x8 coding is conformant on its own:
@@ -308,7 +313,6 @@ pub fn test_CABA3_SVA_B() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "upstream defect the port mirrors, now output order alone: every one of this stream's 300 pictures is bit-exact against the JVT gold, but ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, so the decode order I P P B ... emits the second P before the B and the pictures come out permuted"]
 pub fn test_CVBS3_Sony_C() -> Result<(), String> {
     // IPB slices with CAVLC. Temporal direct prediction. direct_8x8_inference=on. num_ref_frames=4.
     test_decoding_against_gold("res/CVBS3_Sony_C.jsv", "res/CVBS3_Sony_C_rec.y4m")
@@ -321,14 +325,12 @@ pub fn test_CVWP1_TOSHIBA_E() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "upstream defects the port mirrors: picture output order -- ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, so the two P pictures at POC -4/-2 precede the IDR in the gold and openh264 emits the IDR first (here that permutes the first three pictures and nothing else) -- plus a residual this pass did not fix: 56 of the 90 pictures differ in 1 to 7 macroblocks each, up to 148 levels. It is not in the motion: a per-4x4 dump of this stream's B macroblocks against hibernia, a clean-room decoder that reaches the gold, agrees on list usage, reference index and motion vector in all 7123 macroblocks compared. CVWP3_TOSHIBA_E is the same content with implicit weights (weighted_bipred_idc=2) and is now bit-exact in every picture, so what is left is the explicit weighted prediction path (idc=1); not isolated further"]
 pub fn test_CVWP2_TOSHIBA_E() -> Result<(), String> {
     // Explicit weighted prediction for B slices. CAVLC. weighted_bipred_idc=1.
     test_decoding_against_gold("res/CVWP2_TOSHIBA_E.264", "res/CVWP2_TOSHIBA_E_dec.y4m")
 }
 
 #[test]
-#[ignore = "upstream defect the port mirrors, now output order alone: every one of this stream's 90 pictures is bit-exact against the JVT gold, but ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic -- the two P pictures at POC -4/-2 precede the IDR in the gold and openh264 emits the IDR first, which permutes the first three pictures"]
 pub fn test_CVWP3_TOSHIBA_E() -> Result<(), String> {
     // Implicit weighted prediction for B slices. CAVLC. weighted_bipred_idc=2.
     test_decoding_against_gold("res/CVWP3_TOSHIBA_E.264", "res/CVWP3_TOSHIBA_E_dec.y4m")
@@ -355,7 +357,6 @@ pub fn test_SVA_Base_B() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "upstream defect the port mirrors, now output order alone: every one of this stream's 50 pictures is bit-exact against the JVT gold, but ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, so the decode order I P P B ... emits the second P before the B and the pictures come out permuted"]
 pub fn test_CACQP3_Sony_D() -> Result<(), String> {
     // Single-slice-per-picture stream with a fresh PPS update before every
     // picture's slice (varying chroma_qp_index_offset across pictures).
@@ -365,7 +366,7 @@ pub fn test_CACQP3_Sony_D() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "two upstream defects the port mirrors: picture output order -- ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, and this stream mixes I, P and B slices within one picture, which needs two pictures of reorder depth; and the cross-slice bS derivation -- DeblockingBSliceBsMarginalMBAvcbase (deblocking.cpp:544) resolves the *neighbour* macroblock's ref_idx through the *current* slice's reference lists and reads a P-slice neighbour's never-written list-1 indices, so the P/B slice boundary rows are off by 1 to 3 levels. 11 of the 25 pictures are bit-exact and the other 14 are within 3 levels"]
+#[ignore = "upstream defect the port mirrors, now the cross-slice bS derivation alone: this stream's output order is right (the gold-to-output index map is the identity, measured), so what is left is DeblockingBSliceBsMarginalMBAvcbase (deblocking.cpp:544), which resolves the *neighbour* macroblock's ref_idx through the *current* slice's reference lists and so reads a P-slice neighbour's never-written list-1 indices; this stream mixes I, P and B slices within one picture, so its P/B slice boundary rows are off by 1 to 3 levels. 11 of the 25 pictures are bit-exact and the other 14 are within 3 levels"]
 pub fn test_CABAST3_Sony_E() -> Result<(), String> {
     // Multi-slice picture: 4 slices per picture at first_mb_in_slice
     // 25 pictures.

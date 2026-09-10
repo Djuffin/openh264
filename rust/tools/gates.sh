@@ -289,7 +289,7 @@ fi
 # pinned count is for; the number moves with the reason written down, never to
 # make the gate pass.
 #
-# **7 since the four B-slice and reference-list decoder fixes.** The other 20 were
+# **3 since output order became Annex C's.** The other 20 were
 # `e2e_conformance_test.rs`'s, each ignored because the C++ `h264dec` diverges from
 # the gold on that stream too. Fixing `GetInterBPred`'s 16x8, 8x16 and 4x4
 # sub-partition arms — in the reference and in the port alike — made eleven of them
@@ -302,10 +302,15 @@ fi
 # temporal-direct reference indices reaching the MV-prediction cache, a co-located
 # P_8x8ref0 in `GetColocatedMb`, and the reference-list modification bound — made
 # three more bit-exact on the same three-runs-in-both-profiles rule:
-# `test_CABA3_SVA_B`, `test_CAWP5_TOSHIBA_E` and `test_ffmpeg_main`. That leaves 6
-# e2e tests plus the Miri control. Five of the six are picture output order, on
-# three of which every picture is now bit-exact and only the permutation remains;
-# each carries a reason naming the defect that keeps it red.
+# `test_CABA3_SVA_B`, `test_CAWP5_TOSHIBA_E` and `test_ffmpeg_main`, taking the
+# count to 7. Then two more — the display layer replaced with the bumping process
+# of Annex C, and explicit weighted prediction reaching both halves of an 8x4 or
+# 4x8 B sub-partition — made four more bit-exact on the same rule:
+# `test_CVBS3_Sony_C`, `test_CACQP3_Sony_D`, `test_CVWP3_TOSHIBA_E` and
+# `test_CVWP2_TOSHIBA_E`. That leaves 2 e2e tests plus the Miri control. Neither of
+# the two is output order any more: one is the cross-slice bS derivation, the other
+# one 8x8 sub-partition at a slice boundary, and each carries a reason naming the
+# defect that keeps it red.
 # ---------------------------------------------------------------------------
 run_cargo_test() {  # $1 = profile label, $2.. = extra cargo args
   local label=$1; shift
@@ -320,10 +325,10 @@ run_cargo_test() {  # $1 = profile label, $2.. = extra cargo args
   printf '  totals: %s passed / %s failed / %s ignored\n' "$passed" "$failed" "$ignored"
   if [ "$rc" -ne 0 ] || [ "$failed" -ne 0 ]; then
     fail "cargo test ($label): $passed/$failed/$ignored"
-  elif [ "$ignored" -ne 7 ]; then
-    fail "cargo test ($label): ignored set is $ignored, must be 7 (plan §1.4)"
+  elif [ "$ignored" -ne 3 ]; then
+    fail "cargo test ($label): ignored set is $ignored, must be 3 (plan §1.4)"
   else
-    pass "cargo test ($label): $passed passed / 0 failed / 7 ignored"
+    pass "cargo test ($label): $passed passed / 0 failed / 3 ignored"
   fi
 }
 
