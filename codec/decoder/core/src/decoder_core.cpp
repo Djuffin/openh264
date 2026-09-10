@@ -2660,6 +2660,15 @@ int32_t DecodeCurrentAccessUnit (PWelsDecoderContext pCtx, uint8_t** ppDst, SBuf
       memset (pCtx->pCurDqLayer->pMbRefConcealedFlag, 0, pCtx->pSps->iMbWidth * pCtx->pSps->iMbHeight * sizeof (bool));
       memset (pCtx->pDec->pRefPic[LIST_0], 0, sizeof (PPicture) * MAX_DPB_COUNT);
       memset (pCtx->pDec->pRefPic[LIST_1], 0, sizeof (PPicture) * MAX_DPB_COUNT);
+      //Fix relative to 2.6.0: the per-8x8 reference pictures are written by WelsRecordRefPicturesSlice
+      //for the macroblocks a slice actually covers, and pictures come out of a pool, so start the
+      //picture with "no reference" everywhere rather than with the previous tenant's pointers.
+      for (int32_t listIdx = LIST_0; listIdx < LIST_A; ++listIdx) {
+        if (pCtx->pDec->pRefPicture[listIdx] != NULL) {
+          memset (pCtx->pDec->pRefPicture[listIdx], 0,
+                  pCtx->pSps->iMbWidth * pCtx->pSps->iMbHeight * 4 * sizeof (PPicture));
+        }
+      }
       pCtx->pDec->iMbNum = pCtx->pSps->iMbWidth * pCtx->pSps->iMbHeight;
       pCtx->pDec->iMbEcedNum = 0;
       pCtx->pDec->iMbEcedPropNum = 0;

@@ -776,7 +776,7 @@ TEST (DecoderDeblocking, FilteringEdgeLumaHV) {
 
 /////////// Bs calculation functions
 TEST (DecoderDeblocking, DeblockingBsMarginalMBAvcbase) {
-  // uint32_t DeblockingBsMarginalMBAvcbase (PDeblockingFilter pFilter, PDqLayer pCurDqLayer, int32_t iEdge, int32_t iNeighMb, int32_t iMbXy)
+  // uint32_t DeblockingBsMarginalMBAvcbase (PDqLayer pCurDqLayer, int32_t iEdge, int32_t iNeighMb, int32_t iMbXy)
   /* Calculate the Bs equal to 2 or 1 */
   SDqLayer sDqLayer;
   SDeblockingFilter sFilter;
@@ -786,6 +786,12 @@ TEST (DecoderDeblocking, DeblockingBsMarginalMBAvcbase) {
   int8_t iNoZeroCount[24 * 2]; // (*pNzc)[24]
   int8_t iLayerRefIndex[2][16 * 2]; // (*pRefIndex[LIST_A])[MB_BLOCK4x4_NUM];
   int16_t iLayerMv[2][16 * 2][2]; //(*pMv[LIST_A])[MB_BLOCK4x4_NUM][MV_A];
+  //Fix relative to 2.6.0: the routine now compares the reference *pictures* the two blocks use,
+  //recorded per 8x8 block on the decoded picture (SPicture::pRefPicture), not reference indices
+  //resolved through the current slice's lists -- see 8.7.2.1.  The fixture therefore carries a
+  //decoded picture, and the "different reference" case sets pictures rather than indices.
+  PPicture iRefPicture[2][2][4]; // (*pRefPicture[LIST_A])[4], for two macroblocks
+  SPicture sDec;
   uint32_t uiBSx4;
   uint8_t* pBS = (uint8_t*) (&uiBSx4);
 
@@ -808,10 +814,21 @@ TEST (DecoderDeblocking, DeblockingBsMarginalMBAvcbase) {
 
   sFilter.pRefPics[0] = iFilterPics[0];
   sFilter.pRefPics[1] = iFilterPics[1];
-  sDqLayer.pDec = NULL;
+  // pNzc stays NULL so GetPNzc keeps reading the layer's array above.
+  memset (&sDec, 0, sizeof (sDec));
+  sDec.pRefIndex[0] = (int8_t (*)[16])&iLayerRefIndex[0];
+  sDec.pRefIndex[1] = (int8_t (*)[16])&iLayerRefIndex[1];
+  sDec.pMv[0] = (int16_t (*) [16][2])&iLayerMv[0];
+  sDec.pMv[1] = (int16_t (*) [16][2])&iLayerMv[1];
+  sDec.pRefPicture[0] = (PPicture (*)[4])&iRefPicture[0];
+  sDec.pRefPicture[1] = (PPicture (*)[4])&iRefPicture[1];
+  sDqLayer.pDec = &sDec;
+  // 4x4 raster index -> the 8x8 block it belongs to, as MB_BLOCK8x8_IDX in deblocking.cpp
+#define UT_DB_BLOCK8x8(r) ((((r) >> 3) << 1) + (((r) & 3) >> 1))
 #define UT_DB_CLEAN_STATUS \
   memset(iNoZeroCount, 0, sizeof(int8_t)*24*2); \
   memset(iLayerRefIndex, 0, sizeof(int8_t)*2*16*2); \
+  memset(iRefPicture, 0, sizeof(iRefPicture)); \
   memset(iLayerMv, 0, sizeof(int16_t)*2*16*2*2);
 
 #define SET_REF_VALUE(value, pos) \
@@ -830,82 +847,85 @@ TEST (DecoderDeblocking, DeblockingBsMarginalMBAvcbase) {
       UT_DB_CLEAN_STATUS
       iNoZeroCount[0 * 24 + iCurrBlock] = 1; // Current MB_block position
       SET_REF_VALUE (2, iPos);
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == uiBSx4) << iEdge << " " << iPos << " NoZeroCount!=0";
 
       // (2) iEdge == 0, neighbor block NoZeroCount != 0
       UT_DB_CLEAN_STATUS
       iNoZeroCount[1 * 24 + iNeighborBlock ] = 1; // Neighbor MB_block position
       SET_REF_VALUE (2, iPos);
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == uiBSx4) << iEdge << " " << iPos << " NoZeroCount!=0";
 
-      // (3) iEdge == 0, reference idx diff
+      // (3) iEdge == 0, different reference pictures.  A reference picture is recorded per 8x8
+      //     block, so the whole 8x8 this position falls in -- both of the two 4x4 positions along
+      //     the edge that share it -- takes bS 1.
       UT_DB_CLEAN_STATUS
-      iLayerRefIndex[0][0 * 16 + iCurrBlock] = 0;
-      iLayerRefIndex[0][1 * 16 + iNeighborBlock] = 1;
-      SET_REF_VALUE (1, iPos);
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
-                   0) == uiBSx4) << iEdge << " " << iPos << " Ref idx diff";
+      iRefPicture[0][0][UT_DB_BLOCK8x8 (iCurrBlock)] = iFilterPics[0][0];
+      iRefPicture[0][1][UT_DB_BLOCK8x8 (iNeighborBlock)] = iFilterPics[0][1];
+      uiBSx4 = 0;
+      pBS[iPos & ~1] = pBS[ (iPos & ~1) + 1] = 1;
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
+                   0) == uiBSx4) << iEdge << " " << iPos << " Ref picture diff";
 
       // (4) iEdge == 0, abs(mv diff) < 4
       UT_DB_CLEAN_STATUS
       iLayerMv[0][0 * 16 + iCurrBlock][0] = rand() % 4;
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == 0) << iEdge << " " << iPos << " diff_mv < 4";
 
       UT_DB_CLEAN_STATUS
       iLayerMv[0][0 * 16 + iCurrBlock][1] = rand() % 4;
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == 0) << iEdge << " " << iPos << " diff_mv < 4";
 
       UT_DB_CLEAN_STATUS
       iLayerMv[0][1 * 16 + iNeighborBlock][0] = rand() % 4;
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == 0) << iEdge << " " << iPos << " diff_mv < 4";
 
       UT_DB_CLEAN_STATUS
       iLayerMv[0][1 * 16 + iNeighborBlock][1] = rand() % 4;
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == 0) << iEdge << " " << iPos << " diff_mv < 4";
 
       // (5) iEdge == 0, abs(mv diff) > 4
       UT_DB_CLEAN_STATUS
       iLayerMv[0][0 * 16 + iCurrBlock][0] = 4;
       SET_REF_VALUE (1, iPos);
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == uiBSx4) << iEdge << " " << iPos << " diff_mv == 4";
 
       UT_DB_CLEAN_STATUS
       iLayerMv[0][0 * 16 + iCurrBlock][1] = 4;
       SET_REF_VALUE (1, iPos);
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == uiBSx4) << iEdge << " " << iPos << " diff_mv == 4";
 
       UT_DB_CLEAN_STATUS
       iLayerMv[0][1 * 16 + iNeighborBlock][0] = 4;
       SET_REF_VALUE (1, iPos);
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == uiBSx4) << iEdge << " " << iPos << " diff_mv == 4";
 
       UT_DB_CLEAN_STATUS
       iLayerMv[0][1 * 16 + iNeighborBlock][1] = 4;
       SET_REF_VALUE (1, iPos);
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == uiBSx4) << iEdge << " " << iPos << " diff_mv == 4";
 
       UT_DB_CLEAN_STATUS
       iLayerMv[0][0 * 16 + iCurrBlock][0] = -2048;
       iLayerMv[0][1 * 16 + iNeighborBlock][0] = 2047;
       SET_REF_VALUE (1, iPos);
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == uiBSx4) << iEdge << " " << iPos << " diff_mv == maximum";
 
       UT_DB_CLEAN_STATUS
       iLayerMv[0][0 * 16 + iCurrBlock][1] = -2048;
       iLayerMv[0][1 * 16 + iNeighborBlock][1] = 2047;
       SET_REF_VALUE (1, iPos);
-      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sFilter, &sDqLayer, iEdge, 1,
+      EXPECT_TRUE (DeblockingBsMarginalMBAvcbase (&sDqLayer, iEdge, 1,
                    0) == uiBSx4) << iEdge << " " << iPos << " diff_mv == maximum";
     }
   }

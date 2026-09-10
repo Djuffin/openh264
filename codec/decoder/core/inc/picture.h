@@ -100,6 +100,13 @@ struct SPicture {
   uint32_t*  pMbType; // mb type used for direct mode
   int16_t (*pMv[LIST_A])[MB_BLOCK4x4_NUM][MV_A]; // used for direct mode
   int8_t (*pRefIndex[LIST_A])[MB_BLOCK4x4_NUM]; //used for direct mode
+  //Fix relative to 2.6.0: the reference *picture* each 8x8 block of each macroblock uses, resolved
+  //through the reference lists of the slice the macroblock belongs to.  8.7.2.1 derives the boundary
+  //strength of an edge from "which pictures are referenced", and two macroblocks on either side of a
+  //slice boundary carry indices into two different pairs of lists, so an index alone does not name a
+  //picture outside its own slice.  One entry per 8x8 block, in 8x8 raster order (0 top-left, 1
+  //top-right, 2 bottom-left, 3 bottom-right); NULL where the list is unused by that macroblock.
+  struct SPicture* (*pRefPicture[LIST_A])[4];
   struct SPicture* pRefPic[LIST_A][17];  //ref pictures used for direct mode
   SWelsDecEvent* pReadyEvent;  //MB line ready event
 

@@ -67,6 +67,18 @@ void  DeblockingInit (PDeblockingFunc pDeblockingFunc,  int32_t iCpu);
 void WelsDeblockingFilterSlice (PWelsDecoderContext pCtx, PDeblockingFilterMbFunc pDeblockMb);
 
 /*!
+ * \brief   Fix relative to 2.6.0: record the reference pictures of one macroblock / of the whole
+ *          slice just decoded, so a neighbouring slice's boundary strength can compare pictures
+ *          rather than indices into lists that are not its own (8.7.2.1).
+ *
+ * \param   dec         Wels decoder context
+ *
+ * \return  NONE
+ */
+void WelsRecordRefPicturesMb (PWelsDecoderContext pCtx, int32_t iMbXy);
+void WelsRecordRefPicturesSlice (PWelsDecoderContext pCtx);
+
+/*!
 * \brief   AVC slice init deblocking filtering target layer
 *
 * \in and out param   SDeblockingFilter
@@ -97,8 +109,8 @@ void WelsDeblockingFilterMB (PDqLayer pCurDqLayer, SDeblockingFilter& pFilter, i
  * \return  NONE
  */
 
-uint32_t DeblockingBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLayer pCurDqLayer, int32_t iEdge,
-                                        int32_t iNeighMb, int32_t iMbXy);
+uint32_t DeblockingBsMarginalMBAvcbase (PDqLayer pCurDqLayer, int32_t iEdge, int32_t iNeighMb,
+                                        int32_t iMbXy);
 uint32_t DeblockingBSliceBsMarginalMBAvcbase (PDqLayer pCurDqLayer, int32_t iEdge, int32_t iNeighMb, int32_t iMbXy);
 
 int32_t DeblockingAvailableNoInterlayer (PDqLayer pCurDqLayer, int32_t iFilterIdc);

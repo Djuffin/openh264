@@ -163,6 +163,11 @@ int32_t WelsTargetSliceConstruction (PWelsDecoderContext pCtx) {
   if (pCtx->pParam->bParseOnly) //for parse only, deblocking should not go on
     return ERR_NONE;
 
+  //Fix relative to 2.6.0: record this slice's per-8x8 reference pictures before the filter-idc test
+  //below, so that a slice which does not filter its own edges still leaves behind what a neighbouring
+  //slice's boundary-strength derivation reads across the boundary (8.7.2.1).
+  WelsRecordRefPicturesSlice (pCtx);
+
   if (1 == pSliceHeader->uiDisableDeblockingFilterIdc
       || pCtx->pCurDqLayer->sLayerInfo.sSliceInLayer.iTotalMbInCurSlice <= 0) {
     return ERR_NONE;//NO_SUPPORTED_FILTER_IDX
@@ -1349,6 +1354,13 @@ int32_t WelsDecodeMbCabacPSlice (PWelsDecoderContext pCtx, PNalUnit pNalCur, uin
 
   pCurDqLayer->pNoSubMbPartSizeLessThan8x8Flag[iMbXy] = true;
   pCurDqLayer->pTransformSize8x8Flag[iMbXy] = false;
+  //Fix relative to 2.6.0: 8.4.2.1 gives a P macroblock no list-1 prediction, and neither the skip
+  //short-cut below nor the inter paths write pRefIndex[LIST_1] or pMv[LIST_1] -- they hold whatever
+  //this pooled picture carried from its previous use.  A B slice below or right of this one compares
+  //list-1 motion whenever the reference pictures match, so give the unused list its defined value:
+  //"no reference" and a zero vector, exactly what a B macroblock that skips a list records.
+  memset (pCurDqLayer->pDec->pRefIndex[LIST_1][iMbXy], REF_NOT_IN_LIST, sizeof (int8_t) * MB_BLOCK4x4_NUM);
+  memset (pCurDqLayer->pDec->pMv[LIST_1][iMbXy], 0, sizeof (int16_t) * MV_A * MB_BLOCK4x4_NUM);
 
   GetNeighborAvailMbType (&uiNeighAvail, pCurDqLayer);
   WELS_READ_VERIFY (ParseSkipFlagCabac (pCtx, &uiNeighAvail, uiCode));
@@ -1724,6 +1736,10 @@ int32_t WelsDecodeAndConstructSlice (PWelsDecoderContext pCtx) {
       pCtx->sBlockFunc.pWelsSetNonZeroCountFunc (
         pCtx->pDec->pNzc[pCurDqLayer->iMbXyIndex]); // set all none-zero nzc to 1; dbk can be opti!
     }
+    //Fix relative to 2.6.0: this path deblocks each macroblock as it is reconstructed rather than the
+    //slice as a whole, so it records that macroblock's reference pictures here, at the same point
+    //WelsTargetSliceConstruction records a whole slice's.
+    WelsRecordRefPicturesMb (pCtx, pCurDqLayer->iMbXyIndex);
     WelsDeblockingFilterMB (pCurDqLayer, pFilter, iFilterIdc, pDeblockMb);
     if (pCtx->uiNalRefIdc > 0) {
       if (pCurDqLayer->iMbX == 0 || pCurDqLayer->iMbX == pCurDqLayer->iMbWidth - 1 || pCurDqLayer->iMbY == 0
@@ -2455,6 +2471,10 @@ int32_t WelsDecodeMbCavlcPSlice (PWelsDecoderContext pCtx, PNalUnit pNalCur, uin
 
   pCurDqLayer->pNoSubMbPartSizeLessThan8x8Flag[iMbXy] = true;
   pCurDqLayer->pTransformSize8x8Flag[iMbXy] = false;
+  //Fix relative to 2.6.0: as in WelsDecodeMbCabacPSlice -- a P macroblock's unused list 1 gets its
+  //defined value here rather than the pooled picture's leftovers (8.4.2.1).
+  memset (pCurDqLayer->pDec->pRefIndex[LIST_1][iMbXy], REF_NOT_IN_LIST, sizeof (int8_t) * MB_BLOCK4x4_NUM);
+  memset (pCurDqLayer->pDec->pMv[LIST_1][iMbXy], 0, sizeof (int16_t) * MV_A * MB_BLOCK4x4_NUM);
 
   if (-1 == pSlice->iMbSkipRun) {
     WELS_READ_VERIFY (BsGetUe (pBs, &uiCode)); //mb_skip_run

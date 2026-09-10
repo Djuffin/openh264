@@ -179,6 +179,10 @@ static const int8_t g_kiTc0Table[52 + 24][4] = { //this table refers Table 8-17 
   , { -1, 13, 17, 25 }, { -1, 13, 17, 25 }, { -1, 13, 17, 25 }, { -1, 13, 17, 25 }, { -1, 13, 17, 25 }, { -1, 13, 17, 25 }
 };
 
+//Fix relative to 2.6.0: the 8x8 block a 4x4 block belongs to, from its 4x4 raster index (0..15):
+//row = r / 4, column = r % 4, 8x8 = (row / 2) * 2 + column / 2.  Indexes SPicture::pRefPicture.
+#define MB_BLOCK8x8_IDX(r) ((((r) >> 3) << 1) + ((((r) & 3)) >> 1))
+
 static const uint8_t g_kuiTableBIdx[2][8] = {
   {
     0,  4,  8,  12,
@@ -448,8 +452,12 @@ void static inline DeblockingBSliceBSInsideMBNormal (PDeblockingFilter  pFilter,
 }
 
 
-uint32_t DeblockingBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLayer pCurDqLayer, int32_t iEdge,
-                                        int32_t iNeighMb, int32_t iMbXy) {
+//Fix relative to 2.6.0: pFilter is gone from both marginal routines' parameter lists. They compared
+//reference indices resolved through the filter's snapshot of *this* slice's lists; they now compare
+//the pictures the picture itself records, and the filter has nothing left to say about a bS at a
+//macroblock edge. (The header already declared DeblockingBSliceBsMarginalMBAvcbase without it.)
+uint32_t DeblockingBsMarginalMBAvcbase (PDqLayer pCurDqLayer, int32_t iEdge, int32_t iNeighMb,
+                                        int32_t iMbXy) {
   int32_t i, j;
   uint32_t uiBSx4;
   uint8_t* pBS = (uint8_t*) (&uiBSx4);
@@ -457,8 +465,13 @@ uint32_t DeblockingBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLayer pCu
   const uint8_t* pBnIdx     = &g_kuiTableBIdx[iEdge][4];
   const uint8_t* pB8x8Idx   = &g_kuiTableB8x8Idx[iEdge][0];
   const uint8_t* pBn8x8Idx  = &g_kuiTableB8x8Idx[iEdge][8];
-  int8_t (*iRefIdx)[MB_BLOCK4x4_NUM] = pCurDqLayer->pDec != NULL ? pCurDqLayer->pDec->pRefIndex[LIST_0] :
-                                       pCurDqLayer->pRefIndex[LIST_0];
+  //Fix relative to 2.6.0: this edge can separate two slices, and 8.7.2.1 compares the reference
+  //*pictures* the two blocks use -- "based only on which pictures are referenced, without regard to
+  //whether a prediction is formed using an index into list 0 or list 1, and without regard to the
+  //index position within a list".  Resolving the neighbour's index through *this* slice's list 0, as
+  //pFilter->pRefPics did, names a different picture whenever the two slices carry different lists.
+  //Both sides are read from the picture WelsRecordRefPicturesSlice filled per slice instead.
+  PPicture (*pRefPicture)[4] = pCurDqLayer->pDec->pRefPicture[LIST_0];
 
   if (pCurDqLayer->pTransformSize8x8Flag[iMbXy] && pCurDqLayer->pTransformSize8x8Flag[iNeighMb]) {
     for (i = 0; i < 2; i++) {
@@ -470,9 +483,8 @@ uint32_t DeblockingBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLayer pCu
         pBS[i << 1] = pBS[1 + (i << 1)] = 2;
       } else {
         PPicture ref0, ref1;
-        ref0 = (iRefIdx[iMbXy][*pB8x8Idx] > REF_NOT_IN_LIST) ? pFilter->pRefPics[LIST_0][iRefIdx[iMbXy][*pB8x8Idx]] : NULL;
-        ref1 = (iRefIdx[iNeighMb][*pBn8x8Idx] > REF_NOT_IN_LIST) ? pFilter->pRefPics[LIST_0][iRefIdx[iNeighMb][*pBn8x8Idx]] :
-               NULL;
+        ref0 = pRefPicture[iMbXy][MB_BLOCK8x8_IDX (*pB8x8Idx)];
+        ref1 = pRefPicture[iNeighMb][MB_BLOCK8x8_IDX (*pBn8x8Idx)];
         pBS[i << 1] = pBS[1 + (i << 1)] = MB_BS_MV (ref0, ref1, pCurDqLayer->pDec->pMv[LIST_0], iMbXy, iNeighMb,
                                           *pB8x8Idx, *pBn8x8Idx);
       }
@@ -490,8 +502,8 @@ uint32_t DeblockingBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLayer pCu
           pBS[j + (i << 1)] = 2;
         } else {
           PPicture ref0, ref1;
-          ref0 = (iRefIdx[iMbXy][*pB8x8Idx] > REF_NOT_IN_LIST) ? pFilter->pRefPics[LIST_0][iRefIdx[iMbXy][*pB8x8Idx]] : NULL;
-          ref1 = (iRefIdx[iNeighMb][*pBnIdx] > REF_NOT_IN_LIST) ? pFilter->pRefPics[LIST_0][iRefIdx[iNeighMb][*pBnIdx]] : NULL;
+          ref0 = pRefPicture[iMbXy][MB_BLOCK8x8_IDX (*pB8x8Idx)];
+          ref1 = pRefPicture[iNeighMb][MB_BLOCK8x8_IDX (*pBnIdx)];
           pBS[j + (i << 1)] = MB_BS_MV (ref0, ref1,
                                         (pCurDqLayer->pDec != NULL ? pCurDqLayer->pDec->pMv[LIST_0] : pCurDqLayer->pMv[LIST_0]), iMbXy, iNeighMb, *pB8x8Idx,
                                         *pBnIdx);
@@ -511,9 +523,8 @@ uint32_t DeblockingBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLayer pCu
           pBS[j + (i << 1)] = 2;
         } else {
           PPicture ref0, ref1;
-          ref0 = (iRefIdx[iMbXy][*pBIdx] > REF_NOT_IN_LIST) ? pFilter->pRefPics[LIST_0][iRefIdx[iMbXy][*pBIdx]] : NULL;
-          ref1 = (iRefIdx[iNeighMb][*pBn8x8Idx] > REF_NOT_IN_LIST) ? pFilter->pRefPics[LIST_0][iRefIdx[iNeighMb][*pBn8x8Idx]] :
-                 NULL;
+          ref0 = pRefPicture[iMbXy][MB_BLOCK8x8_IDX (*pBIdx)];
+          ref1 = pRefPicture[iNeighMb][MB_BLOCK8x8_IDX (*pBn8x8Idx)];
           pBS[j + (i << 1)] = MB_BS_MV (ref0, ref1,
                                         (pCurDqLayer->pDec != NULL ? pCurDqLayer->pDec->pMv[LIST_0] : pCurDqLayer->pMv[LIST_0]), iMbXy, iNeighMb, *pBIdx,
                                         *pBn8x8Idx);
@@ -529,8 +540,8 @@ uint32_t DeblockingBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLayer pCu
         pBS[i] = 2;
       } else {
         PPicture ref0, ref1;
-        ref0 = (iRefIdx[iMbXy][*pBIdx] > REF_NOT_IN_LIST) ? pFilter->pRefPics[LIST_0][iRefIdx[iMbXy][*pBIdx]] : NULL;
-        ref1 = (iRefIdx[iNeighMb][*pBnIdx] > REF_NOT_IN_LIST) ? pFilter->pRefPics[LIST_0][iRefIdx[iNeighMb][*pBnIdx]] : NULL;
+        ref0 = pRefPicture[iMbXy][MB_BLOCK8x8_IDX (*pBIdx)];
+        ref1 = pRefPicture[iNeighMb][MB_BLOCK8x8_IDX (*pBnIdx)];
         pBS[i] = MB_BS_MV (ref0, ref1, (pCurDqLayer->pDec != NULL ? pCurDqLayer->pDec->pMv[LIST_0] : pCurDqLayer->pMv[LIST_0]),
                            iMbXy, iNeighMb, *pBIdx, *pBnIdx);
       }
@@ -541,8 +552,8 @@ uint32_t DeblockingBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLayer pCu
 
   return uiBSx4;
 }
-uint32_t DeblockingBSliceBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLayer pCurDqLayer, int32_t iEdge,
-    int32_t iNeighMb, int32_t iMbXy) {
+uint32_t DeblockingBSliceBsMarginalMBAvcbase (PDqLayer pCurDqLayer, int32_t iEdge, int32_t iNeighMb,
+    int32_t iMbXy) {
   int32_t i, j;
   uint32_t uiBSx4;
   uint8_t* pBS = (uint8_t*) (&uiBSx4);
@@ -551,8 +562,14 @@ uint32_t DeblockingBSliceBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLay
   const uint8_t* pB8x8Idx = &g_kuiTableB8x8Idx[iEdge][0];
   const uint8_t* pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge][8];
   PPicture ref_p0, ref_p1, ref_q0, ref_q1;
-  int8_t (*iRefIdx0)[MB_BLOCK4x4_NUM] = pCurDqLayer->pDec->pRefIndex[LIST_0];
-  int8_t (*iRefIdx1)[MB_BLOCK4x4_NUM] = pCurDqLayer->pDec->pRefIndex[LIST_1];
+  //Fix relative to 2.6.0: as in DeblockingBsMarginalMBAvcbase above, both macroblocks' reference
+  //pictures come from the per-slice record rather than from resolving both macroblocks' indices
+  //through the current slice's two lists (8.7.2.1).  Two things went wrong across a slice boundary:
+  //the neighbour's list-0 index named whatever this slice's list 0 held at that position, and a
+  //P-slice neighbour's list-1 indices -- which its parse never writes -- resolved through this
+  //slice's list 1 into a phantom second reference.
+  PPicture (*pRefPicture0)[4] = pCurDqLayer->pDec->pRefPicture[LIST_0];
+  PPicture (*pRefPicture1)[4] = pCurDqLayer->pDec->pRefPicture[LIST_1];
 
   if (pCurDqLayer->pTransformSize8x8Flag[iMbXy] && pCurDqLayer->pTransformSize8x8Flag[iNeighMb]) {
     for (i = 0; i < 2; i++) {
@@ -564,12 +581,10 @@ uint32_t DeblockingBSliceBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLay
         pBS[i << 1] = pBS[1 + (i << 1)] = 2;
       } else {
         pBS[i << 1] = pBS[1 + (i << 1)] = 1;
-        ref_p0 = iRefIdx0[iMbXy][*pB8x8Idx] > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_0][iRefIdx0[iMbXy][*pB8x8Idx]] : NULL;
-        ref_q0 = iRefIdx0[iNeighMb][*pBn8x8Idx]  > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_0][iRefIdx0[iNeighMb][*pBn8x8Idx]] :
-                 NULL;
-        ref_p1 = iRefIdx1[iMbXy][*pB8x8Idx] > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_1][iRefIdx1[iMbXy][*pB8x8Idx]] : NULL;
-        ref_q1 = iRefIdx1[iNeighMb][*pBn8x8Idx]  > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_1][iRefIdx1[iNeighMb][*pBn8x8Idx]] :
-                 NULL;
+        ref_p0 = pRefPicture0[iMbXy][MB_BLOCK8x8_IDX (*pB8x8Idx)];
+        ref_q0 = pRefPicture0[iNeighMb][MB_BLOCK8x8_IDX (*pBn8x8Idx)];
+        ref_p1 = pRefPicture1[iMbXy][MB_BLOCK8x8_IDX (*pB8x8Idx)];
+        ref_q1 = pRefPicture1[iNeighMb][MB_BLOCK8x8_IDX (*pBn8x8Idx)];
         if (((ref_p0 == ref_q0) && (ref_p1 == ref_q1)) || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))) {
           int16_t (*pMv0)[MB_BLOCK4x4_NUM][MV_A] = pCurDqLayer->pDec != NULL ? pCurDqLayer->pDec->pMv[LIST_0] :
               pCurDqLayer->pMv[LIST_0];
@@ -593,12 +608,10 @@ uint32_t DeblockingBSliceBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLay
           pBS[j + (i << 1)] = 2;
         } else {
           pBS[j + (i << 1)] = 1;
-          ref_p0 = iRefIdx0[iMbXy][*pB8x8Idx] > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_0][iRefIdx0[iMbXy][*pB8x8Idx]] : NULL;
-          ref_q0 = iRefIdx0[iNeighMb][*pBnIdx]  > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_0][iRefIdx0[iNeighMb][*pBnIdx]] :
-                   NULL;
-          ref_p1 = iRefIdx1[iMbXy][*pB8x8Idx] > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_1][iRefIdx1[iMbXy][*pB8x8Idx]] : NULL;
-          ref_q1 = iRefIdx1[iNeighMb][*pBnIdx]  > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_1][iRefIdx1[iNeighMb][*pBnIdx]] :
-                   NULL;
+          ref_p0 = pRefPicture0[iMbXy][MB_BLOCK8x8_IDX (*pB8x8Idx)];
+          ref_q0 = pRefPicture0[iNeighMb][MB_BLOCK8x8_IDX (*pBnIdx)];
+          ref_p1 = pRefPicture1[iMbXy][MB_BLOCK8x8_IDX (*pB8x8Idx)];
+          ref_q1 = pRefPicture1[iNeighMb][MB_BLOCK8x8_IDX (*pBnIdx)];
           if (((ref_p0 == ref_q0) && (ref_p1 == ref_q1)) || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))) {
             int16_t (*pMv0)[MB_BLOCK4x4_NUM][MV_A] = pCurDqLayer->pDec != NULL ? pCurDqLayer->pDec->pMv[LIST_0] :
                 pCurDqLayer->pMv[LIST_0];
@@ -622,12 +635,10 @@ uint32_t DeblockingBSliceBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLay
           pBS[j + (i << 1)] = 2;
         } else {
           pBS[j + (i << 1)] = 1;
-          ref_p0 = iRefIdx0[iMbXy][*pBIdx] > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_0][iRefIdx0[iMbXy][*pBIdx]] : NULL;
-          ref_q0 = iRefIdx0[iNeighMb][*pBn8x8Idx]  > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_0][iRefIdx0[iNeighMb][*pBn8x8Idx]] :
-                   NULL;
-          ref_p1 = iRefIdx1[iMbXy][*pBIdx] > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_1][iRefIdx1[iMbXy][*pBIdx]] : NULL;
-          ref_q1 = iRefIdx1[iNeighMb][*pBn8x8Idx]  > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_1][iRefIdx1[iNeighMb][*pBn8x8Idx]] :
-                   NULL;
+          ref_p0 = pRefPicture0[iMbXy][MB_BLOCK8x8_IDX (*pBIdx)];
+          ref_q0 = pRefPicture0[iNeighMb][MB_BLOCK8x8_IDX (*pBn8x8Idx)];
+          ref_p1 = pRefPicture1[iMbXy][MB_BLOCK8x8_IDX (*pBIdx)];
+          ref_q1 = pRefPicture1[iNeighMb][MB_BLOCK8x8_IDX (*pBn8x8Idx)];
           if (((ref_p0 == ref_q0) && (ref_p1 == ref_q1)) || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))) {
             int16_t (*pMv0)[MB_BLOCK4x4_NUM][MV_A] = pCurDqLayer->pDec != NULL ? pCurDqLayer->pDec->pMv[LIST_0] :
                 pCurDqLayer->pMv[LIST_0];
@@ -647,12 +658,10 @@ uint32_t DeblockingBSliceBsMarginalMBAvcbase (PDeblockingFilter  pFilter, PDqLay
         pBS[i] = 2;
       } else {
         pBS[i] = 1;
-        ref_p0 = iRefIdx0[iMbXy][*pBIdx] > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_0][iRefIdx0[iMbXy][*pBIdx]] : NULL;
-        ref_q0 = iRefIdx0[iNeighMb][*pBnIdx]  > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_0][iRefIdx0[iNeighMb][*pBnIdx]] :
-                 NULL;
-        ref_p1 = iRefIdx1[iMbXy][*pBIdx] > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_1][iRefIdx1[iMbXy][*pBIdx]] : NULL;
-        ref_q1 = iRefIdx1[iNeighMb][*pBnIdx]  > REF_NOT_IN_LIST ? pFilter->pRefPics[LIST_1][iRefIdx1[iNeighMb][*pBnIdx]] :
-                 NULL;
+        ref_p0 = pRefPicture0[iMbXy][MB_BLOCK8x8_IDX (*pBIdx)];
+        ref_q0 = pRefPicture0[iNeighMb][MB_BLOCK8x8_IDX (*pBnIdx)];
+        ref_p1 = pRefPicture1[iMbXy][MB_BLOCK8x8_IDX (*pBIdx)];
+        ref_q1 = pRefPicture1[iNeighMb][MB_BLOCK8x8_IDX (*pBnIdx)];
         if (((ref_p0 == ref_q0) && (ref_p1 == ref_q1)) || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))) {
           int16_t (*pMv0)[MB_BLOCK4x4_NUM][MV_A] = pCurDqLayer->pDec != NULL ? pCurDqLayer->pDec->pMv[LIST_0] :
               pCurDqLayer->pMv[LIST_0];
@@ -1131,6 +1140,18 @@ static void DeblockingIntraMb (PDqLayer pCurDqLayer, PDeblockingFilter  pFilter,
   FilteringEdgeChromaHV (pCurDqLayer, pFilter, iBoundryFlag);
 }
 
+//Fix relative to 2.6.0: true when any 8x8 block of iMbXy predicts from list 1, read from the
+//per-slice record so the answer is the neighbouring slice's, not this one's.  A macroblock of an I or
+//P slice always answers false; only a B macroblock that really uses list 1 answers true.
+static inline bool MbUsesList1 (PDqLayer pCurDqLayer, int32_t iMbXy) {
+  if (pCurDqLayer->pDec == NULL || pCurDqLayer->pDec->pRefPicture[LIST_1] == NULL) {
+    return false;  // nothing recorded: no list-1 prediction is known of this macroblock
+  }
+  PPicture (*pRefPicture)[4] = pCurDqLayer->pDec->pRefPicture[LIST_1];
+  return (pRefPicture[iMbXy][0] != NULL) || (pRefPicture[iMbXy][1] != NULL)
+         || (pRefPicture[iMbXy][2] != NULL) || (pRefPicture[iMbXy][3] != NULL);
+}
+
 void WelsDeblockingMb (PDqLayer pCurDqLayer, PDeblockingFilter  pFilter, int32_t iBoundryFlag) {
   uint8_t nBS[2][4][4] = {{{ 0 }}};
 
@@ -1155,13 +1176,19 @@ void WelsDeblockingMb (PDqLayer pCurDqLayer, PDeblockingFilter  pFilter, int32_t
     if (iBoundryFlag & LEFT_FLAG_MASK) {
       iMbNb = iMbXyIndex - 1;
       uint32_t uiMbType = pCurDqLayer->pDec != NULL ? pCurDqLayer->pDec->pMbType[iMbNb] : pCurDqLayer->pMbType[iMbNb];
-      if (bBSlice) {
+      //Fix relative to 2.6.0: the left neighbour can belong to another slice, and the two-list
+      //derivation is the one 8.7.2.1 describes whenever *either* macroblock uses two lists.  A B
+      //neighbour of a P macroblock therefore goes through the B routine too; a B neighbour that
+      //predicts from list 0 alone stays on the one-list routine, which compares the same pictures.
+      //(No stream here codes a B slice above or left of a P slice, so this direction is covered only
+      //by every other asset staying byte-identical.)
+      if (bBSlice || MbUsesList1 (pCurDqLayer, iMbNb)) {
         * (uint32_t*)nBS[0][0] = IS_INTRA (uiMbType) ? 0x04040404 :
                                  DeblockingBSliceBsMarginalMBAvcbase (
-                                   pFilter, pCurDqLayer, 0, iMbNb, iMbXyIndex);
+                                   pCurDqLayer, 0, iMbNb, iMbXyIndex);
       } else {
         * (uint32_t*)nBS[0][0] = IS_INTRA (uiMbType) ? 0x04040404 : DeblockingBsMarginalMBAvcbase (
-                                   pFilter, pCurDqLayer, 0, iMbNb, iMbXyIndex);
+                                   pCurDqLayer, 0, iMbNb, iMbXyIndex);
       }
     } else {
       * (uint32_t*)nBS[0][0] = 0;
@@ -1169,13 +1196,14 @@ void WelsDeblockingMb (PDqLayer pCurDqLayer, PDeblockingFilter  pFilter, int32_t
     if (iBoundryFlag & TOP_FLAG_MASK) {
       iMbNb = iMbXyIndex - pCurDqLayer->iMbWidth;
       uint32_t uiMbType = pCurDqLayer->pDec != NULL ? pCurDqLayer->pDec->pMbType[iMbNb] : pCurDqLayer->pMbType[iMbNb];
-      if (bBSlice) {
+      //Fix relative to 2.6.0: as for the left edge above.
+      if (bBSlice || MbUsesList1 (pCurDqLayer, iMbNb)) {
         * (uint32_t*)nBS[1][0] = IS_INTRA (uiMbType) ? 0x04040404 :
                                  DeblockingBSliceBsMarginalMBAvcbase (
-                                   pFilter, pCurDqLayer, 1, iMbNb, iMbXyIndex);
+                                   pCurDqLayer, 1, iMbNb, iMbXyIndex);
       } else {
         * (uint32_t*)nBS[1][0] = IS_INTRA (uiMbType) ? 0x04040404 : DeblockingBsMarginalMBAvcbase (
-                                   pFilter, pCurDqLayer, 1, iMbNb, iMbXyIndex);
+                                   pCurDqLayer, 1, iMbNb, iMbXyIndex);
       }
     } else {
       * (uint32_t*)nBS[1][0] = 0;
@@ -1208,6 +1236,85 @@ void WelsDeblockingMb (PDqLayer pCurDqLayer, PDeblockingFilter  pFilter, int32_t
     DeblockingInterMb (pCurDqLayer, pFilter, nBS, iBoundryFlag);
     break;
   }
+}
+
+/*!
+ * \brief   Fix relative to 2.6.0: record, for one macroblock, the reference picture each of its four
+ *          8x8 blocks predicts from, resolved through the reference lists of the slice being decoded.
+ *
+ *          8.7.2.1 makes an edge's boundary strength depend on which *pictures* the two blocks
+ *          reference, and a reference index only names a picture together with the lists of the slice
+ *          that coded it.  Deblocking runs per slice and filters across slice boundaries, so the
+ *          index of a neighbour in another slice has to be resolved before that slice's lists are
+ *          gone.  A list the slice type does not use records NULL: 8.4.2.1 gives a P macroblock no
+ *          list-1 prediction at all, and its pRefIndex[LIST_1] is never written.
+ *
+ * \return  NONE
+ */
+void WelsRecordRefPicturesMb (PWelsDecoderContext pCtx, int32_t iMbXy) {
+  PDqLayer pCurDqLayer = pCtx->pCurDqLayer;
+  PPicture pDec = pCurDqLayer->pDec;
+  static const uint8_t kuiBlock8x8Scan4Idx[4] = { 0, 2, 8, 10 };  // 4x4 raster index of each 8x8
+
+  if (pDec == NULL || pDec->pRefPicture[LIST_0] == NULL || pDec->pRefPicture[LIST_1] == NULL) {
+    return;
+  }
+
+  //An intra macroblock references no picture at all -- 8.7.2.1 gives its edges bS 3 or 4 without
+  //looking -- and its pRefIndex is never written, so it records "no reference" without reading one.
+  const bool bIntra = IS_INTRA (pDec->pMbType[iMbXy]);
+  const EWelsSliceType eSliceType = (EWelsSliceType) pCurDqLayer->sLayerInfo.sSliceInLayer.eSliceType;
+  for (int32_t listIdx = LIST_0; listIdx < LIST_A; ++listIdx) {
+    const bool bListUsed = !bIntra
+                           && ((B_SLICE == eSliceType) || (P_SLICE == eSliceType && LIST_0 == listIdx));
+    for (int32_t i = 0; i < 4; ++i) {
+      const int8_t iRefIdx = pDec->pRefIndex[listIdx][iMbXy][kuiBlock8x8Scan4Idx[i]];
+      pDec->pRefPicture[listIdx][iMbXy][i] = (bListUsed && iRefIdx > REF_NOT_IN_LIST)
+                                             ? pCtx->sRefPic.pRefList[listIdx][iRefIdx] : NULL;
+    }
+  }
+}
+
+/*!
+ * \brief   Fix relative to 2.6.0: WelsRecordRefPicturesMb over every macroblock of the slice just
+ *          decoded, walking it exactly as WelsDeblockingFilterSlice below does.
+ *
+ *          Called before deblocking and *before* the uiDisableDeblockingFilterIdc test, so a slice
+ *          that does not filter its own edges still leaves behind what a neighbouring slice reads
+ *          across the boundary.
+ *
+ * \return  NONE
+ */
+void WelsRecordRefPicturesSlice (PWelsDecoderContext pCtx) {
+  PDqLayer pCurDqLayer = pCtx->pCurDqLayer;
+  PSliceHeaderExt pSliceHeaderExt = &pCurDqLayer->sLayerInfo.sSliceInLayer.sSliceHeaderExt;
+  int32_t iTotalMbCount = pSliceHeaderExt->sSliceHeader.pSps->uiTotalMbCount;
+  PFmo pFmo = pCtx->pFmo;
+  int32_t iTotalNumMb = pCurDqLayer->sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
+  int32_t iCountNumMb = 0;
+  int32_t iNextMbXyIndex = pSliceHeaderExt->sSliceHeader.iFirstMbInSlice;
+
+  if (iTotalNumMb <= 0 || iNextMbXyIndex < 0 || iNextMbXyIndex >= iTotalMbCount) {
+    return;
+  }
+
+  do {
+    WelsRecordRefPicturesMb (pCtx, iNextMbXyIndex);
+
+    ++iCountNumMb;
+    if (iCountNumMb >= iTotalNumMb) {
+      break;
+    }
+
+    if (pSliceHeaderExt->sSliceHeader.pPps->uiNumSliceGroups > 1) {
+      iNextMbXyIndex = FmoNextMb (pFmo, iNextMbXyIndex);
+    } else {
+      ++iNextMbXyIndex;
+    }
+    if (-1 == iNextMbXyIndex || iNextMbXyIndex >= iTotalMbCount) { // slice group boundary or end of a frame
+      break;
+    }
+  } while (1);
 }
 
 /*!
