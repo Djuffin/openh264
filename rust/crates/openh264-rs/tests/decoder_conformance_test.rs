@@ -432,12 +432,12 @@ asset_test!(
     "test_qcif_cabac.264",
     "587d1d05943f3cd416bf69469975fdee05361e69"
 );
-// Hash intentionally differs from the C++ decoder's output (992a25b4...). This stream
-// keeps two pictures buffered at end of stream, and upstream's DecodeFrame2 flush path
-// gives them the same uiDecodingTimeStamp, so ReleaseBufferedReadyPictureNoReorder falls
-// back to slot order and emits POC 8 before POC 6. Both are iSeqNum 1, so POC order is
-// display order and 6 must come first; the port breaks the tie by POC instead (see
-// ReleaseBufferedReadyPictureNoReorder in src/api/codec_api.rs).
+// This hash used to be a documented deviation from the C++: the stream keeps two
+// pictures buffered at end of stream, upstream's flush path gave them the same
+// uiDecodingTimeStamp, and `ReleaseBufferedReadyPictureNoReorder` then fell back to
+// slot order and emitted POC 8 before POC 6. That function is gone from both
+// codebases — the display layer sorts by (sequence, POC) and nothing else — so this
+// is `h264dec`'s own output again, like every other hash here.
 asset_test!(
     test_asset_test_scalinglist_jm,
     "test_scalinglist_jm.264",
@@ -648,5 +648,5 @@ asset_test!(
 asset_test!(
     test_asset_cacqp3_sony_d,
     "CACQP3_Sony_D.jsv",
-    "72599a2f7e804e95b6003ecc065190db9f2f073d"
+    "2ab41abd239c1c556e91ff027f47002001ee8605"
 );

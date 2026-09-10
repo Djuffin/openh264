@@ -225,7 +225,20 @@ fn test_encoder_create_and_destroy_lifecycle() {
 /// Returns `(frames emitted, frames the decoder says are still buffered)`. The
 /// second number is `sReoderingStatus.iNumOfPicts`, read back through the public
 /// `DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER`.
-unsafe fn decode_pass(p_decoder: *mut ISVCDecoder, units: &[&[u8]], limit: usize) -> (usize, i32) {
+///
+/// `drain` runs the end-of-stream sequence a whole-file caller runs — signal
+/// `DECODER_OPTION_END_OF_STREAM`, one null `DecodeFrame2`, then `FlushFrame` per
+/// buffered picture. It is what makes the frame count a count of *the stream*: a
+/// stream that reorders holds up to its DPB size of pictures back (Annex C.4.5.3),
+/// so the pictures still in the buffer when the units run out are the majority for
+/// a short asset. The interrupted pass passes `false`, which is the state the probe
+/// below needs.
+unsafe fn decode_pass(
+    p_decoder: *mut ISVCDecoder,
+    units: &[&[u8]],
+    limit: usize,
+    drain: bool,
+) -> (usize, i32) {
     unsafe {
         let mut frames = 0usize;
         for unit in units.iter().take(limit) {
@@ -240,6 +253,45 @@ unsafe fn decode_pass(p_decoder: *mut ISVCDecoder, units: &[&[u8]], limit: usize
             );
             if buf_info.iBufferStatus == 1 {
                 frames += 1;
+            }
+        }
+        if drain {
+            let mut eos = 1i32;
+            ISVCDecoder::SetOption(
+                p_decoder,
+                DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
+                &mut eos as *mut i32 as *mut std::ffi::c_void,
+            );
+            let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+            let mut buf_info = SBufferInfo::default();
+            ISVCDecoder::DecodeFrame2(
+                p_decoder,
+                std::ptr::null(),
+                0,
+                p_dst.as_mut_ptr(),
+                &mut buf_info,
+            );
+            if buf_info.iBufferStatus == 1 {
+                frames += 1;
+            }
+            loop {
+                let mut left = 0i32;
+                ISVCDecoder::GetOption(
+                    p_decoder,
+                    DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+                    &mut left as *mut i32 as *mut std::ffi::c_void,
+                );
+                if left <= 0 {
+                    break;
+                }
+                let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+                let mut buf_info = SBufferInfo::default();
+                ISVCDecoder::FlushFrame(p_decoder, p_dst.as_mut_ptr(), &mut buf_info);
+                if buf_info.iBufferStatus == 1 {
+                    frames += 1;
+                } else {
+                    break;
+                }
             }
         }
         let mut remaining = 0i32;
@@ -294,7 +346,7 @@ fn test_decoder_reinit_does_not_inherit_reordering_slots() {
             ISVCDecoder::Initialize(p_fresh, &param),
             CM_RESULT_SUCCESS as i64
         );
-        let (fresh_frames, _) = decode_pass(p_fresh, &units, units.len());
+        let (fresh_frames, _) = decode_pass(p_fresh, &units, units.len(), true);
         ISVCDecoder::Uninitialize(p_fresh);
         WelsDestroyDecoder(p_fresh);
         assert!(fresh_frames > 0, "the asset decoded nothing at all");
@@ -309,7 +361,7 @@ fn test_decoder_reinit_does_not_inherit_reordering_slots() {
         // Stop while the reordering buffer still holds pictures. A B-slice stream
         // buffers by construction; if this ever reads 0 the probe has stopped
         // covering the finding and the assertion says so.
-        let (_, buffered) = decode_pass(p_decoder, &units, 12);
+        let (_, buffered) = decode_pass(p_decoder, &units, 12, false);
         assert!(
             buffered > 0,
             "nothing was buffered at the interruption — this probe no longer reaches F37's state"
@@ -338,7 +390,7 @@ fn test_decoder_reinit_does_not_inherit_reordering_slots() {
         );
 
         // …and decodes the stream exactly as a decoder that never saw the first pass.
-        let (reinit_frames, _) = decode_pass(p_decoder, &units, units.len());
+        let (reinit_frames, _) = decode_pass(p_decoder, &units, units.len(), true);
         assert_eq!(
             reinit_frames, fresh_frames,
             "a re-initialised decoder emitted {reinit_frames} frames where a fresh one emits \
