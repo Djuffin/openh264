@@ -444,6 +444,13 @@ impl Default for SWelsLastDecPicInfo {
 
 pub use crate::api::codec_api::{SBufferInfo, SSysMEMBuffer};
 
+/// Pictures waiting for output. The bumping process of C.4.5.3 keeps at most
+/// [`GetDpbSize`](crate::decoder::decoder_core::GetDpbSize) of them, and this
+/// display layer can lag it by the number of reference frames (it emits one picture
+/// per completed picture, where a bump step may emit several), so twice the largest
+/// DPB is a bound with room to spare. `PICT_INFO_LIST_SIZE` in `decoder_context.h`.
+pub const PICT_INFO_LIST_SIZE: usize = 2 * MAX_DPB_COUNT;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SPictInfo {
@@ -464,7 +471,22 @@ pub struct SPictReoderingStatus {
     pub iLastWrittenSeqNum: i32,
     pub iLastWrittenPOC: i32,
     pub iLargestBufferedPicIndex: i32,
-    pub bHasBSlice: bool,
+    /// Coded video sequences as the display layer counts them: one more at every
+    /// IDR, SPS change and MMCO 5, which are the boundaries C.4.4 empties the DPB
+    /// across. A buffered picture from an older sequence is always ready to go out.
+    pub iOutputSeqNum: i32,
+    /// `pCtx.iSeqNum` as it stood when the previous picture was buffered, so a change
+    /// of the core's own sequence counter is visible here. `IMinInt32` until the
+    /// first picture.
+    pub iPrevCoreSeqNum: i32,
+    /// Refreshed from the active SPS on every completed picture — see
+    /// [`NeedsPictureReordering`](crate::decoder::decoder_core::NeedsPictureReordering)
+    /// and [`GetDpbSize`](crate::decoder::decoder_core::GetDpbSize).
+    pub bReorderPictures: bool,
+    pub iDpbSize: i32,
+    /// VUI `max_num_reorder_frames`, or -1 when the VUI carries no bitstream
+    /// restriction.
+    pub iMaxNumReorderFrames: i32,
 }
 
 /// The parse-only output buffers, **decoder-side and owned**.
@@ -1321,14 +1343,12 @@ pub struct SWelsDecoderContext {
     /// In the reference it is a `CWelsDecoder` member because a *threaded* decoder
     /// shares one reordering buffer across N contexts; with one context per decoder
     /// the context is where it belongs.
-    pub pPictInfoList: [SPictInfo; 16],
+    pub pPictInfoList: [SPictInfo; PICT_INFO_LIST_SIZE],
     /// `CWelsDecoderImpl::sReoderingStatus`, **owned**.
     pub pPictReoderingStatus: SPictReoderingStatus,
     /// `CWelsDecoder::m_bIsBaseline` — reordering is bypassed entirely for baseline
     /// profiles.
     pub bIsBaseline: bool,
-    /// `CWelsDecoder::m_iLastBufferedIdx`.
-    pub iLastBufferedIdx: i32,
     /// `CWelsDecoder::m_uiDecodeTimeStamp` — the monotonic counter stamped onto each
     /// decoded picture as [`uiDecodingTimeStamp`](Self::uiDecodingTimeStamp); the
     /// no-reorder release path orders buffered pictures by it.
@@ -1471,10 +1491,9 @@ impl Default for SWelsDecoderContext {
             bDequantCoeff4x4Init: false,
             bUseScalingList: false,
             lastReadyHeightOffset: [[0; MAX_REF_PIC_COUNT]; LIST_A],
-            pPictInfoList: [SPictInfo::default(); 16],
+            pPictInfoList: [SPictInfo::default(); PICT_INFO_LIST_SIZE],
             pPictReoderingStatus: SPictReoderingStatus::default(),
             bIsBaseline: false,
-            iLastBufferedIdx: 0,
             uiDecodeTimeStamp: 0,
         }
     }
