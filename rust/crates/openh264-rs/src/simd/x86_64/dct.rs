@@ -235,7 +235,6 @@ unsafe fn dct_two_4x4_sse41<A: SampleCursor, B: SampleCursor>(
         _mm_storeu_si128(out_right.add(8) as *mut __m128i, right_r23);
     }
 }
-
 #[target_feature(enable = "sse4.1")]
 unsafe fn dct_four_4x4_sse41_impl<A: SampleCursor, B: SampleCursor>(
     dct: &mut [i16; 64],
@@ -263,50 +262,18 @@ pub fn dct_four_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 64], pix1:
 // Inverse 4x4 Integer DCT & Prediction Addition
 // ============================================================================
 
-#[target_feature(enable = "sse2")]
-fn idct_row(r0: i16, r1: i16, r2: i16, r3: i16) -> __m128i {
-    let r0 = r0 as i32;
-    let r1 = r1 as i32;
-    let r2 = r2 as i32;
-    let r3 = r3 as i32;
-
-    let t0 = r0 + r2;
-    let t1 = r0 - r2;
-    let t2 = (r1 >> 1) - r3;
-    let t3 = r1 + (r3 >> 1);
-
-    let s0 = (t0 + t3) as i16;
-    let s1 = (t1 + t2) as i16;
-    let s2 = (t1 - t2) as i16;
-    let s3 = (t0 - t3) as i16;
-
-    _mm_set_epi16(0, 0, 0, 0, s3, s2, s1, s0)
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn add_res_and_clip(pred_4bytes: [u8; 4], res: __m128i) -> [u8; 4] {
+    let p_vec = _mm_cvtsi32_si128(i32::from_ne_bytes(pred_4bytes));
+    let p_unp = _mm_cvtepu8_epi16(p_vec);
+    let sum = _mm_add_epi16(p_unp, res);
+    let packed = _mm_packus_epi16(sum, sum);
+    let res32 = _mm_cvtsi128_si32(packed);
+    res32.to_ne_bytes()
 }
 
-#[target_feature(enable = "sse2")]
-fn add_res_and_clip(pred_4bytes: [u8; 4], res: __m128i) -> [u8; 4] {
-    unsafe {
-        let p32 = (pred_4bytes.as_ptr() as *const i32).read_unaligned();
-        let p_vec = _mm_cvtsi32_si128(p32);
-        let p_unp = _mm_unpacklo_epi8(p_vec, _mm_setzero_si128());
-        let sum = _mm_add_epi16(p_unp, res);
-        let packed = _mm_packus_epi16(sum, sum);
-        let res32 = _mm_cvtsi128_si32(packed);
-        res32.to_ne_bytes()
-    }
-}
-
-/// Sign-extends the four live `i16` lanes in the low half of `v` to four `i32` lanes.
-///
-/// SSE2 has no `pmovsxwd` — that is SSE4.1 — so duplicate each word into a pair and
-/// shift the pair down arithmetically: `[a b c d …]` becomes `[a a b b]` and then
-/// `[a b c d]` as `i32`, sign carried by the shift.
-#[target_feature(enable = "sse2")]
-fn widen_lo_i16_to_i32(v: __m128i) -> __m128i {
-    _mm_srai_epi32(_mm_unpacklo_epi16(v, v), 16)
-}
-
-/// Computes the 4x4 IDCT residual vectors for 4 rows using SSE2.
+/// Computes the 4x4 IDCT residual vectors for 4 rows using SSE4.1.
 ///
 /// # The vertical pass runs in `i32`
 ///
@@ -314,86 +281,122 @@ fn widen_lo_i16_to_i32(v: __m128i) -> __m128i {
 /// truncation is observable — so `s0..s12` span the full `i16` range and `s0 + s8`
 /// overflows 16 bits, where `epi16` lanes would wrap and the scalar saturates.
 /// `idct_vertical_pass_does_not_wrap_at_16_bits` pins the case.
-#[target_feature(enable = "sse2")]
-fn compute_idct_residuals(dct: &[i16; 16]) -> (__m128i, __m128i, __m128i, __m128i) {
-    let s0 = widen_lo_i16_to_i32(idct_row(dct[0], dct[1], dct[2], dct[3]));
-    let s4 = widen_lo_i16_to_i32(idct_row(dct[4], dct[5], dct[6], dct[7]));
-    let s8 = widen_lo_i16_to_i32(idct_row(dct[8], dct[9], dct[10], dct[11]));
-    let s12 = widen_lo_i16_to_i32(idct_row(dct[12], dct[13], dct[14], dct[15]));
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn compute_idct_residuals(dct: &[i16; 16]) -> (__m128i, __m128i, __m128i, __m128i) {
+    unsafe {
+        let p = dct.as_ptr() as *const __m128i;
+        let r01 = _mm_loadu_si128(p);
+        let r23 = _mm_loadu_si128(p.add(1));
 
-    let c32 = _mm_set1_epi32(32);
+        let row0 = r01;
+        let row1 = _mm_srli_si128(r01, 8);
+        let row2 = r23;
+        let row3 = _mm_srli_si128(r23, 8);
 
-    let t1_a = _mm_add_epi32(s0, s8);
-    let t2_a = _mm_add_epi32(s4, _mm_srai_epi32(s12, 1));
-    let res0 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_a, t2_a), c32), 6);
-    let res3 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_a, t2_a), c32), 6);
+        // 1. Transpose rows to columns
+        let (c0, c1, c2, c3) = transpose4(row0, row1, row2, row3);
 
-    let t1_b = _mm_sub_epi32(s0, s8);
-    let t2_b = _mm_sub_epi32(_mm_srai_epi32(s4, 1), s12);
-    let res1 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_b, t2_b), c32), 6);
-    let res2 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_b, t2_b), c32), 6);
+        // 2. Horizontal 1D IDCT across all 4 rows
+        let t0 = _mm_add_epi16(c0, c2);
+        let t1 = _mm_sub_epi16(c0, c2);
+        let t2 = _mm_sub_epi16(_mm_srai_epi16(c1, 1), c3);
+        let t3 = _mm_add_epi16(c1, _mm_srai_epi16(c3, 1));
 
-    // Back to the `i16` lanes `add_res_and_clip` adds the prediction in. The
-    // signed saturation `packs` applies is unreachable and so exact: `|s*| <= 32768`
-    // bounds `|t1| <= 65536` and `|t2| <= 49152`, giving `|32 + t1 ± t2| <= 114720`
-    // and `|result| <= 1792` after the `>> 6`.
-    let zero = _mm_setzero_si128();
-    (
-        _mm_packs_epi32(res0, zero),
-        _mm_packs_epi32(res1, zero),
-        _mm_packs_epi32(res2, zero),
-        _mm_packs_epi32(res3, zero),
-    )
-}
+        let s0 = _mm_add_epi16(t0, t3);
+        let s1 = _mm_add_epi16(t1, t2);
+        let s2 = _mm_sub_epi16(t1, t2);
+        let s3 = _mm_sub_epi16(t0, t3);
 
-#[target_feature(enable = "sse2")]
-fn idct_res_add_pred_sse2_impl(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
-    let (res0, res1, res2, res3) = compute_idct_residuals(rs);
-    for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
-        let row: &mut [u8; 4] = pred.row_mut(dy as isize, 0, 4).try_into().unwrap();
-        *row = add_res_and_clip(*row, res);
+        // 3. Transpose back to rows of intermediate coefficients (implicitly truncated to i16)
+        let (r0, r1, r2, r3) = transpose4(s0, s1, s2, s3);
+
+        // 4. Widen to i32 for vertical butterfly to prevent overflow
+        let s0_32 = _mm_cvtepi16_epi32(r0);
+        let s4_32 = _mm_cvtepi16_epi32(r1);
+        let s8_32 = _mm_cvtepi16_epi32(r2);
+        let s12_32 = _mm_cvtepi16_epi32(r3);
+
+        let c32 = _mm_set1_epi32(32);
+
+        let t1_a = _mm_add_epi32(s0_32, s8_32);
+        let t2_a = _mm_add_epi32(s4_32, _mm_srai_epi32(s12_32, 1));
+        let res0 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_a, t2_a), c32), 6);
+        let res3 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_a, t2_a), c32), 6);
+
+        let t1_b = _mm_sub_epi32(s0_32, s8_32);
+        let t2_b = _mm_sub_epi32(_mm_srai_epi32(s4_32, 1), s12_32);
+        let res1 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_b, t2_b), c32), 6);
+        let res2 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_b, t2_b), c32), 6);
+
+        let zero = _mm_setzero_si128();
+        (
+            _mm_packs_epi32(res0, zero),
+            _mm_packs_epi32(res1, zero),
+            _mm_packs_epi32(res2, zero),
+            _mm_packs_epi32(res3, zero),
+        )
     }
 }
 
-/// 4x4 inverse integer DCT of `rs`, added to `pred` and saturated to `[0, 255]` in place using SSE2.
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_res_add_pred_sse41_impl(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
+    unsafe {
+        let (res0, res1, res2, res3) = compute_idct_residuals(rs);
+        for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
+            let row: &mut [u8; 4] = pred.row_mut(dy as isize, 0, 4).try_into().unwrap();
+            *row = add_res_and_clip(*row, res);
+        }
+    }
+}
+
+/// 4x4 inverse integer DCT of `rs`, added to `pred` and saturated to `[0, 255]` in place using SSE4.1.
 ///
 /// C++: `IdctResAddPred_sse2`, `codec/common/x86/dct.asm`.
 #[inline]
 pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
-    unsafe { idct_res_add_pred_sse2_impl(pred, rs) }
+    unsafe { idct_res_add_pred_sse41_impl(pred, rs) }
 }
 
-#[target_feature(enable = "sse2")]
-fn idct_t4_rec_sse2_impl(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
-    let (res0, res1, res2, res3) = compute_idct_residuals(dct);
-    for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
-        let p: [u8; 4] = pred.row_view(dy as isize, 0, 4).try_into().unwrap();
-        let row: &mut [u8; 4] = rec.row_mut(dy as isize, 0, 4).try_into().unwrap();
-        *row = add_res_and_clip(p, res);
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_t4_rec_sse41_impl(
+    rec: &mut PlaneCursorMut<'_>,
+    pred: &PlaneCursor<'_>,
+    dct: &[i16; 16],
+) {
+    unsafe {
+        let (res0, res1, res2, res3) = compute_idct_residuals(dct);
+        for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
+            let p: [u8; 4] = pred.row_view(dy as isize, 0, 4).try_into().unwrap();
+            let row: &mut [u8; 4] = rec.row_mut(dy as isize, 0, 4).try_into().unwrap();
+            *row = add_res_and_clip(p, res);
+        }
     }
 }
 
-/// 4x4 IDCT with separate source prediction cursor using SSE2.
+/// 4x4 IDCT with separate source prediction cursor using SSE4.1.
 ///
 /// C++: `WelsIDctT4Rec_sse2`, `codec/common/x86/dct.asm`.
 #[inline]
 pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
-    unsafe { idct_t4_rec_sse2_impl(rec, pred, dct) }
+    unsafe { idct_t4_rec_sse41_impl(rec, pred, dct) }
 }
 
-#[target_feature(enable = "sse2")]
-fn idct_t4_rec_in_place_sse2_impl(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
-    idct_res_add_pred_sse2_impl(rec, dct);
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_t4_rec_in_place_sse41_impl(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
+    unsafe {
+        idct_res_add_pred_sse41_impl(rec, dct);
+    }
 }
 
 /// [`idct_t4_rec`] in place on `rec`.
 #[inline]
 pub fn idct_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
-    unsafe { idct_t4_rec_in_place_sse2_impl(rec, dct) }
+    unsafe { idct_t4_rec_in_place_sse41_impl(rec, dct) }
 }
 
-#[target_feature(enable = "sse2")]
-fn idct_four_t4_rec_sse2_impl(
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_four_t4_rec_sse41_impl(
     rec: &mut PlaneCursorMut<'_>,
     pred: &PlaneCursor<'_>,
     dct: &[i16; 64],
@@ -401,7 +404,9 @@ fn idct_four_t4_rec_sse2_impl(
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-        idct_t4_rec_sse2_impl(&mut rec.reborrow(dx, dy), &pred.advance(dx, dy), sub);
+        unsafe {
+            idct_t4_rec_sse41_impl(&mut rec.reborrow(dx, dy), &pred.advance(dx, dy), sub);
+        }
     }
 }
 
@@ -410,47 +415,51 @@ fn idct_four_t4_rec_sse2_impl(
 /// C++: `WelsIDctFourT4Rec_sse2`, `codec/common/x86/dct.asm`.
 #[inline]
 pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 64]) {
-    unsafe { idct_four_t4_rec_sse2_impl(rec, pred, dct) }
+    unsafe { idct_four_t4_rec_sse41_impl(rec, pred, dct) }
 }
 
-#[target_feature(enable = "sse2")]
-fn idct_four_t4_rec_in_place_sse2_impl(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_four_t4_rec_in_place_sse41_impl(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-        idct_t4_rec_in_place_sse2_impl(&mut rec.reborrow(dx, dy), sub);
+        unsafe {
+            idct_t4_rec_in_place_sse41_impl(&mut rec.reborrow(dx, dy), sub);
+        }
     }
 }
 
 /// [`idct_t4_rec_in_place`] over four 4x4 blocks forming an 8x8 quadrant.
 #[inline]
 pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
-    unsafe { idct_four_t4_rec_in_place_sse2_impl(rec, dct) }
+    unsafe { idct_four_t4_rec_in_place_sse41_impl(rec, dct) }
 }
 
-#[target_feature(enable = "sse2")]
-fn idct_t4_rec_to_view_sse2_impl(
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_t4_rec_to_view_sse41_impl(
     rec: &RecCursor<'_>,
     pred: &[u8],
     pred_stride: usize,
     dct: &[i16; 16],
 ) {
-    let (res0, res1, res2, res3) = compute_idct_residuals(dct);
-    for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
-        let p: [u8; 4] = pred[dy * pred_stride..][..4].try_into().unwrap();
-        let out = add_res_and_clip(p, res);
-        rec.write_row::<4>(dy as isize, 0, &out);
+    unsafe {
+        let (res0, res1, res2, res3) = compute_idct_residuals(dct);
+        for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
+            let p: [u8; 4] = pred[dy * pred_stride..][..4].try_into().unwrap();
+            let out = add_res_and_clip(p, res);
+            rec.write_row::<4>(dy as isize, 0, &out);
+        }
     }
 }
 
-/// [`idct_t4_rec_to_view`] using SSE2.
+/// [`idct_t4_rec_to_view`] using SSE4.1.
 #[inline]
 pub fn idct_t4_rec_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dct: &[i16; 16]) {
-    unsafe { idct_t4_rec_to_view_sse2_impl(rec, pred, pred_stride, dct) }
+    unsafe { idct_t4_rec_to_view_sse41_impl(rec, pred, pred_stride, dct) }
 }
 
-#[target_feature(enable = "sse2")]
-fn idct_four_t4_rec_to_view_sse2_impl(
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_four_t4_rec_to_view_sse41_impl(
     rec: &RecCursor<'_>,
     pred: &[u8],
     pred_stride: usize,
@@ -460,11 +469,13 @@ fn idct_four_t4_rec_to_view_sse2_impl(
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
         let off = dy as usize * pred_stride + dx as usize;
-        idct_t4_rec_to_view_sse2_impl(&rec.advance(dx, dy), &pred[off..], pred_stride, sub);
+        unsafe {
+            idct_t4_rec_to_view_sse41_impl(&rec.advance(dx, dy), &pred[off..], pred_stride, sub);
+        }
     }
 }
 
-/// [`idct_four_t4_rec_to_view`] using SSE2.
+/// [`idct_four_t4_rec_to_view`] using SSE4.1.
 #[inline]
 pub fn idct_four_t4_rec_to_view(
     rec: &RecCursor<'_>,
@@ -472,53 +483,59 @@ pub fn idct_four_t4_rec_to_view(
     pred_stride: usize,
     dct: &[i16; 64],
 ) {
-    unsafe { idct_four_t4_rec_to_view_sse2_impl(rec, pred, pred_stride, dct) }
+    unsafe { idct_four_t4_rec_to_view_sse41_impl(rec, pred, pred_stride, dct) }
 }
 
-#[target_feature(enable = "sse2")]
-fn idct_t4_rec_in_place_view_sse2_impl(rec: &RecCursor<'_>, dct: &[i16; 16]) {
-    let (res0, res1, res2, res3) = compute_idct_residuals(dct);
-    for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
-        let cur = rec.row::<4>(dy as isize, 0);
-        let out = add_res_and_clip(cur, res);
-        rec.write_row::<4>(dy as isize, 0, &out);
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_t4_rec_in_place_view_sse41_impl(rec: &RecCursor<'_>, dct: &[i16; 16]) {
+    unsafe {
+        let (res0, res1, res2, res3) = compute_idct_residuals(dct);
+        for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
+            let cur = rec.row::<4>(dy as isize, 0);
+            let out = add_res_and_clip(cur, res);
+            rec.write_row::<4>(dy as isize, 0, &out);
+        }
     }
 }
 
-/// [`idct_t4_rec_in_place_view`] using SSE2.
+/// [`idct_t4_rec_in_place_view`] using SSE4.1.
 #[inline]
 pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
-    unsafe { idct_t4_rec_in_place_view_sse2_impl(rec, dct) }
+    unsafe { idct_t4_rec_in_place_view_sse41_impl(rec, dct) }
 }
 
-#[target_feature(enable = "sse2")]
-fn idct_four_t4_rec_in_place_view_sse2_impl(rec: &RecCursor<'_>, dct: &[i16; 64]) {
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_four_t4_rec_in_place_view_sse41_impl(rec: &RecCursor<'_>, dct: &[i16; 64]) {
     const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
     for (k, &(dx, dy)) in SUBS.iter().enumerate() {
         let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-        idct_t4_rec_in_place_view_sse2_impl(&rec.advance(dx, dy), sub);
+        unsafe {
+            idct_t4_rec_in_place_view_sse41_impl(&rec.advance(dx, dy), sub);
+        }
     }
 }
 
-/// [`idct_four_t4_rec_in_place_view`] using SSE2.
+/// [`idct_four_t4_rec_in_place_view`] using SSE4.1.
 #[inline]
 pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
-    unsafe { idct_four_t4_rec_in_place_view_sse2_impl(rec, dct) }
+    unsafe { idct_four_t4_rec_in_place_view_sse41_impl(rec, dct) }
 }
 
-#[target_feature(enable = "sse2")]
-fn idct_t4_rec_on_mb_in_place_view_sse2_impl(rec: &RecCursor<'_>, dct: &[i16; 256]) {
+#[target_feature(enable = "sse4.1")]
+unsafe fn idct_t4_rec_on_mb_in_place_view_sse41_impl(rec: &RecCursor<'_>, dct: &[i16; 256]) {
     const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
     for (k, &(dx, dy)) in QUADS.iter().enumerate() {
         let sub: &[i16; 64] = (&dct[k << 6..][..64]).try_into().unwrap();
-        idct_four_t4_rec_in_place_view_sse2_impl(&rec.advance(dx, dy), sub);
+        unsafe {
+            idct_four_t4_rec_in_place_view_sse41_impl(&rec.advance(dx, dy), sub);
+        }
     }
 }
 
-/// [`idct_t4_rec_on_mb_in_place_view`] using SSE2.
+/// [`idct_t4_rec_on_mb_in_place_view`] using SSE4.1.
 #[inline]
 pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
-    unsafe { idct_t4_rec_on_mb_in_place_view_sse2_impl(rec, dct) }
+    unsafe { idct_t4_rec_on_mb_in_place_view_sse41_impl(rec, dct) }
 }
 
 #[target_feature(enable = "sse2")]

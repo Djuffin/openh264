@@ -600,6 +600,74 @@ unsafe fn filter_6tap_vertical_words(
     _mm_srai_epi16(rounded, 5)
 }
 
+#[target_feature(enable = "avx2")]
+#[inline]
+unsafe fn filter_6tap_vertical_avx2(
+    p0: __m256i,
+    p1: __m256i,
+    p2: __m256i,
+    p3: __m256i,
+    p4: __m256i,
+    p5: __m256i,
+) -> __m256i {
+    let p14 = _mm256_add_epi16(p1, p4);
+    let p23 = _mm256_add_epi16(p2, p3);
+    let x = _mm256_sub_epi16(_mm256_slli_epi16(p23, 2), p14);
+    let p05 = _mm256_add_epi16(p0, p5);
+    let sum = _mm256_add_epi16(p05, _mm256_add_epi16(x, _mm256_slli_epi16(x, 2)));
+    let rounded = _mm256_add_epi16(sum, _mm256_set1_epi16(16));
+    _mm256_srai_epi16(rounded, 5)
+}
+
+#[target_feature(enable = "avx2")]
+unsafe fn ver_lanes_avx2_16x<
+    S: RefSamples + Copy,
+    const H: usize,
+    const SH: usize,
+    const AVG: usize,
+>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let s = src.span::<16, SH>(-2, 0);
+    let mut d = dst.span_mut::<16, H>(0, 0);
+
+    let load_row = |y: usize| -> __m256i {
+        unsafe {
+            let r = s.row::<16>(y, 0);
+            let raw = _mm_loadu_si128(r.as_ptr() as *const __m128i);
+            _mm256_cvtepu8_epi16(raw)
+        }
+    };
+
+    let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
+        load_row(0),
+        load_row(1),
+        load_row(2),
+        load_row(3),
+        load_row(4),
+    );
+
+    for y in 0..H {
+        let r5 = load_row(y + 5);
+        let out = d.row_mut::<16>(y, 0);
+
+        unsafe {
+            let w = filter_6tap_vertical_avx2(r0, r1, r2, r3, r4, r5);
+            let lo = _mm256_castsi256_si128(w);
+            let hi = _mm256_extracti128_si256(w, 1);
+            let mut both = _mm_packus_epi16(lo, hi);
+            if AVG != 0 {
+                let tap = _mm_loadu_si128(s.row::<16>(y + AVG, 0).as_ptr() as *const __m128i);
+                both = _mm_avg_epu8(both, tap);
+            }
+            _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, both);
+        }
+
+        (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
+    }
+}
+
 /// The vertical filter at width 16, 8 or 4: the five-row window carried in widened
 /// registers and one new row read per output row.
 #[target_feature(enable = "sse4.1")]
@@ -720,9 +788,13 @@ unsafe fn ver_block<
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
-    match W {
-        16 | 8 | 4 => unsafe { ver_lanes::<S, W, H, SH, AVG>(src, dst) },
-        _ => ver_odd::<S, W, H, SH, AVG>(src, dst),
+    if W == 16 && crate::simd::has_avx2() {
+        unsafe { ver_lanes_avx2_16x::<S, H, SH, AVG>(src, dst) }
+    } else {
+        match W {
+            16 | 8 | 4 => unsafe { ver_lanes::<S, W, H, SH, AVG>(src, dst) },
+            _ => ver_odd::<S, W, H, SH, AVG>(src, dst),
+        }
     }
 }
 
