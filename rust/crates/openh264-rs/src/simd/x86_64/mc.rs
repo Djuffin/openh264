@@ -92,6 +92,7 @@ fn w4<R: BlockRows>(r: &R, y: usize, x: usize) -> __m128i {
 /// The width is a const parameter so the chunk chain below has a constant trip count: a
 /// row loop whose body still contains a loop is one the unroller declines, and with it
 /// every per-row bounds check stays. See [`ROW_GROUP`].
+#[allow(dead_code)]
 #[inline(always)]
 fn avg_row<const W: usize>(out: &mut [u8; W], a: &[u8; W], b: &[u8; W]) {
     if W == 16 {
@@ -123,7 +124,6 @@ fn avg_row<const W: usize>(out: &mut [u8; W], a: &[u8; W], b: &[u8; W]) {
     }
 }
 
-/// `PixelAvg` over one const-shape block: one span per operand, walked row by row.
 #[inline(always)]
 fn avg_block<A: RefSamples, B: RefSamples, const W: usize, const H: usize>(
     dst: &mut PlaneCursorMut<'_>,
@@ -134,10 +134,11 @@ fn avg_block<A: RefSamples, B: RefSamples, const W: usize, const H: usize>(
     let sb = b.span::<W, H>(0, 0);
     let mut d = dst.span_mut::<W, H>(0, 0);
     for y in 0..H {
-        let ra = sa.row::<W>(y, 0);
-        let rb = sb.row::<W>(y, 0);
+        let (ra, rb) = (sa.row::<W>(y, 0), sb.row::<W>(y, 0));
         let out = d.row_mut::<W>(y, 0);
-        avg_row::<W>(out, &ra, &rb);
+        for j in 0..W {
+            out[j] = (((ra[j] as u32) + (rb[j] as u32) + 1) >> 1) as u8;
+        }
     }
 }
 
@@ -158,6 +159,7 @@ fn avg_any<A: RefSamples, B: RefSamples>(
 }
 
 /// Public safe entry point for SSE2 pixel averaging.
+#[inline(always)]
 pub fn pixel_avg<A: RefSamples, B: RefSamples>(
     dst: &mut PlaneCursorMut<'_>,
     a: &A,
@@ -220,18 +222,36 @@ unsafe fn chroma_block<
     let s = src.span::<SW, SH>(0, 0);
     let mut d = dst.span_mut::<W, H>(0, 0);
     if W == 8 {
-        let (iA, iB, iC, iD) = (w[0] as i32, w[1] as i32, w[2] as i32, w[3] as i32);
+        let coeff_ab = _mm_set1_epi16(((w[1] as i16) << 8) | (w[0] as i16));
+        let coeff_cd = _mm_set1_epi16(((w[3] as i16) << 8) | (w[2] as i16));
+        let round_32 = _mm_set1_epi16(32);
+
+        let load_interleaved_8 = |y: usize| -> __m128i {
+            let r = s.row::<SW>(y, 0);
+            let lo = i64::from_ne_bytes(r[..8].try_into().unwrap());
+            let hi = r[8] as i64;
+            let v_lo = _mm_cvtsi64_si128(lo);
+            let v_hi = _mm_cvtsi64_si128(hi);
+            let r0 = _mm_unpacklo_epi64(v_lo, v_hi);
+            let r1 = _mm_srli_si128::<1>(r0);
+            _mm_unpacklo_epi8(r0, r1)
+        };
+
+        let mut curr_interleaved = load_interleaved_8(0);
+
         for y in 0..H {
-            let (r0, r1) = (s.row::<SW>(y, 0), s.row::<SW>(y + 1, 0));
-            let out = d.row_mut::<W>(y, 0);
-            for j in 0..W {
-                out[j] = ((iA * (r0[j] as i32)
-                    + iB * (r0[j + 1] as i32)
-                    + iC * (r1[j] as i32)
-                    + iD * (r1[j + 1] as i32)
-                    + 32)
-                    >> 6) as u8;
-            }
+            let next_interleaved = load_interleaved_8(y + 1);
+
+            let term0 = _mm_maddubs_epi16(curr_interleaved, coeff_ab);
+            let term1 = _mm_maddubs_epi16(next_interleaved, coeff_cd);
+            let sum = _mm_add_epi16(term0, term1);
+            let shifted = _mm_srli_epi16(_mm_add_epi16(sum, round_32), 6);
+            let packed = _mm_packus_epi16(shifted, shifted);
+
+            let out = d.row_mut::<8>(y, 0);
+            *out = _mm_cvtsi128_si64(packed).to_ne_bytes();
+
+            curr_interleaved = next_interleaved;
         }
     } else if W == 4 {
         let coeff_ab = _mm_set1_epi16(((w[1] as i16) << 8) | (w[0] as i16));
@@ -306,8 +326,21 @@ fn chroma_any<S: RefSamples + Copy>(
     }
 }
 
+/// SIMD block copy for whole-pixel motion vectors.
+#[inline(always)]
+fn copy_block_simd<const W: usize, const H: usize, S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let s = src.span::<W, H>(0, 0);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    for y in 0..H {
+        *d.row_mut::<W>(y, 0) = s.row::<W>(y, 0);
+    }
+}
+
 /// Public safe entry point for SSE2 chroma MC.
-#[inline]
+#[inline(always)]
 pub fn mc_chroma<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -317,7 +350,14 @@ pub fn mc_chroma<S: RefSamples + Copy>(
     height: usize,
 ) {
     if (mv_x & 0x07) == 0 && (mv_y & 0x07) == 0 {
-        mc_copy(src, dst, width, height);
+        match (width, height) {
+            (8, 8) => copy_block_simd::<8, 8, S>(src, dst),
+            (8, 4) => copy_block_simd::<8, 4, S>(src, dst),
+            (4, 8) => copy_block_simd::<4, 8, S>(src, dst),
+            (4, 4) => copy_block_simd::<4, 4, S>(src, dst),
+            (2, 2) => copy_block_simd::<2, 2, S>(src, dst),
+            _ => mc_copy(src, dst, width, height),
+        }
         return;
     }
     mc_chroma_frac(src, dst, mv_x, mv_y, width, height)
@@ -327,7 +367,7 @@ pub fn mc_chroma<S: RefSamples + Copy>(
 /// enough to inline. The whole-sample vector is the common chroma case and a block copy;
 /// with the bilinear dispatch in the same body, `mc_copy` lost its constant width and
 /// height at that call site.
-#[inline]
+#[inline(always)]
 fn mc_chroma_frac<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -998,7 +1038,33 @@ impl McLeaves for Sse2Leaves {
 }
 
 /// Public safe entry point for SSE2 luma quarter-pel MC.
+#[inline(always)]
 pub fn mc_luma<S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    mv_x: i16,
+    mv_y: i16,
+    width: usize,
+    height: usize,
+) {
+    if (mv_x & 0x03) == 0 && (mv_y & 0x03) == 0 {
+        match (width, height) {
+            (16, 16) => copy_block_simd::<16, 16, S>(src, dst),
+            (16, 8) => copy_block_simd::<16, 8, S>(src, dst),
+            (8, 16) => copy_block_simd::<8, 16, S>(src, dst),
+            (8, 8) => copy_block_simd::<8, 8, S>(src, dst),
+            (8, 4) => copy_block_simd::<8, 4, S>(src, dst),
+            (4, 8) => copy_block_simd::<4, 8, S>(src, dst),
+            (4, 4) => copy_block_simd::<4, 4, S>(src, dst),
+            _ => mc_copy(src, dst, width, height),
+        }
+        return;
+    }
+    mc_luma_frac(src, dst, mv_x, mv_y, width, height)
+}
+
+#[inline(always)]
+fn mc_luma_frac<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     mv_x: i16,
