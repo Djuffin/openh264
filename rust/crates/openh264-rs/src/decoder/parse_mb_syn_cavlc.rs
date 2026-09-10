@@ -2063,6 +2063,15 @@ pub fn ParseInterBInfo(
                         // CAVLC has no mvd cache — the C++ passes NULL here too.
                         None,
                     );
+                    // Fix relative to 2.6.0, mirroring `parse_mb_syn_cavlc.cpp:1631`:
+                    // `ref_idx_list` is initialised to -1 above and was only filled for spatial
+                    // direct sub-macroblocks, yet the mv loop below copies it into the
+                    // MV-prediction cache for every sub-macroblock. A temporal direct
+                    // sub-macroblock therefore advertised REF_NOT_IN_LIST to its neighbours
+                    // instead of the reference index 8.4.1.2.3 derived for it, and the partitions
+                    // predicted after it mis-predicted their motion vectors.
+                    ref_idx_list[LIST_0][i] = iRef[LIST_0];
+                    ref_idx_list[LIST_1][i] = iRef[LIST_1];
                 }
             }
         }

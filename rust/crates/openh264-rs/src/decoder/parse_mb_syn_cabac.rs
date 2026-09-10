@@ -2905,6 +2905,15 @@ pub fn ParseInterBMotionInfoCabac(
 
         let pSubMbType = *pCurDqLayer.grid.sub_mb_type.get(iMbXy);
 
+        // Fix relative to 2.6.0, mirroring `parse_mb_syn_cabac.cpp:950`: the reference indices of
+        // a temporal direct sub-macroblock used to reach the MV-prediction cache in the loop
+        // below, before the non-direct sub-macroblocks were predicted, so a direct sub-macroblock
+        // that is not yet decoded became an available neighbour C for them. 6.4.11.7 / 8.4.1.3.2
+        // declare a partition that follows the current one in decoding order unavailable, which
+        // the cache implements by pre-marking those cells REF_NOT_AVAIL. Record the refs here and
+        // write them at the sub-macroblock's turn in the mv loop, as the spatial path already does.
+        let mut ref_idx_list = [[REF_NOT_IN_LIST; 4]; LIST_A];
+
         for i in 0..4usize {
             // Direct 8x8 Ref and mv
             let iIdx8 = (i << 2) as i16;
@@ -2945,8 +2954,8 @@ pub fn ParseInterBMotionInfoCabac(
                     }
                     Update8x8RefIdx(&mut *pCurDqLayer, &mut *pDec, iIdx8, LIST_0, iRef[LIST_0]);
                     Update8x8RefIdx(&mut *pCurDqLayer, &mut *pDec, iIdx8, LIST_1, iRef[LIST_1]);
-                    UpdateP8x8RefCacheIdxCabac(pRefIndex, iIdx8, LIST_0 as i32, iRef[LIST_0]);
-                    UpdateP8x8RefCacheIdxCabac(pRefIndex, iIdx8, LIST_1 as i32, iRef[LIST_1]);
+                    ref_idx_list[LIST_0][i] = iRef[LIST_0];
+                    ref_idx_list[LIST_1][i] = iRef[LIST_1];
                     FillTemporalDirect8x8Mv(
                         &mut *pCurDqLayer,
                         Some(&mut *pDec),
@@ -2964,7 +2973,6 @@ pub fn ParseInterBMotionInfoCabac(
         }
 
         // ref no-direct
-        let mut ref_idx_list = [[REF_NOT_IN_LIST; 4]; LIST_A];
         for listIdx in LIST_0..LIST_A {
             for i in 0..4usize {
                 let iIdx8 = (i << 2) as i16;
@@ -3014,9 +3022,6 @@ pub fn ParseInterBMotionInfoCabac(
             for i in 0..4usize {
                 let iIdx8 = (i << 2) as i16;
                 let subMbType = pSubMbType[i];
-                if IS_DIRECT(subMbType) && iDirectSpatialMvPredFlag == 0 {
-                    continue;
-                }
                 let iref = ref_idx_list[listIdx][i];
                 UpdateP8x8RefCacheIdxCabac(pRefIndex, iIdx8, listIdx as i32, iref);
 
