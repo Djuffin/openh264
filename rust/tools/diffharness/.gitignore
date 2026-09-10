@@ -1,4 +1,0 @@
-out/
-cxx_enc
-rust_enc/target/
-rust_enc/Cargo.lock
