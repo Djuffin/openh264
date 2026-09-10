@@ -471,32 +471,32 @@ asset_test!(
 asset_test!(
     test_asset_vid_1280x544_cabac_temporal_direct,
     "VID_1280x544_cabac_temporal_direct.264",
-    "02299df3b9d83300d244b36601699859c57fe905"
+    "9ec363243d41ecd6358509d4ba9a9e113e583867"
 );
 asset_test!(
     test_asset_vid_1280x720_cabac_temporal_direct,
     "VID_1280x720_cabac_temporal_direct.264",
-    "0ef0818cb23445d209b8a7632c13f1c7e820cc27"
+    "1dca83802d37b8cfa2b6c813f33d285fc5005a7a"
 );
 asset_test!(
     test_asset_vid_1920x1080_cabac_temporal_direct,
     "VID_1920x1080_cabac_temporal_direct.264",
-    "ad2b1d1456919693e38a1e3e8cd9c21699688cec"
+    "e25d00389810538fe03e6851541c73f1e8b50b08"
 );
 asset_test!(
     test_asset_vid_1280x544_cavlc_temporal_direct,
     "VID_1280x544_cavlc_temporal_direct.264",
-    "71a12ff2b548b765a34c11f39eef1faa19b38d59"
+    "3d2da78eefd45028dd65a5314835bc9c3ee9f891"
 );
 asset_test!(
     test_asset_vid_1280x720_cavlc_temporal_direct,
     "VID_1280x720_cavlc_temporal_direct.264",
-    "f39cecb32ba20ca4f3b3a385db9ef46ba340e41f"
+    "47c21d12d9bae9212efac4a0b3c3cf435cdd437c"
 );
 asset_test!(
     test_asset_vid_1920x1080_cavlc_temporal_direct,
     "VID_1920x1080_cavlc_temporal_direct.264",
-    "6aae2d569a1ebbe5ae20e2dfc5e709cc05ab1a21"
+    "8b2892c21b40476ea52827e3daac36cfe52a7b48"
 );
 
 // ---------------------------------------------------------------------------
@@ -648,5 +648,5 @@ asset_test!(
 asset_test!(
     test_asset_cacqp3_sony_d,
     "CACQP3_Sony_D.jsv",
-    "1db1699df71da52b57582e4dee57303157a74b92"
+    "72599a2f7e804e95b6003ecc065190db9f2f073d"
 );
