@@ -35,7 +35,6 @@
 #![allow(unsafe_code)]
 
 use core::arch::x86_64::*;
-use core::cell::Cell;
 
 use crate::encoder::rec_view::RecCursor;
 
@@ -53,53 +52,115 @@ use crate::encoder::rec_view::RecCursor;
 /// Overlapping operands are fine, and the scalar's behaviour under them is
 /// preserved: a row is read whole before any of it is written back, exactly as
 /// `copy_rows_shared` reads into a `[u8; 16]` before writing.
-#[target_feature(enable = "sse2")]
-unsafe fn copy_rows16(
-    dst: &[Cell<u8>],
+#[inline(always)]
+unsafe fn copy_rows16<const H: usize>(
+    mut d: *mut u8,
     dst_stride: usize,
-    src: &[Cell<u8>],
+    mut s: *const u8,
     src_stride: usize,
-    h: usize,
 ) {
-    unsafe {
-        // `&[Cell<u8>]` is a shared reference to `UnsafeCell` contents, which is
-        // what makes writing through a pointer derived from it sound — the same
-        // door `Cell::as_ptr` opens for a single cell, widened to the slice's
-        // provenance so a 16-byte store stays inside it.
-        let s = src.as_ptr() as *const u8;
-        let d = dst.as_ptr() as *mut u8;
-        for y in 0..h {
-            let v = _mm_loadu_si128(s.add(y * src_stride) as *const __m128i);
-            _mm_storeu_si128(d.add(y * dst_stride) as *mut __m128i, v);
+    let mut y = 0;
+    while y + 4 <= H {
+        unsafe {
+            let v0 = _mm_loadu_si128(s as *const __m128i);
+            let v1 = _mm_loadu_si128(s.add(src_stride) as *const __m128i);
+            let v2 = _mm_loadu_si128(s.add(src_stride * 2) as *const __m128i);
+            let v3 = _mm_loadu_si128(s.add(src_stride * 3) as *const __m128i);
+            _mm_storeu_si128(d as *mut __m128i, v0);
+            _mm_storeu_si128(d.add(dst_stride) as *mut __m128i, v1);
+            _mm_storeu_si128(d.add(dst_stride * 2) as *mut __m128i, v2);
+            _mm_storeu_si128(d.add(dst_stride * 3) as *mut __m128i, v3);
+            s = s.add(src_stride * 4);
+            d = d.add(dst_stride * 4);
         }
+        y += 4;
+    }
+    while y + 2 <= H {
+        unsafe {
+            let s1 = s.add(src_stride);
+            let d1 = d.add(dst_stride);
+            let v0 = _mm_loadu_si128(s as *const __m128i);
+            let v1 = _mm_loadu_si128(s1 as *const __m128i);
+            _mm_storeu_si128(d as *mut __m128i, v0);
+            _mm_storeu_si128(d1 as *mut __m128i, v1);
+            s = s1.add(src_stride);
+            d = d1.add(dst_stride);
+        }
+        y += 2;
+    }
+    while y < H {
+        unsafe {
+            let v = _mm_loadu_si128(s as *const __m128i);
+            _mm_storeu_si128(d as *mut __m128i, v);
+            s = s.add(src_stride);
+            d = d.add(dst_stride);
+        }
+        y += 1;
     }
 }
 
 /// The 8-wide form of [`copy_rows16`]; same contract with `8` for `16`.
-#[target_feature(enable = "sse2")]
-fn copy_rows8(dst: &[Cell<u8>], dst_stride: usize, src: &[Cell<u8>], src_stride: usize, h: usize) {
-    unsafe {
-        let s = src.as_ptr() as *const u8;
-        let d = dst.as_ptr() as *mut u8;
-        for y in 0..h {
-            let v = _mm_loadl_epi64(s.add(y * src_stride) as *const __m128i);
-            _mm_storel_epi64(d.add(y * dst_stride) as *mut __m128i, v);
+#[inline(always)]
+unsafe fn copy_rows8<const H: usize>(
+    mut d: *mut u8,
+    dst_stride: usize,
+    mut s: *const u8,
+    src_stride: usize,
+) {
+    let mut y = 0;
+    while y + 4 <= H {
+        unsafe {
+            let v0 = _mm_loadl_epi64(s as *const __m128i);
+            let v1 = _mm_loadl_epi64(s.add(src_stride) as *const __m128i);
+            let v2 = _mm_loadl_epi64(s.add(src_stride * 2) as *const __m128i);
+            let v3 = _mm_loadl_epi64(s.add(src_stride * 3) as *const __m128i);
+            _mm_storel_epi64(d as *mut __m128i, v0);
+            _mm_storel_epi64(d.add(dst_stride) as *mut __m128i, v1);
+            _mm_storel_epi64(d.add(dst_stride * 2) as *mut __m128i, v2);
+            _mm_storel_epi64(d.add(dst_stride * 3) as *mut __m128i, v3);
+            s = s.add(src_stride * 4);
+            d = d.add(dst_stride * 4);
         }
+        y += 4;
+    }
+    while y + 2 <= H {
+        unsafe {
+            let s1 = s.add(src_stride);
+            let d1 = d.add(dst_stride);
+            let v0 = _mm_loadl_epi64(s as *const __m128i);
+            let v1 = _mm_loadl_epi64(s1 as *const __m128i);
+            _mm_storel_epi64(d as *mut __m128i, v0);
+            _mm_storel_epi64(d1 as *mut __m128i, v1);
+            s = s1.add(src_stride);
+            d = d1.add(dst_stride);
+        }
+        y += 2;
+    }
+    while y < H {
+        unsafe {
+            let v = _mm_loadl_epi64(s as *const __m128i);
+            _mm_storel_epi64(d as *mut __m128i, v);
+            s = s.add(src_stride);
+            d = d.add(dst_stride);
+        }
+        y += 1;
     }
 }
 
-/// `W` bytes of each of `h` rows, from one shared cursor to another.
+/// `W` bytes of each of `H` rows, from one shared cursor to another.
 ///
 /// Panics through `block_span` if either block leaves its buffer, before any
 /// pointer is formed — which is what lets the kernels below be `unsafe` only
 /// over an already-validated span.
 #[inline(always)]
-fn copy_block<const W: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>, h: usize) {
-    let s = src.block_span(0, 0, W, h);
-    let d = dst.block_span(0, 0, W, h);
+fn copy_block<const W: usize, const H: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
+    let s = src.block_span(0, 0, W, H);
+    let d = dst.block_span(0, 0, W, H);
+    let s_ptr = s.as_ptr() as *const u8;
+    let d_ptr = d.as_ptr() as *mut u8;
     match W {
-        16 => unsafe { copy_rows16(d, dst.stride(), s, src.stride(), h) },
-        8 => unsafe { copy_rows8(d, dst.stride(), s, src.stride(), h) },
+        16 => unsafe { copy_rows16::<H>(d_ptr, dst.stride(), s_ptr, src.stride()) },
+        8 => unsafe { copy_rows8::<H>(d_ptr, dst.stride(), s_ptr, src.stride()) },
         _ => unreachable!("only the 8- and 16-wide rows have kernels"),
     }
 }
@@ -107,28 +168,28 @@ fn copy_block<const W: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>, h: usize
 /// C++: `WelsCopy16x16_sse2` and `WelsCopy16x16NotAligned_sse2`,
 /// `codec/common/x86/mb_copy.asm:68` and `:135` — see the module header for why
 /// one kernel serves both.
-#[inline]
+#[inline(always)]
 pub fn copy_16x16(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
-    copy_block::<16>(dst, src, 16);
+    copy_block::<16, 16>(dst, src);
 }
 
 /// C++: `WelsCopy16x8NotAligned_sse2`, `codec/common/x86/mb_copy.asm:201`.
-#[inline]
+#[inline(always)]
 pub fn copy_16x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
-    copy_block::<16>(dst, src, 8);
+    copy_block::<16, 8>(dst, src);
 }
 
 /// The SSE2 counterpart of `WelsCopy8x16_mmx`, `codec/common/x86/mb_copy.asm:245`
 /// — see the module header on why this is not MMX.
-#[inline]
+#[inline(always)]
 pub fn copy_8x16(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
-    copy_block::<8>(dst, src, 16);
+    copy_block::<8, 16>(dst, src);
 }
 
 /// The SSE2 counterpart of `WelsCopy8x8_mmx`, `codec/common/x86/mb_copy.asm:311`.
-#[inline]
+#[inline(always)]
 pub fn copy_8x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
-    copy_block::<8>(dst, src, 8);
+    copy_block::<8, 8>(dst, src);
 }
 
 // ============================================================================

@@ -1253,11 +1253,12 @@ fn quant_rows(rows: &mut Vec<Row>) {
 
 fn copy_rows(rows: &mut Vec<Row>) {
     let src = noise(STRIDE * ROWS, 21);
-    let (mut d0, mut d1) = (vec![0u8; STRIDE * ROWS], vec![0u8; STRIDE * ROWS]);
+    let mut d0 = vec![0u8; STRIDE * ROWS];
+    let mut s0 = src.clone();
+    let mut d1 = vec![0u8; STRIDE * ROWS];
+    let mut s1 = src.clone();
     #[cfg(feature = "wide")]
     let mut d2 = vec![0u8; STRIDE * ROWS];
-    let mut s0 = src.clone();
-    let mut s1 = src.clone();
     #[cfg(feature = "wide")]
     let mut s2 = src.clone();
     let sum = |d: &[u8], c: bool| if c { fnv(d) } else { d[ANCHOR] as u64 };
