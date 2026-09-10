@@ -2139,7 +2139,12 @@ pub fn WelsDeblockingMb(
                 nBS[1][0] = [0u8; 4];
             }
 
-            if IS_SKIP(iCurMbType) {
+            // Fix relative to 2.6.0, mirroring `deblocking.cpp:1183`: the skip short-cut (all
+            // internal edges bS = 0) holds for P_Skip, one 16x16 partition with one motion
+            // vector, but not for B_Skip, whose four 8x8 quadrants inherit direct motion that
+            // differs per 8x8 or per 4x4; 8.7.2.1 derives bS from that per-4x4 motion. A B_Skip
+            // falls through to `DeblockingBSliceBSInsideMBNormal` below, as B_Direct_16x16 does.
+            if IS_SKIP(iCurMbType) && !bBSlice {
                 nBS[0][1] = [0u8; 4];
                 nBS[0][2] = [0u8; 4];
                 nBS[0][3] = [0u8; 4];

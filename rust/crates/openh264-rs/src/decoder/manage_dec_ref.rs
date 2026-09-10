@@ -1040,13 +1040,23 @@ pub fn WelsReorderRefList(
     let list_count = if pCtx.eSliceType == B_SLICE { 2 } else { 1 };
 
     for listIdx in 0..list_count {
-        let iMaxRefIdx = (pCtx.iPicQueueNumber as usize).min(MAX_REF_PIC_COUNT);
         let iRefCount = pCurDqLayer
             .sLayerInfo
             .sSliceInLayer
             .sSliceHeaderExt
             .sSliceHeader
             .uiRefCount[listIdx];
+        // Fix relative to 2.6.0, mirroring `manage_dec_ref.cpp:407`: the command loop below and
+        // the scan and shift extents it shares were bounded by `iPicQueueNumber`
+        // (num_ref_frames + 2). 8.2.4.3 runs one command per entry of the list being modified,
+        // and that list is num_ref_idx_lX_active long, which duplicated references push past
+        // num_ref_frames + 2: the commands past the seventh were dropped and the tail of the list
+        // kept its initial content. Cover num_ref_idx_lX_active as well. `ParseRefPicList-
+        // Reordering` rejects a stream with more than `uiRefCount` commands, and `uiRefCount`
+        // itself is rejected above MAX_REF_PIC_COUNT, so the extents stay inside `pRefList`.
+        let iMaxRefIdx = (pCtx.iPicQueueNumber as usize)
+            .max(iRefCount.max(0) as usize)
+            .min(MAX_REF_PIC_COUNT);
         let mut iPredFrameNum = pCurDqLayer
             .sLayerInfo
             .sSliceInLayer
@@ -1219,7 +1229,6 @@ pub fn WelsReorderRefList2(
 
     let iShortRefCount = pCtx.sRefPic.uiShortRefCount[LIST_0] as usize;
     let iLongRefCount = pCtx.sRefPic.uiLongRefCount[LIST_0] as usize;
-    let iMaxRefIdx = (pCtx.iPicQueueNumber as usize).min(MAX_REF_PIC_COUNT);
     let iCurFrameNum = pCurDqLayer
         .sLayerInfo
         .sSliceInLayer
@@ -1242,7 +1251,13 @@ pub fn WelsReorderRefList2(
             let mut iPredFrameNum = iCurFrameNum;
             let mut i = 0usize;
             while reorder_syn.sReorderingSyn[listIdx][i].uiReorderingOfPicNumsIdc != 3 {
-                if iCount >= iMaxRefIdx {
+                // Fix relative to 2.6.0, mirroring `manage_dec_ref.cpp:522`: this bound was
+                // `iPicQueueNumber` (num_ref_frames + 2). 8.2.4.3 runs the commands over a list
+                // num_ref_idx_lX_active entries long, which duplicated references push past
+                // num_ref_frames + 2; the commands beyond that were dropped and the tail of the
+                // list was filled by the padding loop at the end of this function with copies of
+                // the last entry instead of the commanded pictures.
+                if iCount >= iRefCount {
                     break;
                 }
                 for j in (iCount + 1..=iRefCount).rev() {
