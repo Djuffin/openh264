@@ -977,20 +977,199 @@ pub fn deblock_chroma_eq4(
 }
 
 // ============================================================================
-// Unit Tests & Parity Verification
+// Boundary Strength Calculation (bs_calc)
 // ============================================================================
+
+const COLUMN_MAJOR: [u8; 16] = [
+    0, 4, 8, 12, // col 0
+    1, 5, 9, 13, // col 1
+    2, 6, 10, 14, // col 2
+    3, 7, 11, 15, // col 3
+];
+
+const PACK_EVEN_BYTES_LO: [u8; 16] = [
+    0, 2, 4, 6, 8, 10, 12, 14, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+];
+
+const PACK_EVEN_BYTES_HI: [u8; 16] = [
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0, 2, 4, 6, 8, 10, 12, 14,
+];
+
+/// The four counts at `idx` of a neighbour's table, as one word.
+#[inline]
+fn nzc_word(nzc: &[i8; 24], idx: [usize; 4]) -> u32 {
+    u32::from_ne_bytes(idx.map(|i| nzc[i] as u8))
+}
+
+/// A macroblock's sixteen luma counts as bytes. Only their non-zero-ness is read, so
+/// the sign the C++ never sets in them cannot matter.
+#[inline]
+fn nzc_word_bytes(nzc: &[i8; 24]) -> [u8; 16] {
+    std::array::from_fn(|i| nzc[i] as u8)
+}
+
+/// `BS_NZC_CHECK`'s tail: `2` wherever either of the two blocks has a coefficient.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn nzc_term(cur: __m128i, prev: __m128i) -> __m128i {
+    let both = _mm_or_si128(cur, prev);
+    let is_zero = _mm_cmpeq_epi8(both, _mm_setzero_si128());
+    _mm_andnot_si128(is_zero, _mm_set1_epi8(2))
+}
+
+/// The `k`-th group of four motion vectors, as eight halfword lanes.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn ld_mv4<const K: usize>(mv: &[SMVUnitXY; 16]) -> __m128i {
+    const { assert!(K < 4, "a macroblock holds four groups of four vectors") };
+    _mm_loadu_si128(mv.as_ptr().cast::<__m128i>().add(K))
+}
+
+/// Four motion vectors gathered from scattered indices — the left neighbour's last
+/// column, which is the one place contiguous load cannot serve.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn gather_mv4(mv: &[SMVUnitXY; 16], idx: [usize; 4]) -> __m128i {
+    let mut w = [0i16; 8];
+    for (j, &i) in idx.iter().enumerate() {
+        w[2 * j] = mv[i].iMvX;
+        w[2 * j + 1] = mv[i].iMvY;
+    }
+    _mm_loadu_si128(w.as_ptr() as *const __m128i)
+}
+
+/// `BS_COMPARE_MV`: for four vector pairs, a set mask where either component differs
+/// by four or more — the whole-sample threshold `MB_BS_MV`/`SMB_EDGE_MV` test.
+///
+/// `|a - b| >= 4` is spelled as saturating subtraction each way and the larger of the two,
+/// clamping differences past `i16::MAX` to `i16::MAX` (>= 4).
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn mv_ge4(a: __m128i, b: __m128i) -> __m128i {
+    let d = _mm_max_epi16(_mm_subs_epi16(a, b), _mm_subs_epi16(b, a));
+    _mm_cmpgt_epi16(d, _mm_set1_epi16(3))
+}
+
+/// The four groups' comparisons folded to sixteen `1`/`0` bytes.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn mv_term(m: [__m128i; 4]) -> __m128i {
+    let b01 = _mm_packs_epi16(m[0], m[1]);
+    let b23 = _mm_packs_epi16(m[2], m[3]);
+
+    let or01 = _mm_or_si128(b01, _mm_srli_si128(b01, 1));
+    let or23 = _mm_or_si128(b23, _mm_srli_si128(b23, 1));
+
+    let lo = _mm_shuffle_epi8(
+        or01,
+        _mm_loadu_si128(PACK_EVEN_BYTES_LO.as_ptr() as *const __m128i),
+    );
+    let hi = _mm_shuffle_epi8(
+        or23,
+        _mm_loadu_si128(PACK_EVEN_BYTES_HI.as_ptr() as *const __m128i),
+    );
+
+    _mm_and_si128(_mm_or_si128(lo, hi), _mm_set1_epi8(1))
+}
+
+/// The per-direction mask: the macroblock edge kept or cleared, the three interior
+/// edges reduced to what this macroblock kind's rule allows.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn bs_mask(edge_present: bool, inside: u8) -> __m128i {
+    let mut m = [inside; 16];
+    m[..4].fill(if edge_present { 0xFF } else { 0 });
+    _mm_loadu_si128(m.as_ptr() as *const __m128i)
+}
+
+/// Vectorized deblocking boundary strength calculation for one macroblock.
+///
+/// Accelerated using SSSE3/SSE4.1 intrinsics:
+/// - `pshufb` for NZC column transpose and MV byte packing
+/// - `pslldq` and `por` for boundary neighbor alignment
+/// - `psubsw`, `pmaxsw`, `pcmpgtw` for MV threshold testing
+/// - `pmaxub` and `pand` for composite strength and edge masking
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn bs_calc_sse41(
+    cur_nzc: &[i8; 24],
+    cur_mv: &[SMVUnitXY; 16],
+    left: Option<(&[i8; 24], &[SMVUnitXY; 16])>,
+    top: Option<(&[i8; 24], &[SMVUnitXY; 16])>,
+    inside: u8,
+    bs: &mut [[[u8; 4]; 4]; 2],
+) {
+    let rows = _mm_loadu_si128(nzc_word_bytes(cur_nzc).as_ptr() as *const __m128i);
+    let cols = _mm_shuffle_epi8(
+        rows,
+        _mm_loadu_si128(COLUMN_MAJOR.as_ptr() as *const __m128i),
+    );
+
+    let top_word = top.map_or(0, |(n, _)| nzc_word(n, [12, 13, 14, 15]));
+    let left_word = left.map_or(0, |(n, _)| nzc_word(n, [3, 7, 11, 15]));
+
+    let prev_rows = _mm_or_si128(_mm_slli_si128(rows, 4), _mm_cvtsi32_si128(top_word as i32));
+    let prev_cols = _mm_or_si128(_mm_slli_si128(cols, 4), _mm_cvtsi32_si128(left_word as i32));
+
+    let (r0, r1, r2, r3) = (
+        ld_mv4::<0>(cur_mv),
+        ld_mv4::<1>(cur_mv),
+        ld_mv4::<2>(cur_mv),
+        ld_mv4::<3>(cur_mv),
+    );
+
+    let t0 = _mm_unpacklo_epi32(r0, r1);
+    let t1 = _mm_unpackhi_epi32(r0, r1);
+    let t2 = _mm_unpacklo_epi32(r2, r3);
+    let t3 = _mm_unpackhi_epi32(r2, r3);
+
+    let c0 = _mm_unpacklo_epi64(t0, t2);
+    let c1 = _mm_unpackhi_epi64(t0, t2);
+    let c2 = _mm_unpacklo_epi64(t1, t3);
+    let c3 = _mm_unpackhi_epi64(t1, t3);
+
+    let zero_mv = _mm_setzero_si128();
+    let prev_r = top.map_or(zero_mv, |(_, m)| ld_mv4::<3>(m));
+    let prev_c = left.map_or(zero_mv, |(_, m)| gather_mv4(m, [3, 7, 11, 15]));
+
+    let mv_rows = mv_term([
+        mv_ge4(prev_r, r0),
+        mv_ge4(r0, r1),
+        mv_ge4(r1, r2),
+        mv_ge4(r2, r3),
+    ]);
+    let mv_cols = mv_term([
+        mv_ge4(prev_c, c0),
+        mv_ge4(c0, c1),
+        mv_ge4(c1, c2),
+        mv_ge4(c2, c3),
+    ]);
+
+    let vertical = _mm_and_si128(
+        _mm_max_epu8(nzc_term(cols, prev_cols), mv_cols),
+        bs_mask(left.is_some(), inside),
+    );
+    let horizontal = _mm_and_si128(
+        _mm_max_epu8(nzc_term(rows, prev_rows), mv_rows),
+        bs_mask(top.is_some(), inside),
+    );
+
+    let (v, h) = bs.split_at_mut(1);
+    _mm_storeu_si128(
+        v[0].as_flattened_mut().as_mut_ptr() as *mut __m128i,
+        vertical,
+    );
+    _mm_storeu_si128(
+        h[0].as_flattened_mut().as_mut_ptr() as *mut __m128i,
+        horizontal,
+    );
+}
 
 /// The boundary strengths of one macroblock.
 ///
-/// **A forward to the scalar, because upstream has no x86 kernel here.**
-/// `DeblockingBSCalcEnc` exists only as `_neon` and `_AArch64_neon`
-/// (`codec/encoder/core/inc/deblocking.h:66-75`), and
-/// `codec/encoder/core/src/deblocking.cpp` installs `DeblockingBSCalc_c` on every
-/// other target — so there is no `mb_copy.asm`-style routine to transcribe, and
-/// inventing one would be a kernel this port measures against nothing. The aarch64
-/// set carries the real thing; see
+/// Accelerated implementation using SSSE3/SSE4.1 intrinsics; see
 /// [`bs_calc_scalar`](crate::encoder::deblocking::bs_calc_scalar) for the contract.
-#[inline(always)]
+#[inline]
 pub fn bs_calc(
     cur_nzc: &[i8; 24],
     cur_mv: &[SMVUnitXY; 16],
@@ -999,8 +1178,15 @@ pub fn bs_calc(
     inside: u8,
     bs: &mut [[[u8; 4]; 4]; 2],
 ) {
-    crate::encoder::deblocking::bs_calc_scalar(cur_nzc, cur_mv, left, top, inside, bs)
+    // SAFETY: SSE4.1/SSSE3 is baseline for x86_64 SIMD.
+    unsafe {
+        bs_calc_sse41(cur_nzc, cur_mv, left, top, inside, bs);
+    }
 }
+
+// ============================================================================
+// Unit Tests & Parity Verification
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -1210,6 +1396,86 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_bs_calc_parity() {
+        use crate::encoder::deblocking::bs_calc_scalar;
+
+        let mut seed = 0x123456789abcdef0u64;
+        let mut rng = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 32) as u32
+        };
+
+        for _ in 0..1000 {
+            let mut cur_nzc = [0i8; 24];
+            for x in cur_nzc.iter_mut() {
+                *x = if (rng() % 3) == 0 {
+                    (rng() % 16) as i8
+                } else {
+                    0
+                };
+            }
+            let mut cur_mv = [SMVUnitXY { iMvX: 0, iMvY: 0 }; 16];
+            for m in cur_mv.iter_mut() {
+                m.iMvX = (rng() as i16) % 100;
+                m.iMvY = (rng() as i16) % 100;
+            }
+
+            let has_left = (rng() % 2) != 0;
+            let mut left_nzc = [0i8; 24];
+            let mut left_mv = [SMVUnitXY { iMvX: 0, iMvY: 0 }; 16];
+            let left = if has_left {
+                for x in left_nzc.iter_mut() {
+                    *x = if (rng() % 3) == 0 {
+                        (rng() % 16) as i8
+                    } else {
+                        0
+                    };
+                }
+                for m in left_mv.iter_mut() {
+                    m.iMvX = (rng() as i16) % 100;
+                    m.iMvY = (rng() as i16) % 100;
+                }
+                Some((&left_nzc, &left_mv))
+            } else {
+                None
+            };
+
+            let has_top = (rng() % 2) != 0;
+            let mut top_nzc = [0i8; 24];
+            let mut top_mv = [SMVUnitXY { iMvX: 0, iMvY: 0 }; 16];
+            let top = if has_top {
+                for x in top_nzc.iter_mut() {
+                    *x = if (rng() % 3) == 0 {
+                        (rng() % 16) as i8
+                    } else {
+                        0
+                    };
+                }
+                for m in top_mv.iter_mut() {
+                    m.iMvX = (rng() as i16) % 100;
+                    m.iMvY = (rng() as i16) % 100;
+                }
+                Some((&top_nzc, &top_mv))
+            } else {
+                None
+            };
+
+            let inside_masks = [0x00, 0x02, 0xFF];
+            let inside = inside_masks[(rng() % 3) as usize];
+
+            let mut bs_expected = [[[0u8; 4]; 4]; 2];
+            let mut bs_actual = [[[0u8; 4]; 4]; 2];
+
+            bs_calc_scalar(&cur_nzc, &cur_mv, left, top, inside, &mut bs_expected);
+            bs_calc(&cur_nzc, &cur_mv, left, top, inside, &mut bs_actual);
+
+            assert_eq!(bs_actual, bs_expected, "bs_calc mismatch");
         }
     }
 }

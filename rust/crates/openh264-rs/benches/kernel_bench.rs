@@ -1580,6 +1580,106 @@ fn deblock_rows(rows: &mut Vec<Row>) {
             }
         );
     }
+
+    {
+        use openh264_rs::encoder::deblocking::bs_calc_scalar;
+        use openh264_rs::encoder::encoder_context::SMVUnitXY;
+
+        let cur_nzc = [
+            1i8, 0, 2, 0, 0, 3, 0, 0, 4, 0, 0, 5, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let cur_mv = [
+            SMVUnitXY { iMvX: 0, iMvY: 0 },
+            SMVUnitXY { iMvX: 8, iMvY: 0 },
+            SMVUnitXY { iMvX: 0, iMvY: 12 },
+            SMVUnitXY { iMvX: 4, iMvY: 4 },
+            SMVUnitXY { iMvX: 0, iMvY: 0 },
+            SMVUnitXY { iMvX: 0, iMvY: 0 },
+            SMVUnitXY { iMvX: 16, iMvY: 0 },
+            SMVUnitXY { iMvX: 0, iMvY: 0 },
+            SMVUnitXY { iMvX: 0, iMvY: 0 },
+            SMVUnitXY { iMvX: 0, iMvY: 20 },
+            SMVUnitXY { iMvX: 0, iMvY: 0 },
+            SMVUnitXY { iMvX: 0, iMvY: 0 },
+            SMVUnitXY { iMvX: 2, iMvY: 2 },
+            SMVUnitXY { iMvX: 0, iMvY: 0 },
+            SMVUnitXY { iMvX: 0, iMvY: 0 },
+            SMVUnitXY { iMvX: 0, iMvY: 0 },
+        ];
+        let left_nzc = [
+            0i8, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let left_mv = [SMVUnitXY { iMvX: 4, iMvY: 0 }; 16];
+        let top_nzc = [
+            0i8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let top_mv = [SMVUnitXY { iMvX: 0, iMvY: 8 }; 16];
+        let inside = 0xFFu8;
+
+        let mut bs0 = [[[0u8; 4]; 4]; 2];
+        let mut bs1 = [[[0u8; 4]; 4]; 2];
+        #[cfg(feature = "wide")]
+        let mut bs2 = [[[0u8; 4]; 4]; 2];
+
+        row!(
+            *rows,
+            "bs_calc",
+            |c| {
+                bs_calc_scalar(
+                    black_box(&cur_nzc),
+                    black_box(&cur_mv),
+                    black_box(Some((&left_nzc, &left_mv))),
+                    black_box(Some((&top_nzc, &top_mv))),
+                    black_box(inside),
+                    &mut bs0,
+                );
+                if c {
+                    bs0.iter()
+                        .flatten()
+                        .flatten()
+                        .fold(0u64, |a, &b| a.wrapping_mul(31).wrapping_add(b as u64))
+                } else {
+                    bs0[0][0][0] as u64
+                }
+            },
+            |c| {
+                isa::deblock::bs_calc(
+                    black_box(&cur_nzc),
+                    black_box(&cur_mv),
+                    black_box(Some((&left_nzc, &left_mv))),
+                    black_box(Some((&top_nzc, &top_mv))),
+                    black_box(inside),
+                    &mut bs1,
+                );
+                if c {
+                    bs1.iter()
+                        .flatten()
+                        .flatten()
+                        .fold(0u64, |a, &b| a.wrapping_mul(31).wrapping_add(b as u64))
+                } else {
+                    bs1[0][0][0] as u64
+                }
+            },
+            |c| {
+                wd::deblock::bs_calc(
+                    black_box(&cur_nzc),
+                    black_box(&cur_mv),
+                    black_box(Some((&left_nzc, &left_mv))),
+                    black_box(Some((&top_nzc, &top_mv))),
+                    black_box(inside),
+                    &mut bs2,
+                );
+                if c {
+                    bs2.iter()
+                        .flatten()
+                        .flatten()
+                        .fold(0u64, |a, &b| a.wrapping_mul(31).wrapping_add(b as u64))
+                } else {
+                    bs2[0][0][0] as u64
+                }
+            }
+        );
+    }
 }
 
 // ============================================================================
