@@ -396,11 +396,18 @@ int32_t WelsReorderRefList (PWelsDecoderContext pCtx) {
   for (int32_t listIdx = 0; listIdx < ListCount; ++listIdx) {
     PPicture pPic = NULL;
     PPicture* ppRefList = pCtx->sRefPic.pRefList[listIdx];
-    int32_t  iMaxRefIdx = pCtx->iPicQueueNumber;
+    int32_t iRefCount = pSliceHeader->uiRefCount[listIdx];
+    //Fix relative to 2.6.0: the command loop below and the scan and shift extents it shares were
+    //bounded by pCtx->iPicQueueNumber (num_ref_frames + 2).  8.2.4.3 runs one command per entry of
+    //the list being modified, and that list is num_ref_idx_lX_active long, which duplicated
+    //references push past num_ref_frames + 2: the commands past the seventh were dropped and the
+    //tail of the list kept its initial content.  Cover num_ref_idx_lX_active as well.  ParseRefPic-
+    //ListReordering() rejects a stream with more than uiRefCount commands, and uiRefCount itself is
+    //rejected above MAX_REF_PIC_COUNT, so the extents stay inside pRefList[] either way.
+    int32_t  iMaxRefIdx = WELS_MAX (pCtx->iPicQueueNumber, iRefCount);
     if (iMaxRefIdx > MAX_REF_PIC_COUNT) {
       iMaxRefIdx = MAX_REF_PIC_COUNT;
     }
-    int32_t iRefCount = pSliceHeader->uiRefCount[listIdx];
     int32_t iPredFrameNum = pSliceHeader->iFrameNum;
     int32_t iMaxPicNum = 1 << pSliceHeader->pSps->uiLog2MaxFrameNum;
     int32_t iAbsDiffPicNum = -1;
@@ -494,10 +501,6 @@ int32_t WelsReorderRefList2 (PWelsDecoderContext pCtx) {
   int32_t i = 0;
   int32_t j = 0;
   int32_t k = 0;
-  int32_t iMaxRefIdx = pCtx->iPicQueueNumber;
-  if (iMaxRefIdx > MAX_REF_PIC_COUNT) {
-    iMaxRefIdx = MAX_REF_PIC_COUNT;
-  }
   const int32_t iCurFrameNum = pSliceHeader->iFrameNum;
   const int32_t iMaxPicNum = 1 << pSliceHeader->pSps->uiLog2MaxFrameNum;
   int32_t iListCount = 1;
@@ -511,7 +514,12 @@ int32_t WelsReorderRefList2 (PWelsDecoderContext pCtx) {
     if (pRefPicListReorderSyn->bRefPicListReorderingFlag[listIdx]) {
       int32_t iPredFrameNum = iCurFrameNum;
       for (i = 0; pRefPicListReorderSyn->sReorderingSyn[listIdx][i].uiReorderingOfPicNumsIdc != 3; i++) {
-        if (iCount >= iMaxRefIdx)
+        //Fix relative to 2.6.0: this bound was pCtx->iPicQueueNumber (num_ref_frames + 2).  8.2.4.3
+        //runs the commands over a list num_ref_idx_lX_active entries long, which duplicated
+        //references push past num_ref_frames + 2; the commands beyond that were dropped and the tail
+        //of the list was filled by the padding loop at the end of this function with copies of the
+        //last entry instead of the commanded pictures.
+        if (iCount >= iRefCount)
           break;
 
         for (j = iRefCount; j > iCount; j--)

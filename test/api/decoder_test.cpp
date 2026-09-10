@@ -133,12 +133,12 @@ static const FileParam kFileParamArray[] = {
   {"res/Cisco_Men_whisper_640x320_CABAC_Bframe_9.264", "2b349c1bc806b6e0412008747b2463d77b576476"},
   {"res/Cisco_Men_whisper_640x320_CAVLC_Bframe_9.264", "e5b76ff7e2f44e9b33906f8a4039d0d2bdb1580b"},
   {"res/Cisco_Adobe_PDF_sample_a_1024x768_CAVLC_Bframe_9.264", "9d758d9e6f4dead0d7b361f3ddf2ee009d0ea190"},
-  {"res/VID_1280x544_cabac_temporal_direct.264", "02299df3b9d83300d244b36601699859c57fe905"},
-  {"res/VID_1280x720_cabac_temporal_direct.264", "0ef0818cb23445d209b8a7632c13f1c7e820cc27"},
-  {"res/VID_1920x1080_cabac_temporal_direct.264", "ad2b1d1456919693e38a1e3e8cd9c21699688cec"},
-  {"res/VID_1280x544_cavlc_temporal_direct.264", "71a12ff2b548b765a34c11f39eef1faa19b38d59"},
-  {"res/VID_1280x720_cavlc_temporal_direct.264", "f39cecb32ba20ca4f3b3a385db9ef46ba340e41f"},
-  {"res/VID_1920x1080_cavlc_temporal_direct.264", "6aae2d569a1ebbe5ae20e2dfc5e709cc05ab1a21"},
+  {"res/VID_1280x544_cabac_temporal_direct.264", "9ec363243d41ecd6358509d4ba9a9e113e583867"},
+  {"res/VID_1280x720_cabac_temporal_direct.264", "1dca83802d37b8cfa2b6c813f33d285fc5005a7a"},
+  {"res/VID_1920x1080_cabac_temporal_direct.264", "e25d00389810538fe03e6851541c73f1e8b50b08"},
+  {"res/VID_1280x544_cavlc_temporal_direct.264", "3d2da78eefd45028dd65a5314835bc9c3ee9f891"},
+  {"res/VID_1280x720_cavlc_temporal_direct.264", "47c21d12d9bae9212efac4a0b3c3cf435cdd437c"},
+  {"res/VID_1920x1080_cavlc_temporal_direct.264", "8b2892c21b40476ea52827e3daac36cfe52a7b48"},
 };
 
 INSTANTIATE_TEST_SUITE_P (DecodeFile, DecoderOutputTest,

@@ -1623,6 +1623,13 @@ int32_t ParseInterBInfo (PWelsDecoderContext pCtx, int16_t iMvArray[LIST_A][30][
           Update8x8RefIdx (pCurDqLayer, iIdx8, LIST_1, iRef[LIST_1]);
           FillTemporalDirect8x8Mv (pCurDqLayer, iIdx8, pSubPartCount[i], pPartW[i], directSubMbType, iRef, mvColoc, iMvArray,
                                    NULL);
+          //Fix relative to 2.6.0: ref_idx_list[][] is memset to -1 above and was only filled for
+          //spatial direct sub-macroblocks, yet the mv loop below copies it into the MV-prediction
+          //cache for every sub-macroblock.  A temporal direct sub-macroblock therefore advertised
+          //REF_NOT_IN_LIST to its neighbours instead of the reference index 8.4.1.2.3 derived for
+          //it, and the partitions predicted after it mis-predicted their motion vectors.
+          ref_idx_list[LIST_0][i] = iRef[LIST_0];
+          ref_idx_list[LIST_1][i] = iRef[LIST_1];
         }
       }
     }
