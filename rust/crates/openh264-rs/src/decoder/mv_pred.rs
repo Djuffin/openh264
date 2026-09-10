@@ -874,14 +874,33 @@ pub fn PredMvBDirectSpatial(
         }
     }
 
+    // Fix relative to 2.6.0 (mv_pred.cpp:562-587): the macroblock-level flags were cleared
+    // unconditionally. For B_Skip and B_Direct_16x16 every sub-block is direct, so the macroblock
+    // word is the direct result and clearing it is right. This function also runs for a B_8x8 with
+    // at least one B_Direct_8x8 sub-block (bSkipOrDirect is false then), and there it derives those
+    // sub-blocks only, while the macroblock word (g_ksInterBMbTypeInfo[22]: MB_TYPE_8x8 | P0L0 |
+    // P0L1 | P1L0 | P1L1) is the union over all four - an explicit B_L1_8x8 beside an L0-only
+    // direct sub-block still uses list 1. GetColocatedMb() above trusts that word when this picture
+    // is later some other picture's co-located picture (8.4.1.2.1), and dropped the explicit
+    // sub-blocks' list-1 motion, which the colZero test of 8.4.1.2.2 and the fallback of 8.4.1.2.3
+    // then read as "no motion in either list". Visible with B-pyramid streams, where a B picture is
+    // a reference. The per-4x4 reference indices still decide per block: the parsers write
+    // REF_NOT_IN_LIST into the unused list of every explicit sub-block. bSkipOrDirect, not
+    // IS_Inter_8x8(mbType), is the discriminator - GetColocatedMb() ORs the direct shape into
+    // mbType, so a B_Direct_16x16 over an 8x8-partitioned co-located macroblock carries MB_TYPE_8x8
+    // here too. The subMbType clears stay: that word is what the direct sub-blocks themselves get.
     if ref_idx[LIST_0] <= REF_NOT_IN_LIST && ref_idx[LIST_1] <= REF_NOT_IN_LIST {
         ref_idx[LIST_0] = 0;
         ref_idx[LIST_1] = 0;
     } else if ref_idx[LIST_1] < 0 {
-        mbType &= !MB_TYPE_L1;
+        if bSkipOrDirect {
+            mbType &= !MB_TYPE_L1;
+        }
         *subMbType &= !MB_TYPE_L1;
     } else if ref_idx[LIST_0] < 0 {
-        mbType &= !MB_TYPE_L0;
+        if bSkipOrDirect {
+            mbType &= !MB_TYPE_L0;
+        }
         *subMbType &= !MB_TYPE_L0;
     }
     SetMbType(pCurDqLayer, Some(&mut *pDec), iMbXy, mbType);
