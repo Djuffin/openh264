@@ -2563,6 +2563,17 @@ pub fn WelsTargetSliceConstruction(
             return ERR_NONE;
         }
 
+        // Fix relative to 2.6.0, mirroring `decode_slice.cpp:169`: record this slice's per-8x8
+        // reference pictures before the filter-idc test below, so that a slice which does not filter
+        // its own edges still leaves behind what a neighbouring slice's boundary-strength derivation
+        // reads across the boundary (8.7.2.1).
+        {
+            let (pDec, view) = pic_split(pCtx);
+            if let Some(pDec) = pDec {
+                WelsRecordRefPicturesSlice(&view, dq, &mut *pDec);
+            }
+        }
+
         if dq
             .sLayerInfo
             .sSliceInLayer
@@ -3483,6 +3494,12 @@ pub fn WelsDecodeMbCavlcPSlice(
         let (buf, pBs) = pNalCur.sNalData.sVclNal.sSliceBitsRead.split(pCtx.sRawData);
         let iMbXy = dq.iMbXyIndex as usize;
         let mut uiCode = 0u32;
+
+        // Fix relative to 2.6.0, mirroring `decode_slice.cpp:2476`: as in `WelsDecodeMbCabacPSlice` —
+        // a P macroblock's unused list 1 gets its defined value here rather than the pooled picture's
+        // leftovers (8.4.2.1).
+        pDec.pRefIndex[LIST_1].get_mut(iMbXy).fill(REF_NOT_IN_LIST);
+        pDec.pMv[LIST_1].get_mut(iMbXy).fill([0; MV_A]);
 
         if dq.sLayerInfo.sSliceInLayer.iMbSkipRun == -1 {
             if BsGetUe(buf, pBs, &mut uiCode) != 0 {
@@ -5050,6 +5067,15 @@ pub fn WelsDecodeMbCabacPSlice(
         *dq.grid.no_sub_mb_part_size_less_than8x8_flag.get_mut(iMbXy) = true;
         *dq.grid.transform_size8x8_flag.get_mut(iMbXy) = false;
 
+        // Fix relative to 2.6.0, mirroring `decode_slice.cpp:1362`: 8.4.2.1 gives a P macroblock no
+        // list-1 prediction, and neither the skip short-cut below nor the inter paths write
+        // `pRefIndex[LIST_1]` or `pMv[LIST_1]` — they hold whatever this pooled picture carried from
+        // its previous use. A B slice below or right of this one compares list-1 motion whenever the
+        // reference pictures match, so give the unused list its defined value: "no reference" and a
+        // zero vector, exactly what a B macroblock that skips a list records.
+        pDec.pRefIndex[LIST_1].get_mut(iMbXy).fill(REF_NOT_IN_LIST);
+        pDec.pMv[LIST_1].get_mut(iMbXy).fill([0; MV_A]);
+
         GetNeighborAvailMbType(&mut sNeighAvail, Some(&*dq), Some(&*pDec));
         let mut ret = ParseSkipFlagCabac(pCtx, &sNeighAvail, &mut uiCode);
         if ret != ERR_NONE {
@@ -5765,7 +5791,9 @@ use crate::common::deblocking_common::nonzero_count;
 use crate::decoder::cabac_decoder::{
     InitCabacDecEngineFromBS, RestoreCabacDecEngineToBS, WelsCabacContextInit,
 };
-use crate::decoder::deblocking::{WelsDeblockingFilterSlice, WelsDeblockingMb};
+use crate::decoder::deblocking::{
+    WelsDeblockingFilterSlice, WelsDeblockingMb, WelsRecordRefPicturesSlice,
+};
 use crate::decoder::dec_golomb::{
     BsGetBits, BsGetOneBit, BsGetSe, BsGetUe, g_kuiInterCbpTable, g_kuiInterCbpTable400,
 };
@@ -5773,7 +5801,7 @@ pub use crate::decoder::dec_golomb::{g_kuiIntra4x4CbpTable, g_kuiIntra4x4CbpTabl
 use crate::decoder::decoder_context::{parse_only, pic_split};
 use crate::decoder::fmo::FmoNextMb;
 use crate::decoder::mv_pred::{
-    PredBDirectTemporal, PredMvBDirectSpatial, PredPSkipMvFromNeighbor, SubMbType,
+    PredBDirectTemporal, PredMvBDirectSpatial, PredPSkipMvFromNeighbor, REF_NOT_IN_LIST, SubMbType,
 };
 use crate::decoder::parse_mb_syn_cabac::{
     ParseCbpInfoCabac, ParseDeltaQpCabac, ParseEndOfSliceCabac, ParseIPCMInfoCabac,

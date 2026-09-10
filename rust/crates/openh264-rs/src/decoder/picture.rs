@@ -232,6 +232,18 @@ pub struct SPicture {
     /// Reference indices per 4x4 block for `LIST_0` and `LIST_1` (direct mode).
     pub pRefIndex: [MbArray<[i8; MB_BLOCK4x4_NUM]>; LIST_A],
 
+    /// Fix relative to 2.6.0, mirroring `picture.h:109`'s `pRefPicture[LIST_A]`: the reference
+    /// *picture* each 8x8 block of each macroblock predicts from, resolved through the reference
+    /// lists of the slice that coded the macroblock.
+    ///
+    /// 8.7.2.1 derives an edge's boundary strength from "which pictures are referenced", and an
+    /// index only names a picture together with its own slice's lists — so a macroblock on the far
+    /// side of a slice boundary cannot be read through the filtering slice's lists. Four entries per
+    /// macroblock in 8x8 raster order (0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right);
+    /// `None` where that list is unused. Written by
+    /// [`WelsRecordRefPicturesSlice`](crate::decoder::deblocking::WelsRecordRefPicturesSlice).
+    pub pRefPicture: [MbArray<[Option<PicId>; 4]>; LIST_A],
+
     /// This picture's own reference lists, as **slot handles** — snapshotted when the
     /// picture is marked as a reference, and read back by `MapColToList0` when a
     /// later B slice uses temporal direct mode.
@@ -285,6 +297,7 @@ impl Default for SPicture {
             pMbType: MbArray::empty(),
             pMv: [MbArray::empty(), MbArray::empty()],
             pRefIndex: [MbArray::empty(), MbArray::empty()],
+            pRefPicture: [MbArray::empty(), MbArray::empty()],
             pRefPic: [[None; 17]; LIST_A],
         }
     }
@@ -319,6 +332,9 @@ impl SPicture {
                 MbArray::new(dims, [0; MB_BLOCK4x4_NUM]),
                 MbArray::new(dims, [0; MB_BLOCK4x4_NUM]),
             ],
+            // `AllocPicture`'s two extra `WelsMallocz`es beside the four above
+            // (`pic_queue.cpp:128-131`).
+            pRefPicture: [MbArray::new(dims, [None; 4]), MbArray::new(dims, [None; 4])],
             ..Default::default()
         }
     }
