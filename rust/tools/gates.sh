@@ -307,10 +307,13 @@ fi
 # of Annex C, and explicit weighted prediction reaching both halves of an 8x4 or
 # 4x8 B sub-partition — made four more bit-exact on the same rule:
 # `test_CVBS3_Sony_C`, `test_CACQP3_Sony_D`, `test_CVWP3_TOSHIBA_E` and
-# `test_CVWP2_TOSHIBA_E`. That leaves 2 e2e tests plus the Miri control. Neither of
-# the two is output order any more: one is the cross-slice bS derivation, the other
-# one 8x8 sub-partition at a slice boundary, and each carries a reason naming the
-# defect that keeps it red.
+# `test_CVWP2_TOSHIBA_E`, taking the count to 3. Then one more — a B_8x8
+# macroblock keeping its list flags through spatial direct derivation, so a
+# co-located B_8x8's explicit list-1 sub-blocks still carry motion — made
+# `test_ffmpeg_multi_slice_variable_size` bit-exact on the same rule. That leaves
+# 1 e2e test plus the Miri control. It is not output order and not the slice
+# boundary either: it is the cross-slice bS derivation, and it carries a reason
+# naming the defect that keeps it red.
 # ---------------------------------------------------------------------------
 run_cargo_test() {  # $1 = profile label, $2.. = extra cargo args
   local label=$1; shift
@@ -325,10 +328,10 @@ run_cargo_test() {  # $1 = profile label, $2.. = extra cargo args
   printf '  totals: %s passed / %s failed / %s ignored\n' "$passed" "$failed" "$ignored"
   if [ "$rc" -ne 0 ] || [ "$failed" -ne 0 ]; then
     fail "cargo test ($label): $passed/$failed/$ignored"
-  elif [ "$ignored" -ne 3 ]; then
-    fail "cargo test ($label): ignored set is $ignored, must be 3 (plan §1.4)"
+  elif [ "$ignored" -ne 2 ]; then
+    fail "cargo test ($label): ignored set is $ignored, must be 2 (plan §1.4)"
   else
-    pass "cargo test ($label): $passed passed / 0 failed / 3 ignored"
+    pass "cargo test ($label): $passed passed / 0 failed / 2 ignored"
   fi
 }
 
