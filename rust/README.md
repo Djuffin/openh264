@@ -34,6 +34,13 @@ this tree is not, and the port matches the patched tree:
   slice has been seen, then emit whatever is within two of the last written POC —
   instead of the bumping process of Annex C, so a conforming stream's pictures could
   come out permuted.
+* `deblocking.cpp`'s two marginal boundary-strength routines resolved *both*
+  macroblocks' reference indices through the *filtering* slice's reference lists,
+  although 8.7.2.1 compares which pictures each block references and an index only
+  names a picture together with its own slice's lists. Across a slice boundary the
+  neighbour's list-0 index named the wrong picture, and a P-slice neighbour's
+  list-1 indices — which its parse never writes — resolved into a phantom second
+  reference.
 
 ### Picture output order
 

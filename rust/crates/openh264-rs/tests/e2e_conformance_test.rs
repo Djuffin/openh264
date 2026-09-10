@@ -8,10 +8,10 @@
 //!   against ffmpeg's own decode of the same bitstream. These are skipped when
 //!   ffmpeg is not on `PATH`.
 //!
-//! One test here is `#[ignore]`d because upstream openh264 itself does not
-//! decode it bit-exactly. It is kept (run it with
-//! `cargo test -- --ignored`) because it documents a real conformance gap, and
-//! its reason names the defect rather than the family.
+//! **No test here is `#[ignore]`d any more.** Every JVT stream in `res/` with a
+//! gold, and every ffmpeg/libx264 clip these tests build, decodes bit-exactly.
+//! What follows is the history of how that list emptied, kept because each entry
+//! names a defect this tree fixed rather than a family that "does not work".
 //!
 //! **Picture output order is no longer one of them.** The display layer used to
 //! hold a picture back until a B slice had been seen and then emit from a
@@ -35,9 +35,16 @@
 //! sub-blocks' list-1 motion never reached the direct derivation. Guarding the two
 //! macroblock-level clears with `bSkipOrDirect` activated this test.
 //!
-//! What is left is one defect. `test_CABAST3_Sony_E` is the cross-slice bS
-//! derivation — `DeblockingBSliceBsMarginalMBAvcbase` resolves a neighbour's
-//! ref_idx through the current slice's lists — and its output order is now right.
+//! **And the last one was the cross-slice boundary strength.**
+//! `test_CABAST3_Sony_E` codes four slices per picture with the types changing
+//! inside the picture, and both marginal bS routines resolved *both* macroblocks'
+//! reference indices through the *filtering* slice's lists — so at a P/B boundary
+//! the neighbour's list-0 index named the wrong picture, and its list-1 indices,
+//! which a P-slice parse never writes, resolved into a phantom second reference.
+//! 14 of its 25 pictures were off by up to 3 levels on the two macroblock rows
+//! either side of that boundary. Recording each macroblock's reference *pictures*
+//! per slice (`SPicture::pRefPicture`, 8.7.2.1's "based only on which pictures are
+//! referenced") and comparing those activated this test, the last one on the list.
 //!
 //! Things that used to be on that list are not any more, and the difference is
 //! worth keeping straight. High-profile 8x8 coding is conformant on its own:
@@ -166,8 +173,8 @@ fn decode_to_y4m(encoded_video_buffer: &[u8]) -> Result<Vec<u8>, String> {
             // arriving next is parked in the spare slot for
             // `WriteBackActiveParameters` rather than overwriting `sPpsBuffer[id]`
             // in place under the pending picture (`au_parser.cpp:1458` against
-            // `:1465`). Every `#[ignore]` reason in this file referees a
-            // gold against `h264dec`, so the call sequence has to be `h264dec`'s.
+            // `:1465`). Every gold in this file is refereed against `h264dec`, so
+            // the call sequence has to be `h264dec`'s.
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
             let _ = ISVCDecoder::DecodeFrame2(
@@ -376,11 +383,12 @@ pub fn test_CACQP3_Sony_D() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "upstream defect the port mirrors, now the cross-slice bS derivation alone: this stream's output order is right (the gold-to-output index map is the identity, measured), so what is left is DeblockingBSliceBsMarginalMBAvcbase (deblocking.cpp:544), which resolves the *neighbour* macroblock's ref_idx through the *current* slice's reference lists and so reads a P-slice neighbour's never-written list-1 indices; this stream mixes I, P and B slices within one picture, so its P/B slice boundary rows are off by 1 to 3 levels. 11 of the 25 pictures are bit-exact and the other 14 are within 3 levels"]
 pub fn test_CABAST3_Sony_E() -> Result<(), String> {
     // Multi-slice picture: 4 slices per picture at first_mb_in_slice
-    // 25 pictures.
-    // CABAC. IPB slices, POC type 0, 1 ref frame, no direct prediction.
+    // 0 / 99 / 198 / 297, with the slice types changing *inside* the picture —
+    // I/P/I/P in the reference pictures, I/P/B/I in the non-reference ones — and
+    // deblocking filtering across the boundaries between them. 25 pictures.
+    // CABAC. IPB slices, POC type 0, 1 ref frame, temporal direct prediction.
     test_decoding_against_gold("res/CABAST3_Sony_E.jsv", "res/CABAST3_Sony_E.y4m")
 }
 
