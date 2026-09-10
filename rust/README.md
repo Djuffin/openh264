@@ -5,10 +5,23 @@ This directory holds a line-by-line Rust port of Cisco's [OpenH264](../README.md
 decoder, and the encoder's video-processing plugins. It builds as a Rust library
 and as a drop-in `libopenh264` shared library that exports exactly the seven
 symbols upstream does, and it has no dependencies. The reference here is 2.6.0
-plus exactly one local decoder patch: `codec/decoder/core/src/rec_mb.cpp`'s
-`GetInterBPred` combined a B partition's two hypotheses into one destination, so
-bi-predicted 16x8, 8x16 and 4x4 sub-partitions came out wrong; upstream is still
-affected, this tree is not, and the port matches the patched tree.
+plus a small set of local decoder patches; upstream is still affected by each,
+this tree is not, and the port matches the patched tree:
+
+* `rec_mb.cpp`'s `GetInterBPred` combined a B partition's two hypotheses into one
+  destination, so bi-predicted 16x8, 8x16 and 4x4 sub-partitions came out wrong.
+* `deblocking.cpp` gave a B_Skip macroblock the P_Skip short-cut (internal edge
+  bS = 0) although its four 8x8 quadrants carry per-8x8 or per-4x4 direct motion.
+* `parse_mb_syn_cabac.cpp` and `parse_mb_syn_cavlc.cpp` wrote a temporal direct
+  sub-macroblock's reference indices into the MV-prediction cache before the
+  non-direct sub-macroblocks were predicted (CABAC), or as -1 (CAVLC), defeating
+  the "not yet decoded partition is unavailable" rule of 6.4.11.7 / 8.4.1.3.2.
+* `mv_pred.cpp`'s `GetColocatedMb` did not recognise a co-located P_8x8ref0 as
+  8x8-partitioned, so with `direct_8x8_inference_flag = 0` the direct derivation
+  ran at 8x8 instead of 4x4 granularity.
+* `manage_dec_ref.cpp`'s two reference-list modification routines processed at
+  most `num_ref_frames + 2` commands and padded the rest, instead of running one
+  per entry of a list `num_ref_idx_lX_active` long (8.2.4.3).
 
 The one property everything here is organised around: **for the same input and
 the same parameters, the port produces the same bytes as the C++**. Every

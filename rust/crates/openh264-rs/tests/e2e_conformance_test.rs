@@ -8,25 +8,35 @@
 //!   against ffmpeg's own decode of the same bitstream. These are skipped when
 //!   ffmpeg is not on `PATH`.
 //!
-//! Nine tests here are `#[ignore]`d because upstream openh264 itself does not
+//! Six tests here are `#[ignore]`d because upstream openh264 itself does not
 //! decode them bit-exactly. They are kept (run them with
 //! `cargo test -- --ignored`) because they document real conformance gaps, and
 //! each one's reason names the defect rather than the family.
 //!
-//! Three defects account for all nine, and each is upstream's, mirrored by the
-//! port: **picture output order** (`ReleaseBufferedReadyPictureReorder` does not
-//! reorder until a B slice has been seen, then works from a POC-distance
-//! heuristic), **MV prediction reading a not-yet-decoded direct sub-block** as an
-//! available neighbour C, and **the P-slice reference list** built from
-//! `ref_pic_list_modification` with duplicated entries.
+//! **Picture output order** accounts for five of the six on its own:
+//! `ReleaseBufferedReadyPictureReorder` does not reorder until a B slice has been
+//! seen, then works from a POC-distance heuristic. On three of those five —
+//! `test_CVBS3_Sony_C`, `test_CVWP3_TOSHIBA_E`, `test_CACQP3_Sony_D` — every
+//! picture is now bit-exact and the permutation is all that is left. The other
+//! two carry a residual as well: `test_CABAST3_Sony_E` the cross-slice bS
+//! derivation (`DeblockingBSliceBsMarginalMBAvcbase` resolves a neighbour's
+//! ref_idx through the current slice's lists), `test_CVWP2_TOSHIBA_E` something
+//! in explicit weighted prediction — its motion is right, measured per 4x4
+//! against a clean-room decoder. The sixth, the multi-slice ffmpeg clip, is
+//! one 8x8 sub-partition of one macroblock and is not attributed.
 //!
-//! Two things that used to be on that list are not any more, and the difference is
+//! Things that used to be on that list are not any more, and the difference is
 //! worth keeping straight. High-profile 8x8 coding is conformant on its own:
 //! `test_ffmpeg_high_cabac_8x8`, `_high_cavlc_8x8`, `_high_multi_slice` and
-//! `_high_custom_scaling_matrix` are bit-exact and run. And B-slice bi-prediction
-//! was a fourth defect until `codec/decoder/core/src/rec_mb.cpp`'s `GetInterBPred`
-//! was fixed in this tree — that fix is what activated eleven of the twenty tests
-//! ignored here before it.
+//! `_high_custom_scaling_matrix` are bit-exact and run. B-slice bi-prediction was
+//! a defect until `codec/decoder/core/src/rec_mb.cpp`'s `GetInterBPred` was fixed
+//! in this tree — that fix activated eleven of the twenty tests ignored here
+//! before it. And four more decoder fixes in this tree (B_Skip internal
+//! deblocking edges, the temporal-direct reference indices reaching the
+//! MV-prediction cache, a co-located P_8x8ref0 in `GetColocatedMb`, and the
+//! reference-list modification bound) activated three more —
+//! `test_CABA3_SVA_B`, `test_CAWP5_TOSHIBA_E`, `test_ffmpeg_main` — and turned
+//! the MV-prediction and reference-list families off this list entirely.
 
 #![allow(non_snake_case)]
 
@@ -292,14 +302,13 @@ pub fn test_CABA2_SVA_B() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "upstream defect the port mirrors: B_8x8 macroblocks with B_Direct_8x8 sub-MBs and direct_8x8_inference_flag=0 -- openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used. Differences are at most 5 levels, inside those blocks"]
 pub fn test_CABA3_SVA_B() -> Result<(), String> {
     // IPB slices with CABAC. Temporal direct prediction. num_ref_frames=5.
     test_decoding_against_gold("res/CABA3_SVA_B.264", "res/CABA3_SVA_B_rec.y4m")
 }
 
 #[test]
-#[ignore = "two upstream defects the port mirrors: picture output order: ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, so this stream's decode order I P P B ... emits the second P before the B; and, in MV prediction, openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used"]
+#[ignore = "upstream defect the port mirrors, now output order alone: every one of this stream's 300 pictures is bit-exact against the JVT gold, but ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, so the decode order I P P B ... emits the second P before the B and the pictures come out permuted"]
 pub fn test_CVBS3_Sony_C() -> Result<(), String> {
     // IPB slices with CAVLC. Temporal direct prediction. direct_8x8_inference=on. num_ref_frames=4.
     test_decoding_against_gold("res/CVBS3_Sony_C.jsv", "res/CVBS3_Sony_C_rec.y4m")
@@ -312,14 +321,14 @@ pub fn test_CVWP1_TOSHIBA_E() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "upstream defects the port mirrors: picture output order: ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic -- the two P pictures at POC -4/-2 precede the IDR in the gold and openh264 emits the IDR first -- plus residuals from the direct-sub-block neighbour availability defect and from explicit weighted bipred (idc=1), which are not separately isolated"]
+#[ignore = "upstream defects the port mirrors: picture output order -- ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, so the two P pictures at POC -4/-2 precede the IDR in the gold and openh264 emits the IDR first (here that permutes the first three pictures and nothing else) -- plus a residual this pass did not fix: 56 of the 90 pictures differ in 1 to 7 macroblocks each, up to 148 levels. It is not in the motion: a per-4x4 dump of this stream's B macroblocks against hibernia, a clean-room decoder that reaches the gold, agrees on list usage, reference index and motion vector in all 7123 macroblocks compared. CVWP3_TOSHIBA_E is the same content with implicit weights (weighted_bipred_idc=2) and is now bit-exact in every picture, so what is left is the explicit weighted prediction path (idc=1); not isolated further"]
 pub fn test_CVWP2_TOSHIBA_E() -> Result<(), String> {
     // Explicit weighted prediction for B slices. CAVLC. weighted_bipred_idc=1.
     test_decoding_against_gold("res/CVWP2_TOSHIBA_E.264", "res/CVWP2_TOSHIBA_E_dec.y4m")
 }
 
 #[test]
-#[ignore = "upstream defects the port mirrors: picture output order: ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic -- the two P pictures at POC -4/-2 precede the IDR in the gold and openh264 emits the IDR first -- plus residuals from the direct-sub-block neighbour availability defect and from implicit weighted bipred (idc=2), which are not separately isolated"]
+#[ignore = "upstream defect the port mirrors, now output order alone: every one of this stream's 90 pictures is bit-exact against the JVT gold, but ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic -- the two P pictures at POC -4/-2 precede the IDR in the gold and openh264 emits the IDR first, which permutes the first three pictures"]
 pub fn test_CVWP3_TOSHIBA_E() -> Result<(), String> {
     // Implicit weighted prediction for B slices. CAVLC. weighted_bipred_idc=2.
     test_decoding_against_gold("res/CVWP3_TOSHIBA_E.264", "res/CVWP3_TOSHIBA_E_dec.y4m")
@@ -332,7 +341,6 @@ pub fn test_CAWP1_TOSHIBA_E() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "upstream defect the port mirrors, and the only ignored test here with no B slice in it: ref_pic_list_modification builds 8-10 active P entries out of 4-5 pictures (duplicated refs carrying distinct explicit weights) and the list openh264 builds is wrong from frame 4, MB 9. CAWP1_TOSHIBA_E, the same weighting without the modification, passes. Suspects are WelsReorderRefList (manage_dec_ref.cpp:385, iMaxRefIdx = num_ref_frames + 2) and stale initial-list entries; not pinned down"]
 pub fn test_CAWP5_TOSHIBA_E() -> Result<(), String> {
     // Explicit weighted prediction for P slices. CABAC. weighted_pred_flag=1.
     test_decoding_against_gold("res/CAWP5_TOSHIBA_E.264", "res/CAWP5_TOSHIBA_E_dec.y4m")
@@ -347,7 +355,7 @@ pub fn test_SVA_Base_B() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "two upstream defects the port mirrors: picture output order: ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, so this stream's decode order I P P B ... emits the second P before the B; and, in MV prediction, openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used"]
+#[ignore = "upstream defect the port mirrors, now output order alone: every one of this stream's 50 pictures is bit-exact against the JVT gold, but ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, so the decode order I P P B ... emits the second P before the B and the pictures come out permuted"]
 pub fn test_CACQP3_Sony_D() -> Result<(), String> {
     // Single-slice-per-picture stream with a fresh PPS update before every
     // picture's slice (varying chroma_qp_index_offset across pictures).
@@ -357,7 +365,7 @@ pub fn test_CACQP3_Sony_D() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "two upstream defects the port mirrors: picture output order: ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, and this stream mixes I, P and B slices within one picture, which needs two pictures of reorder depth; and, in MV prediction, openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used"]
+#[ignore = "two upstream defects the port mirrors: picture output order -- ReleaseBufferedReadyPictureReorder does not reorder until a B slice has been seen (bHasBSlice) and then uses a POC-distance heuristic, and this stream mixes I, P and B slices within one picture, which needs two pictures of reorder depth; and the cross-slice bS derivation -- DeblockingBSliceBsMarginalMBAvcbase (deblocking.cpp:544) resolves the *neighbour* macroblock's ref_idx through the *current* slice's reference lists and reads a P-slice neighbour's never-written list-1 indices, so the P/B slice boundary rows are off by 1 to 3 levels. 11 of the 25 pictures are bit-exact and the other 14 are within 3 levels"]
 pub fn test_CABAST3_Sony_E() -> Result<(), String> {
     // Multi-slice picture: 4 slices per picture at first_mb_in_slice
     // 25 pictures.
@@ -476,7 +484,6 @@ fn test_ffmpeg_baseline() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "upstream defect the port mirrors: x264's defaults here (direct=spatial, b-pyramid, weightb, sub-8x8 partitions) reach the case where openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used; +-1..3 residuals in a few frames. The same configuration with direct=none or partitions=none is bit-exact against ffmpeg for both decoders"]
 fn test_ffmpeg_main() -> Result<(), String> {
     // Generate H.264 main stream using ffmpeg.
     // -bf 8: Allow up to 8 consecutive B-frames.
@@ -870,7 +877,7 @@ fn test_ffmpeg_high_multi_slice() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "upstream defect the port mirrors: x264's defaults here (direct=spatial, b-pyramid, weightb, sub-8x8 partitions) reach the case where openh264 pre-fills every direct sub-block's motion into the prediction cache, so a later, not-yet-decoded direct sub-block is taken as neighbour C where Rec. 8.4.1.3.2 / 6.4.11.7 make it unavailable and D should be used; +-1..3 residuals in a few frames. The same configuration with direct=none or partitions=none is bit-exact against ffmpeg for both decoders"]
+#[ignore = "residual this pass did not attribute: one B macroblock in one frame (21 of 30) differs, and only its bottom-right 8x8 sub-partition, by up to 17 levels. The macroblock's top neighbour lies in the previous slice (slice-max-mbs=120 starts a slice mid-row), so the prediction of that one sub-partition depends on the slice boundary; the rest of the stream, and the same content with uniform slices, is bit-exact against ffmpeg for both decoders"]
 fn test_ffmpeg_multi_slice_variable_size() -> Result<(), String> {
     // Variable slice size via `slice-max-mbs`. Tests next_mb_addr tracking when
     // slices have non-uniform MB counts within a picture.
