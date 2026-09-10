@@ -199,6 +199,17 @@ void ForceClearCurrentNal (PAccessUnit pAu);
 bool CheckRefPicturesComplete (PWelsDecoderContext pCtx); // Check whether all ref pictures are complete
 
 void ForceResetParaSetStatusAndAUList (PWelsDecoderContext pCtx);
+
+/*
+ * Does a stream with this SPS need the Annex C bumping process to put its pictures
+ * into output order, or is decoding order already output order?
+ */
+bool NeedsPictureReordering (const PSps kpSps);
+
+/*
+ * Size of the decoded picture buffer in frames, A.3.1 over Table A-1.
+ */
+int32_t GetDpbSize (const PSps kpSps);
 } // namespace WelsDec
 
 #endif//WELS_DECODER_CORE_H__

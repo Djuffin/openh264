@@ -294,7 +294,7 @@ void DestroyPicBuff (PWelsDecoderContext pCtx, PPicBuff* ppPicBuf, CMemoryAlign*
 void ResetReorderingPictureBuffers (PPictReoderingStatus pPictReoderingStatus, PPictInfo pPictInfo,
                                     const bool& fullReset) {
   if (pPictReoderingStatus != NULL && pPictInfo != NULL) {
-    int32_t pictInfoListCount = fullReset ? 16 : (pPictReoderingStatus->iLargestBufferedPicIndex + 1);
+    int32_t pictInfoListCount = fullReset ? PICT_INFO_LIST_SIZE : (pPictReoderingStatus->iLargestBufferedPicIndex + 1);
     pPictReoderingStatus->iPictInfoIndex = 0;
     pPictReoderingStatus->iMinPOC = IMinInt32;
     pPictReoderingStatus->iNumOfPicts = 0;
@@ -305,7 +305,8 @@ void ResetReorderingPictureBuffers (PPictReoderingStatus pPictReoderingStatus, P
       pPictInfo[i].iPicBuffIdx = -1; //ensure a deterministic invalid sentinel so error-path decoding cannot leave heap garbage
     }
     pPictInfo->sBufferInfo.iBufferStatus = 0;
-		pPictReoderingStatus->bHasBSlice = false;
+    pPictReoderingStatus->iOutputSeqNum = 0;
+    pPictReoderingStatus->iPrevCoreSeqNum = IMinInt32;
   }
 }
 
@@ -441,6 +442,14 @@ static inline int32_t GetTargetRefListSize (PWelsDecoderContext pCtx) {
     iNumRefFrames = MAX_REF_PIC_COUNT + 2;
   } else {
     iNumRefFrames = pCtx->pSps->iNumRefFrames + 2;
+    if (NeedsPictureReordering (pCtx->pSps)) {
+      //A stream that reorders holds pictures past the point they stop being
+      //references: the display layer keeps up to GetDpbSize() of them, and lags the
+      //spec's bumping by at most one reference frame plus one because it emits one
+      //picture per completed picture. Plus the picture being decoded, plus the two
+      //above for the EC exchange.
+      iNumRefFrames = GetDpbSize (pCtx->pSps) + pCtx->pSps->iNumRefFrames + 3;
+    }
     int32_t  iThreadCount = GetThreadCount (pCtx);
     if (iThreadCount > 1) {
       //due to thread and reordering buffering, it needs more dpb space

@@ -2255,6 +2255,64 @@ void DecodeFinishUpdate (PWelsDecoderContext pCtx) {
 * return:
 *  0 - success; otherwise returned error_no defined in error_no.h
 */
+/*!
+ * \brief  Does this stream need the Annex C bumping process, or can a picture be
+ *         handed to the caller the moment it is decoded?
+ *
+ * Direct output is what the display layer always did for baseline, and it stays
+ * correct -- and keeps the decoder at zero latency -- for three families:
+ *  - the baseline and CAVLC 4:4:4 profiles, which carry no B slices and no
+ *    reordering;
+ *  - pic_order_cnt_type other than 0. Type 2 has, by its own definition, output
+ *    order equal to decoding order. Type 1 does permit reordering, but this decoder
+ *    derives no POC for it (see the comment on the POC switch in
+ *    DecodeCurrentAccessUnit), so there would be nothing to sort by; such a stream
+ *    stays in decoding order as it always has, and no stream in this tree's test
+ *    material exercises it;
+ *  - a VUI whose max_num_reorder_frames is 0 (E.2.1): the encoder has stated that
+ *    no picture precedes another in output order that follows it in decoding order.
+ *    This project's own encoder writes exactly that (encoder/core/src/au_set.cpp),
+ *    so openh264-encoded streams keep the latency they have always had.
+ */
+bool NeedsPictureReordering (const PSps kpSps) {
+  if (kpSps == NULL)
+    return false;
+  if (kpSps->uiProfileIdc == 66 || kpSps->uiProfileIdc == 83)
+    return false;
+  if (kpSps->uiPocType != 0)
+    return false;
+  if (kpSps->sVui.bBitstreamRestrictionFlag && kpSps->sVui.uiMaxNumReorderFrames == 0)
+    return false;
+  return true;
+}
+
+/*!
+ * \brief  Size of the decoded picture buffer in frames -- A.3.1 over Table A-1,
+ *         the derivation the JM spells out as getDpbSize().
+ *
+ * MaxDpbMbs / (PicWidthInMbs * FrameHeightInMbs), capped at 16 frames, unless the
+ * VUI carries max_dec_frame_buffering, which replaces it; then never below
+ * max_num_ref_frames, and never below one frame.
+ *
+ * pSLevelLimits is the stream's own row of Table A-1: GetLevelLimits resolves
+ * level_idc 9 -- and 11 with constraint_set3_flag -- to level 1b, and ParseSps
+ * rejects an SPS whose level_idc it does not know, so a picture only ever decodes
+ * with a row attached.
+ */
+int32_t GetDpbSize (const PSps kpSps) {
+  int32_t iDpbFrames = MAX_REF_PIC_COUNT;
+  if (kpSps == NULL)
+    return iDpbFrames;
+  if (kpSps->pSLevelLimits != NULL && kpSps->uiTotalMbCount > 0) {
+    iDpbFrames = (int32_t) (kpSps->pSLevelLimits->uiMaxDPBMbs / kpSps->uiTotalMbCount);
+    iDpbFrames = WELS_MIN (iDpbFrames, MAX_REF_PIC_COUNT);
+  }
+  if (kpSps->sVui.bBitstreamRestrictionFlag) {
+    iDpbFrames = WELS_CLIP3 ((int32_t) kpSps->sVui.uiMaxDecFrameBuffering, 1, MAX_REF_PIC_COUNT);
+  }
+  return WELS_MAX (WELS_MAX (iDpbFrames, kpSps->iNumRefFrames), 1);
+}
+
 int32_t WelsDecodeInitAccessUnitStart (PWelsDecoderContext pCtx, SBufferInfo* pDstInfo) {
   int32_t iErr = ERR_NONE;
   PAccessUnit pCurAu = pCtx->pAccessUnitList;

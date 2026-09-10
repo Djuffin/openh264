@@ -127,7 +127,7 @@ static const FileParam kFileParamArray[] = {
   {"res/test_cif_I_CABAC_slice.264", "19121bc67f2b13fb8f030504fc0827e1ac6d0fdb"},
   {"res/test_cif_P_CABAC_slice.264", "521bbd0ba2422369b724c7054545cf107a56f959"},
   {"res/test_qcif_cabac.264", "587d1d05943f3cd416bf69469975fdee05361e69"},
-  {"res/test_scalinglist_jm.264", "992a25b4ec98db4a16d61c097e614eb16afe3478"},
+  {"res/test_scalinglist_jm.264", "f690a3af2896a53360215fb5d35016bfd41499b3"},
   {"res/test_vd_1d.264", "5827d2338b79ff82cd091c707823e466197281d3"},
   {"res/test_vd_rc.264", "eea02e97bfec89d0418593a8abaaf55d02eaa1ca"},
   {"res/Cisco_Men_whisper_640x320_CABAC_Bframe_9.264", "2b349c1bc806b6e0412008747b2463d77b576476"},

@@ -937,6 +937,12 @@ int32_t GetInterBPred (uint8_t* pPredYCbCr[3], uint8_t* pTempPredYCbCr[3], PWels
           iMVs[1] = pCurDqLayer->pDec->pMv[listIdx][iMBXY][iIIdx][1];
           iRefIndex = pCurDqLayer->pDec->pRefIndex[listIdx][iMBXY][iIIdx];
           BaseMC (pCtx, &pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, pMCFunc, 8, 4, iMVs);
+          //Fix relative to 2.6.0: weight the top 8x4 before the destination advances.
+          //8.4.2.3 applies weighted sample prediction to every (sub-)macroblock
+          //partition; weighting only after the advance left the top half unweighted.
+          if (bWeightedBipredIdcIs1) {
+            WeightPrediction (pCurDqLayer, &pMCRefMem, listIdx, iRefIndex, 8, 4);
+          }
           pMCRefMem.pDstY += (iDstLineLuma << 2);
           pMCRefMem.pDstU += (iDstLineChroma << 1);
           pMCRefMem.pDstV += (iDstLineChroma << 1);
@@ -987,6 +993,11 @@ int32_t GetInterBPred (uint8_t* pPredYCbCr[3], uint8_t* pTempPredYCbCr[3], PWels
           iMVs[1] = pCurDqLayer->pDec->pMv[listIdx][iMBXY][iIIdx][1];
           iRefIndex = pCurDqLayer->pDec->pRefIndex[listIdx][iMBXY][iIIdx];
           BaseMC (pCtx, &pMCRefMem, listIdx, iRefIndex, iXOffset, iYOffset, pMCFunc, 4, 8, iMVs);
+          //Fix relative to 2.6.0: weight the left 4x8 before the destination advances.
+          //8.4.2.3, as for B_L0_8x4 / B_L1_8x4 above.
+          if (bWeightedBipredIdcIs1) {
+            WeightPrediction (pCurDqLayer, &pMCRefMem, listIdx, iRefIndex, 4, 8);
+          }
           pMCRefMem.pDstY += 4;
           pMCRefMem.pDstU += 2;
           pMCRefMem.pDstV += 2;

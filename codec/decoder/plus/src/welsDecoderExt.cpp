@@ -143,7 +143,6 @@ CWelsDecoder::CWelsDecoder (void)
     m_DecCtxActiveCount (0),
     m_pDecThrCtx (NULL),
     m_pLastDecThrCtx (NULL),
-    m_iLastBufferedIdx (0),
     m_iStreamSeqNum (0) {
 #ifdef OUTPUT_BIT_STREAM
   char chFileName[1024] = { 0 };  //for .264
@@ -704,14 +703,7 @@ DECODING_STATE CWelsDecoder::DecodeFrameNoDelay (const unsigned char* kpSrc,
       WAIT_EVENT (&m_sBufferingEvent, WELS_DEC_THREAD_WAIT_INFINITE);
       RESET_EVENT (&m_sBufferingEvent);
       RESET_EVENT (&m_sReleaseBufferEvent);
-      if (!m_sReoderingStatus.bHasBSlice) {
-        if (m_sReoderingStatus.iNumOfPicts > 1) {
-          ReleaseBufferedReadyPictureNoReorder (NULL, ppDst, pDstInfo);
-        }
-      }
-      else {
-        ReleaseBufferedReadyPictureReorder (NULL, ppDst, pDstInfo);
-      }
+      ReleaseBufferedReadyPictureReorder (NULL, ppDst, pDstInfo);
     }
     return (DECODING_STATE)iRet;
   }
@@ -934,12 +926,7 @@ DECODING_STATE CWelsDecoder::FlushFrame (unsigned char** ppDst,
     }
   }
   if (bEndOfStreamFlag && m_sReoderingStatus.iNumOfPicts > 0) {
-    if (!m_sReoderingStatus.bHasBSlice) {
-      ReleaseBufferedReadyPictureNoReorder (NULL, ppDst, pDstInfo);
-    }
-    else {
-      ReleaseBufferedReadyPictureReorder (NULL, ppDst, pDstInfo, true);
-    }
+    ReleaseBufferedReadyPictureReorder (NULL, ppDst, pDstInfo, true);
   }
   return dsErrorFree;
 }
@@ -989,28 +976,100 @@ void CWelsDecoder::OutputStatisticsLog (SDecoderStatistics& sDecoderStatistics) 
   }
 }
 
-void CWelsDecoder::BufferingReadyPicture (PWelsDecoderContext pCtx, unsigned char** ppDst,
-    SBufferInfo* pDstInfo) {
-  if (pDstInfo->iBufferStatus == 0) {
-    return;
-  }
-  m_bIsBaseline = pCtx->pSps->uiProfileIdc == 66 || pCtx->pSps->uiProfileIdc == 83;
-  if (!m_bIsBaseline) {
-    if (pCtx->pSliceHeader->eSliceType == B_SLICE) {
-      m_sReoderingStatus.bHasBSlice = true;
+/*!
+ * \brief  Refreshes, from the active SPS, the three things the display layer needs
+ *         to put pictures into output order: whether this stream reorders at all,
+ *         how many frames its DPB holds, and what its VUI promises about reordering.
+ */
+void CWelsDecoder::UpdateReorderingParameters (PWelsDecoderContext pCtx) {
+  const PSps kpSps = pCtx->pSps;
+  m_bIsBaseline = kpSps->uiProfileIdc == 66 || kpSps->uiProfileIdc == 83;
+  m_sReoderingStatus.bReorderPictures = NeedsPictureReordering (kpSps);
+  m_sReoderingStatus.iDpbSize = GetDpbSize (kpSps);
+  m_sReoderingStatus.iMaxNumReorderFrames = kpSps->sVui.bBitstreamRestrictionFlag
+      ? (int32_t) kpSps->sVui.uiMaxNumReorderFrames : -1;
+}
+
+/*!
+ * \brief  DPB fullness in frame buffers, C.4.1: |R| + |W \ R|, where R is the set
+ *         of pictures the core holds as reference right now and W the set waiting
+ *         here for output. A picture that is both is one frame buffer, not two.
+ *
+ * Marking for the current picture has already run when this is reached --
+ * DecodeCurrentAccessUnit calls DecodeFrameConstruction and then WelsMarkAsRef
+ * before returning to this layer -- so R already holds the current picture if it is
+ * a reference, and W holds it because it has just been buffered. The count is
+ * therefore one more than the fullness C.4.5.3 tests before storing the current
+ * picture, which is why the caller's test is "> iDpbSize" and not ">=".
+ */
+int32_t CWelsDecoder::GetDpbFullness (PWelsDecoderContext pCtx, PPicBuff pPicBuff) {
+  PPicture pRefs[2 * MAX_DPB_COUNT];
+  int32_t iRefs = 0;
+  if (pCtx != NULL) {
+    for (int32_t iList = 0; iList < 2; ++iList) {
+      PPicture* pList = (iList == 0) ? pCtx->sRefPic.pShortRefList[LIST_0] : pCtx->sRefPic.pLongRefList[LIST_0];
+      const uint32_t kuiCount = (iList == 0) ? pCtx->sRefPic.uiShortRefCount[LIST_0] :
+                                pCtx->sRefPic.uiLongRefCount[LIST_0];
+      for (uint32_t i = 0; i < kuiCount && i < MAX_DPB_COUNT; ++i) {
+        if (pList[i] == NULL)
+          continue;
+        bool bSeen = false;
+        for (int32_t j = 0; j < iRefs; ++j) {
+          if (pRefs[j] == pList[i]) {
+            bSeen = true;
+            break;
+          }
+        }
+        if (!bSeen && iRefs < (int32_t) (sizeof (pRefs) / sizeof (pRefs[0])))
+          pRefs[iRefs++] = pList[i];
+      }
     }
   }
-  for (int32_t i = 0; i < 16; ++i) {
+  int32_t iWaiting = 0;
+  for (int32_t i = 0; i <= m_sReoderingStatus.iLargestBufferedPicIndex; ++i) {
+    if (m_sPictInfoList[i].iPOC == IMinInt32)
+      continue;
+    PPicture pPic = NULL;
+    const int32_t kiPicBuffIdx = m_sPictInfoList[i].iPicBuffIdx;
+    if (pPicBuff != NULL && kiPicBuffIdx >= 0 && kiPicBuffIdx < pPicBuff->iCapacity)
+      pPic = pPicBuff->ppPic[kiPicBuffIdx];
+    bool bIsRef = false;
+    if (pPic != NULL) {
+      for (int32_t j = 0; j < iRefs; ++j) {
+        if (pRefs[j] == pPic) {
+          bIsRef = true;
+          break;
+        }
+      }
+    }
+    if (!bIsRef)
+      ++iWaiting;
+  }
+  return iRefs + iWaiting;
+}
+
+/*!
+ * \brief  Moves the current picture into the first free slot of the picture list,
+ *         and takes the DPB reference that keeps its planes alive until it is
+ *         emitted. Leaves iBufferStatus alone -- i.e. the picture where it is -- if
+ *         the list is full; see EmitOnFullPictInfoList.
+ */
+void CWelsDecoder::StoreReadyPicture (PWelsDecoderContext pCtx, SBufferInfo* pDstInfo) {
+  for (int32_t i = 0; i < PICT_INFO_LIST_SIZE; ++i) {
     if (m_sPictInfoList[i].iPOC == IMinInt32) {
       memcpy (&m_sPictInfoList[i].sBufferInfo, pDstInfo, sizeof (SBufferInfo));
-      m_sPictInfoList[i].iPOC = pCtx->pSliceHeader->iPicOrderCntLsb;
-      m_sPictInfoList[i].iSeqNum = pCtx->iSeqNum;
+      //The decoded picture's own POC, not the slice header's: the two agree except
+      //after an MMCO 5, where marking zeroes the picture's POC as 8.2.1 requires
+      //and the slice header still carries what was coded.
+      m_sPictInfoList[i].iPOC = pCtx->pLastDecPicInfo->pPreviousDecodedPictureInDpb != NULL
+                               ? pCtx->pLastDecPicInfo->pPreviousDecodedPictureInDpb->iFramePoc
+                               : pCtx->pSliceHeader->iPicOrderCntLsb;
+      m_sPictInfoList[i].iSeqNum = m_sReoderingStatus.iOutputSeqNum;
       m_sPictInfoList[i].uiDecodingTimeStamp = pCtx->uiDecodingTimeStamp;
       if (pCtx->pLastDecPicInfo->pPreviousDecodedPictureInDpb != NULL) {
         m_sPictInfoList[i].iPicBuffIdx = pCtx->pLastDecPicInfo->pPreviousDecodedPictureInDpb->iPicBuffIdx;
         if (GetThreadCount (pCtx) <= 1) ++pCtx->pLastDecPicInfo->pPreviousDecodedPictureInDpb->iRefCount;
       }
-      m_iLastBufferedIdx = i;
       pDstInfo->iBufferStatus = 0;
       ++m_sReoderingStatus.iNumOfPicts;
       if (i > m_sReoderingStatus.iLargestBufferedPicIndex) {
@@ -1021,11 +1080,131 @@ void CWelsDecoder::BufferingReadyPicture (PWelsDecoderContext pCtx, unsigned cha
   }
 }
 
+/*!
+ * \brief  The picture list is full: emit whichever of the current picture and the
+ *         smallest waiting picture comes first in output order, so that the output
+ *         order still holds and neither is dropped.
+ *
+ * PICT_INFO_LIST_SIZE is twice the largest DPB Table A-1 allows, and the backlog
+ * this layer can build is bounded below that (see GetTargetRefListSize), so this is
+ * a guarantee that a picture is never dropped rather than a path a conforming
+ * stream reaches.
+ */
+void CWelsDecoder::EmitOnFullPictInfoList (PWelsDecoderContext pCtx, unsigned char** ppDst,
+    SBufferInfo* pDstInfo) {
+  const int32_t kiCurPoc = pCtx->pLastDecPicInfo->pPreviousDecodedPictureInDpb != NULL
+                           ? pCtx->pLastDecPicInfo->pPreviousDecodedPictureInDpb->iFramePoc
+                           : pCtx->pSliceHeader->iPicOrderCntLsb;
+  int32_t iMinIdx = -1;
+  for (int32_t i = 0; i <= m_sReoderingStatus.iLargestBufferedPicIndex; ++i) {
+    if (m_sPictInfoList[i].iPOC == IMinInt32) continue;
+    if (iMinIdx < 0
+        || ((m_sPictInfoList[i].iSeqNum == m_sPictInfoList[iMinIdx].iSeqNum)
+            ? (m_sPictInfoList[i].iPOC < m_sPictInfoList[iMinIdx].iPOC)
+            : (m_sPictInfoList[i].iSeqNum - m_sPictInfoList[iMinIdx].iSeqNum < 0))) {
+      iMinIdx = i;
+    }
+  }
+  const bool kbCurrentIsFirst = (iMinIdx < 0)
+                                || ((m_sPictInfoList[iMinIdx].iSeqNum == m_sReoderingStatus.iOutputSeqNum)
+                                    ? (kiCurPoc <= m_sPictInfoList[iMinIdx].iPOC)
+                                    : (m_sReoderingStatus.iOutputSeqNum - m_sPictInfoList[iMinIdx].iSeqNum < 0));
+  if (kbCurrentIsFirst) {
+    //Straight out, the way C.4.5.2 outputs a picture no waiting one precedes.
+    ppDst[0] = pDstInfo->pDst[0];
+    ppDst[1] = pDstInfo->pDst[1];
+    ppDst[2] = pDstInfo->pDst[2];
+    return;
+  }
+  //Force the smallest waiting picture out, which frees its slot, buffer the current
+  //picture into it, and hand the freed picture to the caller.
+  SBufferInfo sCurrent;
+  memcpy (&sCurrent, pDstInfo, sizeof (SBufferInfo));
+  ReleaseBufferedReadyPictureReorder (pCtx, ppDst, pDstInfo, true);
+  SBufferInfo sEmitted;
+  memcpy (&sEmitted, pDstInfo, sizeof (SBufferInfo));
+  unsigned char* pEmitted[3] = { ppDst[0], ppDst[1], ppDst[2] };
+  memcpy (pDstInfo, &sCurrent, sizeof (SBufferInfo));
+  StoreReadyPicture (pCtx, pDstInfo);
+  memcpy (pDstInfo, &sEmitted, sizeof (SBufferInfo));
+  ppDst[0] = pEmitted[0];
+  ppDst[1] = pEmitted[1];
+  ppDst[2] = pEmitted[2];
+}
+
+void CWelsDecoder::BufferingReadyPicture (PWelsDecoderContext pCtx, unsigned char** ppDst,
+    SBufferInfo* pDstInfo) {
+  if (pDstInfo->iBufferStatus == 0) {
+    return;
+  }
+  UpdateReorderingParameters (pCtx);
+  //A coded video sequence ends at an IDR or an SPS change -- which is what the
+  //core's own iSeqNum counts -- and at a memory_management_control_operation equal
+  //to 5, which 8.2.1 makes the current picture's POC zero and C.4.4 makes a point
+  //past which nothing earlier may still be waiting. Marking has already run, so
+  //bLastHasMmco5 is this picture's flag.
+  const bool kbNewSequence = (m_sReoderingStatus.iPrevCoreSeqNum != pCtx->iSeqNum)
+                             || pCtx->pLastDecPicInfo->bLastHasMmco5;
+  if (kbNewSequence) {
+    ++m_sReoderingStatus.iOutputSeqNum;
+    m_sReoderingStatus.iPrevCoreSeqNum = pCtx->iSeqNum;
+    //C.4.4: an IDR that asks for it discards the pictures of the sequence before it
+    //instead of outputting them. No stream in this tree's test material sets the
+    //flag on anything but its very first picture, where there is nothing to discard,
+    //so this arm is written to the specification and is not exercised here.
+    if (pCtx->pSliceHeader != NULL && pCtx->pSliceHeader->bIdrFlag
+        && pCtx->pSliceHeader->sRefMarking.bNoOutputOfPriorPicsFlag) {
+      for (int32_t i = 0; i <= m_sReoderingStatus.iLargestBufferedPicIndex; ++i) {
+        if (m_sPictInfoList[i].iPOC == IMinInt32)
+          continue;
+        m_sPictInfoList[i].iPOC = IMinInt32;
+        const int32_t kiPicBuffIdx = m_sPictInfoList[i].iPicBuffIdx;
+        if (pCtx->pPicBuff != NULL && kiPicBuffIdx >= 0 && kiPicBuffIdx < pCtx->pPicBuff->iCapacity) {
+          PPicture pPic = pCtx->pPicBuff->ppPic[kiPicBuffIdx];
+          --pPic->iRefCount;
+          if (pPic->iRefCount <= 0 && pPic->pSetUnRef)
+            pPic->pSetUnRef (pPic);
+        }
+        --m_sReoderingStatus.iNumOfPicts;
+      }
+    }
+  }
+  StoreReadyPicture (pCtx, pDstInfo);
+}
+
+/*!
+ * \brief  The bumping process of C.4.5.3, one output per completed picture.
+ *
+ * Picks the buffered picture with the smallest (sequence, POC) -- the next one in
+ * output order, since output order is POC order within a coded video sequence and
+ * sequences follow one another in decoding order -- and emits it when the DPB says
+ * nothing still to come can precede it:
+ *
+ *  - isFlush: end of stream, everything left goes out in order;
+ *  - the picture is from an older sequence than the one being decoded. C.4.4 empties
+ *    the DPB across a sequence boundary, so nothing that follows can precede it;
+ *  - the DPB has no empty frame buffer (C.4.5.3). GetDpbFullness() counts one more
+ *    than the fullness the specification tests, because the current picture is
+ *    already stored here and already marked there, hence "> iDpbSize";
+ *  - the VUI carries max_num_reorder_frames and more than that many pictures are
+ *    waiting (E.2.1): the smallest of them cannot be preceded by a picture that has
+ *    not been decoded yet. This is the term that keeps the latency of a stream with
+ *    a VUI down to what its encoder promised.
+ */
 void CWelsDecoder::ReleaseBufferedReadyPictureReorder (PWelsDecoderContext pCtx, unsigned char** ppDst,
     SBufferInfo* pDstInfo, bool isFlush) {
   PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;
   if (pCtx == NULL && m_iThreadCount <= 1) {
     pCtx = m_pDecThrCtx[0].pCtx;
+  }
+  //The reference lists this reads live in a decoding context, and the threaded
+  //callers have none to pass: the last thread to finish a picture owns the lists
+  //that describe the DPB now. With neither, R is empty and the fullness test falls
+  //back to the number of pictures waiting, which is still an upper bound on when to
+  //emit and never emits one early.
+  PWelsDecoderContext pRefCtx = pCtx;
+  if (pRefCtx == NULL && m_pLastDecThrCtx != NULL) {
+    pRefCtx = m_pLastDecThrCtx->pCtx;
   }
   if (m_sReoderingStatus.iNumOfPicts > 0) {
     m_sReoderingStatus.iMinPOC = IMinInt32;
@@ -1052,12 +1231,10 @@ void CWelsDecoder::ReleaseBufferedReadyPictureReorder (PWelsDecoderContext pCtx,
   if (m_sReoderingStatus.iMinPOC > IMinInt32) {
     bool isReady = true;
     if (!isFlush) {
-      int32_t iLastPOC = pCtx != NULL ? pCtx->pSliceHeader->iPicOrderCntLsb : m_sPictInfoList[m_iLastBufferedIdx].iPOC;
-      int32_t iLastSeqNum = pCtx != NULL ? pCtx->iSeqNum : m_sPictInfoList[m_iLastBufferedIdx].iSeqNum;
-      isReady = (m_sReoderingStatus.iLastWrittenPOC > IMinInt32
-        && m_sReoderingStatus.iMinPOC - m_sReoderingStatus.iLastWrittenPOC <= 1)
-        || m_sReoderingStatus.iMinPOC < iLastPOC
-        || m_sReoderingStatus.iMinSeqNum - iLastSeqNum < 0;
+      isReady = (m_sReoderingStatus.iMinSeqNum - m_sReoderingStatus.iOutputSeqNum < 0)
+                || (GetDpbFullness (pRefCtx, pPicBuff) > m_sReoderingStatus.iDpbSize)
+                || (m_sReoderingStatus.iMaxNumReorderFrames >= 0
+                    && m_sReoderingStatus.iNumOfPicts > m_sReoderingStatus.iMaxNumReorderFrames);
     }
     if (isReady) {
       m_sReoderingStatus.iLastWrittenPOC = m_sReoderingStatus.iMinPOC;
@@ -1089,88 +1266,22 @@ void CWelsDecoder::ReleaseBufferedReadyPictureReorder (PWelsDecoderContext pCtx,
   }
 }
 
-//if there is no b-frame, no ordering based on values of POCs is necessary.
-//The function is added to force to avoid picture reordering because some h.264 streams do not follow H.264 POC specifications. 
-void CWelsDecoder::ReleaseBufferedReadyPictureNoReorder(PWelsDecoderContext pCtx, unsigned char** ppDst, SBufferInfo* pDstInfo)
-{
-  int32_t firstValidIdx = -1;
-  uint32_t uiDecodingTimeStamp = 0;
-  for (int32_t i = 0; i <= m_sReoderingStatus.iLargestBufferedPicIndex; ++i) {
-    if (m_sPictInfoList[i].iPOC != IMinInt32) {
-      uiDecodingTimeStamp = m_sPictInfoList[i].uiDecodingTimeStamp;
-      m_sReoderingStatus.iPictInfoIndex = i;
-      firstValidIdx = i;
-      break;
-    }
-  }
-  for (int32_t i = 0; i <= m_sReoderingStatus.iLargestBufferedPicIndex; ++i) {
-    if (i == firstValidIdx) continue;
-    if (m_sPictInfoList[i].iPOC != IMinInt32 && m_sPictInfoList[i].uiDecodingTimeStamp < uiDecodingTimeStamp) {
-      uiDecodingTimeStamp = m_sPictInfoList[i].uiDecodingTimeStamp;
-      m_sReoderingStatus.iPictInfoIndex = i;
-    }
-  }
-  if (uiDecodingTimeStamp > 0) {
-#if defined (_DEBUG)
-#ifdef _MOTION_VECTOR_DUMP_
-    fprintf(stderr, "Output POC: #%d uiDecodingTimeStamp=%d\n", m_sPictInfoList[m_sReoderingStatus.iPictInfoIndex].iPOC,
-      uiDecodingTimeStamp);
-#endif
-#endif
-    m_sReoderingStatus.iLastWrittenPOC = m_sPictInfoList[m_sReoderingStatus.iPictInfoIndex].iPOC;
-    m_sReoderingStatus.iLastWrittenSeqNum = m_sPictInfoList[m_sReoderingStatus.iPictInfoIndex].iSeqNum;
-    memcpy(pDstInfo, &m_sPictInfoList[m_sReoderingStatus.iPictInfoIndex].sBufferInfo, sizeof(SBufferInfo));
-    ppDst[0] = pDstInfo->pDst[0];
-    ppDst[1] = pDstInfo->pDst[1];
-    ppDst[2] = pDstInfo->pDst[2];
-    m_sPictInfoList[m_sReoderingStatus.iPictInfoIndex].iPOC = IMinInt32;
-    if (pCtx || m_pPicBuff) {
-      PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;
-      int32_t iPicBuffIdx = m_sPictInfoList[m_sReoderingStatus.iPictInfoIndex].iPicBuffIdx;
-      if (pPicBuff != NULL && iPicBuffIdx >= 0 && iPicBuffIdx < pPicBuff->iCapacity) {
-        PPicture pPic = pPicBuff->ppPic[iPicBuffIdx];
-        --pPic->iRefCount;
-        if (pPic->iRefCount <= 0 && pPic->pSetUnRef)
-          pPic->pSetUnRef(pPic);
-      }
-    }
-    --m_sReoderingStatus.iNumOfPicts;
-  }
-  return;
-}
-
 DECODING_STATE CWelsDecoder::ReorderPicturesInDisplay(PWelsDecoderContext pDecContext, unsigned char** ppDst,
   SBufferInfo* pDstInfo) {
   DECODING_STATE iRet = dsErrorFree;
   if (pDecContext->pSps != NULL) {
-    m_bIsBaseline = pDecContext->pSps->uiProfileIdc == 66 || pDecContext->pSps->uiProfileIdc == 83;
-    if (!m_bIsBaseline) {
+    UpdateReorderingParameters (pDecContext);
+    //A stream that cannot reorder is handed its picture the moment it is decoded,
+    //which is what this layer always did for baseline. Everything else goes into
+    //the buffer and comes out by the bumping process.
+    if (m_sReoderingStatus.bReorderPictures && pDstInfo->iBufferStatus == 1) {
+      BufferingReadyPicture (pDecContext, ppDst, pDstInfo);
       if (pDstInfo->iBufferStatus == 1) {
-        if (pDecContext->pSliceHeader->eSliceType == B_SLICE &&
-            ((pDecContext->iSeqNum == m_sReoderingStatus.iLastWrittenSeqNum) ?
-              (pDecContext->pSliceHeader->iPicOrderCntLsb <= m_sReoderingStatus.iLastWrittenPOC + 2) :
-              (pDecContext->iSeqNum - m_sReoderingStatus.iLastWrittenSeqNum == 1 && pDecContext->pSliceHeader->iPicOrderCntLsb == 0))) {
-          m_sReoderingStatus.iLastWrittenPOC = pDecContext->pSliceHeader->iPicOrderCntLsb;
-          m_sReoderingStatus.iLastWrittenSeqNum = pDecContext->iSeqNum;
-          //issue #3478, use b-slice type to determine correct picture order as the first priority as POC order is not as reliable as based on b-slice
-          ppDst[0] = pDstInfo->pDst[0];
-          ppDst[1] = pDstInfo->pDst[1];
-          ppDst[2] = pDstInfo->pDst[2];
-#if defined (_DEBUG)
-#ifdef _MOTION_VECTOR_DUMP_
-          fprintf (stderr, "Output POC: #%d uiDecodingTimeStamp=%d\n", pDecContext->pSliceHeader->iPicOrderCntLsb,
-             pDecContext->uiDecodingTimeStamp);
-#endif
-#endif
-          return iRet;
-        }
-        BufferingReadyPicture(pDecContext, ppDst, pDstInfo);
-        if (!m_sReoderingStatus.bHasBSlice && m_sReoderingStatus.iNumOfPicts > 1) {
-          ReleaseBufferedReadyPictureNoReorder (pDecContext, ppDst, pDstInfo);
-        }
-        else {
-          ReleaseBufferedReadyPictureReorder (pDecContext, ppDst, pDstInfo);
-        }
+        //The picture list was full, so the picture is still here. It is sized so
+        //that this cannot happen; the valve is what makes that a guarantee.
+        EmitOnFullPictInfoList (pDecContext, ppDst, pDstInfo);
+      } else {
+        ReleaseBufferedReadyPictureReorder (pDecContext, ppDst, pDstInfo);
       }
     }
   }
