@@ -209,7 +209,7 @@ pub use crate::decoder::nalu::EWelsNalUnitType::*;
 
 pub use crate::decoder::decoder_context::SPosOffset;
 use crate::decoder::decoder_context::{
-    IMinInt32, SPictInfo, SPictReoderingStatus, ec_active_idc, slice_split,
+    IMinInt32, PICT_INFO_LIST_SIZE, SPictInfo, SPictReoderingStatus, ec_active_idc, slice_split,
 };
 
 pub use crate::decoder::decoder_context::ParseOnlyBsBuffers;
@@ -667,20 +667,88 @@ pub fn ComputeColocatedTemporalScaling(
     }
 }
 
+/// Does a stream with this SPS need the Annex C bumping process to put its pictures
+/// into output order, or is decoding order already output order?
+/// Matches `bool NeedsPictureReordering (const PSps)` in `decoder_core.cpp`.
+///
+/// Direct output is what the display layer always did for baseline, and it stays
+/// correct — and keeps the decoder at zero latency — for three families:
+///
+/// * the baseline and CAVLC 4:4:4 profiles, which carry no B slices and no
+///   reordering;
+/// * `pic_order_cnt_type` other than 0. Type 2 has, by its own definition, output
+///   order equal to decoding order. Type 1 does permit reordering, but this decoder
+///   derives no POC for it (see the POC switch in [`DecodeCurrentAccessUnit`]), so
+///   there would be nothing to sort by; such a stream stays in decoding order as it
+///   always has, and no stream in this tree's test material exercises it;
+/// * a VUI whose `max_num_reorder_frames` is 0 (E.2.1): the encoder has stated that
+///   no picture precedes another in output order that follows it in decoding order.
+///   This project's own encoder writes exactly that (`encoder/core/src/au_set.cpp`),
+///   so openh264-encoded streams keep the latency they have always had.
+pub fn NeedsPictureReordering(kpSps: &SSps) -> bool {
+    if kpSps.uiProfileIdc == 66 || kpSps.uiProfileIdc == 83 {
+        return false;
+    }
+    if kpSps.uiPocType != 0 {
+        return false;
+    }
+    if kpSps.sVui.bBitstreamRestrictionFlag && kpSps.sVui.uiMaxNumReorderFrames == 0 {
+        return false;
+    }
+    true
+}
+
+/// Size of the decoded picture buffer in frames — A.3.1 over Table A-1, the
+/// derivation the JM spells out as `getDpbSize()`.
+/// Matches `int32_t GetDpbSize (const PSps)` in `decoder_core.cpp`.
+///
+/// `MaxDpbMbs / (PicWidthInMbs * FrameHeightInMbs)`, capped at 16 frames, unless the
+/// VUI carries `max_dec_frame_buffering`, which replaces it; then never below
+/// `max_num_ref_frames`, and never below one frame.
+///
+/// The C++ reads `pSps->pSLevelLimits`, the row `ParseSps` attached; this port keeps
+/// no pointer in the SPS and resolves the row here instead. [`GetLevelLimits`]
+/// resolves `level_idc` 9 — and 11 with `constraint_set3_flag` — to level 1b, and
+/// `ParseSps` rejects an SPS whose `level_idc` it does not know, so a picture only
+/// ever decodes with a row available; the `None` arm is the 16-frame maximum.
+pub fn GetDpbSize(kpSps: &SSps) -> i32 {
+    let mut iDpbFrames = MAX_REF_PIC_COUNT as i32;
+    if let Some(kpLevelLimits) =
+        crate::decoder::nalu::GetLevelLimits(kpSps.uiLevelIdc as i32, kpSps.bConstraintSet3Flag)
+    {
+        if kpSps.uiTotalMbCount > 0 {
+            iDpbFrames = (kpLevelLimits.uiMaxDPBMbs / kpSps.uiTotalMbCount) as i32;
+            iDpbFrames = iDpbFrames.min(MAX_REF_PIC_COUNT as i32);
+        }
+    }
+    if kpSps.sVui.bBitstreamRestrictionFlag {
+        iDpbFrames = (kpSps.sVui.uiMaxDecFrameBuffering as i32).clamp(1, MAX_REF_PIC_COUNT as i32);
+    }
+    iDpbFrames.max(kpSps.iNumRefFrames).max(1)
+}
+
 /// Adaptive picture-queue size, `pSps->iNumRefFrames + 2` (the extra two are
-/// the EC MV copy exchange buffers).
+/// the EC MV copy exchange buffers) — or, for a stream that reorders,
+/// `GetDpbSize() + iNumRefFrames + 3`.
 /// Matches `GetTargetRefListSize` in `decoder.cpp`.
 pub fn GetTargetRefListSize(pCtx: &mut SWelsDecoderContext) -> i32 {
-    let kiNumRefFrames = active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).map(|sps| sps.iNumRefFrames);
-    let mut iNumRefFrames = match kiNumRefFrames {
+    let kpSps = active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).copied();
+    let mut iNumRefFrames = match kpSps {
         None => MAX_REF_PIC_COUNT as i32 + 2,
-        Some(kiNumRefFrames) => {
+        Some(kpSps) => {
             let iThreadCount = GetThreadCount(pCtx);
             if iThreadCount > 1 {
                 // Thread and reordering buffering need more DPB space.
                 MAX_DPB_COUNT as i32 + iThreadCount
+            } else if NeedsPictureReordering(&kpSps) {
+                // A stream that reorders holds pictures past the point they stop
+                // being references: the display layer keeps up to `GetDpbSize()` of
+                // them, and lags the specification's bumping by at most one reference
+                // frame plus one, because it emits one picture per completed picture.
+                // Plus the picture being decoded, plus the two the EC exchange wants.
+                GetDpbSize(&kpSps) + kpSps.iNumRefFrames + 3
             } else {
-                kiNumRefFrames + 2
+                kpSps.iNumRefFrames + 2
             }
         }
     };
@@ -1963,7 +2031,7 @@ pub fn WelsDecoderLastDecPicInfoDefaults(
 /// the field.
 pub fn ResetReorderingPictureBuffers(
     pPictReoderingStatus: &mut SPictReoderingStatus,
-    pPictInfo: &mut [SPictInfo; 16],
+    pPictInfo: &mut [SPictInfo; PICT_INFO_LIST_SIZE],
     fullReset: bool,
 ) {
     let pictInfoListCount = if fullReset {
@@ -1981,7 +2049,8 @@ pub fn ResetReorderingPictureBuffers(
         info.iPicBuffIdx = -1;
     }
     pPictInfo[0].sBufferInfo.iBufferStatus = 0;
-    pPictReoderingStatus.bHasBSlice = false;
+    pPictReoderingStatus.iOutputSeqNum = 0;
+    pPictReoderingStatus.iPrevCoreSeqNum = IMinInt32;
 }
 
 /// `void CWelsDecoder::OutputStatisticsLog (SDecoderStatistics&)` —

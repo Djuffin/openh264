@@ -8,7 +8,8 @@
 #![deny(unsafe_code)]
 
 use crate::decoder::decoder_context::{
-    parser_bs, pic_pool_ptr, prev_dpb_id, prev_dpb_pic_mut, slice_header_of,
+    LIST_0, MAX_DPB_COUNT, PICT_INFO_LIST_SIZE, parser_bs, pic_pool_ptr, prev_dpb_id,
+    prev_dpb_pic_mut, slice_header_of,
 };
 use crate::decoder::decoder_core::{
     ERR_NONE, OutputStatisticsLog, ResetDecStatNums, WelsDecoderLastDecPicInfoDefaults,
@@ -16,7 +17,6 @@ use crate::decoder::decoder_core::{
 };
 use crate::decoder::nalu::{EWelsNalUnitType, IS_PARAM_SETS_NALS};
 use crate::decoder::pic_queue::SPicBuff;
-use crate::decoder::slice::EWelsSliceType;
 use std::ffi::{c_char, c_long, c_void};
 use std::ptr;
 
@@ -2914,11 +2914,7 @@ impl Decoder {
             // `false` is the C's `NULL` context argument
             // (`welsDecoderExt.cpp:1103`): drain the slot list without touching
             // the live pool. See `pool_for`.
-            if !p_ctx.pPictReoderingStatus.bHasBSlice {
-                ReleaseBufferedReadyPictureNoReorder(&mut *p_ctx, false, ppDst, pDstInfo);
-            } else {
-                ReleaseBufferedReadyPictureReorder(&mut *p_ctx, false, ppDst, pDstInfo, true);
-            }
+            ReleaseBufferedReadyPictureReorder(&mut *p_ctx, false, ppDst, pDstInfo, true);
         }
         DECODING_STATE::dsErrorFree
     }
@@ -3141,12 +3137,6 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
     }
 }
 
-#[allow(unsafe_code)]
-/// Matches `void CWelsDecoder::BufferingReadyPicture (...)` in `welsDecoderExt.cpp`.
-///
-/// Moves a just-decoded picture out of `pDstInfo` and into the reordering slot
-/// list, clearing `iBufferStatus` so nothing is emitted until a release call
-/// picks the picture back up in display order.
 /// `pCtx ? pCtx->pPicBuff : m_pPicBuff` — the C++'s pool selection, as a flag.
 ///
 /// **`m_pPicBuff` is provably null in this port.** Its only writers in the reference
@@ -3170,6 +3160,226 @@ fn pool_for(
     pic_pool_ptr(&mut pCtx.pPicBuff)
 }
 
+/// Matches `void CWelsDecoder::UpdateReorderingParameters (...)`.
+///
+/// Refreshes, from the active SPS, the three things the display layer needs to put
+/// pictures into output order: whether this stream reorders at all, how many frames
+/// its DPB holds, and what its VUI promises about reordering. `false` when no SPS is
+/// active yet — the C's `if (pDecContext->pSps != NULL)` guard.
+fn UpdateReorderingParameters(
+    pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
+) -> bool {
+    let Some(sps) =
+        crate::decoder::decoder_context::active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps).copied()
+    else {
+        return false;
+    };
+    pCtx.bIsBaseline = sps.uiProfileIdc == 66 || sps.uiProfileIdc == 83;
+    let st = &mut pCtx.pPictReoderingStatus;
+    st.bReorderPictures = crate::decoder::decoder_core::NeedsPictureReordering(&sps);
+    st.iDpbSize = crate::decoder::decoder_core::GetDpbSize(&sps);
+    st.iMaxNumReorderFrames = if sps.sVui.bBitstreamRestrictionFlag {
+        sps.sVui.uiMaxNumReorderFrames as i32
+    } else {
+        -1
+    };
+    true
+}
+
+/// Matches `int32_t CWelsDecoder::GetDpbFullness (...)`.
+///
+/// DPB fullness in frame buffers, C.4.1: `|R| + |W \ R|`, where `R` is the set of
+/// pictures the core holds as reference right now and `W` the set waiting here for
+/// output. A picture that is both is one frame buffer, not two; `iPicBuffIdx` names
+/// the pool slot on both sides, and comparing those indices is what the C++ compares
+/// `PPicture` pointers for.
+///
+/// Marking for the current picture has already run when this is reached —
+/// `DecodeCurrentAccessUnit` calls `DecodeFrameConstruction` and then `WelsMarkAsRef`
+/// before returning to this layer — so `R` already holds the current picture if it
+/// is a reference, and `W` holds it because it has just been buffered. The count is
+/// therefore one more than the fullness C.4.5.3 tests *before* storing the current
+/// picture, which is why the caller's test is `> iDpbSize` and not `>=`.
+///
+/// The C++ resolves the reference lists out of a context that may be null on its
+/// threaded paths (`m_pLastDecThrCtx->pCtx`, and an empty `R` with neither); this
+/// port has no threads — `GetThreadCount` returns 0 — so the live context is always
+/// the one to read.
+fn GetDpbFullness(pCtx: &crate::decoder::decoder_core::SWelsDecoderContext) -> i32 {
+    // The distinct pool slots held as reference, by `iPicBuffIdx`. Short and long
+    // lists can name the same picture, so they are unioned rather than added.
+    let mut aiRefBuffIdx = [-1i32; 2 * MAX_DPB_COUNT];
+    let mut iRefs = 0usize;
+    let pPicBuff = pCtx.pPicBuff.as_deref();
+    for iList in 0..2 {
+        let (pList, kuiCount) = if iList == 0 {
+            (
+                &pCtx.sRefPic.pShortRefList[LIST_0],
+                pCtx.sRefPic.uiShortRefCount[LIST_0],
+            )
+        } else {
+            (
+                &pCtx.sRefPic.pLongRefList[LIST_0],
+                pCtx.sRefPic.uiLongRefCount[LIST_0],
+            )
+        };
+        for slot in pList.iter().take((kuiCount as usize).min(MAX_DPB_COUNT)) {
+            let Some(id) = *slot else { continue };
+            let Some(iPicBuffIdx) = pPicBuff.and_then(|p| p.slot(id)).map(|pic| pic.iPicBuffIdx)
+            else {
+                continue;
+            };
+            if iPicBuffIdx < 0 || aiRefBuffIdx[..iRefs].contains(&iPicBuffIdx) {
+                continue;
+            }
+            if iRefs < aiRefBuffIdx.len() {
+                aiRefBuffIdx[iRefs] = iPicBuffIdx;
+                iRefs += 1;
+            }
+        }
+    }
+    let mut iWaiting = 0i32;
+    let largest = pCtx.pPictReoderingStatus.iLargestBufferedPicIndex;
+    for i in 0..=largest {
+        let info = pCtx.pPictInfoList[i as usize];
+        if info.iPOC == crate::decoder::decoder_context::IMinInt32 {
+            continue;
+        }
+        if !aiRefBuffIdx[..iRefs].contains(&info.iPicBuffIdx) {
+            iWaiting += 1;
+        }
+    }
+    iRefs as i32 + iWaiting
+}
+
+/// Matches `void CWelsDecoder::StoreReadyPicture (...)`.
+///
+/// Moves the current picture into the first free slot of the picture list and takes
+/// the DPB reference that keeps its planes alive until it is emitted. Leaves
+/// `iBufferStatus` alone — i.e. the picture where it is — if the list is full; see
+/// [`EmitOnFullPictInfoList`].
+fn StoreReadyPicture(
+    pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
+    pDstInfo: &mut SBufferInfo,
+) {
+    let IMinInt32 = crate::decoder::decoder_context::IMinInt32;
+    let Some(i) = (0..PICT_INFO_LIST_SIZE).find(|&i| pCtx.pPictInfoList[i].iPOC == IMinInt32)
+    else {
+        return;
+    };
+    pCtx.pPictInfoList[i].sBufferInfo = *pDstInfo;
+    // The DPB's "previous picture" is a slot handle, so the resolve happens here
+    // rather than the pointer being stored. The thread count is read before the pool
+    // borrow opens: the picture is `pPicBuff`'s and `GetThreadCount` takes the
+    // context.
+    let bSingleThreaded = crate::decoder::decoder_core::GetThreadCount(&*pCtx) <= 1;
+    let prev_id = prev_dpb_id(&pCtx.pLastDecPicInfo);
+    let mut sPrev: Option<(i32, i32)> = None;
+    if let Some(prev) = prev_dpb_pic_mut(&mut pCtx.pPicBuff, prev_id) {
+        sPrev = Some((prev.iFramePoc, prev.iPicBuffIdx));
+        if bSingleThreaded {
+            prev.iRefCount += 1;
+        }
+    }
+    // The decoded picture's own POC, not the slice header's: the two agree except
+    // after an MMCO 5, where marking zeroes the picture's POC as 8.2.1 requires and
+    // the slice header still carries what was coded.
+    pCtx.pPictInfoList[i].iPOC = match sPrev {
+        Some((iFramePoc, iPicBuffIdx)) => {
+            pCtx.pPictInfoList[i].iPicBuffIdx = iPicBuffIdx;
+            iFramePoc
+        }
+        None => slice_header_of(&*pCtx).map_or(0, |sh| sh.iPicOrderCntLsb),
+    };
+    pCtx.pPictInfoList[i].iSeqNum = pCtx.pPictReoderingStatus.iOutputSeqNum;
+    pCtx.pPictInfoList[i].uiDecodingTimeStamp = pCtx.uiDecodingTimeStamp;
+    pDstInfo.iBufferStatus = 0;
+    pCtx.pPictReoderingStatus.iNumOfPicts += 1;
+    if i as i32 > pCtx.pPictReoderingStatus.iLargestBufferedPicIndex {
+        pCtx.pPictReoderingStatus.iLargestBufferedPicIndex = i as i32;
+    }
+}
+
+/// Matches `void CWelsDecoder::EmitOnFullPictInfoList (...)`.
+///
+/// The picture list is full: emit whichever of the current picture and the smallest
+/// waiting picture comes first in output order, so that the output order still holds
+/// and neither is dropped.
+///
+/// [`PICT_INFO_LIST_SIZE`] is twice the largest DPB Table A-1 allows, and the backlog
+/// this layer can build is bounded below that (see `GetTargetRefListSize`), so this
+/// is a guarantee that a picture is never dropped rather than a path a conforming
+/// stream reaches.
+fn EmitOnFullPictInfoList(
+    pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
+    ppDst: &mut [*mut u8; 3],
+    pDstInfo: &mut SBufferInfo,
+) {
+    let IMinInt32 = crate::decoder::decoder_context::IMinInt32;
+    let kiCurPoc = match prev_dpb_id(&pCtx.pLastDecPicInfo)
+        .and_then(|id| pCtx.pPicBuff.as_deref().and_then(|p| p.slot(id)))
+    {
+        Some(pic) => pic.iFramePoc,
+        None => slice_header_of(&*pCtx).map_or(0, |sh| sh.iPicOrderCntLsb),
+    };
+    let mut iMinIdx: Option<usize> = None;
+    for i in 0..=pCtx.pPictReoderingStatus.iLargestBufferedPicIndex {
+        let info = pCtx.pPictInfoList[i as usize];
+        if info.iPOC == IMinInt32 {
+            continue;
+        }
+        let bSmaller = match iMinIdx {
+            None => true,
+            Some(m) => {
+                let cur = pCtx.pPictInfoList[m];
+                if info.iSeqNum == cur.iSeqNum {
+                    info.iPOC < cur.iPOC
+                } else {
+                    info.iSeqNum.wrapping_sub(cur.iSeqNum) < 0
+                }
+            }
+        };
+        if bSmaller {
+            iMinIdx = Some(i as usize);
+        }
+    }
+    let kbCurrentIsFirst = match iMinIdx {
+        None => true,
+        Some(m) => {
+            let min = pCtx.pPictInfoList[m];
+            let iOutputSeqNum = pCtx.pPictReoderingStatus.iOutputSeqNum;
+            if min.iSeqNum == iOutputSeqNum {
+                kiCurPoc <= min.iPOC
+            } else {
+                iOutputSeqNum.wrapping_sub(min.iSeqNum) < 0
+            }
+        }
+    };
+    if kbCurrentIsFirst {
+        // Straight out, the way C.4.5.2 outputs a picture no waiting one precedes.
+        ppDst[0] = pDstInfo.pDst[0];
+        ppDst[1] = pDstInfo.pDst[1];
+        ppDst[2] = pDstInfo.pDst[2];
+        return;
+    }
+    // Force the smallest waiting picture out, which frees its slot, buffer the
+    // current picture into it, and hand the freed picture to the caller.
+    let sCurrent = *pDstInfo;
+    ReleaseBufferedReadyPictureReorder(pCtx, true, ppDst, pDstInfo, true);
+    let sEmitted = *pDstInfo;
+    let pEmitted = *ppDst;
+    *pDstInfo = sCurrent;
+    StoreReadyPicture(pCtx, pDstInfo);
+    *pDstInfo = sEmitted;
+    *ppDst = pEmitted;
+}
+
+/// Matches `void CWelsDecoder::BufferingReadyPicture (...)` in `welsDecoderExt.cpp`.
+///
+/// Moves a just-decoded picture out of `pDstInfo` and into the reordering slot list,
+/// clearing `iBufferStatus` so nothing is emitted until a release call picks the
+/// picture back up in display order, and closes off the coded video sequence the
+/// picture ends, if it ends one.
 fn BufferingReadyPicture(
     pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
     _ppDst: &mut [*mut u8; 3],
@@ -3178,49 +3388,60 @@ fn BufferingReadyPicture(
     if pDstInfo.iBufferStatus == 0 {
         return;
     }
-    if let Some(sps) =
-        crate::decoder::decoder_context::active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
-    {
-        pCtx.bIsBaseline = sps.uiProfileIdc == 66 || sps.uiProfileIdc == 83;
-    }
-    if !pCtx.bIsBaseline {
-        if slice_header_of(&*pCtx).is_some_and(|sh| sh.eSliceType == EWelsSliceType::B_SLICE) {
-            pCtx.pPictReoderingStatus.bHasBSlice = true;
+    UpdateReorderingParameters(pCtx);
+    // A coded video sequence ends at an IDR or an SPS change — which is what the
+    // core's own `iSeqNum` counts — and at a memory_management_control_operation
+    // equal to 5, which 8.2.1 makes the current picture's POC zero and C.4.4 makes a
+    // point past which nothing earlier may still be waiting. Marking has already run,
+    // so `bLastHasMmco5` is this picture's flag.
+    let kbNewSequence = pCtx.pPictReoderingStatus.iPrevCoreSeqNum != pCtx.iSeqNum
+        || pCtx.pLastDecPicInfo.bLastHasMmco5;
+    if kbNewSequence {
+        pCtx.pPictReoderingStatus.iOutputSeqNum += 1;
+        pCtx.pPictReoderingStatus.iPrevCoreSeqNum = pCtx.iSeqNum;
+        // C.4.4: an IDR that asks for it discards the pictures of the sequence before
+        // it instead of outputting them. No stream in this tree's test material sets
+        // the flag on anything but its very first picture, where there is nothing to
+        // discard, so this arm is written to the specification and is not exercised
+        // here.
+        let bNoOutputOfPriorPics = slice_header_of(&*pCtx)
+            .is_some_and(|sh| sh.bIdrFlag && sh.sRefMarking.bNoOutputOfPriorPicsFlag);
+        if bNoOutputOfPriorPics {
+            DiscardBufferedPictures(pCtx);
         }
     }
-    for i in 0..16usize {
-        if pCtx.pPictInfoList[i].iPOC == crate::decoder::decoder_context::IMinInt32 {
-            pCtx.pPictInfoList[i].sBufferInfo = *pDstInfo;
-            pCtx.pPictInfoList[i].iPOC = slice_header_of(&*pCtx).map_or(0, |sh| sh.iPicOrderCntLsb);
-            pCtx.pPictInfoList[i].iSeqNum = pCtx.iSeqNum;
-            pCtx.pPictInfoList[i].uiDecodingTimeStamp = pCtx.uiDecodingTimeStamp;
-            // The DPB's "previous picture" is a slot handle, so the resolve happens
-            // here rather than the pointer being stored. The thread count is read
-            // before the pool borrow opens: the picture is `pPicBuff`'s and
-            // `GetThreadCount` takes the context.
-            let bSingleThreaded = crate::decoder::decoder_core::GetThreadCount(&*pCtx) <= 1;
-            let prev_id = prev_dpb_id(&pCtx.pLastDecPicInfo);
-            if let Some(prev) = prev_dpb_pic_mut(&mut pCtx.pPicBuff, prev_id) {
-                let iPicBuffIdx = prev.iPicBuffIdx;
-                if bSingleThreaded {
-                    prev.iRefCount += 1;
+    StoreReadyPicture(pCtx, pDstInfo);
+}
+
+/// The `no_output_of_prior_pics_flag` arm of C.4.4: every waiting picture is
+/// released without being output.
+fn DiscardBufferedPictures(pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext) {
+    let IMinInt32 = crate::decoder::decoder_context::IMinInt32;
+    for i in 0..=pCtx.pPictReoderingStatus.iLargestBufferedPicIndex {
+        let idx = i as usize;
+        if pCtx.pPictInfoList[idx].iPOC == IMinInt32 {
+            continue;
+        }
+        pCtx.pPictInfoList[idx].iPOC = IMinInt32;
+        let iPicBuffIdx = pCtx.pPictInfoList[idx].iPicBuffIdx;
+        if let Some(pPicBuff) = pic_pool_ptr(&mut pCtx.pPicBuff) {
+            if let Some(pPic) = pPicBuff.slot_at_mut(iPicBuffIdx) {
+                pPic.iRefCount -= 1;
+                if pPic.iRefCount <= 0 {
+                    if let Some(set_unref) = pPic.pSetUnRef {
+                        set_unref(pPic);
+                    }
                 }
-                pCtx.pPictInfoList[i].iPicBuffIdx = iPicBuffIdx;
             }
-            pCtx.iLastBufferedIdx = i as i32;
-            pDstInfo.iBufferStatus = 0;
-            pCtx.pPictReoderingStatus.iNumOfPicts += 1;
-            if i as i32 > pCtx.pPictReoderingStatus.iLargestBufferedPicIndex {
-                pCtx.pPictReoderingStatus.iLargestBufferedPicIndex = i as i32;
-            }
-            break;
         }
+        pCtx.pPictReoderingStatus.iNumOfPicts -= 1;
     }
 }
 
 /// Releases the buffered picture whose slot is referenced by `iPictInfoIndex`,
-/// dropping the DPB reference taken in [`BufferingReadyPicture`]. Shared tail of
-/// both `ReleaseBufferedReadyPicture*` functions in `welsDecoderExt.cpp`.
+/// dropping the DPB reference taken in [`StoreReadyPicture`]. Shared tail of
+/// `ReleaseBufferedReadyPictureReorder` and `EmitOnFullPictInfoList` in
+/// `welsDecoderExt.cpp`.
 fn EmitBufferedPicture(
     pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
     bUsePool: bool,
@@ -3254,73 +3475,25 @@ fn EmitBufferedPicture(
     pCtx.pPictReoderingStatus.iNumOfPicts -= 1;
 }
 
-/// Matches `void CWelsDecoder::ReleaseBufferedReadyPictureNoReorder (...)`.
-///
-/// Picks the buffered picture with the smallest decoding timestamp, i.e. plain
-/// decode order. Used when the stream has no B slices, where POC ordering is
-/// unreliable in practice.
-///
-/// DELIBERATE DEVIATION from the C++ reference: on a decoding-timestamp *tie*
-/// this emits the lower POC first, where C++ falls back to slot order.
-///
-/// `uiDecodingTimeStamp` is only bumped by `DecodeFrame2` calls that carry data
-/// (`if (kiSrcLen > 0 && kpSrc != NULL)`), so the picture that completes during
-/// the `DecodeFrame2 (NULL, 0, ...)` end-of-stream flush inherits the previous
-/// call's timestamp and ties with the picture already buffered. C++ then emits
-/// them in slot order, which can invert the last two pictures of a stream --
-/// visible on res/CABA2_SVA_B.264, where upstream emits POC 32 before POC 30
-/// and disagrees with the JVT gold. (`h264dec` avoids it only because
-/// `DecodeFrameNoDelay` never produces the tie.) POC is the actual display
-/// order key, so it is the correct tiebreaker; this engages on an exact tie
-/// only, and non-tied ordering is bit-identical to C++.
-fn ReleaseBufferedReadyPictureNoReorder(
-    pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
-    bUsePool: bool,
-    ppDst: &mut [*mut u8; 3],
-    pDstInfo: &mut SBufferInfo,
-) {
-    let mut firstValidIdx: i32 = -1;
-    let mut uiDecodingTimeStamp: u32 = 0;
-    let mut iChosenPOC: i32 = 0;
-    let largest = pCtx.pPictReoderingStatus.iLargestBufferedPicIndex;
-    for i in 0..=largest {
-        if pCtx.pPictInfoList[i as usize].iPOC != crate::decoder::decoder_context::IMinInt32 {
-            uiDecodingTimeStamp = pCtx.pPictInfoList[i as usize].uiDecodingTimeStamp;
-            iChosenPOC = pCtx.pPictInfoList[i as usize].iPOC;
-            pCtx.pPictReoderingStatus.iPictInfoIndex = i;
-            firstValidIdx = i;
-            break;
-        }
-    }
-    for i in 0..=largest {
-        if i == firstValidIdx {
-            continue;
-        }
-        let info = pCtx.pPictInfoList[i as usize];
-        if info.iPOC != crate::decoder::decoder_context::IMinInt32
-            && (info.uiDecodingTimeStamp < uiDecodingTimeStamp
-                || (info.uiDecodingTimeStamp == uiDecodingTimeStamp && info.iPOC < iChosenPOC))
-        {
-            uiDecodingTimeStamp = info.uiDecodingTimeStamp;
-            iChosenPOC = info.iPOC;
-            pCtx.pPictReoderingStatus.iPictInfoIndex = i;
-        }
-    }
-    if uiDecodingTimeStamp > 0 {
-        let idx = pCtx.pPictReoderingStatus.iPictInfoIndex as usize;
-        pCtx.pPictReoderingStatus.iLastWrittenPOC = pCtx.pPictInfoList[idx].iPOC;
-        pCtx.pPictReoderingStatus.iLastWrittenSeqNum = pCtx.pPictInfoList[idx].iSeqNum;
-        // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;`
-        // (`welsDecoderExt.cpp:1026`), as a flag — see [`pool_for`].
-        EmitBufferedPicture(pCtx, bUsePool, ppDst, pDstInfo);
-    }
-}
-
 /// Matches `void CWelsDecoder::ReleaseBufferedReadyPictureReorder (...)`.
 ///
-/// Picks the buffered picture with the smallest (seqNum, POC) and emits it only
-/// once it is safe to do so — either it directly follows the last written POC,
-/// or the decoder has moved past it. `isFlush` forces the emit.
+/// The bumping process of C.4.5.3, one output per completed picture.
+///
+/// Picks the buffered picture with the smallest `(sequence, POC)` — the next one in
+/// output order, since output order is POC order within a coded video sequence and
+/// sequences follow one another in decoding order — and emits it when the DPB says
+/// nothing still to come can precede it:
+///
+/// * `isFlush`: end of stream, everything left goes out in order;
+/// * the picture is from an older sequence than the one being decoded. C.4.4 empties
+///   the DPB across a sequence boundary, so nothing that follows can precede it;
+/// * the DPB has no empty frame buffer (C.4.5.3). [`GetDpbFullness`] counts one more
+///   than the fullness the specification tests, because the current picture is
+///   already stored here and already marked there, hence `> iDpbSize`;
+/// * the VUI carries `max_num_reorder_frames` and more than that many pictures are
+///   waiting (E.2.1): the smallest of them cannot be preceded by a picture that has
+///   not been decoded yet. This is the term that keeps the latency of a stream with
+///   a VUI down to what its encoder promised.
 fn ReleaseBufferedReadyPictureReorder(
     pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
     bUsePool: bool,
@@ -3329,14 +3502,14 @@ fn ReleaseBufferedReadyPictureReorder(
     isFlush: bool,
 ) {
     let IMinInt32 = crate::decoder::decoder_context::IMinInt32;
-    // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;` (`:1128`), which in
-    // the C++ is evaluated *before* `if (!pCtx) pCtx = m_pDecContext;` restores the
-    // live context for everything below. Both halves are `bUsePool` now — see
-    // [`pool_for`] — and the restore is what makes the flag the whole difference.
-    // The resolution itself happens down in `EmitBufferedPicture`: held here it
-    // would be a borrow of `pCtx` spanning the whole body below, which reads `pCtx`
-    // throughout. Nothing between this point and the call writes `pCtx.pPicBuff`,
-    // and `bUsePool` is a by-value `bool`.
+    // `PPicBuff pPicBuff = pCtx ? pCtx->pPicBuff : m_pPicBuff;`, which in the C++ is
+    // evaluated *before* `if (!pCtx) pCtx = m_pDecContext;` restores the live context
+    // for everything below. Both halves are `bUsePool` now — see [`pool_for`] — and
+    // the restore is what makes the flag the whole difference. The resolution itself
+    // happens down in [`EmitBufferedPicture`]: held here it would be a borrow of
+    // `pCtx` spanning the whole body below, which reads `pCtx` throughout. Nothing
+    // between this point and the call writes `pCtx.pPicBuff`, and `bUsePool` is a
+    // by-value `bool`.
 
     if pCtx.pPictReoderingStatus.iNumOfPicts > 0 {
         pCtx.pPictReoderingStatus.iMinPOC = IMinInt32;
@@ -3376,16 +3549,10 @@ fn ReleaseBufferedReadyPictureReorder(
     if pCtx.pPictReoderingStatus.iMinPOC > IMinInt32 {
         let mut isReady = true;
         if !isFlush {
-            let last_idx = pCtx.iLastBufferedIdx as usize;
-            let iLastPOC = match slice_header_of(&*pCtx) {
-                Some(sh) => sh.iPicOrderCntLsb,
-                None => pCtx.pPictInfoList[last_idx].iPOC,
-            };
-            let iLastSeqNum = pCtx.iSeqNum;
             let st = pCtx.pPictReoderingStatus;
-            isReady = (st.iLastWrittenPOC > IMinInt32 && st.iMinPOC - st.iLastWrittenPOC <= 1)
-                || st.iMinPOC < iLastPOC
-                || st.iMinSeqNum.wrapping_sub(iLastSeqNum) < 0;
+            isReady = st.iMinSeqNum.wrapping_sub(st.iOutputSeqNum) < 0
+                || GetDpbFullness(&*pCtx) > st.iDpbSize
+                || (st.iMaxNumReorderFrames >= 0 && st.iNumOfPicts > st.iMaxNumReorderFrames);
         }
         if isReady {
             pCtx.pPictReoderingStatus.iLastWrittenPOC = pCtx.pPictReoderingStatus.iMinPOC;
@@ -3398,46 +3565,27 @@ fn ReleaseBufferedReadyPictureReorder(
 
 /// Matches `DECODING_STATE CWelsDecoder::ReorderPicturesInDisplay (...)`.
 ///
-/// Baseline streams never reorder, so the picture passes straight through and
-/// the buffer stays empty.
+/// A stream that cannot reorder — baseline, a POC type this decoder derives no POC
+/// for, or a VUI that promises output order is decoding order — is handed its
+/// picture the moment it is decoded, which is what this layer always did for
+/// baseline. Everything else goes into the buffer and comes out by the bumping
+/// process.
 fn ReorderPicturesInDisplay(
     pCtx: &mut crate::decoder::decoder_core::SWelsDecoderContext,
     ppDst: &mut [*mut u8; 3],
     pDstInfo: &mut SBufferInfo,
 ) {
-    let Some(profile) =
-        crate::decoder::decoder_context::active_sps(&pCtx.sSpsPpsCtx, pCtx.active_sps)
-            .map(|sps| sps.uiProfileIdc)
-    else {
-        return;
-    };
-    pCtx.bIsBaseline = profile == 66 || profile == 83;
-    if pCtx.bIsBaseline || pDstInfo.iBufferStatus != 1 {
+    if !UpdateReorderingParameters(pCtx) {
         return;
     }
-    let sh_poc = slice_header_of(&*pCtx)
-        .filter(|sh| sh.eSliceType == EWelsSliceType::B_SLICE)
-        .map(|sh| sh.iPicOrderCntLsb);
-    if let Some(sh_poc) = sh_poc {
-        let st = pCtx.pPictReoderingStatus;
-        let follows = if pCtx.iSeqNum == st.iLastWrittenSeqNum {
-            sh_poc <= st.iLastWrittenPOC + 2
-        } else {
-            pCtx.iSeqNum - st.iLastWrittenSeqNum == 1 && sh_poc == 0
-        };
-        if follows {
-            // issue #3478: B-slice type is a more reliable ordering signal than POC.
-            pCtx.pPictReoderingStatus.iLastWrittenPOC = sh_poc;
-            pCtx.pPictReoderingStatus.iLastWrittenSeqNum = pCtx.iSeqNum;
-            ppDst[0] = pDstInfo.pDst[0];
-            ppDst[1] = pDstInfo.pDst[1];
-            ppDst[2] = pDstInfo.pDst[2];
-            return;
-        }
+    if !pCtx.pPictReoderingStatus.bReorderPictures || pDstInfo.iBufferStatus != 1 {
+        return;
     }
     BufferingReadyPicture(pCtx, ppDst, pDstInfo);
-    if !pCtx.pPictReoderingStatus.bHasBSlice && pCtx.pPictReoderingStatus.iNumOfPicts > 1 {
-        ReleaseBufferedReadyPictureNoReorder(pCtx, true, ppDst, pDstInfo);
+    if pDstInfo.iBufferStatus == 1 {
+        // The picture list was full, so the picture is still here. It is sized so
+        // that this cannot happen; the valve is what makes that a guarantee.
+        EmitOnFullPictInfoList(pCtx, ppDst, pDstInfo);
     } else {
         ReleaseBufferedReadyPictureReorder(pCtx, true, ppDst, pDstInfo, false);
     }

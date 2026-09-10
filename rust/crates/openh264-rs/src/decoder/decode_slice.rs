@@ -1871,6 +1871,13 @@ pub fn GetInterBPred(
                     iMVs = pMv(listIdx, iIIdx);
                     iRefIndex = pRef(listIdx, iIIdx);
                     mc0!(blk8, listIdx, iRefIndex, iXOffset, iYOffset, 8, 4, iMVs);
+                    // Fix relative to 2.6.0 (`rec_mb.cpp:940-944`): weight the top 8x4
+                    // before the destination advances. 8.4.2.3 applies weighted sample
+                    // prediction to every (sub-)macroblock partition; the reference
+                    // weighted only after the advance, leaving the top half unweighted.
+                    if bWeightedBipredIdcIs1 {
+                        WeightPrediction(pwt.as_ref(), pDec, blk8, listIdx, iRefIndex as i32, 8, 4);
+                    }
                     let lower = blk8.blk(0, 4);
                     iMVs = pMv(listIdx, iIIdx + 4);
                     mc0!(
@@ -1938,6 +1945,11 @@ pub fn GetInterBPred(
                     iMVs = pMv(listIdx, iIIdx);
                     iRefIndex = pRef(listIdx, iIIdx);
                     mc0!(blk8, listIdx, iRefIndex, iXOffset, iYOffset, 4, 8, iMVs);
+                    // Fix relative to 2.6.0 (`rec_mb.cpp:994-998`): weight the left 4x8
+                    // before the destination advances. 8.4.2.3, as for B_L0_8x4 above.
+                    if bWeightedBipredIdcIs1 {
+                        WeightPrediction(pwt.as_ref(), pDec, blk8, listIdx, iRefIndex as i32, 4, 8);
+                    }
                     let right = blk8.blk(4, 0);
                     iMVs = pMv(listIdx, iIIdx + 1);
                     mc0!(

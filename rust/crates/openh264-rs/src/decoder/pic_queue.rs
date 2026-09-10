@@ -985,7 +985,8 @@ mod tests {
         // buffered pictures naming pool slots 2 and 3.
         ctx.pPictReoderingStatus.iLargestBufferedPicIndex = 1;
         ctx.pPictReoderingStatus.iNumOfPicts = 2;
-        ctx.pPictReoderingStatus.bHasBSlice = true;
+        ctx.pPictReoderingStatus.iOutputSeqNum = 3;
+        ctx.pPictReoderingStatus.iPrevCoreSeqNum = 3;
         ctx.pPictInfoList[0].iPOC = 4;
         ctx.pPictInfoList[0].iPicBuffIdx = 2;
         ctx.pPictInfoList[1].iPOC = 8;
@@ -1001,7 +1002,8 @@ mod tests {
         // — the two that were written — and leaves the untouched tail alone.
         assert_eq!(ctx.pPictReoderingStatus.iNumOfPicts, 0);
         assert_eq!(ctx.pPictReoderingStatus.iLargestBufferedPicIndex, 0);
-        assert!(!ctx.pPictReoderingStatus.bHasBSlice);
+        assert_eq!(ctx.pPictReoderingStatus.iOutputSeqNum, 0);
+        assert_eq!(ctx.pPictReoderingStatus.iPrevCoreSeqNum, IMinInt32);
         assert_eq!(ctx.pPictReoderingStatus.iMinPOC, IMinInt32);
         for i in 0..2 {
             assert_eq!(
