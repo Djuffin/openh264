@@ -310,10 +310,16 @@ fi
 # `test_CVWP2_TOSHIBA_E`, taking the count to 3. Then one more — a B_8x8
 # macroblock keeping its list flags through spatial direct derivation, so a
 # co-located B_8x8's explicit list-1 sub-blocks still carry motion — made
-# `test_ffmpeg_multi_slice_variable_size` bit-exact on the same rule. That leaves
-# 1 e2e test plus the Miri control. It is not output order and not the slice
-# boundary either: it is the cross-slice bS derivation, and it carries a reason
-# naming the defect that keeps it red.
+# `test_ffmpeg_multi_slice_variable_size` bit-exact on the same rule, taking the
+# count to 2. And one more — boundary strength at a macroblock edge that separates
+# two slices derived from the reference *pictures* each block uses
+# (`SPicture::pRefPicture`, 8.7.2.1) instead of from indices resolved through the
+# filtering slice's lists — made `test_CABAST3_Sony_E` bit-exact on the same
+# three-runs-in-both-profiles rule, taking the count to **1**.
+#
+# That 1 is the Miri control named above, and nothing else: no e2e conformance
+# test is `#[ignore]`d any more. A new `#[ignore]` here is a regression in the
+# fixture set, not a number to raise.
 # ---------------------------------------------------------------------------
 run_cargo_test() {  # $1 = profile label, $2.. = extra cargo args
   local label=$1; shift
@@ -328,10 +334,10 @@ run_cargo_test() {  # $1 = profile label, $2.. = extra cargo args
   printf '  totals: %s passed / %s failed / %s ignored\n' "$passed" "$failed" "$ignored"
   if [ "$rc" -ne 0 ] || [ "$failed" -ne 0 ]; then
     fail "cargo test ($label): $passed/$failed/$ignored"
-  elif [ "$ignored" -ne 2 ]; then
-    fail "cargo test ($label): ignored set is $ignored, must be 2 (plan §1.4)"
+  elif [ "$ignored" -ne 1 ]; then
+    fail "cargo test ($label): ignored set is $ignored, must be 1 (plan §1.4)"
   else
-    pass "cargo test ($label): $passed passed / 0 failed / 2 ignored"
+    pass "cargo test ($label): $passed passed / 0 failed / 1 ignored"
   fi
 }
 
