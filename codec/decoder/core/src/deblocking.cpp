@@ -1181,7 +1181,12 @@ void WelsDeblockingMb (PDqLayer pCurDqLayer, PDeblockingFilter  pFilter, int32_t
       * (uint32_t*)nBS[1][0] = 0;
     }
     //SKIP MB_16x16 or others
-    if (IS_SKIP (iCurMbType)) {
+    //Fix relative to 2.6.0: the skip short-cut (all internal edges bS = 0) holds for P_Skip, whose
+    //macroblock is one 16x16 partition with one motion vector, but not for B_Skip: its four 8x8
+    //quadrants inherit direct motion that differs per 8x8 (direct_8x8_inference_flag = 1) or per 4x4
+    //(flag = 0), and 8.7.2.1 derives bS from that per-4x4 motion.  Let a B_Skip fall through to the
+    //B-slice derivation below, as B_Direct_16x16 (MB_TYPE_DIRECT without MB_TYPE_SKIP) already does.
+    if (IS_SKIP (iCurMbType) && !bBSlice) {
       * (uint32_t*)nBS[0][1] = * (uint32_t*)nBS[0][2] = * (uint32_t*)nBS[0][3] =
                                  * (uint32_t*)nBS[1][1] = * (uint32_t*)nBS[1][2] = * (uint32_t*)nBS[1][3] = 0;
     } else {

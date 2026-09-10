@@ -335,7 +335,13 @@ int32_t GetColocatedMb (PWelsDecoderContext pCtx, MbType& mbType, SubMbType& sub
     //This indicates the colocated MB is P SKIP MB
     coloc_mbType |= MB_TYPE_16x16 | MB_TYPE_P0L0 | MB_TYPE_P1L0;
   }
-  if (IS_Inter_8x8 (coloc_mbType) && !pCtx->pSps->bDirect8x8InferenceFlag) {
+  //Fix relative to 2.6.0: IS_Inter_8x8() only tests MB_TYPE_8x8, but a co-located P_8x8ref0 is
+  //stored as MB_TYPE_8x8_REF0 (g_ksInterPMbTypeInfo[4]) and is 8x8-partitioned just the same.  With
+  //direct_8x8_inference_flag = 0 it fell to the 8x8-corner branch below, so the direct sub-blocks
+  //took one corner's motion for the whole 8x8 instead of the per-4x4 derivation 8.4.1.2.2 /
+  //8.4.1.2.3 prescribe.  Test both partitioned types here; IS_Inter_8x8() itself is left alone,
+  //other call sites mean MB_TYPE_8x8 by it.
+  if ((coloc_mbType & (MB_TYPE_8x8 | MB_TYPE_8x8_REF0)) && !pCtx->pSps->bDirect8x8InferenceFlag) {
     subMbType = SUB_MB_TYPE_4x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1 | MB_TYPE_DIRECT;
     mbType |= MB_TYPE_8x8 | MB_TYPE_L0 | MB_TYPE_L1;
   } else if (!is8x8 && (IS_INTER_16x16 (coloc_mbType) || IS_INTRA (coloc_mbType)/* || IS_SKIP(coloc_mbType)*/)) {
