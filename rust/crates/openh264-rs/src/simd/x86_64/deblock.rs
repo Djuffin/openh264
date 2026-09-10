@@ -21,7 +21,7 @@ use crate::safe::plane::{BlockRows, PlaneSamples};
 
 /// Vectorized 16-line Luma bS < 4 (Lt4) filter across contiguous sample rows.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 pub unsafe fn deblock_luma_lt4_16(
     p2: &mut [u8; 16],
     p1: &mut [u8; 16],
@@ -168,7 +168,7 @@ pub unsafe fn deblock_luma_lt4_16(
 
 /// Vectorized 16-line Luma bS == 4 (Eq4) filter across contiguous sample rows.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 pub unsafe fn deblock_luma_eq4_16(
     p3: &[u8; 16],
     p2: &mut [u8; 16],
@@ -367,7 +367,7 @@ pub unsafe fn deblock_luma_eq4_16(
 
 /// Vectorized 16-line Chroma bS < 4 (Lt4) filter across contiguous sample rows.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 pub unsafe fn deblock_chroma_lt4_16(
     p1: &[u8; 16],
     p0: &mut [u8; 16],
@@ -458,7 +458,7 @@ pub unsafe fn deblock_chroma_lt4_16(
 
 /// Vectorized 16-line Chroma bS == 4 (Eq4) filter across contiguous sample rows.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 pub unsafe fn deblock_chroma_eq4_16(
     p1: &[u8; 16],
     p0: &mut [u8; 16],
@@ -531,6 +531,128 @@ pub unsafe fn deblock_chroma_eq4_16(
 }
 
 // ============================================================================
+// SIMD Matrix Transpositions
+// ============================================================================
+
+/// Transposes two 8x8 blocks of bytes packed in pairs of rows across 8 `__m128i` registers.
+///
+/// Input: `r0..r7`, where register `ri` holds row `i` (bytes 0..7) and row `i+8` (bytes 8..15).
+/// Output: `(c0..c7)`, where register `cj` holds column `j` across all 16 rows (bytes 0..15).
+///
+/// Since two independent 8x8 matrix transpositions form an involution ($A^{TT} = A$),
+/// calling this function again on `(c0..c7)` transposes back into `(r0..r7)`.
+#[inline(always)]
+unsafe fn transpose_16x8_u8(
+    r0: __m128i,
+    r1: __m128i,
+    r2: __m128i,
+    r3: __m128i,
+    r4: __m128i,
+    r5: __m128i,
+    r6: __m128i,
+    r7: __m128i,
+) -> (
+    __m128i,
+    __m128i,
+    __m128i,
+    __m128i,
+    __m128i,
+    __m128i,
+    __m128i,
+    __m128i,
+) {
+    // Stage 1: Interleave adjacent rows at byte level.
+    // t0..t3 process lower 8x8 block (rows 0..7), u0..u3 process upper 8x8 block (rows 8..15).
+    let t0 = _mm_unpacklo_epi8(r0, r1);
+    let t1 = _mm_unpacklo_epi8(r2, r3);
+    let t2 = _mm_unpacklo_epi8(r4, r5);
+    let t3 = _mm_unpacklo_epi8(r6, r7);
+
+    let u0 = _mm_unpackhi_epi8(r0, r1);
+    let u1 = _mm_unpackhi_epi8(r2, r3);
+    let u2 = _mm_unpackhi_epi8(r4, r5);
+    let u3 = _mm_unpackhi_epi8(r6, r7);
+
+    // Stage 2: Interleave 16-bit words.
+    let w0 = _mm_unpacklo_epi16(t0, t1);
+    let w1 = _mm_unpackhi_epi16(t0, t1);
+    let w2 = _mm_unpacklo_epi16(t2, t3);
+    let w3 = _mm_unpackhi_epi16(t2, t3);
+
+    let v0 = _mm_unpacklo_epi16(u0, u1);
+    let v1 = _mm_unpackhi_epi16(u0, u1);
+    let v2 = _mm_unpacklo_epi16(u2, u3);
+    let v3 = _mm_unpackhi_epi16(u2, u3);
+
+    // Stage 3: Interleave 32-bit dwords.
+    let d0 = _mm_unpacklo_epi32(w0, w2);
+    let d1 = _mm_unpackhi_epi32(w0, w2);
+    let d2 = _mm_unpacklo_epi32(w1, w3);
+    let d3 = _mm_unpackhi_epi32(w1, w3);
+
+    let e0 = _mm_unpacklo_epi32(v0, v2);
+    let e1 = _mm_unpackhi_epi32(v0, v2);
+    let e2 = _mm_unpacklo_epi32(v1, v3);
+    let e3 = _mm_unpackhi_epi32(v1, v3);
+
+    // Stage 4: Combine 64-bit halves from lower and upper blocks into 16-sample columns.
+    let c0 = _mm_unpacklo_epi64(d0, e0);
+    let c1 = _mm_unpackhi_epi64(d0, e0);
+    let c2 = _mm_unpacklo_epi64(d1, e1);
+    let c3 = _mm_unpackhi_epi64(d1, e1);
+    let c4 = _mm_unpacklo_epi64(d2, e2);
+    let c5 = _mm_unpackhi_epi64(d2, e2);
+    let c6 = _mm_unpacklo_epi64(d3, e3);
+    let c7 = _mm_unpackhi_epi64(d3, e3);
+
+    (c0, c1, c2, c3, c4, c5, c6, c7)
+}
+
+/// Transposes 8 lines of 4-sample Cb and Cr taps into 4 16-byte column vectors.
+///
+/// Input: `r0..r7`, where register `ri` holds Cb row `i` in dword 0 (bytes 0..3)
+/// and Cr row `i` in dword 1 (bytes 4..7).
+/// Output: `(t0, t1, t2, t3)`, where each register `tj` contains column `j` across all 8 rows
+/// of Cb in the lower 8 bytes, and all 8 rows of Cr in the upper 8 bytes.
+#[inline(always)]
+unsafe fn transpose_chroma_4x8_u8(
+    r0: __m128i,
+    r1: __m128i,
+    r2: __m128i,
+    r3: __m128i,
+    r4: __m128i,
+    r5: __m128i,
+    r6: __m128i,
+    r7: __m128i,
+) -> (__m128i, __m128i, __m128i, __m128i) {
+    // Stage 1: byte unpack
+    let a0 = _mm_unpacklo_epi8(r0, r1);
+    let a1 = _mm_unpacklo_epi8(r2, r3);
+    let a2 = _mm_unpacklo_epi8(r4, r5);
+    let a3 = _mm_unpacklo_epi8(r6, r7);
+
+    // Stage 2: word unpack
+    let b0 = _mm_unpacklo_epi16(a0, a1);
+    let b1 = _mm_unpackhi_epi16(a0, a1);
+    let b2 = _mm_unpacklo_epi16(a2, a3);
+    let b3 = _mm_unpackhi_epi16(a2, a3);
+
+    // Stage 3: dword unpack
+    let cb01 = _mm_unpacklo_epi32(b0, b2);
+    let cb23 = _mm_unpackhi_epi32(b0, b2);
+    let cr01 = _mm_unpacklo_epi32(b1, b3);
+    let cr23 = _mm_unpackhi_epi32(b1, b3);
+
+    // Stage 4: qword unpack combining Cb and Cr
+    let t0 = _mm_unpacklo_epi64(cb01, cr01);
+    let t1 = _mm_unpackhi_epi64(cb01, cr01);
+    let t2 = _mm_unpacklo_epi64(cb23, cr23);
+    let t3 = _mm_unpackhi_epi64(cb23, cr23);
+
+    (t0, t1, t2, t3)
+}
+
+// ============================================================================
 // Public Dispatch Functions
 // ============================================================================
 
@@ -576,46 +698,94 @@ pub fn deblock_luma_lt4(
         // The cross-line step must be this cursor's stride.
         debug_assert_eq!(step_y, pix.stride() as isize);
         // Vertical edge: 16 lines of taps at cols `-4 .. 4`, out of one span.
-        let mut rows = [[0u8; 8]; 16];
-        {
-            let s = pix.span::<8, 16>(0, -4);
-            for (i, r) in rows.iter_mut().enumerate() {
-                *r = s.row::<8>(i, 0);
-            }
-        }
-
-        let mut t = [[0u8; 16]; 8];
-        for y in 0..16 {
-            for x in 0..8 {
-                t[x][y] = rows[y][x];
-            }
-        }
-
-        let [
-            _,
-            ref mut t1,
-            ref mut t2,
-            ref mut t3,
-            ref mut t4,
-            ref mut t5,
-            ref mut t6,
-            _,
-        ] = t;
         unsafe {
-            deblock_luma_lt4_16(t1, t2, t3, t4, t5, t6, alpha, beta, tc);
-        }
+            let (r0, r1, r2, r3, r4, r5, r6, r7) = {
+                let s = pix.span::<8, 16>(0, -4);
+                (
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(8, 0)),
+                        i64::from_ne_bytes(s.row::<8>(0, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(9, 0)),
+                        i64::from_ne_bytes(s.row::<8>(1, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(10, 0)),
+                        i64::from_ne_bytes(s.row::<8>(2, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(11, 0)),
+                        i64::from_ne_bytes(s.row::<8>(3, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(12, 0)),
+                        i64::from_ne_bytes(s.row::<8>(4, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(13, 0)),
+                        i64::from_ne_bytes(s.row::<8>(5, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(14, 0)),
+                        i64::from_ne_bytes(s.row::<8>(6, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(15, 0)),
+                        i64::from_ne_bytes(s.row::<8>(7, 0)),
+                    ),
+                )
+            };
 
-        for x in 2..=5 {
-            for y in 0..16 {
-                rows[y][x] = t[x][y];
-            }
-        }
+            let (_c0, c1, c2, c3, c4, c5, c6, _c7) =
+                transpose_16x8_u8(r0, r1, r2, r3, r4, r5, r6, r7);
 
-        // Write back only the columns the filter can modify: the span read above is
-        // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
-        // the previous macroblock.
-        let out: [[u8; 4]; 16] = std::array::from_fn(|i| rows[i][2..6].try_into().expect("p1..q1"));
-        pix.set_block::<4, 16>(0, -2, &out);
+            let mut t1 = [0u8; 16];
+            let mut t2 = [0u8; 16];
+            let mut t3 = [0u8; 16];
+            let mut t4 = [0u8; 16];
+            let mut t5 = [0u8; 16];
+            let mut t6 = [0u8; 16];
+            _mm_storeu_si128(t1.as_mut_ptr() as *mut __m128i, c1);
+            _mm_storeu_si128(t2.as_mut_ptr() as *mut __m128i, c2);
+            _mm_storeu_si128(t3.as_mut_ptr() as *mut __m128i, c3);
+            _mm_storeu_si128(t4.as_mut_ptr() as *mut __m128i, c4);
+            _mm_storeu_si128(t5.as_mut_ptr() as *mut __m128i, c5);
+            _mm_storeu_si128(t6.as_mut_ptr() as *mut __m128i, c6);
+
+            deblock_luma_lt4_16(
+                &mut t1, &mut t2, &mut t3, &mut t4, &mut t5, &mut t6, alpha, beta, tc,
+            );
+
+            let p1_vec = _mm_loadu_si128(t2.as_ptr() as *const __m128i);
+            let p0_vec = _mm_loadu_si128(t3.as_ptr() as *const __m128i);
+            let q0_vec = _mm_loadu_si128(t4.as_ptr() as *const __m128i);
+            let q1_vec = _mm_loadu_si128(t5.as_ptr() as *const __m128i);
+
+            // Interleave (p1, p0) and (q0, q1) pairs
+            let a0 = _mm_unpacklo_epi8(p1_vec, p0_vec);
+            let a1 = _mm_unpackhi_epi8(p1_vec, p0_vec);
+            let b0 = _mm_unpacklo_epi8(q0_vec, q1_vec);
+            let b1 = _mm_unpackhi_epi8(q0_vec, q1_vec);
+
+            // Interleave pairs into 4-sample rows: [p1, p0, q0, q1]
+            let row0_3 = _mm_unpacklo_epi16(a0, b0);
+            let row4_7 = _mm_unpackhi_epi16(a0, b0);
+            let row8_11 = _mm_unpacklo_epi16(a1, b1);
+            let row12_15 = _mm_unpackhi_epi16(a1, b1);
+
+            let mut out = [[0u8; 4]; 16];
+            let ptr = out.as_mut_ptr() as *mut __m128i;
+            _mm_storeu_si128(ptr.add(0), row0_3);
+            _mm_storeu_si128(ptr.add(1), row4_7);
+            _mm_storeu_si128(ptr.add(2), row8_11);
+            _mm_storeu_si128(ptr.add(3), row12_15);
+
+            // Write back only the columns the filter can modify: the span read above is
+            // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
+            // the previous macroblock.
+            pix.set_block::<4, 16>(0, -2, &out);
+        }
     } else {
         deblock_luma_lt4_scalar(pix, step_x, step_y, alpha, beta, tc);
     }
@@ -664,46 +834,95 @@ pub fn deblock_luma_eq4(
         // The cross-line step must be this cursor's stride.
         debug_assert_eq!(step_y, pix.stride() as isize);
         // Vertical edge: 16 lines of taps `-4 .. 4`, out of one span.
-        let mut rows = [[0u8; 8]; 16];
-        {
-            let s = pix.span::<8, 16>(0, -4);
-            for (i, r) in rows.iter_mut().enumerate() {
-                *r = s.row::<8>(i, 0);
-            }
-        }
-
-        let mut t = [[0u8; 16]; 8];
-        for y in 0..16 {
-            for x in 0..8 {
-                t[x][y] = rows[y][x];
-            }
-        }
-
-        let [
-            ref t0,
-            ref mut t1,
-            ref mut t2,
-            ref mut t3,
-            ref mut t4,
-            ref mut t5,
-            ref mut t6,
-            ref t7,
-        ] = t;
         unsafe {
-            deblock_luma_eq4_16(t0, t1, t2, t3, t4, t5, t6, t7, alpha, beta);
-        }
+            let (r0, r1, r2, r3, r4, r5, r6, r7) = {
+                let s = pix.span::<8, 16>(0, -4);
+                (
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(8, 0)),
+                        i64::from_ne_bytes(s.row::<8>(0, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(9, 0)),
+                        i64::from_ne_bytes(s.row::<8>(1, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(10, 0)),
+                        i64::from_ne_bytes(s.row::<8>(2, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(11, 0)),
+                        i64::from_ne_bytes(s.row::<8>(3, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(12, 0)),
+                        i64::from_ne_bytes(s.row::<8>(4, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(13, 0)),
+                        i64::from_ne_bytes(s.row::<8>(5, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(14, 0)),
+                        i64::from_ne_bytes(s.row::<8>(6, 0)),
+                    ),
+                    _mm_set_epi64x(
+                        i64::from_ne_bytes(s.row::<8>(15, 0)),
+                        i64::from_ne_bytes(s.row::<8>(7, 0)),
+                    ),
+                )
+            };
 
-        for x in 1..=6 {
-            for y in 0..16 {
-                rows[y][x] = t[x][y];
+            let (c0, mut c1, mut c2, mut c3, mut c4, mut c5, mut c6, c7) =
+                transpose_16x8_u8(r0, r1, r2, r3, r4, r5, r6, r7);
+
+            let mut t0 = [0u8; 16];
+            let mut t1 = [0u8; 16];
+            let mut t2 = [0u8; 16];
+            let mut t3 = [0u8; 16];
+            let mut t4 = [0u8; 16];
+            let mut t5 = [0u8; 16];
+            let mut t6 = [0u8; 16];
+            let mut t7 = [0u8; 16];
+            _mm_storeu_si128(t0.as_mut_ptr() as *mut __m128i, c0);
+            _mm_storeu_si128(t1.as_mut_ptr() as *mut __m128i, c1);
+            _mm_storeu_si128(t2.as_mut_ptr() as *mut __m128i, c2);
+            _mm_storeu_si128(t3.as_mut_ptr() as *mut __m128i, c3);
+            _mm_storeu_si128(t4.as_mut_ptr() as *mut __m128i, c4);
+            _mm_storeu_si128(t5.as_mut_ptr() as *mut __m128i, c5);
+            _mm_storeu_si128(t6.as_mut_ptr() as *mut __m128i, c6);
+            _mm_storeu_si128(t7.as_mut_ptr() as *mut __m128i, c7);
+
+            deblock_luma_eq4_16(
+                &t0, &mut t1, &mut t2, &mut t3, &mut t4, &mut t5, &mut t6, &t7, alpha, beta,
+            );
+
+            c1 = _mm_loadu_si128(t1.as_ptr() as *const __m128i);
+            c2 = _mm_loadu_si128(t2.as_ptr() as *const __m128i);
+            c3 = _mm_loadu_si128(t3.as_ptr() as *const __m128i);
+            c4 = _mm_loadu_si128(t4.as_ptr() as *const __m128i);
+            c5 = _mm_loadu_si128(t5.as_ptr() as *const __m128i);
+            c6 = _mm_loadu_si128(t6.as_ptr() as *const __m128i);
+
+            let (r0_out, r1_out, r2_out, r3_out, r4_out, r5_out, r6_out, r7_out) =
+                transpose_16x8_u8(c0, c1, c2, c3, c4, c5, c6, c7);
+
+            let r_outs = [
+                r0_out, r1_out, r2_out, r3_out, r4_out, r5_out, r6_out, r7_out,
+            ];
+            let mut out = [[0u8; 6]; 16];
+            for i in 0..8 {
+                let b_lo = (_mm_cvtsi128_si64(r_outs[i]) as u64).to_ne_bytes();
+                let b_hi = (_mm_cvtsi128_si64(_mm_srli_si128(r_outs[i], 8)) as u64).to_ne_bytes();
+                out[i].copy_from_slice(&b_lo[1..7]);
+                out[i + 8].copy_from_slice(&b_hi[1..7]);
             }
-        }
 
-        // Write back only the columns the filter can modify: the span read above is
-        // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
-        // the previous macroblock.
-        let out: [[u8; 6]; 16] = std::array::from_fn(|i| rows[i][1..7].try_into().expect("p2..q2"));
-        pix.set_block::<6, 16>(0, -3, &out);
+            // Write back only the columns the filter can modify: the span read above is
+            // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
+            // the previous macroblock.
+            pix.set_block::<6, 16>(0, -3, &out);
+        }
     } else {
         deblock_luma_eq4_scalar(pix, step_x, step_y, alpha, beta);
     }
@@ -776,45 +995,91 @@ pub fn deblock_chroma_lt4(
         debug_assert_eq!(step_y, cb.stride() as isize);
         debug_assert_eq!(step_y, cr.stride() as isize);
         // Eight lines of taps `-2 .. 2` per plane, out of one span each.
-        let mut cb_rows = [[0u8; 4]; 8];
-        let mut cr_rows = [[0u8; 4]; 8];
-        {
-            let (sb, sr) = (cb.span::<4, 8>(0, -2), cr.span::<4, 8>(0, -2));
-            for i in 0..8 {
-                cb_rows[i] = sb.row::<4>(i, 0);
-                cr_rows[i] = sr.row::<4>(i, 0);
-            }
-        }
-
-        let mut t = [[0u8; 16]; 4];
-        for y in 0..8 {
-            for x in 0..4 {
-                t[x][y] = cb_rows[y][x];
-                t[x][y + 8] = cr_rows[y][x];
-            }
-        }
-
-        let [ref t0, ref mut t1, ref mut t2, ref t3] = t;
         unsafe {
-            deblock_chroma_lt4_16(t0, t1, t2, t3, alpha, beta, tc);
-        }
+            let (r0, r1, r2, r3, r4, r5, r6, r7) = {
+                let (sb, sr) = (cb.span::<4, 8>(0, -2), cr.span::<4, 8>(0, -2));
+                (
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(0, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(0, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(1, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(1, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(2, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(2, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(3, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(3, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(4, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(4, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(5, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(5, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(6, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(6, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(7, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(7, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                )
+            };
 
-        for y in 0..8 {
-            cb_rows[y][1] = t[1][y];
-            cb_rows[y][2] = t[2][y];
-            cr_rows[y][1] = t[1][y + 8];
-            cr_rows[y][2] = t[2][y + 8];
-        }
+            let (t0, t1, t2, t3) = transpose_chroma_4x8_u8(r0, r1, r2, r3, r4, r5, r6, r7);
 
-        // Write back only the columns the filter can modify: the span read above is
-        // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
-        // the previous macroblock.
-        let out_cb: [[u8; 2]; 8] =
-            std::array::from_fn(|i| cb_rows[i][1..3].try_into().expect("p0, q0"));
-        let out_cr: [[u8; 2]; 8] =
-            std::array::from_fn(|i| cr_rows[i][1..3].try_into().expect("p0, q0"));
-        cb.set_block::<2, 8>(0, -1, &out_cb);
-        cr.set_block::<2, 8>(0, -1, &out_cr);
+            let mut arr_p1 = [0u8; 16];
+            let mut arr_p0 = [0u8; 16];
+            let mut arr_q0 = [0u8; 16];
+            let mut arr_q1 = [0u8; 16];
+            _mm_storeu_si128(arr_p1.as_mut_ptr() as *mut __m128i, t0);
+            _mm_storeu_si128(arr_p0.as_mut_ptr() as *mut __m128i, t1);
+            _mm_storeu_si128(arr_q0.as_mut_ptr() as *mut __m128i, t2);
+            _mm_storeu_si128(arr_q1.as_mut_ptr() as *mut __m128i, t3);
+
+            deblock_chroma_lt4_16(&arr_p1, &mut arr_p0, &mut arr_q0, &arr_q1, alpha, beta, tc);
+
+            let p0 = _mm_loadu_si128(arr_p0.as_ptr() as *const __m128i);
+            let q0 = _mm_loadu_si128(arr_q0.as_ptr() as *const __m128i);
+
+            let cb_pairs = _mm_unpacklo_epi8(p0, q0);
+            let cr_pairs = _mm_unpackhi_epi8(p0, q0);
+
+            let mut out_cb = [[0u8; 2]; 8];
+            let mut out_cr = [[0u8; 2]; 8];
+            _mm_storeu_si128(out_cb.as_mut_ptr() as *mut __m128i, cb_pairs);
+            _mm_storeu_si128(out_cr.as_mut_ptr() as *mut __m128i, cr_pairs);
+
+            // Write back only the columns the filter can modify: the span read above is
+            // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
+            // the previous macroblock.
+            cb.set_block::<2, 8>(0, -1, &out_cb);
+            cr.set_block::<2, 8>(0, -1, &out_cr);
+        }
     } else {
         deblock_chroma_lt4_scalar(cb, cr, step_x, step_y, alpha, beta, tc);
     }
@@ -886,45 +1151,91 @@ pub fn deblock_chroma_eq4(
         debug_assert_eq!(step_y, cb.stride() as isize);
         debug_assert_eq!(step_y, cr.stride() as isize);
         // Eight lines of taps `-2 .. 2` per plane, out of one span each.
-        let mut cb_rows = [[0u8; 4]; 8];
-        let mut cr_rows = [[0u8; 4]; 8];
-        {
-            let (sb, sr) = (cb.span::<4, 8>(0, -2), cr.span::<4, 8>(0, -2));
-            for i in 0..8 {
-                cb_rows[i] = sb.row::<4>(i, 0);
-                cr_rows[i] = sr.row::<4>(i, 0);
-            }
-        }
-
-        let mut t = [[0u8; 16]; 4];
-        for y in 0..8 {
-            for x in 0..4 {
-                t[x][y] = cb_rows[y][x];
-                t[x][y + 8] = cr_rows[y][x];
-            }
-        }
-
-        let [ref t0, ref mut t1, ref mut t2, ref t3] = t;
         unsafe {
-            deblock_chroma_eq4_16(t0, t1, t2, t3, alpha, beta);
-        }
+            let (r0, r1, r2, r3, r4, r5, r6, r7) = {
+                let (sb, sr) = (cb.span::<4, 8>(0, -2), cr.span::<4, 8>(0, -2));
+                (
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(0, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(0, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(1, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(1, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(2, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(2, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(3, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(3, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(4, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(4, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(5, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(5, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(6, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(6, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                    _mm_setr_epi32(
+                        u32::from_ne_bytes(sb.row::<4>(7, 0)) as i32,
+                        u32::from_ne_bytes(sr.row::<4>(7, 0)) as i32,
+                        0,
+                        0,
+                    ),
+                )
+            };
 
-        for y in 0..8 {
-            cb_rows[y][1] = t[1][y];
-            cb_rows[y][2] = t[2][y];
-            cr_rows[y][1] = t[1][y + 8];
-            cr_rows[y][2] = t[2][y + 8];
-        }
+            let (t0, t1, t2, t3) = transpose_chroma_4x8_u8(r0, r1, r2, r3, r4, r5, r6, r7);
 
-        // Write back only the columns the filter can modify: the span read above is
-        // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
-        // the previous macroblock.
-        let out_cb: [[u8; 2]; 8] =
-            std::array::from_fn(|i| cb_rows[i][1..3].try_into().expect("p0, q0"));
-        let out_cr: [[u8; 2]; 8] =
-            std::array::from_fn(|i| cr_rows[i][1..3].try_into().expect("p0, q0"));
-        cb.set_block::<2, 8>(0, -1, &out_cb);
-        cr.set_block::<2, 8>(0, -1, &out_cr);
+            let mut arr_p1 = [0u8; 16];
+            let mut arr_p0 = [0u8; 16];
+            let mut arr_q0 = [0u8; 16];
+            let mut arr_q1 = [0u8; 16];
+            _mm_storeu_si128(arr_p1.as_mut_ptr() as *mut __m128i, t0);
+            _mm_storeu_si128(arr_p0.as_mut_ptr() as *mut __m128i, t1);
+            _mm_storeu_si128(arr_q0.as_mut_ptr() as *mut __m128i, t2);
+            _mm_storeu_si128(arr_q1.as_mut_ptr() as *mut __m128i, t3);
+
+            deblock_chroma_eq4_16(&arr_p1, &mut arr_p0, &mut arr_q0, &arr_q1, alpha, beta);
+
+            let p0 = _mm_loadu_si128(arr_p0.as_ptr() as *const __m128i);
+            let q0 = _mm_loadu_si128(arr_q0.as_ptr() as *const __m128i);
+
+            let cb_pairs = _mm_unpacklo_epi8(p0, q0);
+            let cr_pairs = _mm_unpackhi_epi8(p0, q0);
+
+            let mut out_cb = [[0u8; 2]; 8];
+            let mut out_cr = [[0u8; 2]; 8];
+            _mm_storeu_si128(out_cb.as_mut_ptr() as *mut __m128i, cb_pairs);
+            _mm_storeu_si128(out_cr.as_mut_ptr() as *mut __m128i, cr_pairs);
+
+            // Write back only the columns the filter can modify: the span read above is
+            // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
+            // the previous macroblock.
+            cb.set_block::<2, 8>(0, -1, &out_cb);
+            cr.set_block::<2, 8>(0, -1, &out_cr);
+        }
     } else {
         deblock_chroma_eq4_scalar(cb, cr, step_x, step_y, alpha, beta);
     }
@@ -1430,6 +1741,148 @@ mod tests {
             bs_calc(&cur_nzc, &cur_mv, left, top, inside, &mut bs_actual);
 
             assert_eq!(bs_actual, bs_expected, "bs_calc mismatch");
+        }
+    }
+
+    #[test]
+    fn test_transpose_16x8_roundtrip() {
+        let mut rows = [[0u8; 8]; 16];
+        for y in 0..16 {
+            for x in 0..8 {
+                rows[y][x] = (y * 13 + x * 7 + 42) as u8;
+            }
+        }
+        unsafe {
+            let r0 = _mm_set_epi64x(i64::from_ne_bytes(rows[8]), i64::from_ne_bytes(rows[0]));
+            let r1 = _mm_set_epi64x(i64::from_ne_bytes(rows[9]), i64::from_ne_bytes(rows[1]));
+            let r2 = _mm_set_epi64x(i64::from_ne_bytes(rows[10]), i64::from_ne_bytes(rows[2]));
+            let r3 = _mm_set_epi64x(i64::from_ne_bytes(rows[11]), i64::from_ne_bytes(rows[3]));
+            let r4 = _mm_set_epi64x(i64::from_ne_bytes(rows[12]), i64::from_ne_bytes(rows[4]));
+            let r5 = _mm_set_epi64x(i64::from_ne_bytes(rows[13]), i64::from_ne_bytes(rows[5]));
+            let r6 = _mm_set_epi64x(i64::from_ne_bytes(rows[14]), i64::from_ne_bytes(rows[6]));
+            let r7 = _mm_set_epi64x(i64::from_ne_bytes(rows[15]), i64::from_ne_bytes(rows[7]));
+
+            let (c0, c1, c2, c3, c4, c5, c6, c7) =
+                transpose_16x8_u8(r0, r1, r2, r3, r4, r5, r6, r7);
+
+            let cols = [c0, c1, c2, c3, c4, c5, c6, c7];
+            for x in 0..8 {
+                let mut col_arr = [0u8; 16];
+                _mm_storeu_si128(col_arr.as_mut_ptr() as *mut __m128i, cols[x]);
+                for y in 0..16 {
+                    assert_eq!(col_arr[y], rows[y][x], "mismatch at col {x}, row {y}");
+                }
+            }
+
+            let (r0_out, r1_out, r2_out, r3_out, r4_out, r5_out, r6_out, r7_out) =
+                transpose_16x8_u8(c0, c1, c2, c3, c4, c5, c6, c7);
+
+            let r_outs = [
+                r0_out, r1_out, r2_out, r3_out, r4_out, r5_out, r6_out, r7_out,
+            ];
+            for i in 0..8 {
+                let b_lo = (_mm_cvtsi128_si64(r_outs[i]) as u64).to_ne_bytes();
+                let b_hi = (_mm_cvtsi128_si64(_mm_srli_si128(r_outs[i], 8)) as u64).to_ne_bytes();
+                assert_eq!(b_lo, rows[i], "roundtrip mismatch at row {i}");
+                assert_eq!(b_hi, rows[i + 8], "roundtrip mismatch at row {}", i + 8);
+            }
+        }
+    }
+
+    #[test]
+    fn test_transpose_chroma_4x8() {
+        let mut cb_rows = [[0u8; 4]; 8];
+        let mut cr_rows = [[0u8; 4]; 8];
+        for y in 0..8 {
+            for x in 0..4 {
+                cb_rows[y][x] = (y * 5 + x * 3 + 10) as u8;
+                cr_rows[y][x] = (y * 9 + x * 11 + 50) as u8;
+            }
+        }
+        unsafe {
+            let r0 = _mm_setr_epi32(
+                u32::from_ne_bytes(cb_rows[0]) as i32,
+                u32::from_ne_bytes(cr_rows[0]) as i32,
+                0,
+                0,
+            );
+            let r1 = _mm_setr_epi32(
+                u32::from_ne_bytes(cb_rows[1]) as i32,
+                u32::from_ne_bytes(cr_rows[1]) as i32,
+                0,
+                0,
+            );
+            let r2 = _mm_setr_epi32(
+                u32::from_ne_bytes(cb_rows[2]) as i32,
+                u32::from_ne_bytes(cr_rows[2]) as i32,
+                0,
+                0,
+            );
+            let r3 = _mm_setr_epi32(
+                u32::from_ne_bytes(cb_rows[3]) as i32,
+                u32::from_ne_bytes(cr_rows[3]) as i32,
+                0,
+                0,
+            );
+            let r4 = _mm_setr_epi32(
+                u32::from_ne_bytes(cb_rows[4]) as i32,
+                u32::from_ne_bytes(cr_rows[4]) as i32,
+                0,
+                0,
+            );
+            let r5 = _mm_setr_epi32(
+                u32::from_ne_bytes(cb_rows[5]) as i32,
+                u32::from_ne_bytes(cr_rows[5]) as i32,
+                0,
+                0,
+            );
+            let r6 = _mm_setr_epi32(
+                u32::from_ne_bytes(cb_rows[6]) as i32,
+                u32::from_ne_bytes(cr_rows[6]) as i32,
+                0,
+                0,
+            );
+            let r7 = _mm_setr_epi32(
+                u32::from_ne_bytes(cb_rows[7]) as i32,
+                u32::from_ne_bytes(cr_rows[7]) as i32,
+                0,
+                0,
+            );
+
+            let (t0, t1, t2, t3) = transpose_chroma_4x8_u8(r0, r1, r2, r3, r4, r5, r6, r7);
+
+            let cols = [t0, t1, t2, t3];
+            for x in 0..4 {
+                let mut col_arr = [0u8; 16];
+                _mm_storeu_si128(col_arr.as_mut_ptr() as *mut __m128i, cols[x]);
+                for y in 0..8 {
+                    assert_eq!(col_arr[y], cb_rows[y][x], "cb mismatch at col {x}, row {y}");
+                    assert_eq!(
+                        col_arr[y + 8],
+                        cr_rows[y][x],
+                        "cr mismatch at col {x}, row {y}"
+                    );
+                }
+            }
+
+            let cb_pairs = _mm_unpacklo_epi8(t1, t2);
+            let cr_pairs = _mm_unpackhi_epi8(t1, t2);
+            let mut out_cb = [[0u8; 2]; 8];
+            let mut out_cr = [[0u8; 2]; 8];
+            _mm_storeu_si128(out_cb.as_mut_ptr() as *mut __m128i, cb_pairs);
+            _mm_storeu_si128(out_cr.as_mut_ptr() as *mut __m128i, cr_pairs);
+            for y in 0..8 {
+                assert_eq!(
+                    out_cb[y],
+                    [cb_rows[y][1], cb_rows[y][2]],
+                    "out_cb mismatch at row {y}"
+                );
+                assert_eq!(
+                    out_cr[y],
+                    [cr_rows[y][1], cr_rows[y][2]],
+                    "out_cr mismatch at row {y}"
+                );
+            }
         }
     }
 }
