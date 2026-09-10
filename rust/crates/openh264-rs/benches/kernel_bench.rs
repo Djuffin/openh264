@@ -1,32 +1,21 @@
 //! Per-kernel timing of the three implementations of each SIMD kernel: the scalar
-//! reference, the `core::arch` intrinsics for the host — `simd::x86_64` or
-//! `simd::aarch64` — and, when built with `--features wide`, the `wide`-crate kernels
-//! in `simd::wide`.
+//! reference, the `core::arch` intrinsics for the host (`simd::x86_64`, SSE2, or
+//! `simd::aarch64`, NEON) and, with `--features wide`, the `wide`-crate kernels in
+//! `simd::wide`.
 //!
-//! **Both SIMD columns are optional, and for the same reason.** The intrinsic module
-//! exists only on its own architecture and `simd::wide` does not exist without the
-//! feature, so a row carries whichever of the two this build has and the table prints
-//! `-` for the other. The `intrin` column is SSE2 on x86_64 and NEON on aarch64.
+//! Both SIMD columns are optional: a row carries whichever of the two this build has
+//! and the table prints `-` for the other.
 //!
-//! One process, one set of inputs, three closures per row. Every row is checked
-//! before it is timed: each implementation runs once on its own fresh copy of the
-//! inputs and the three checksums must agree, or the row is reported as a mismatch
-//! and the process exits non-zero. Timing is the best of `BENCH_REPEATS` blocks of
-//! calls, each block sized to run about `BENCH_BLOCK_MS` milliseconds, reported as
-//! nanoseconds per call. Best-of, because on a desktop the slow blocks are the
-//! scheduler and the fast ones are the kernel.
+//! Every row is checked before it is timed: each implementation runs once on its own
+//! fresh copy of the inputs and the three checksums must agree, or the row is reported
+//! as a mismatch and the process exits non-zero. Timing is the best of `BENCH_REPEATS`
+//! blocks of calls, each block sized to run about `BENCH_BLOCK_MS` milliseconds,
+//! reported as nanoseconds per call.
 //!
 //! The inputs are the shapes the encoder hands each kernel: 64-byte-stride planes of
 //! noise anchored off the alignment, coefficient blocks over the quantiser's real
 //! range, and for the deblocking filters a smooth gradient so the filter conditions
-//! hold on most lines (an all-noise plane takes the early-out on every line, which
-//! times the compare and nothing else).
-//!
-//! Run as:
-//!
-//! ```text
-//! cargo bench --bench kernel_bench --features wide
-//! ```
+//! hold on most lines — an all-noise plane takes the early-out on every line.
 //!
 //! Environment knobs: `BENCH_REPEATS` (default 7), `BENCH_BLOCK_MS` (default 20),
 //! `BENCH_FILTER=<substring>` to run only matching rows.
@@ -127,8 +116,7 @@ fn run3<S, I, W>(
     let c_scalar = scalar(true);
     let c_isa = intrinsics.as_mut().map(|i| i(true));
     let c_wide = wide.as_mut().map(|w| w(true));
-    // The scalar is the reference, so an absent column is vacuously consistent with
-    // it — never "equal to zero", which is what comparing the `Option`s would say.
+    // The scalar is the reference; an absent column is vacuously consistent with it.
     let consistent = c_isa.is_none_or(|c| c == c_scalar) && c_wide.is_none_or(|c| c == c_scalar);
     if !consistent {
         eprintln!(" MISMATCH {name}: scalar {c_scalar:#x} intrinsics {c_isa:x?} wide {c_wide:x?}");
@@ -359,9 +347,8 @@ fn sad_rows(rows: &mut Vec<Row>) {
 
 /// A whole picture per call, not a block: three 16x16 macroblocks across by three
 /// down at stride 64, which is the shape `CVAACalculation::Process` walks. The
-/// planes are exactly `vaa_span` bytes, so a kernel that over-reads panics in the
-/// bench too, and the checksum folds every output array together with the returned
-/// frame SAD — a kernel that gets `mad` or `sd` wrong cannot hide behind the SAD.
+/// planes are exactly `vaa_span` bytes, so an over-reading kernel panics here, and
+/// the checksum folds every output array together with the returned frame SAD.
 fn vaa_rows(rows: &mut Vec<Row>) {
     const W: i32 = 48;
     const H: i32 = 48;
@@ -412,9 +399,8 @@ fn vaa_rows(rows: &mut Vec<Row>) {
         }
     }
 
-    // One output set per column, allocated **once**: `Out::new` is six `Vec`s, and
-    // inside the timed closure those six allocations were most of what the row
-    // measured. The kernels overwrite every entry they touch, so reuse is exact.
+    // One output set per column, allocated once, so the row does not time `Out::new`'s
+    // six `Vec` allocations. The kernels overwrite every entry they touch.
     let (mut o0, mut o1) = (Out::new(mbs), Out::new(mbs));
     #[cfg(feature = "wide")]
     let mut o2 = Out::new(mbs);
@@ -718,10 +704,9 @@ fn mc_rows(rows: &mut Vec<Row>) {
             out_sum(&s2.out, c)
         }
     );
-    // The **zero motion vector**: every arm of `mc_luma`/`mc_chroma` falls through to
-    // `common::mc::mc_copy`, so all three columns time the same block copy and the
-    // row exists to say what that copy costs. The vector is `black_box`ed so the
-    // dispatch is not folded away — the encoder reaches it through a run-time value.
+    // Zero motion vector: every arm of `mc_luma`/`mc_chroma` falls through to
+    // `common::mc::mc_copy`, so all three columns time the same block copy. The vector
+    // is `black_box`ed so the dispatch is not folded away.
     row!(
         *rows,
         "mc luma (0,0) 16x16",
@@ -802,10 +787,10 @@ fn mc_rows(rows: &mut Vec<Row>) {
             out_sum(&s2.out, c)
         }
     );
-    // The same two over the **shared cell view**, which is the operand the encoder
-    // actually hands them: the reference picture is reached through the
-    // reconstruction seam, and a cell row cannot be lent as `&[u8]`. The rows above
-    // read a plain slice plane and are the cheaper half of the pair.
+    // The same two over the shared cell view, the operand the encoder hands them: the
+    // reference picture is reached through the reconstruction seam, and a cell row
+    // cannot be lent as `&[u8]`. The rows above read a plain slice plane and are the
+    // cheaper half of the pair.
     row!(
         *rows,
         "mc luma (0,0) 16x16 cells",
@@ -846,11 +831,10 @@ fn mc_rows(rows: &mut Vec<Row>) {
             out_sum(&s2.out, c)
         }
     );
-    // The **refinement shapes**, over the shared cell view: `MeRefineFracPixel` runs
-    // the two half-pel filters at `kiW + 1` by `kiH` and `kiW` by `kiH + 1` out of the
+    // The refinement shapes, over the shared cell view: `MeRefineFracPixel` runs the
+    // two half-pel filters at `kiW + 1` by `kiH` and `kiW` by `kiH + 1` out of the
     // reference picture, and averages the quarter-pel candidates against a block of
-    // it. These are the shapes and the operand the encoder actually spends its motion
-    // compensation in; the plain-plane rows above are the decoder's.
+    // it. The plain-plane rows above are the decoder's shapes.
     row!(
         *rows,
         "mc hor_ver20 17x16 cells",

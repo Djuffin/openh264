@@ -28,11 +28,10 @@
 
 //! # CABAC Macroblock Syntax Parsing Engine
 //!
-//! Translated from `codec/decoder/core/src/parse_mb_syn_cabac.cpp` and
+//! `codec/decoder/core/src/parse_mb_syn_cabac.cpp`,
 //! `codec/decoder/core/inc/parse_mb_syn_cabac.h`.
 //!
-//! Implements the macroblock and sub-macroblock layer entropy parsing algorithms for
-//! H.264 / AVC Context-Based Adaptive Binary Arithmetic Coding (CABAC), adhering strictly to
+//! Macroblock and sub-macroblock layer entropy parsing for CABAC, per
 //! ISO/IEC 14496-10 (ITU-T H.264) Section 7.3.5 and Section 9.3.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
@@ -648,7 +647,7 @@ pub fn WelsMedian(a: i16, b: i16, c: i16) -> i16 {
 }
 
 pub use crate::decoder::decoder_core::GetThreadCount;
-// Used by the B-slice motion-info branches ported from ParseInterBMotionInfoCabac.
+// Used by the B-slice motion-info branches in ParseInterBMotionInfoCabac.
 pub use crate::decoder::decode_slice::WELS_MIN;
 pub use crate::decoder::decode_slice::{
     SPartMbInfo, g_ksInterBSubMbTypeInfo, g_ksInterPSubMbTypeInfo,
@@ -1979,7 +1978,7 @@ pub fn ParseInterPMotionInfoCabac(
                 pNeighAvail,
                 pNonZeroCount,
                 pRefIndex,
-                // P slices have no direct cache; the C++ passes NULL here too.
+                // P slices have no direct cache.
                 None,
                 LIST_0 as i32,
                 iPartIdx,
@@ -2049,7 +2048,7 @@ pub fn ParseInterPMotionInfoCabac(
                     pNeighAvail,
                     pNonZeroCount,
                     pRefIndex,
-                    // P slices have no direct cache; the C++ passes NULL here too.
+                    // P slices have no direct cache.
                     None,
                     LIST_0 as i32,
                     iPartIdx,
@@ -2156,7 +2155,7 @@ pub fn ParseInterPMotionInfoCabac(
                     pNeighAvail,
                     pNonZeroCount,
                     pRefIndex,
-                    // P slices have no direct cache; the C++ passes NULL here too.
+                    // P slices have no direct cache.
                     None,
                     LIST_0 as i32,
                     iPartIdx,
@@ -2283,7 +2282,7 @@ pub fn ParseInterPMotionInfoCabac(
                     pNeighAvail,
                     pNonZeroCount,
                     pRefIndex,
-                    // P slices have no direct cache; the C++ passes NULL here too.
+                    // P slices have no direct cache.
                     None,
                     LIST_0 as i32,
                     iIdx8,
@@ -2456,8 +2455,8 @@ pub fn ParseInterBMotionInfoCabac(
     let pRefCount = pRefCountHdr;
     let mbType = *pDec.pMbType.get(iMbXy);
 
-    // C keeps pMv[4]/pMvd[4]: the 8x8 path duplicates the low pair into the high
-    // pair (`ST32 (pMv + 2, LD32 (pMv))`) so it can store 8 bytes at once.
+    // Four entries because the 8x8 path duplicates the low pair into the high pair,
+    // so it can store both blocks at once.
     let mut pMv = [0i16; 4];
     let mut pMvd = [0i16; 4];
     let mut iRef = [0i8; LIST_A];
@@ -2830,7 +2829,6 @@ pub fn ParseInterBMotionInfoCabac(
         // sub_mb_type, partition
         let mut pMvDirect = [[0i16; 2]; LIST_A];
         if pCtx.sRefPic.pRefList[LIST_1][0].is_none() {
-            // "Colocated Ref Picture for B-Slice is lost, B-Slice decoding cannot be continued!"
             return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REFERENCE_PIC_LOST);
         }
         let bIsLongRef = pRefs
@@ -2852,7 +2850,7 @@ pub fn ParseInterBMotionInfoCabac(
             pSubPartCount[i] = g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iPartCount;
             pPartW[i] = g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iPartWidth;
 
-            // Need modification when B picture add in, reference to 7.3.5
+            // 7.3.5
             if pSubPartCount[i] > 1 {
                 *pCurDqLayer
                     .grid
@@ -2905,13 +2903,11 @@ pub fn ParseInterBMotionInfoCabac(
 
         let pSubMbType = *pCurDqLayer.grid.sub_mb_type.get(iMbXy);
 
-        // Fix relative to 2.6.0, mirroring `parse_mb_syn_cabac.cpp:950`: the reference indices of
-        // a temporal direct sub-macroblock used to reach the MV-prediction cache in the loop
-        // below, before the non-direct sub-macroblocks were predicted, so a direct sub-macroblock
-        // that is not yet decoded became an available neighbour C for them. 6.4.11.7 / 8.4.1.3.2
-        // declare a partition that follows the current one in decoding order unavailable, which
-        // the cache implements by pre-marking those cells REF_NOT_AVAIL. Record the refs here and
-        // write them at the sub-macroblock's turn in the mv loop, as the spatial path already does.
+        // 6.4.11.7 / 8.4.1.3.2 declare a partition that follows the current one in decoding
+        // order unavailable, which the cache implements by pre-marking those cells
+        // REF_NOT_AVAIL. Temporal direct refs are recorded here and written at the
+        // sub-macroblock's turn in the mv loop, as the spatial path does, so that a
+        // not-yet-decoded direct sub-macroblock never becomes an available neighbour C.
         let mut ref_idx_list = [[REF_NOT_IN_LIST; 4]; LIST_A];
 
         for i in 0..4usize {
@@ -3335,9 +3331,8 @@ pub fn ParseDeltaQpCabac(
     ERR_NONE
 }
 
-/// `mb_type` is `(*pDec).pMbType`, the **picture's** family, not `grid.mb_type`:
-/// the two paths coexist in this decoder and the residual chain reads the
-/// picture's.
+/// `mb_type` is `(*pDec).pMbType`, the picture's family, not `grid.mb_type`: the
+/// residual chain reads the picture's.
 pub fn ParseCbfInfoCabac(
     pNeighAvail: &SWelsNeighAvail,
     pNzcCache: &[u8; 48],

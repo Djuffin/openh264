@@ -1,9 +1,9 @@
 //! Intra prediction — `WelsI16x16LumaPred*_AArch64_neon`, `WelsIChromaPred*_AArch64_neon`
 //! and `WelsI4x4LumaPred*_AArch64_neon` in `codec/common/arm64/intra_pred_common_aarch64_neon.S`
-//! and `codec/encoder/core/arm64/intra_pred_aarch64_neon.S`, whose decoder twins in
+//! and `codec/encoder/core/arm64/intra_pred_aarch64_neon.S`. The decoder twins in
 //! `codec/decoder/core/arm64/intra_pred_aarch64_neon.S` are the same bodies writing
-//! back through the stride they read from — which is what the `PredOut` seam below
-//! is, so each predictor is written once here too.
+//! back through the stride they read from — the `PredOut` seam below — so each
+//! predictor is written once.
 //!
 //! # What is vectorised
 //!
@@ -14,12 +14,11 @@
 //! `uaddl`, `uqrshrn` sequences on one eight-byte neighbour line, with the rows read
 //! back out of the result at the offsets the asm stores from.
 //!
-//! Upstream has no arm64 `DDR` — on arm64 it stays C — so `enc_i4x4_luma_pred_ddr`
-//! is written here in the idiom of its `HD` and `VR` neighbours: the nine-sample line
-//! `l3 .. lt .. t3`, one three-tap pass, four rows at `ext` offsets. Nor has it `V`
-//! predictors at any size, a `DC_128` fill, or a 4x4 `H`: those are broadcasts and
-//! fills, and `every_kernel_here_reaches_an_intrinsic` lists them as scalar by
-//! design.
+//! Upstream has no arm64 `DDR`, so `enc_i4x4_luma_pred_ddr` follows the idiom of its
+//! `HD` and `VR` neighbours: the nine-sample line `l3 .. lt .. t3`, one three-tap pass,
+//! four rows at `ext` offsets. Nor has it `V` predictors at any size, a `DC_128` fill,
+//! or a 4x4 `H`: those are broadcasts and fills, and
+//! `every_kernel_here_reaches_an_intrinsic` lists them as scalar by design.
 #![allow(unsafe_code)]
 
 use core::arch::aarch64::*;
@@ -927,15 +926,13 @@ mod tests {
         assert_dec_parity("4x4 DC", dec::i4x4_luma_pred_dc, dec_i4x4_luma_pred_dc);
     }
 
-    /// **The naming rule, enforced.** Every public kernel here reaches at least one
-    /// NEON intrinsic — in its own body or in a function it calls — unless it is one
-    /// of the fills listed below as scalar by design. The x86_64 file explains why
-    /// this is a test and not a review habit: a refactor emptied five kernels of
-    /// their intrinsics there without touching their names.
+    /// Every public kernel here reaches at least one NEON intrinsic — in its own body
+    /// or in a function it calls — unless it is one of the fills listed below as scalar
+    /// by design.
     #[test]
     fn every_kernel_here_reaches_an_intrinsic() {
         /// The broadcasts and fills: a V fill is a row copy, an H fill a byte splat,
-        /// `DC_128` a constant. Upstream keeps most of these in C on arm64 too.
+        /// `DC_128` a constant.
         const SCALAR_BY_DESIGN: [&str; 13] = [
             "enc_i16x16_luma_pred_v",
             "dec_i16x16_luma_pred_v",

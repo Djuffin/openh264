@@ -1,21 +1,15 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-//! Port of `codec/processing/src/denoise/` — the plugin reached through
-//! `METHOD_DENOISE`, behind `bEnableDenoise`.
+//! `codec/processing/src/denoise/` — the plugin reached through `METHOD_DENOISE`,
+//! behind `bEnableDenoise`.
 //!
 //! `CWelsPreProcess::SingleLayerPreprocess` (`wels_preprocess.cpp:394`) runs it on
 //! the source picture, **in place**, before any downsampling or padding — so every
 //! spatial layer of the frame is built from the denoised samples.
 //!
-//! `CDenoiser::InitDenoiseFunc` (`denoise.cpp:55`) has exactly one non-scalar arm
-//! and it is `#if defined(X86_ASM)`; there is no NEON denoise anywhere in the tree.
-//!
-//! Every filter here is sequential in a way that matters: the row above the one
-//! being filtered has already been overwritten by the previous iteration, and
-//! within a group of eight the current row's earlier pixels have not. The C++ gets
-//! that by accumulating into a local `aSample[8]` and `memcpy`-ing it back after the
-//! group; this port does the same with an array and a slice write, for the same
-//! reason and with the same visible ordering.
+//! Filtering order is visible in the output: the row above the one being filtered has
+//! already been overwritten, while within a group of eight the current row's earlier
+//! pixels have not — each group accumulates into an array written back afterwards.
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -40,21 +34,19 @@ const DENOISE_ALL_COMPONENT: u16 = 7;
 /// group's first pixel; the window reaches one row back and one column left, which
 /// is why `BilateralDenoiseLuma` starts at `(radius, radius)`.
 ///
-/// The eight results are written only after all eight are computed — the C++'s
-/// `aSample[8]` plus `WelsMemcpy`. Removing that buffer would let pixel `i`'s window
-/// see pixel `i-1`'s *filtered* value and change the output.
+/// The eight results are written only after all eight are computed; otherwise pixel
+/// `i`'s window would see pixel `i-1`'s *filtered* value and change the output.
 fn BilateralLumaFilter8(plane: &mut [u8], stride: usize, center: usize) {
     let mut aSample = [0u8; 8];
     for i in 0..8 {
         let mut nSum: i32 = 0;
         let mut nTotWeight: i32 = 0;
         let iCenterSample = plane[center + i] as i32;
-        // `pCurLine = pSample - iStride - DENOISE_GRAY_RADIUS`, recomputed per pixel.
         let base = center + i - stride - DENOISE_GRAY_RADIUS;
         for y in 0..3usize {
             for x in 0..3usize {
                 if x == 1 && y == 1 {
-                    continue; // except center point
+                    continue;
                 }
                 let iCurSample = plane[base + y * stride + x] as i32;
                 let iCurWeight = (iCurSample - iCenterSample).abs();
@@ -154,8 +146,8 @@ fn BilateralDenoiseLuma(plane: &mut [u8], iWidth: usize, iHeight: usize, stride:
     for h in r..iHeight - r {
         let row = h * stride;
         let mut w = r;
-        // `w < iWidth - radius - TAIL_OF_LINE8` — done in `usize` without the
-        // subtraction, which would wrap for a picture narrower than the tail.
+        // `w < iWidth - radius - TAIL_OF_LINE8`, rearranged so the `usize` subtraction
+        // cannot wrap for a picture narrower than the tail.
         while w + r + TAIL_OF_LINE8 < iWidth {
             BilateralLumaFilter8(plane, stride, row + w);
             w += 8;
@@ -188,10 +180,8 @@ fn WaverageDenoiseChroma(plane: &mut [u8], iWidth: usize, iHeight: usize, stride
     }
 }
 
-/// `CDenoiser` — `denoise.h:80`. One field, and it is a constant in practice: the
-/// constructor sets `m_uiType = DENOISE_ALL_COMPONENT` and nothing ever calls `Set`
-/// on this plugin, so all three components are always filtered. Kept as a field
-/// anyway because `Process`'s three arms read it.
+/// `CDenoiser` — `denoise.h:80`. `m_uiType` selects which components to filter; it is
+/// `DENOISE_ALL_COMPONENT` in practice, so all three are always filtered.
 pub struct CDenoiser {
     pub m_uiType: u16,
 }
@@ -206,10 +196,8 @@ impl Default for CDenoiser {
 }
 
 /// The three planes of the picture being denoised, as slices from their logical
-/// origins, with the strides that go with them.
-///
-/// `CWelsPreProcess` builds this from `SPicture::plane_mut(i)`, which *is* the
-/// padded allocation.
+/// origins, with the strides that go with them. `CWelsPreProcess` builds them from
+/// `SPicture::plane_mut(i)`, the padded allocation.
 pub struct DenoisePlanes<'a> {
     pub y: &'a mut [u8],
     pub u: &'a mut [u8],
@@ -218,20 +206,14 @@ pub struct DenoisePlanes<'a> {
 }
 
 impl CDenoiser {
-    /// `CDenoiser::Process` — `denoise.cpp:66`. The plugin method, kept so this
-    /// object has the same surface as its four siblings in `SWelsVpContext`.
-    ///
-    /// [`Denoise`] is the body.
+    /// `CDenoiser::Process` — `denoise.cpp:66`. [`Denoise`] is the body.
     pub fn Process(&mut self, pSrc: &SPixMap, planes: &mut DenoisePlanes<'_>) -> i32 {
         Denoise(self.m_uiType, pSrc, planes)
     }
 }
 
-/// `CDenoiser::Process`'s body — `denoise.cpp:66`.
-///
-/// The C++ takes `(iType, pSrc, dst)` and ignores `dst` entirely: denoising is in
-/// place. The `pSrcY == NULL || pSrcU == NULL || pSrcV == NULL` guard becomes the
-/// empty-plane test, which is the same "nothing here" the null meant.
+/// `CDenoiser::Process`'s body — `denoise.cpp:66`. Denoising is in place; an empty
+/// plane or a non-positive rectangle yields `RET_INVALIDPARAM`.
 pub fn Denoise(m_uiType: u16, pSrc: &SPixMap, planes: &mut DenoisePlanes<'_>) -> i32 {
     if planes.y.is_empty() || planes.u.is_empty() || planes.v.is_empty() {
         return RET_INVALIDPARAM;
@@ -279,9 +261,9 @@ mod tests {
         assert_eq!(p[stride + 1], ((160u32 * 4) >> 4) as u8);
     }
 
-    /// `BilateralLumaFilter8`'s whole point: with every neighbour equal to the
-    /// centre, all eight weights are `(32*32)>>5 = 32`, `nTotWeight` reaches 256 and
-    /// the centre's own weight falls to zero — the output is still the input.
+    /// With every neighbour equal to the centre, all eight weights are `(32*32)>>5 = 32`,
+    /// `nTotWeight` reaches 256 and the centre's own weight falls to zero, so the output
+    /// equals the input.
     #[test]
     fn bilateral_is_a_fixed_point_on_a_flat_field() {
         let stride = 16;
@@ -290,17 +272,13 @@ mod tests {
         assert!(p[stride + 1..stride + 9].iter().all(|&v| v == 77));
     }
 
-    /// The group buffer is not an optimisation, it is the semantics: pixel `i`'s
-    /// window must see pixel `i-1`'s **original** value. Running the same eight
-    /// pixels one at a time gives a different answer, and this pins that they differ
-    /// — so a later "simplification" that drops `aSample` fails here rather than in
-    /// a golden hash.
+    /// Pixel `i`'s window must see pixel `i-1`'s **original** value: filtering the same
+    /// eight pixels one at a time gives a different answer.
     #[test]
     fn group_of_eight_reads_pre_filter_values() {
         let stride = 16;
-        // Small variations on purpose: neighbours must be within the filter's
-        // 32-level reach, or every weight is zero, the output equals the input, and
-        // the two orders agree trivially.
+        // Neighbours must stay within the filter's 32-level reach, or every weight is
+        // zero, the output equals the input, and the two orders agree trivially.
         let mut ramp = vec![0u8; stride * 4];
         for (i, v) in ramp.iter_mut().enumerate() {
             *v = (100 + (i * 13) % 17) as u8;

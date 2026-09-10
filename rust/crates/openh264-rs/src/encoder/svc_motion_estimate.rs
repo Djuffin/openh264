@@ -28,9 +28,6 @@
 
 //! # Motion Estimation (ME) Engine
 //!
-//! Translated from `codec/encoder/core/inc/svc_motion_estimate.h` and
-//! `codec/encoder/core/src/svc_motion_estimate.cpp`.
-//!
 //! Implements multi-candidate initial point testing, small diamond search (`ME_DIA`),
 //! 1D orthogonal cross line full search (`ME_CROSS`), and hash-based feature search (`ME_FME`)
 //! for screen content coding and real-time H.264 / AVC video encoding.
@@ -233,7 +230,7 @@ pub use crate::encoder::md::PSampleSadSatdCostFunc;
 
 /// `PSample4SadCostFunc` — the four-candidate SAD the diamond search steps with:
 /// `sample1`'s block against `sample2`'s at each whole-sample neighbour, written to
-/// `sad[0..4]` in the order **up, down, left, right**
+/// `sad[0..4]` in the order up, down, left, right
 /// (`common/sad_common.rs::sample_sad_four::<W, H>`).
 pub type PSample4SadCostFunc = fn(&RecCursor<'_>, &RecCursor<'_>, &mut [i32; 4]);
 
@@ -471,8 +468,7 @@ pub fn WelsMotionEstimateSearch(
         let kiX = pMe.iCurMeBlockPixX as isize;
         let kiY = pMe.iCurMeBlockPixY as isize;
         let cEnc = pEncPlane.cursor(kiX, kiY);
-        // Entry state: the reference position is colocated (mv not yet
-        // searched).
+        // Entry state: the reference position is colocated (mv not yet searched).
         let cRef = pRefPlane.cursor(kiX, kiY);
         let mut enc = String::new();
         let mut rf = String::new();
@@ -817,8 +813,7 @@ pub fn WelsDiamondSearch(
                 continue;
             }
 
-            // The centre of this iteration's probe: colo + the current
-            // integer MV.
+            // The centre of this iteration's probe: colo + the current integer MV.
             let kiRx = kiX + pMe.sMv.iMvX as isize;
             let kiRy = kiY + pMe.sMv.iMvY as isize;
 
@@ -1100,8 +1095,7 @@ pub fn SetMeMethod(uiMethod: u32, pSearchMethodFunc: &mut Option<PSearchMethodFu
             *pSearchMethodFunc = Some(WelsDiamondCrossFeatureSearch);
             true
         }
-        // `ME_FULL` and the C++'s `default:` arm — one match arm because the two
-        // C++ cases have identical bodies (`WelsDiamondSearch`, `return false`).
+        // `ME_FULL` and every unknown value.
         _ => {
             *pSearchMethodFunc = Some(WelsDiamondSearch);
             false
@@ -1127,14 +1121,9 @@ pub fn sum_of_8x8_single_block(cRef: &RecCursor<'_>) -> i32 {
 
 /// As [`sum_of_8x8_single_block`], 16x16.
 ///
-/// `pfCalculateSingleBlockFeature[1]` is selected only for a
-/// `BLOCK_16x16` feature search, and `encoder_ext.cpp:1030-1031` fixes
-/// `kiMe16x16 = ME_DIA_CROSS` (no `ME_FME` bit) against
-/// `kiMe8x8 = ME_DIA_CROSS_FME`, so `SetMeMethod` puts the feature search in
-/// `pfSearchMethod[BLOCK_8x8]` and never in `[BLOCK_16x16]`. The same pair of
-/// constants makes `bIsBlock8x8` always true in `AllocPicture`, hence
-/// `iIs16x16 == 0` on every storage and `pfCalculateBlockFeatureOfFrame[1]`
-/// (`SumOf16x16BlockOfFrame_c`) unreachable with it.
+/// `pfCalculateSingleBlockFeature[1]` is reached only by a `BLOCK_16x16` feature
+/// search, which `encoder_ext.cpp:1030-1031` never configures: `kiMe16x16` carries no
+/// `ME_FME` bit, so the feature search lands in `pfSearchMethod[BLOCK_8x8]`.
 pub fn sum_of_16x16_single_block(cRef: &RecCursor<'_>) -> i32 {
     let mut iSum = 0i32;
     for y in 0..16 {
@@ -1195,7 +1184,6 @@ pub fn SumOf8x8BlockOfFrame_c(
 ) {
     for y in 0..kiHeight {
         let row = (kiWidth * y) as usize;
-        // The row base is `kiRefStride * y`, and each block starts `x` bytes into it.
         let kiRowBase = (kiRefStride * y) as usize;
         for x in 0..kiWidth {
             let iSum = SumOf8x8SingleBlock_c(&kpRefPicture[kiRowBase + x as usize..], kiRefStride);
@@ -1215,7 +1203,6 @@ pub fn SumOf16x16BlockOfFrame_c(
 ) {
     for y in 0..kiHeight {
         let row = (kiWidth * y) as usize;
-        // The row base is `kiRefStride * y`, and each block starts `x` bytes into it.
         let kiRowBase = (kiRefStride * y) as usize;
         for x in 0..kiWidth {
             let iSum =
@@ -1233,8 +1220,8 @@ pub fn InitializeHashforFeature_c(
     pFeatureValuePointerList: &mut [usize],
 ) {
     // `pBufPos` is the running offset into the arena, laying each feature value's
-    // group base and giving that value's write cursor the same start —
-    // `times << 1` per value because each position is an (x, y) pair.
+    // group base and its write cursor at the same start — `times << 1` per value,
+    // each position being an (x, y) pair.
     let mut pBufPos = 0usize;
     for i in 0..kiListSize as usize {
         pLocationOfFeature[i] = pBufPos;
@@ -1268,10 +1255,8 @@ pub fn FillQpelLocationByFeatureValue_c(
     }
 }
 
-/// The three dispatch slots `CalculateFeatureOfBlock` reads, copied out of the
-/// table so the caller can hold the reference picture and the table apart (they
-/// are `Copy` fn pointers; the caller in `PreprocessSliceCoding` needs the table
-/// `&mut` at the same time as the reference list).
+/// The three dispatch slots `CalculateFeatureOfBlock` reads, copied out of the table
+/// so the caller can hold the table and the reference list borrowed at once.
 #[derive(Clone, Copy)]
 pub struct FmeKernels {
     pub calc_frame: [Option<PCalculateBlockFeatureOfFrame>; 2],
@@ -1294,24 +1279,17 @@ impl FmeKernels {
 /// `CalculateFeatureOfBlock` — `svc_motion_estimate.cpp:843-878`.
 ///
 /// `pFeatureOfBlock` is the layer's scratch
-/// (`SFeatureSearchPreparation::pFeatureOfBlock`), which the C++ reaches through
-/// the address `PerformFMEPreprocess` stored in the storage; it arrives as a slice.
-/// `storage` is a separate parameter, not reached through `pRef`, on purpose:
-/// the caller takes the box out of the reference picture (`Option::take`), runs
-/// this with the picture's planes, and puts it back — the only way the picture's
-/// plane and its own storage can be borrowed together without a split accessor.
-/// Under LTR the planes come from a different picture anyway (`pRefOri[0]`). `pRef`
-/// supplies what the C++ reads off it: `pData[0]`/`iLineSize[0]` (`plane(0)`,
-/// `stride(0)`), `iWidthInPixel`, `iHeightInPixel`.
+/// (`SFeatureSearchPreparation::pFeatureOfBlock`). The storage arrives as its own
+/// parameter rather than through `pRef`: the caller takes the box out of the reference
+/// picture, runs this with the picture's planes, and puts it back, so the plane and
+/// the storage can be borrowed together. Under LTR the planes come from a different
+/// picture (`pRefOri[0]`).
 pub fn CalculateFeatureOfBlock(
     kernels: &FmeKernels,
     pRef: &SPicture,
     pFeatureOfBlock: &mut [u16],
     pScreenBlockFeatureStorage: &mut SScreenBlockFeatureStorage,
 ) -> bool {
-    // The C++'s fifth arm, `NULL == pRef->pData[0]`, has no subject: a
-    // pool picture always has its three planes (`SPicture::new` builds them), so
-    // there is nothing to test.
     let SScreenBlockFeatureStorage {
         pTimesOfFeatureValue,
         pLocationOfFeature,
@@ -1321,9 +1299,8 @@ pub fn CalculateFeatureOfBlock(
         iActualListSize: kiActualListSize,
         ..
     } = pScreenBlockFeatureStorage;
-    // Destructured, not field-by-field: the three dispatch calls below need two or
-    // three of these buffers borrowed at once, and a `&mut` per field through the
-    // struct would be a fresh whole-struct claim each time.
+    // Destructured because the dispatch calls below need several of these buffers
+    // borrowed at once.
 
     if pFeatureOfBlock.is_empty()
         || pTimesOfFeatureValue.is_empty()
@@ -1339,8 +1316,6 @@ pub fn CalculateFeatureOfBlock(
     let iWidth = pRef.iWidthInPixel - iEdgeDiscard;
     let kiHeight = pRef.iHeightInPixel - iEdgeDiscard;
 
-    // `write_bytes(.., 0, kiActualListSize * size_of::<u32>())` — the same
-    // `kiActualListSize` prefix, zeroed elementwise.
     pTimesOfFeatureValue[..kiActualListSize as usize].fill(0);
 
     if let Some(calc_frame_feature) = kernels.calc_frame[iIs16x16] {
@@ -1503,9 +1478,8 @@ pub fn FeatureSearchOne(
     let iMaxQpelY = sFeatureSearchIn.iMaxQpelY;
 
     {
-        // `times` is the histogram entry for this feature value and
-        // `pQpelPosition` the group's offset in the arena, which the walk below
-        // adds to.
+        // `times` is the histogram entry for this feature value; `pQpelPosition` the
+        // group's offset in the arena, which the walk below adds to.
         let times = sFeatureSearchIn.pTimesOfFeature[iFeatureOfRef as usize];
         let iSearchTimes = times.min(kuiExpectedSearchTimes) as i32;
         let iSearchTimesx2 = iSearchTimes << 1;
@@ -1602,23 +1576,17 @@ pub fn MotionEstimateFeatureFullSearch(
 // Adaptive FME Switch Management
 // ============================================================================
 
-/// `CountFMECostDown` — `svc_motion_estimate.cpp:1027-1041`: the sum of every
-/// coded slice's `uiSliceFMECostDown`.
-///
-/// `&mut` where the C++ takes `const SDqLayer*`, and nothing here is written:
-/// the slice-bank family has only exclusive accessors. The C++'s dead first
-/// `pSlice` read (`:1031`) has no subject — the loop overwrites it before any
-/// use.
+/// `CountFMECostDown` — `svc_motion_estimate.cpp:1027-1041`: the sum of every coded
+/// slice's `uiSliceFMECostDown`. Takes `&mut` because the slice-bank accessors are
+/// exclusive; nothing here is written.
 fn CountFMECostDown(pCurLayer: &mut SDqLayer) -> u32 {
     let kiSliceCount = GetCurrentSliceNum(pCurLayer);
     let mut uiCostDownSum: u32 = 0;
     if kiSliceCount >= 1 {
         for iSliceIndex in 0..kiSliceCount {
             if let Some(pSlice) = slice_in_layer_mut(pCurLayer, iSliceIndex) {
-                // `uint32_t +=`: the C++ wraps, so this does. `uiSliceFMECostDown`
-                // is itself a wrapping `+=`/`-=` pair in
-                // `WelsDiamondCrossFeatureSearch`, and **nothing ever resets it** —
-                // it accumulates for the life of the slice object.
+                // Wrapping: `uiSliceFMECostDown` is itself accumulated with wrapping
+                // `+=`/`-=` and never reset, so it runs for the slice's lifetime.
                 uiCostDownSum = uiCostDownSum.wrapping_add(pSlice.uiSliceFMECostDown);
             }
         }
@@ -1627,9 +1595,8 @@ fn CountFMECostDown(pCurLayer: &mut SDqLayer) -> u32 {
 }
 
 /// `UpdateFMEGoodFrameCount` — `svc_motion_estimate.cpp:1043-1052`.
-/// `uiFMEGoodFrameCount` lies in `[0, FMESWITCH_GOODFRAMECOUNT_MAX]`, which is
-/// what the two guards are for; neither `+= 1` nor `-= 1` can overflow behind
-/// them, so they are plain arithmetic here as in the C++.
+/// `uiFMEGoodFrameCount` stays in `[0, FMESWITCH_GOODFRAMECOUNT_MAX]`; the two guards
+/// are what keep the `+= 1` / `-= 1` from overflowing.
 fn UpdateFMEGoodFrameCount(iAvMBNormalizedRDcostDown: u32, uiFMEGoodFrameCount: &mut u8) {
     //this strategy may be changed, here the number is derived from empirical-numbers
     if iAvMBNormalizedRDcostDown > FMESWITCH_MBAVERCOSTSAVING_THRESHOLD {
@@ -1644,14 +1611,11 @@ fn UpdateFMEGoodFrameCount(iAvMBNormalizedRDcostDown: u32, uiFMEGoodFrameCount: 
 /// `UpdateFMESwitch` — `svc_motion_estimate.cpp:1054-1058`. Called through
 /// `pfUpdateFMESwitch` after the fork joins, on the frame thread.
 ///
-/// `kiMbNum` is never zero on any path that installs this — the layer's
-/// macroblock grid is sized in `InitDqLayers`, before any slice is coded — so
-/// the division mirrors the C++'s, which would be undefined at zero.
+/// `kiMbNum` is never zero on any path that installs this: the layer's macroblock
+/// grid is sized in `InitDqLayers`, before any slice is coded.
 pub fn UpdateFMESwitch(pCurLayer: &mut SDqLayer) {
     let iFMECost = CountFMECostDown(pCurLayer);
-    // The C++ multiplies two `int32_t`s and divides a `uint32_t` by the product,
-    // so the division is unsigned. `iMbWidth`/`iMbHeight` are `int16_t` here and
-    // both are positive, so the product is the same number.
+    // The division is unsigned; `iMbWidth` and `iMbHeight` are both positive.
     let kiMbNum = (pCurLayer.iMbWidth as i32 * pCurLayer.iMbHeight as i32) as u32;
     let iAvMBNormalizedRDcostDown = iFMECost / kiMbNum;
     if let Some(prep) = pCurLayer.pFeatureSearchPreparation.as_deref_mut() {
@@ -1659,8 +1623,7 @@ pub fn UpdateFMESwitch(pCurLayer: &mut SDqLayer) {
     }
 }
 
-/// Intentional no-op motion estimation FME switch callback.
-/// Matches `void UpdateFMESwitchNull (SDqLayer* pCurLayer)` in `svc_motion_estimate.cpp:1059`.
+/// No-op FME switch callback — `svc_motion_estimate.cpp:1059`.
 pub fn UpdateFMESwitchNull(_pCurLayer: &mut SDqLayer) {}
 
 // ============================================================================
@@ -1670,11 +1633,8 @@ pub fn UpdateFMESwitchNull(_pCurLayer: &mut SDqLayer) {}
 /// `SFeatureSearchPreparation` — `svc_enc_frame.h:59-69`. One per encoder, on the
 /// last DQ layer (`encoder_ext.cpp:1125-1135`), screen content only.
 ///
-/// `pRefBlockFeature` is not carried: the C++ writes it (`encoder_ext.cpp:2743`)
-/// and nothing reads it. `pFeatureOfBlock` is the per-frame scratch that every
-/// reference's `CalculateFeatureOfBlock` fills — the C++ stores its
-/// *address* into the reference's storage (`pFeatureOfBlockPointer`) and reads it
-/// back only inside that function; here it travels as `&mut [u16]` at the call.
+/// `pFeatureOfBlock` is the per-frame scratch every reference's
+/// `CalculateFeatureOfBlock` fills; it travels as `&mut [u16]` at the call.
 #[derive(Debug)]
 pub struct SFeatureSearchPreparation {
     /// Feature of every block (8x8), begin with the point — `svc_enc_frame.h:62`.
@@ -1688,18 +1648,15 @@ pub struct SFeatureSearchPreparation {
 }
 
 impl SFeatureSearchPreparation {
-    /// `RequestFeatureSearchPreparation` — `svc_motion_estimate.cpp:648-672`, with
-    /// the `WelsMallocz` as a `Vec`.
+    /// `RequestFeatureSearchPreparation` — `svc_motion_estimate.cpp:648-672`.
     pub fn new(kiFrameWidth: i32, kiFrameHeight: i32, iNeedFeatureStorage: i32) -> Self {
         let kiFeatureStrategyIndex = (iNeedFeatureStorage >> 16) as u8;
         let bFme8x8 = (iNeedFeatureStorage & 0x0000FF & ME_FME as i32) == ME_FME as i32;
         let kiMarginSize = if bFme8x8 { 8 } else { 16 };
         let w = (kiFrameWidth - kiMarginSize).max(0) as usize;
         let h = (kiFrameHeight - kiMarginSize).max(0) as usize;
-        // The C++ sizes in bytes: `sizeof(uint16_t) * kiFrameSize` for strategy 0,
-        // plus `(kiFrameWidth - kiMarginSize) * sizeof(uint32_t) + kiFrameWidth * 8`
-        // for any other strategy (never taken: `FME_DEFAULT_FEATURE_INDEX` is 0).
-        // Same lengths, in `u16`s.
+        // Lengths in `u16`s. The second arm is never taken:
+        // `FME_DEFAULT_FEATURE_INDEX` is 0.
         let len = if kiFeatureStrategyIndex == 0 {
             w * h
         } else {
@@ -1797,12 +1754,11 @@ mod tests {
 
     /// The arena's three structural invariants:
     ///
-    /// 1. the histogram sums to the number of block positions — every block counted once;
-    /// 2. each value's write cursor ends exactly `2 * times[value]` past its base —
-    ///    the groups tile the arena with no overlap and no gap, which is what
-    ///    `InitializeHashforFeature_c`'s running offset and
-    ///    `FillQpelLocationByFeatureValue_c`'s `+ 2` advance have to agree on;
-    /// 3. every written position is inside the arena and inside the frame, in qpel units.
+    /// 1. the histogram sums to the number of block positions;
+    /// 2. each value's write cursor ends exactly `2 * times[value]` past its base, so
+    ///    the groups tile the arena with no overlap and no gap;
+    /// 3. every written position is inside the arena and inside the frame, in qpel
+    ///    units.
     #[test]
     fn feature_storage_arena_invariants_hold_over_a_synthetic_frame() {
         const W: i32 = 48;
@@ -1827,7 +1783,6 @@ mod tests {
         let bw = (W - MARGIN) as usize;
         let bh = (H - MARGIN) as usize;
         let mut storage = SScreenBlockFeatureStorage::for_frame(W, H, true, 0);
-        // The layer's scratch, passed through rather than aliased.
         let mut feature_of_block = vec![0u16; bw * bh];
 
         assert!(CalculateFeatureOfBlock(
@@ -1957,9 +1912,8 @@ mod tests {
             WelsDiamondCrossFeatureSearch as PSearchMethodFunc
         ));
 
-        // The two `false` cases: `ME_FULL`, and anything else. Both still fill
-        // the slot — with the diamond search — which is why the C++'s callers
-        // only log a warning.
+        // The two `false` cases: `ME_FULL`, and anything else. Both still fill the
+        // slot, with the diamond search.
         slot = None;
         assert!(!SetMeMethod(ME_FULL, &mut slot));
         assert!(eq(&slot, WelsDiamondSearch as PSearchMethodFunc));

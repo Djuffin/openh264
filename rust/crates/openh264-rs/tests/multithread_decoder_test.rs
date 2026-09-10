@@ -1,5 +1,5 @@
 //! Integration test for multithreaded decoding stability and thread isolation.
-//! Ported from `test/api/thread_decoder_test.cpp`.
+//! C++: `test/api/thread_decoder_test.cpp`.
 
 use openh264_rs::api::codec_api::*;
 

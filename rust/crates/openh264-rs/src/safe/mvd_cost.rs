@@ -3,37 +3,27 @@
 //! The MVD-cost cursor — [`MvdCostCursor`], the safe stand-in for the encoder's
 //! `uint16_t*` into `pCtx->pMvdCostTable`.
 //!
-//! # Why this is not a plain slice
+//! # Not a plain slice
 //!
-//! `COST_MVD` indexes the table with a **signed** motion-vector difference:
-//! `p[iMvdX] + p[iMvdY]`, either operand of either sign. The C++ therefore parks
-//! the pointer in the *middle* of a table row and lets the reads run in both
-//! directions from it. A `&[u16]` cannot stand in for such a pointer on its own —
-//! a slice's index 0 is its first element, and there is no negative side of it.
+//! `COST_MVD` indexes the table with a *signed* motion-vector difference:
+//! `p[iMvdX] + p[iMvdY]`, either operand of either sign, so the pointer is parked in the
+//! middle of a table row and the reads run in both directions from it. A `&[u16]` cannot
+//! stand in for that — its index 0 is its first element — but the pair can: the table,
+//! plus the index of the element the pointer pointed at. `at(mvd)` is `p[mvd]`.
 //!
-//! What can stand in is the pair: the table, plus the index of the element the
-//! pointer pointed at. That is this type, and `at(mvd)` is `p[mvd]`.
+//! # The whole table, not the row
 //!
-//! # Why the whole table and not the row
+//! `table` is the entire `pMvdCostTable` allocation, never the single QP row the cursor
+//! sits in, so an index that strays out of its row reads the neighbouring row exactly as
+//! the raw pointer did, and only an index that leaves the *allocation* panics.
 //!
-//! `table` is the **entire** `pMvdCostTable` allocation, never the single QP row
-//! the cursor sits in. The raw pointer could stray outside its own row and still
-//! land inside the allocation, reading whatever the neighbouring row holds; the
-//! encoder is byte-exact against the C++, so a read like that has to keep reading
-//! the same value it read before. Bounding the slice to the row would turn such a
-//! read into a panic. With the whole table, an index that leaves its row lands
-//! exactly where the pointer landed, and only an index that leaves the
-//! *allocation* panics.
+//! # Lifetime
 //!
-//! # On `safe/`'s detached-cursor policy
-//!
-//! [`mod@crate::safe`]'s header says no type here stores a borrow into a buffer,
-//! excepting the ephemeral views that never outlive the call chain that made them
-//! ([`plane::PlaneCursor`](crate::safe::plane::PlaneCursor) and friends). This is
-//! one of those: it is derived inside the slice-encode loop from the context's
-//! table and dies with it. It is not stored in the context, and the table it
-//! borrows is written once at `WelsInitEncoderExt` time and never again — which is
-//! also what makes it lawful for the per-slice worker threads to hold one each.
+//! [`mod@crate::safe`] stores no borrow into a buffer except views that die with the call
+//! chain that made them; this is one of those, derived inside the slice-encode loop and
+//! never stored in the context. The table it borrows is written once at
+//! `WelsInitEncoderExt` time and never again, which is what makes it lawful for each
+//! per-slice worker thread to hold one.
 
 /// A position in the encoder's MVD-cost table, indexed by a **signed** motion-vector
 /// difference.
@@ -59,19 +49,16 @@ impl<'a> MvdCostCursor<'a> {
         Self { table, at }
     }
 
-    /// The table's **origin** — the entry a zero MVD indexes, `iMvdCostTableSize`
-    /// in.
+    /// The table's origin — the entry a zero MVD indexes, `iMvdCostTableSize` in.
     ///
-    /// Callers derive `table` *field-precisely* — `&(*pEncCtx).pMvdCostTable[..]`,
-    /// never a `&self` accessor. A whole-context shared borrow retags the whole
-    /// context, and inside the fork that races any worker's concurrent write to an
-    /// inline context field. The cursor is a borrow, held across the entire
-    /// macroblock loop, so it takes the field and nothing else.
+    /// Callers derive `table` field-precisely (`&(*pEncCtx).pMvdCostTable[..]`, never a
+    /// `&self` accessor): a whole-context shared borrow retags the whole context, which
+    /// inside the fork races a worker's concurrent write to an inline context field.
+    /// Holding the borrow across the whole macroblock loop is lawful because the table is
+    /// written exactly once, by `MvdCostInit` inside `WelsInitEncoderExt`, before any
+    /// slice worker exists.
     ///
-    /// Holding it that long is lawful because the table is written exactly once, by
-    /// `MvdCostInit` inside `WelsInitEncoderExt`, before any slice worker exists.
-    ///
-    /// An unsized table answers [`none`](Self::none).
+    /// An empty table answers [`none`](Self::none).
     pub fn origin(table: &'a [u16], iMvdCostTableSize: i32) -> Self {
         if table.is_empty() {
             return Self::none();

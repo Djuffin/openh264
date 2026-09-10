@@ -28,15 +28,11 @@
 
 //! # OpenH264 Decoder: Flexible Macroblock Ordering (FMO)
 //!
-//! Translated from `codec/decoder/core/inc/fmo.h` and `codec/decoder/core/src/fmo.cpp`.
+//! `codec/decoder/core/inc/fmo.h`, `codec/decoder/core/src/fmo.cpp`.
 //!
-//! Flexible Macroblock Ordering (FMO) partitions the macroblock grid into up to 8 slice
-//! groups to provide spatial error resilience over lossy packet networks. This module implements:
-//! - Allocation and lifecycle management of the macroblock allocation map (`pMbAllocMap`).
-//! - Interleaved slice group map generation (Type 0).
-//! - Dispersed checkerboard slice group map generation (Type 1).
-//! - Parameter set change detection (`FmoParamSetsChanged`) and synchronization (`FmoParamUpdate`).
-//! - Fast O(1) macroblock-to-slice-group queries (`FmoMbToSliceGroup`) and sequential iterators (`FmoNextMb`).
+//! FMO partitions the macroblock grid into up to 8 slice groups for spatial error
+//! resilience over lossy packet networks. Map types 0 (interleaved) and 1 (dispersed
+//! checkerboard) are supported.
 
 #![deny(unsafe_code)]
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
@@ -57,7 +53,6 @@ pub const MAX_SLICEGROUP_IDS: u32 = 8;
 /// Maximum number of Picture Parameter Sets supported in the decoder context.
 pub const MAX_PPS_COUNT: i32 = 256;
 
-// Error codes matching OpenH264 decoder specifications.
 pub const ERR_NONE: i32 = 0;
 pub const ERR_INFO_OUT_OF_MEMORY: i32 = 1;
 pub const ERR_INFO_INVALID_PARAM: i32 = 4;
@@ -189,9 +184,6 @@ pub fn FmoGenerateSliceGroup(
     pFmo.iCountMbNum = iNumMb;
 
     if kpPps.uiNumSliceGroups < 2 && iNumMb > 0 {
-        // The C's `memset(pMbAllocMap, 0, iNumMb)` on this arm, even though the
-        // allocation above already zeroed: it is what the single slice-group map
-        // *is*, not a leftover of the allocator.
         pFmo.pMbAllocMap.fill(0);
         pFmo.iSliceGroupCount = 1;
         return ERR_NONE;

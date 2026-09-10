@@ -1,4 +1,4 @@
-//! Scalar forwards for the `dct` kernels — see the module header.
+//! Scalar forwards for the `dct` kernels.
 
 use crate::decoder::decode_mb_aux::idct_res_add_pred_c;
 use crate::encoder::decode_mb_aux::{

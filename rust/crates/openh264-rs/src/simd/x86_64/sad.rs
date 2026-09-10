@@ -1,11 +1,8 @@
 //! x86_64 SSE2 & AVX2 implementations of SAD and 4-point SAD kernels.
 //!
-//! # How the rows are addressed
-//!
-//! Each operand is cut into a `RefSamples::span` — a slice the compiler knows to be
-//! `(H - 1) * stride + W` long — and the rows are indexed inside it, which leaves one
-//! cut per operand where a `row_n` walk left two checks per row. See
-//! `RefSamples::span`, and `simd::aarch64::sad` for the same treatment measured.
+//! Each operand is cut into a `RefSamples::span` — a slice known to be
+//! `(H - 1) * stride + W` long — and the rows are indexed inside it, which costs one
+//! bounds check per operand instead of two per row.
 //!
 //! The four-point kernels cut a `W + 2` by `G + 2` window of `sample2` per group of
 //! `G` rows — the reach of all four probes of those rows — and read the up and down
@@ -54,10 +51,8 @@ pub fn sad_16x_avx2<S: RefSamples, const H: usize>(
     dx: isize,
     dy: isize,
 ) -> i32 {
-    // The loop below steps two rows per iteration, so an odd `H` would read and
-    // accumulate row `H` — one past the block. Only 16 and 8 are instantiated today;
-    // the SSE2 twin (`sad_16x`, `:22`) iterates one row at a time and has no such
-    // constraint, and nothing in either signature said so.
+    // The loop steps two rows per iteration, so an odd `H` would read and accumulate
+    // row `H` — one past the block.
     const {
         assert!(
             H % 2 == 0,
@@ -314,21 +309,11 @@ pub fn sample_sad_16x16<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     unsafe { sad_16x::<S, 16>(sample1, sample2, 0, 0) }
 }
 
-/// # The AVX2 precondition, and where it is established
-///
-/// `sad_16x_avx2` is `#[target_feature(enable = "avx2")]`: this runs `vpsadbw` with
-/// no test of its own and faults on any pre-Haswell Intel or pre-Excavator AMD part.
-///
-/// The one caller is `encoder::sample::WelsInitSampleSadFunc`, which installs these
-/// into `pfSampleSad` only under `uiCpuFlag & WELS_CPU_AVX2 && simd::has_avx2()`.
-/// That is the right altitude for the test — it is asked once when the table is
-/// built, not on every candidate the mode-decision loop scores — and it is why this
-/// is `pub(crate)`: the module boundary is what keeps the set of callers to the one
-/// that checks, in place of a branch each call would pay for.
-// Only the kernel set `simd::kernels` currently aliases has a caller for this
-// (`encoder/sample.rs`'s AVX2 slot); every set carries the pair because every
-// set has to satisfy that dispatch, and the sets that are compiled but not
-// aliased — which `--features wide` / `--features scalar` decide — go dead.
+/// `sad_16x_avx2` runs `vpsadbw` with no feature test of its own, so the caller must
+/// have established AVX2 support. The one caller,
+/// `encoder::sample::WelsInitSampleSadFunc`, installs this into `pfSampleSad` only
+/// under `uiCpuFlag & WELS_CPU_AVX2 && simd::has_avx2()`.
+// Dead in a kernel set no dispatch site aliases.
 #[allow(dead_code)]
 #[inline(always)]
 pub(crate) fn sample_sad_16x16_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
@@ -341,21 +326,11 @@ pub fn sample_sad_16x8<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     unsafe { sad_16x::<S, 8>(sample1, sample2, 0, 0) }
 }
 
-/// # The AVX2 precondition, and where it is established
-///
-/// `sad_16x_avx2` is `#[target_feature(enable = "avx2")]`: this runs `vpsadbw` with
-/// no test of its own and faults on any pre-Haswell Intel or pre-Excavator AMD part.
-///
-/// The one caller is `encoder::sample::WelsInitSampleSadFunc`, which installs these
-/// into `pfSampleSad` only under `uiCpuFlag & WELS_CPU_AVX2 && simd::has_avx2()`.
-/// That is the right altitude for the test — it is asked once when the table is
-/// built, not on every candidate the mode-decision loop scores — and it is why this
-/// is `pub(crate)`: the module boundary is what keeps the set of callers to the one
-/// that checks, in place of a branch each call would pay for.
-// Only the kernel set `simd::kernels` currently aliases has a caller for this
-// (`encoder/sample.rs`'s AVX2 slot); every set carries the pair because every
-// set has to satisfy that dispatch, and the sets that are compiled but not
-// aliased — which `--features wide` / `--features scalar` decide — go dead.
+/// `sad_16x_avx2` runs `vpsadbw` with no feature test of its own, so the caller must
+/// have established AVX2 support. The one caller,
+/// `encoder::sample::WelsInitSampleSadFunc`, installs this into `pfSampleSad` only
+/// under `uiCpuFlag & WELS_CPU_AVX2 && simd::has_avx2()`.
+// Dead in a kernel set no dispatch site aliases.
 #[allow(dead_code)]
 #[inline(always)]
 pub(crate) fn sample_sad_16x8_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
@@ -521,16 +496,10 @@ mod tests {
     }
 
     // ========================================================================
-    // Input and anchor coverage.
-    //
-    // The three tests above reach all sixteen kernels, but each at one anchor over one
-    // input pattern, so a kernel wrong at another alignment — or only on inputs a ramp
-    // never produces — passes them all.
-    //
-    // The sweep below runs every kernel over four anchors, one per residue class mod 8,
-    // and five distributions. The all-`0xFF`/all-`0x00` pair and the near-identical
-    // pair are the ends of the accumulator's range, where a `psadbw` accumulation that
-    // widened or saturated wrongly would show.
+    // Input and anchor coverage: every kernel over four anchors, one per residue
+    // class mod 8, and five distributions. The all-`0xFF`/all-`0x00` and
+    // near-identical pairs sit at the ends of the accumulator's range, where a
+    // `psadbw` accumulation that widened or saturated wrongly would show.
     // ========================================================================
 
     /// A 64-bit LCG, so a failing seed is replayable.
@@ -566,8 +535,8 @@ mod tests {
         ]
     }
 
-    /// Four anchors covering every residue mod 8, so the aligned case is not the only
-    /// one tested. Each leaves at least 16 rows and 16 columns of margin on all sides.
+    /// Four anchors covering every residue mod 8. Each leaves at least 16 rows and
+    /// 16 columns of margin on all sides.
     const ANCHORS: [usize; 4] = [64 * 16 + 16, 64 * 17 + 19, 64 * 18 + 22, 64 * 19 + 21];
 
     #[test]
@@ -657,11 +626,8 @@ mod tests {
         }
     }
 
-    /// The AVX2 pair over the same sweep.
-    ///
-    /// Like `test_avx2_sad_parity` this can only run where the host has AVX2, but it
-    /// says so on the way out instead of returning green in silence: a run that
-    /// reports "ok" having executed nothing is the failure mode worth avoiding here.
+    /// The AVX2 pair over the same sweep; on a host without AVX2 it prints that it
+    /// executed nothing rather than passing silently.
     #[test]
     fn avx2_sad_parity_over_anchors_and_distributions() {
         if !std::is_x86_feature_detected!("avx2") {
@@ -690,23 +656,14 @@ mod tests {
         }
     }
 
-    /// The table site is the only thing standing between these kernels and a SIGILL,
-    /// so pin what it installs.
-    ///
     /// `WelsInitSampleSadFunc` fills `pfSampleSad[BLOCK_16x16]` from the AVX2 kernel
-    /// exactly when `uiCpuFlag` asks for AVX2 *and* this CPU has it.
+    /// exactly when `uiCpuFlag` asks for AVX2 *and* this CPU has it. On a host with
+    /// AVX2 both spellings install the same kernel, so only the flag half is pinned
+    /// there.
     ///
-    /// **What this catches, and where.** The flag half is pinned on every host: drop
-    /// the `uiCpuFlag & WELS_CPU_AVX2` test and the `WELS_CPU_SSE2`-only case starts
-    /// returning the AVX2 pointer. The hardware half — dropping `has_avx2()` — can only
-    /// fail this test on a machine without AVX2, because on one with it both spellings
-    /// install the same kernel. That is the machine where it matters, and it is not
-    /// this one, so treat a green run here as covering the flag half only.
-    ///
-    /// Function-pointer identity is the comparison, so the caveat on
-    /// `common/mc.rs`'s `init_mc_func_cpu_flags` applies: both addresses come from the
-    /// same `WelsInitSampleSadFunc` instantiation, which makes them comparable, but
-    /// Miri mints a fresh synthetic address per reification and is excluded.
+    /// The comparison is function-pointer identity: both addresses come from the same
+    /// `WelsInitSampleSadFunc` instantiation, but Miri mints a fresh synthetic address
+    /// per reification and is excluded.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn init_sample_sad_installs_avx2_only_where_the_cpu_has_it() {
@@ -725,11 +682,10 @@ mod tests {
         let asked_for_avx2 = slot(WELS_CPU_SSE2 | WELS_CPU_AVX2);
         assert!(baseline.is_some() && asked_for_avx2.is_some());
 
-        // **The oracle is `has_avx2()`, not `is_x86_feature_detected!`.** They are not the
-        // same question: the table arm consults the port's probe, which answers from the
-        // build as well as the CPU — under `--features scalar` the feature word is `0`, so
-        // a host that *has* AVX2 must still get the baseline entry. Asking the CPU
-        // directly made this test fail there.
+        // The oracle is `has_avx2()`, not `is_x86_feature_detected!`: the table arm
+        // consults the crate's probe, which answers from the build as well as the CPU —
+        // under `--features scalar` the feature word is `0`, so a host that *has* AVX2
+        // still gets the baseline entry.
         if crate::simd::has_avx2() {
             assert_ne!(
                 asked_for_avx2, baseline,

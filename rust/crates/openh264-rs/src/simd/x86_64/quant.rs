@@ -10,7 +10,7 @@ use core::arch::x86_64::*;
 
 /// In-place dead-zone quantization of 8 consecutive 16-bit coefficients.
 ///
-/// Matches C++ `SSE2_Quant8` in `codec/encoder/core/x86/quant.asm`.
+/// C++: `SSE2_Quant8`, `codec/encoder/core/x86/quant.asm`.
 #[target_feature(enable = "sse2")]
 fn quant_8(v: __m128i, ff: __m128i, mf: __m128i) -> __m128i {
     let zero = _mm_setzero_si128();
@@ -286,18 +286,16 @@ fn transpose4_epi16_lo(
 ///
 /// The DC coefficients are the `(0, 0)` of each 4x4 block, so within the macroblock's
 /// 241-element span they sit 16 and 64 elements apart — sixteen scattered `i16` reads,
-/// which is why upstream's `SSE2_Load4Col` is sixteen `movsx`/`movd` pairs and why the
-/// gather below is written out. The four vectors hold the four inputs of one scalar row
-/// per lane: lane `k` is the row at `i = 4k`, whose `idx` is `((i & 8) << 4) + ((i & 4) << 3)`,
-/// i.e. 0, 32, 128, 160.
+/// hence the written-out gather below. The four vectors hold the four inputs of one row
+/// per lane: lane `k` is the row at `i = 4k`, whose `idx` is
+/// `((i & 8) << 4) + ((i & 4) << 3)`, i.e. 0, 32, 128, 160.
 ///
 /// With the inputs laid out that way the row pass is lane-wise with no shuffle, one
 /// transpose puts `p[4k + j]` in lane `j` of vector `k`, and the column pass is lane-wise
-/// again. `packs` at the end saturates, which is exactly the scalar's
-/// `.clamp(-32768, 32767) as i16`.
+/// again. `packs` at the end saturates, i.e. `.clamp(-32768, 32767) as i16`.
 ///
-/// Arithmetic is `i32` throughout, as the scalar's is: `|input| <= 32768` bounds the
-/// row pass at `|p| <= 131072` and the column pass at `|t0 ± t1| <= 524288`.
+/// Arithmetic is `i32` throughout: `|input| <= 32768` bounds the row pass at
+/// `|p| <= 131072` and the column pass at `|t0 ± t1| <= 524288`.
 #[target_feature(enable = "sse2")]
 fn hadamard_t4_dc_sse2_impl(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
     unsafe {
@@ -400,24 +398,21 @@ fn ihadamard_butterfly(
 /// # Layout
 ///
 /// Each row is four contiguous `i16`, so a row is one 64-bit load. Transposing before
-/// the first pass is what makes both passes the *same* lane-wise butterfly — the row
-/// pass over `res[i..i+4]` and the column pass over `res[i], res[i+4], res[i+8],
-/// res[i+12]` have identical tap structure, and only the operand layout differs. So the
-/// shape is transpose, butterfly, transpose, butterfly, and
-/// [`ihadamard_butterfly`] is written once.
+/// the first pass makes both passes the *same* lane-wise butterfly — the row pass over
+/// `res[i..i+4]` and the column pass over `res[i], res[i+4], res[i+8], res[i+12]` have
+/// identical tap structure and differ only in operand layout — so the shape is
+/// transpose, butterfly, transpose, butterfly and [`ihadamard_butterfly`] is written
+/// once.
 ///
 /// # Where the multiply goes
 ///
-/// The scalar multiplies by `mf` on the way out of the second pass; upstream's asm
-/// multiplies on the way in, before the transform. Both are correct and give identical
-/// results — the transform is linear and every operation is `wrapping` `i16`, so
-/// `mf * (a ± b) ≡ mf * a ± mf * b (mod 2^16)`. This follows the scalar, which is what
-/// the parity test compares against.
+/// `mf` is applied on the way out of the second pass rather than before the transform.
+/// The two are equivalent: the transform is linear and every operation is wrapping
+/// `i16`, so `mf * (a ± b) ≡ mf * a ± mf * b (mod 2^16)`.
 ///
 /// Every intrinsic here wraps rather than saturating (`_mm_add_epi16`, `_mm_sub_epi16`,
-/// `_mm_mullo_epi16`), matching the scalar's `wrapping_add`/`wrapping_sub`/`wrapping_mul`
-/// exactly. The wrapping is load-bearing, not incidental: the C++ is `int16_t`
-/// throughout and its overflow is observable in the output.
+/// `_mm_mullo_epi16`). The wrapping is load-bearing: the arithmetic is `i16` throughout
+/// and its overflow is observable in the output.
 #[target_feature(enable = "sse2")]
 fn dequant_ihadamard_4x4_sse2_impl(res: &mut [i16; 16], mf: u16) {
     unsafe {
@@ -610,10 +605,8 @@ mod tests {
     // ========================================================================
     // The two luma-DC Hadamard kernels.
     //
-    // Both sweep the **full `i16` input range**, which is not decoration: the ihadamard
-    // is `int16_t` end to end in the C++ and its overflow is observable output, so a
-    // kernel that widened anywhere would pass a small-coefficient sweep and diverge on
-    // a real stream. `hadamard_t4_dc`'s clamp is only reachable from large inputs too.
+    // Both sweep the full `i16` input range: the ihadamard's overflow is observable
+    // output, and `hadamard_t4_dc`'s clamp is only reachable from large inputs.
     // ========================================================================
 
     fn lcg_full_i16(seed: &mut u64) -> i16 {
@@ -641,9 +634,8 @@ mod tests {
         }
     }
 
-    /// The saturating store is the one place the two could differ only at the extremes,
-    /// so drive it deliberately: all sixteen DC coefficients at `i16::MIN`/`MAX` puts
-    /// every output past the clamp in both directions.
+    /// Drives the saturating store: all sixteen DC coefficients at `i16::MIN`/`MAX`
+    /// puts every output past the clamp in both directions.
     #[test]
     fn hadamard_t4_dc_saturates_like_the_scalar() {
         use crate::encoder::encode_mb_aux::hadamard_t4_dc;
@@ -651,8 +643,8 @@ mod tests {
         const DC_IDX: [usize; 16] = [
             0, 16, 64, 80, 32, 48, 96, 112, 128, 144, 192, 208, 160, 176, 224, 240,
         ];
-        // Every assignment of the two extremes across the sixteen DC positions: 65536
-        // cases, which covers the sign patterns that drive the clamp both ways.
+        // Every assignment of the two extremes across the sixteen DC positions:
+        // 65536 sign patterns, driving the clamp both ways.
         for pattern in 0u32..(1 << 16) {
             let mut dct = [0i16; 241];
             for (n, &idx) in DC_IDX.iter().enumerate() {
@@ -669,8 +661,7 @@ mod tests {
             assert_eq!(got, want, "pattern {pattern:#018b}");
         }
 
-        // And a sanity check that this really does reach the clamp, so the test cannot
-        // quietly stop exercising it.
+        // A check that the clamp really is reached.
         let mut dct = [0i16; 241];
         for &idx in &DC_IDX {
             dct[idx] = i16::MAX;
@@ -708,9 +699,8 @@ mod tests {
         }
     }
 
-    /// The wrapping is load-bearing — the C++ is `int16_t` throughout — so pin that the
-    /// SSE2 kernel wraps rather than saturates, with inputs chosen to overflow every
-    /// intermediate.
+    /// Pins that the SSE2 kernel wraps rather than saturates, with inputs chosen to
+    /// overflow every intermediate.
     #[test]
     fn dequant_ihadamard_4x4_wraps_like_the_scalar() {
         for &v in &[i16::MIN, i16::MAX, -1, 1] {

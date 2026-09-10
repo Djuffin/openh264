@@ -2,10 +2,10 @@
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
 
-//! # H.264 / AVC and SVC NAL Unit and Access Unit Parser (`nalu.h` & `au_parser.cpp`)
+//! # H.264 / AVC and SVC NAL Unit and Access Unit Parser
 //!
-//! Translated from `codec/decoder/core/inc/nalu.h`, `codec/decoder/core/inc/au_parser.h`,
-//! and `codec/decoder/core/src/au_parser.cpp`.
+//! `codec/decoder/core/inc/nalu.h`, `codec/decoder/core/inc/au_parser.h`,
+//! `codec/decoder/core/src/au_parser.cpp`.
 //!
 //! This module provides:
 //! 1. In-memory data structures for H.264 Network Abstraction Layer (NAL) units ([`SNalUnit`])
@@ -181,9 +181,8 @@ pub fn IS_SEI_NAL(t: EWelsNalUnitType) -> bool {
 
 #[inline(always)]
 pub fn IS_SPS_NAL(t: EWelsNalUnitType) -> bool {
-    // SPS only. `wels_common_defs.h:146` is
-    // `#define IS_SPS_NAL(t) ((t) == NAL_UNIT_SPS)`; the subset-SPS is *not* in
-    // it, and `IS_PARAM_SETS_NALS` (`:145`) is the macro that takes all three.
+    // SPS only (`wels_common_defs.h:146`): the subset-SPS is *not* in it, and
+    // `IS_PARAM_SETS_NALS` (`:145`) is the macro that takes all three.
     t == EWelsNalUnitType::NAL_UNIT_SPS
 }
 
@@ -283,10 +282,9 @@ pub struct TagPrefixNalUnit {
 
 pub type SPrefixNalUnit = TagPrefixNalUnit;
 
-/// The payload inside [`SNalUnit`] — the C++'s discriminated union, **as a struct**.
-///
-/// The C declares `union { SVclNal sVclNal; SPrefixNalUnit sPrefixNal; }` and the NAL
-/// type is the discriminant, carried out of band in `sNalHeaderExt`.
+/// The payload inside [`SNalUnit`] — the C++'s
+/// `union { SVclNal sVclNal; SPrefixNalUnit sPrefixNal; }` as a struct. The NAL type in
+/// `sNalHeaderExt` is the discriminant.
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub struct SNalData {
@@ -321,11 +319,8 @@ impl Default for TagNalUnit {
 ///
 /// Matches `TagAccessUnits` / `SAccessUnit` in `codec/decoder/core/inc/nalu.h`.
 pub struct TagAccessUnits {
-    /// The NAL nodes.
-    ///
-    /// One node per `Box`, stable across a growth — the C++ moves the nodes
-    /// (`ExpandNalUnitList` copies into a new block and frees the old), which dangles
-    /// every outstanding `SNalUnit*`.
+    /// The NAL nodes. One node per `Box`, so a node's address stays valid across a
+    /// growth of the list.
     pub nal_units: Vec<Box<SNalUnit>>,
     pub uiAvailUnitsNum: u32,
     pub uiActualUnitsNum: u32,
@@ -394,17 +389,15 @@ impl TagAccessUnits {
 // Lookup Tables
 // ============================================================================
 
-/// Global level limits table for H.264 validation.
+/// Global level limits table for H.264 validation — `g_ksLevelLimits`,
+/// `codec/common/src/common_tables.cpp:345`.
 ///
-/// Transcribed field-for-field from `g_ksLevelLimits` in
-/// `codec/common/src/common_tables.cpp:345`. Note that openh264 does **not** use the
-/// H.264 spec's Table A-1 units for three of these columns: `uiMaxDPBMbs` is
-/// `MaxDpbMbs` (macroblocks), not the spec's `MaxDPB` in units of 1024 bytes;
-/// `iMinVmv`/`iMaxVmv` are `MaxVmvR` in quarter-pel units, not luma samples; and
-/// `iMaxMvsPer2Mb` is `0x7fff` (i.e. unlimited) below level 3.0 rather than a
-/// sentinel. Taking the spec's columns instead makes both the decoder MV-range check
-/// and the encoder's `WelsCheckRefFrameLimitationLevelIdcFirst` reject conforming
-/// input.
+/// Three columns are **not** in the H.264 Table A-1 units: `uiMaxDPBMbs` is `MaxDpbMbs`
+/// in macroblocks, not `MaxDPB` in units of 1024 bytes; `iMinVmv`/`iMaxVmv` are
+/// `MaxVmvR` in quarter-pel units, not luma samples; and `iMaxMvsPer2Mb` is `0x7fff`
+/// (unlimited) below level 3.0 rather than a sentinel. The spec's columns would make
+/// the decoder MV-range check and the encoder's
+/// `WelsCheckRefFrameLimitationLevelIdcFirst` reject conforming input.
 pub const g_ksLevelLimits: [SLevelLimits; 17] = [
     SLevelLimits {
         uiLevelIdc: 10,
@@ -647,8 +640,6 @@ fn bytes_equal<T: PartialEq>(a: &T, b: &T) -> bool {
 }
 
 fn bytes_copy<T: Copy>(dst: &mut T, src: &T) {
-    // The `memcpy`'s value form. `T` is a POD parameter set, so the assignment moves
-    // the same bytes the C's did — minus the padding, which nothing reads.
     *dst = *src;
 }
 
@@ -680,11 +671,9 @@ pub fn DecodeNalHeaderExt(pNal: &mut SNalUnit, src: &[u8]) {
 /// The RBSP's size in bits: `(len << 3) - trailing_bits(last byte)`, and **zero for
 /// an empty payload**.
 ///
-/// `size >= 1` is tested before any index is formed. A zero bit size then flows into
-/// the caller's existing `DecInitBits` failure branch — `(0 + 7) >> 3 == 0` is
-/// rejected as `ERR_INFO_INVALID_ACCESS` — so the NAL is refused through the path
-/// the code already had, with `dsBitstreamError` and the same access-unit
-/// bookkeeping.
+/// `size >= 1` is tested before any index is formed. A zero bit size flows into the
+/// caller's `DecInitBits` failure branch, which rejects `(0 + 7) >> 3 == 0` as
+/// `ERR_INFO_INVALID_ACCESS`.
 fn rbsp_bit_size(bytes: &[u8], start: usize, size: i32) -> i32 {
     if size < 1 {
         return 0;
@@ -695,9 +684,8 @@ fn rbsp_bit_size(bytes: &[u8], start: usize, size: i32) -> i32 {
 /// **Parse-only's SPS cache** (`au_parser.cpp:1173-1190`) — the escaped SPS
 /// NAL, verbatim, with the start code normalised to the four-byte form.
 ///
-/// The reader is `DecodeFrameConstruction`'s IDR prepend, which is why the
-/// cache exists at all — a parse-only consumer gets the parameter sets in front of
-/// every IDR whether or not the source stream repeated them.
+/// `DecodeFrameConstruction` prepends it to every IDR, so a parse-only consumer gets
+/// the parameter sets whether or not the source stream repeated them.
 fn parse_only_write_sps(pSpsBs: &mut SSpsBsInfo, iSpsId: i32, kpSrcNal: &[u8]) {
     pSpsBs.iSpsId = iSpsId;
     let iActualLen = actual_len_without_trailing_zeros(kpSrcNal);
@@ -722,14 +710,10 @@ fn parse_only_write_sps(pSpsBs: &mut SSpsBsInfo, iSpsId: i32, kpSrcNal: &[u8]) {
 ///
 /// It pairs with the slice-extension arm of [`parse_only_capture_vcl`], which strips
 /// the SVC header off the slices; between them an SVC access unit comes out as AVC.
-/// The reference forces `profile_idc` to 77 and drops the VUI, the scaling lists and
-/// the SVC extension; only the syntax elements written below survive.
+/// `profile_idc` is forced to 77 and the VUI, the scaling lists and the SVC extension
+/// are dropped; only the syntax elements written below survive.
 ///
-/// **One bound the reference does not have.** It sizes the RBSP writer with
-/// `pBs->pEndBuf - pBs->pStartBuf` — the length of the *source* SPS's bitstream —
-/// while the buffer it hands the writer is `SPS_PPS_BS_SIZE + 4` bytes, so a source
-/// SPS longer than 132 bytes lets the writer run off the allocation. Here the writer
-/// is bounded by the buffer it writes into, and a rewrite that does not fit is
+/// The writer is bounded by the buffer it writes into, so a rewrite that does not fit is
 /// refused (`false`) rather than truncated.
 fn parse_only_write_subset_sps(pSpsBs: &mut SSpsBsInfo, pSps: &SSps) -> bool {
     use crate::encoder::vlc_encoder::{
@@ -742,9 +726,7 @@ fn parse_only_write_subset_sps(pSpsBs: &mut SSpsBsInfo, pSps: &SSps) -> bool {
     pSpsBs.pSpsBsBuf[3] = 0x01;
     pSpsBs.pSpsBsBuf[4] = 0x67; // nal_ref_idc 3, nal_unit_type 7 (SPS)
 
-    // `WelsMallocz (SPS_PPS_BS_SIZE + 4, "Temp buffer for parse only usage.")` — the
-    // four bytes are the writer's flush headroom, and it is a stack array here
-    // because its lifetime is this function.
+    // The four bytes past `SPS_PPS_BS_SIZE` are the writer's flush headroom.
     let mut rbsp = [0u8; SPS_PPS_BS_SIZE + 4];
     let mut bs = BsWriter::new();
     let buf = &mut rbsp[..];
@@ -776,8 +758,8 @@ fn parse_only_write_subset_sps(pSpsBs: &mut SSpsBsInfo, pSps: &SSps) -> bool {
         &mut bs,
         u32::from(pSps.bGapsInFrameNumValueAllowedFlag),
     );
-    // `int32_t - 1` in the C, on a value the SPS parse has already refused to leave
-    // at zero; `wrapping_sub` is the same bit pattern for the same input.
+    // The SPS parse has already refused a zero width or height, so these cannot
+    // underflow.
     BsWriteUE(buf, &mut bs, pSps.iMbWidth.wrapping_sub(1));
     BsWriteUE(buf, &mut bs, pSps.iMbHeight.wrapping_sub(1));
     BsWriteOneBit(buf, &mut bs, u32::from(pSps.bFrameMbsOnlyFlag));
@@ -799,15 +781,12 @@ fn parse_only_write_subset_sps(pSpsBs: &mut SSpsBsInfo, pSps: &SSps) -> bool {
     let dst = &mut pSpsBs.pSpsBsBuf[5..];
     let written = rbsp_to_ebsp(&rbsp[..iRbspSize], dst);
     // `rbsp_to_ebsp` stops at the end of its destination, so a full destination is
-    // indistinguishable from a truncated one and both are refused. The reference has
-    // no check here at all.
+    // indistinguishable from a truncated one and both are refused.
     if written >= dst.len() {
         return false;
     }
-    // The reference stores `pCurBuf - pStartBuf + 5` — the **RBSP** size, not the
-    // escaped one. It is a defect the port does not inherit: `uiSpsBsLen` is what
-    // `DecodeFrameConstruction` copies out, so an escaped subset SPS would be handed
-    // to the caller one byte short per inserted `0x03`.
+    // `uiSpsBsLen` is the **escaped** length, which is what `DecodeFrameConstruction`
+    // copies out.
     pSpsBs.uiSpsBsLen = (written + 5) as u16;
     true
 }
@@ -831,12 +810,9 @@ fn parse_only_write_pps(pPpsBs: &mut SPpsBsInfo, uiPpsId: i32, kpSrcNal: &[u8]) 
     pPpsBs.uiPpsBsLen = uiLen as u16;
 }
 
-/// The reference's "remove final trailing 0 bytes" loop (`au_parser.cpp:325-328`,
-/// `:361-364`, `:1176-1179`, `:1482-1485` — four copies, one behaviour), bounded.
-///
-/// The C walks backwards from the last byte with no floor, so an all-zero NAL reads
-/// off the front of the caller's buffer. The bound is the only difference; on every
-/// input the C survives, the answer is the same.
+/// The "remove final trailing 0 bytes" loop (`au_parser.cpp:325-328`, `:361-364`,
+/// `:1176-1179`, `:1482-1485` — four copies, one behaviour), floored at 0 so an
+/// all-zero NAL yields a length of zero rather than walking off the front.
 fn actual_len_without_trailing_zeros(src: &[u8]) -> usize {
     let mut n = src.len();
     while n > 0 && src[n - 1] == 0 {
@@ -853,14 +829,8 @@ fn actual_len_without_trailing_zeros(src: &[u8]) -> usize {
 /// and the NAL type rewritten to 1 or 5, so an SVC slice comes out as the AVC slice
 /// a plain decoder can read. Returns `(offset into sSavedData, iNalLength)`.
 ///
-/// **One deliberate divergence, and it is not a behaviour change.** The reference
-/// rewrites the NAL type byte **inside the caller's input buffer**
-/// (`*(pSrcNal + iCurrStartByte) &= 0xE0` at `:346-351`, through a `const_cast` the
-/// decoder made at `decoder.cpp:766`) and then copies that byte out. The port
-/// computes the same byte and copies it; the caller's bitstream is left as it was
-/// handed in. Nothing downstream reads those bytes again — `sRawData` already holds
-/// the de-escaped copy this NAL will be decoded from — so the only thing the C's
-/// version changes is the application's buffer.
+/// The rewritten NAL type byte is computed and copied out; the caller's input buffer is
+/// left exactly as it was handed in.
 fn parse_only_capture_vcl(
     saved: &mut RawDataBuffer,
     kpSrcNal: &[u8],
@@ -871,8 +841,7 @@ fn parse_only_capture_vcl(
 
     if bExtensionFlag {
         // `iCurrStartByte` indexes the NAL header byte: 4 behind `00 00 00 01`, 3
-        // behind `00 00 01`. The caller normalises to the three-byte form, so the C's
-        // `if` is always taken; it is written out because the C writes it out.
+        // behind `00 00 01`. The caller normalises to the three-byte form.
         let iCurrStartByte =
             if kpSrcNal.len() >= 3 && kpSrcNal[0] == 0 && kpSrcNal[1] == 0 && kpSrcNal[2] == 1 {
                 3usize
@@ -881,8 +850,7 @@ fn parse_only_capture_vcl(
             };
         let iOffset = iCurrStartByte + 1 + NAL_UNIT_HEADER_EXT_SIZE;
         if iActualLen <= iOffset {
-            // Degenerate NAL: the C indexes past `iActualLen` here and copies a
-            // negative length. There is nothing to capture.
+            // Degenerate NAL: there is nothing to capture.
             return None;
         }
         let mut iNalLength = (iActualLen - NAL_UNIT_HEADER_EXT_SIZE) as i32;
@@ -922,17 +890,13 @@ fn parse_only_capture_vcl(
 /// Parses the NAL unit header byte, checks parameter set existence, and routes
 /// the NAL unit to the appropriate syntactic decoder.
 ///
-/// The payload's identity is an **offset into `sRawData`** (`kiRbspStart`,
-/// minted by `RawDataBuffer::append_ebsp_stripped`), and the return is the offset
-/// past the consumed headers — `Some(offset)` where the C returned an advanced
-/// pointer, `None` where it returned null. Every read below is an index into the
-/// owning buffer.
+/// The payload's identity is an **offset into `sRawData`** (`kiRbspStart`, minted by
+/// `RawDataBuffer::append_ebsp_stripped`), and the return is the offset past the
+/// consumed headers, or `None` for a rejected NAL.
 ///
-/// `kpSrcNal` is the reference's `kpSrcNal`/`kSrcNalLen` pair (`au_parser.cpp:265`):
-/// this NAL's **escaped** bytes, start code included and normalised to the three-byte
-/// form the C's caller hands it (`pSrcNal - 3`, `decoder.cpp:815`). It is read only
-/// by the parse-only capture below — the RBSP in `sRawData` is what everything else
-/// reads.
+/// `kpSrcNal` is this NAL's **escaped** bytes (`au_parser.cpp:265`), start code included
+/// and normalised to the three-byte form. Only the parse-only capture below reads it;
+/// the RBSP in `sRawData` is what everything else reads.
 pub fn ParseNalHeader(
     pCtx: &mut SWelsDecoderContext,
     pNalUnitHeader: &mut SNalUnitHeader,
@@ -1041,9 +1005,7 @@ pub fn ParseNalHeader(
         }
 
         EWelsNalUnitType::NAL_UNIT_PREFIX => {
-            // The prefix NAL is a *field* of the context, not a node of the access
-            // unit, so it is reached as one — `pCtx.sSpsPpsCtx.sPrefixNal` per
-            // statement.
+            // The prefix NAL is a field of the context, not a node of the access unit.
             macro_rules! pCurNal {
                 () => {
                     pCtx.sSpsPpsCtx.sPrefixNal
@@ -1097,9 +1059,8 @@ pub fn ParseNalHeader(
         }
 
         // `case NAL_UNIT_CODED_SLICE_EXT: bExtensionFlag = true;` falls through into
-        // the shared slice body in C, so all three NAL types run the same code and an
-        // SVC slice-extension NAL reaches ParseSliceHeaderSyntaxs with the flag set.
-        // Splitting this into separate match arms leaves type-20 slices unparsed.
+        // the shared slice body, so all three NAL types run the same code and an SVC
+        // slice-extension NAL reaches ParseSliceHeaderSyntaxs with the flag set.
         EWelsNalUnitType::NAL_UNIT_CODED_SLICE_EXT
         | EWelsNalUnitType::NAL_UNIT_CODED_SLICE
         | EWelsNalUnitType::NAL_UNIT_CODED_SLICE_IDR => {
@@ -1173,7 +1134,7 @@ pub fn ParseNalHeader(
                 }
             } else {
                 // `au_parser.cpp:359-382` — the plain arm's capture, before the
-                // prefix-NAL prefetch, as in the reference.
+                // prefix-NAL prefetch.
                 if pCtx.pParam.bParseOnly {
                     let captured =
                         parse_only_capture_vcl(&mut pCtx.sSavedData, kpSrcNal, false, false);
@@ -1222,7 +1183,7 @@ pub fn ParseNalHeader(
 
             let iBitSize = rbsp_bit_size(pCtx.sRawData.bytes(), iNal, iNalSize);
             // `MemGetNextNal` post-increments, so the node it handed back is the last
-            // available one — the two indices are one, and this states it once.
+            // available one.
             let last = (uiAvailNalNum - 1) as usize;
             debug_assert_eq!(last, cur_idx);
             let iErr = {
@@ -1236,11 +1197,9 @@ pub fn ParseNalHeader(
                 return None;
             }
 
-            // The cursor travels as a value and is written back **into the NAL's own
-            // reader**, which is where the slice's bit position lives and where the
-            // slice-data parse picks it up. It is not `pCtx.sBs`: that
-            // one is the non-VCL parser's, and writing this back there would leave
-            // every slice header re-read from its first bit.
+            // The cursor is written back **into the NAL's own reader**, where the slice's
+            // bit position lives and where the slice-data parse picks it up — not into
+            // `pCtx.sBs`, which is the non-VCL parser's.
             let (start, mut cursor) = cur_au(&mut pCtx.access_unit)
                 .and_then(|au| au.node(last))
                 .map(|nal| {
@@ -1340,8 +1299,8 @@ pub fn CheckAccessUnitBoundaryExt(
         return true;
     }
     if pLastSliceHeader.sps_ref.is_some() && pCurSliceHeader.sps_ref.is_some() {
-        // The ids carry which buffer they index, where the C compared `pSps->iSpsId`
-        // and could not tell the two apart.
+        // `sps_ref` carries which buffer it indexes, so an SPS and a subset SPS with
+        // the same id compare unequal.
         if pLastSliceHeader.sps_ref != pCurSliceHeader.sps_ref {
             return true;
         }
@@ -1852,11 +1811,9 @@ pub fn ParseSps(
 ) -> i32 {
     let buf = pCtx.sRawData.window_from(kiRbspStart);
 
-    // `memset (pSubsetSps, 0, sizeof (SSubsetSps))` in `au_parser.cpp`, as a value.
-    // `SSubsetSps::default()` is **not** all-zero — it sets
+    // `memset_zero`, not `default()`: `SSubsetSps::default()` sets
     // `uiBitDepthLuma`/`Chroma` to 8 and `bFrameMbsOnlyFlag` to true through `sSps`,
     // which the parse then reads on the paths that do not write them.
-    // [`SSubsetSps::memset_zero`] is the C's start, spelled out field by field.
     let mut sTempSubsetSps = SSubsetSps::memset_zero();
     let pSubsetSps = &mut sTempSubsetSps;
 
@@ -1878,12 +1835,10 @@ pub fn ParseSps(
         && uiProfileIdc != PRO_EXTENDED
         && uiProfileIdc != PRO_HIGH
     {
-        // **`ERR_NONE` on purpose.** `au_parser.cpp:947` spells this
-        // arm `return false;` inside a function whose every other exit is an error
-        // code, so the C++ reports **success** for an unsupported `profile_idc`:
-        // `false` converts to 0, which is `ERR_NONE`, so `ParseNonVclNal`'s
-        // `if (ERR_NONE != iErr)` does not fire, no `dsNoParamSets`/`dsBitstreamError`
-        // is raised, and `bHasNewSps` is set for an SPS that was never stored.
+        // **`ERR_NONE` on purpose** (`au_parser.cpp:947` returns `false` here, which is
+        // 0): an unsupported `profile_idc` raises no
+        // `dsNoParamSets`/`dsBitstreamError`, and `bHasNewSps` is set for an SPS that
+        // was never stored.
         return ERR_NONE;
     }
 
@@ -1910,8 +1865,7 @@ pub fn ParseSps(
     }
     let iSpsId = uiCode as i32;
 
-    // The lookup stays for its `None` arm, which is live: an unrecognized level is
-    // `ERR_INFO_UNSUPPORTED_NON_BASELINE` and the subset SPS is refused. The row it
+    // An unrecognized level is `ERR_INFO_UNSUPPORTED_NON_BASELINE`; the row the lookup
     // finds is not stored.
     if GetLevelLimits(uiLevelIdc as i32, bConstraintSetFlags[3]).is_none() {
         return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_NON_BASELINE);
@@ -2134,10 +2088,8 @@ pub fn ParseSps(
     }
     pSubsetSps.sSps.bVuiParamPresentFlag = uiCode != 0;
     if pSubsetSps.sSps.bVuiParamPresentFlag {
-        // `au_parser.cpp:1156`. The C++
-        // reads: *if* the VUI failed because it carries HRD, tolerate it — except on a
-        // subset SPS, where it is fatal — and **otherwise propagate whatever it
-        // returned** (`WELS_READ_VERIFY`).
+        // `au_parser.cpp:1156`: a VUI that failed because it carries HRD is tolerated,
+        // except on a subset SPS where it is fatal; any other failure propagates.
         let iRetVui = ParseVui(&mut pSubsetSps.sSps, buf, pBsAux);
         if iRetVui == GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_UNSUPPORTED_VUI_HRD) {
             // Currently no support for VUI with HRD enabled in a subset SPS.
@@ -2150,10 +2102,9 @@ pub fn ParseSps(
     }
 
     // ------------------------------------------------------------------
-    // `au_parser.cpp:1168-1257` — the parse-only SPS caches, between the VUI
-    // and the SVC extension exactly as in the reference: the rewrite below is a
-    // *plain* SPS, so it must be built from the syntax elements parsed so far and
-    // not from the extension that follows.
+    // `au_parser.cpp:1168-1257` — the parse-only SPS caches, between the VUI and the
+    // SVC extension: the rewrite below is a *plain* SPS, so it must be built from the
+    // syntax elements parsed so far and not from the extension that follows.
     // ------------------------------------------------------------------
     if pCtx.pParam.bParseOnly {
         if kpSrcNal.len() >= SPS_PPS_BS_SIZE - 4 {
@@ -2282,10 +2233,9 @@ pub fn ParsePps(
 ) -> i32 {
     let buf = pCtx.sRawData.window_from(kiRbspStart);
 
-    // `memset (pPps, 0, sizeof (SPps))` in au_parser.cpp, as a value, for the
-    // reason `ParseSps` gives: `SPps::default()` sets `uiNumSliceGroups`,
-    // `uiNumRefIdxL0Active`/`L1Active` to 1 and `iPicInitQp`/`Qs` to 26, and the C
-    // starts from all-zero.
+    // `memset_zero`, not `default()`, for the reason `ParseSps` gives: `SPps::default()`
+    // sets `uiNumSliceGroups`, `uiNumRefIdxL0Active`/`L1Active` to 1 and
+    // `iPicInitQp`/`Qs` to 26.
     let mut sTempPpsStore = SPps::memset_zero();
     let pPps = &mut sTempPpsStore;
 
@@ -2475,8 +2425,7 @@ pub fn ParsePps(
         pCtx.sSpsPpsCtx.bPpsAvailFlags[pps_idx] = true;
     }
 
-    // `au_parser.cpp:1471-1493` — the parse-only PPS cache, last thing in
-    // the function as in the reference.
+    // `au_parser.cpp:1471-1493` — the parse-only PPS cache, last thing in the function.
     if pCtx.pParam.bParseOnly {
         if kpSrcNal.len() >= SPS_PPS_BS_SIZE - 4 {
             WelsLog(
@@ -2771,14 +2720,11 @@ pub fn SetScalingListValue(
 }
 
 /// What [`ParseScalingList`] reads out of the SPS.
-///
-/// The C++'s own `bInit` is `bPPS && sps->bSeqScalingMatrixPresentFlag` and
-/// `ParseSps` passes `bPPS = false`.
 #[derive(Copy, Clone)]
 pub struct ScalingListSource {
     pub uiChromaFormatIdc: u8,
     pub bSeqScalingMatrixPresentFlag: bool,
-    /// The SPS's 4x4 lists 0 and 3 — the two the C++ names `defaultScaling4x4_*`.
+    /// The SPS's 4x4 lists 0 and 3.
     pub prev4x4: [[u8; 16]; 2],
     /// The SPS's 8x8 lists 0 and 1.
     pub prev8x8: [[u8; 64]; 2],
@@ -2905,9 +2851,8 @@ pub fn ParseScalingList(
 
 /// Resets FMO contexts and returns count of active FMO units.
 ///
-/// `au_parser.cpp:1794` clears every active entry of `sFmoList` —
-/// `UninitFmoList (&pCtx->sFmoList[0], MAX_PPS_COUNT, pCtx->iActiveFmoNum, …)` — and
-/// *then* zeroes `iActiveFmoNum`.
+/// Every active entry of `sFmoList` is cleared *before* `iActiveFmoNum` is zeroed
+/// (`au_parser.cpp:1794`).
 pub fn ResetFmoList(pCtx: &mut SWelsDecoderContext) -> i32 {
     let iCountNum = pCtx.iActiveFmoNum;
     crate::decoder::fmo::UninitFmoList(&mut pCtx.sFmoList, iCountNum);
@@ -2919,14 +2864,9 @@ pub fn ResetFmoList(pCtx: &mut SWelsDecoderContext) -> i32 {
 // Access Unit List Dynamic Memory Management
 // ============================================================================
 
-/// Grows the node list, keeping every existing node **at its address**.
-///
-/// The C++ (`memmgr_nal_unit.cpp:120`) allocates a second contiguous block, `memcpy`s
-/// the nodes into it and frees the first — so every outstanding `SNalUnit*` (the
-/// context's `pNalCur`, `DecodeCurrentAccessUnit`'s local, the slice header's
-/// back-pointers) dangles the moment an access unit outgrows its list. Pushing boxed
-/// nodes onto a `Vec` keeps the old nodes exactly where they were, so the growth is
-/// invisible to anything holding one.
+/// Grows the node list, keeping every existing node **at its address**
+/// (`memmgr_nal_unit.cpp:120`). Pushing boxed nodes onto a `Vec` leaves the old nodes
+/// where they were, so the growth is invisible to anything holding one.
 pub fn ExpandNalUnitList(pAu: &mut SAccessUnit, kiOrgSize: i32, kiExpSize: i32) -> i32 {
     if kiExpSize <= kiOrgSize {
         return ERR_INVALID_PARAMETERS;
@@ -2957,7 +2897,6 @@ pub fn MemGetNextNal(pAu: &mut SAccessUnit) -> Option<usize> {
 
     let idx = pAu.uiAvailUnitsNum as usize;
     pAu.uiAvailUnitsNum += 1;
-    // The C's `memset (pNu, 0, sizeof (SNalUnit))` is a value.
     *pAu.nal(idx) = SNalUnit::default();
     Some(idx)
 }
@@ -2971,10 +2910,8 @@ pub fn ForceClearCurrentNal(pAu: &mut SAccessUnit) {
 
 /// Drops the NAL just queued and ends the access unit one NAL earlier.
 ///
-/// The error tail the slice branch of [`ParseNalHeader`] spells four times, taking
-/// the availability count from *before* the failure because that is what the C++'s
-/// hoisted `uiAvailNalNum` held. The concealment-disabled arm is what makes the
-/// truncated access unit decodable at all.
+/// `uiAvailNalNum` is the availability count from *before* the failure. The
+/// concealment-disabled arm is what makes the truncated access unit decodable.
 fn discard_nal_and_close_au(pCtx: &mut SWelsDecoderContext, uiAvailNalNum: u32) {
     if let Some(au) = cur_au(&mut pCtx.access_unit) {
         ForceClearCurrentNal(au);
@@ -3019,8 +2956,7 @@ pub fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
 mod au_list_tests {
     use super::*;
 
-    /// `MemGetNextNal` hands out a node the C has just `memset` to zero, and the C's
-    /// zero for `pSliceHeader->pSps` is a null pointer.
+    /// `MemGetNextNal` hands out a zeroed node, whose slice header names no SPS.
     #[test]
     fn a_fresh_nal_node_has_parsed_no_sps() {
         let mut au = SAccessUnit::with_nodes(MAX_NAL_UNIT_NUM_IN_AU);
@@ -3108,9 +3044,7 @@ mod au_list_tests {
         }
     }
 
-    /// `ResetFmoList` must clear the FMO list, not only the counter:
-    /// `au_parser.cpp:1794` calls `UninitFmoList` over `sFmoList` and *then* zeroes
-    /// `iActiveFmoNum`.
+    /// `ResetFmoList` clears the FMO list entries, not only the counter.
     #[test]
     fn reset_fmo_list_clears_the_entries_the_cpp_clears() {
         {
@@ -3173,12 +3107,10 @@ mod au_list_tests {
         assert!(CheckAccessUnitBoundaryExt(None, &hdr, &hdr, &sh, &cur_sh));
     }
 
-    /// The one behavior where the port deliberately diverges from upstream —
-    /// reporting the **escaped** length where `au_parser.cpp:1252` stores the RBSP
-    /// length, one byte short per inserted `0x03`. It drives the writer directly with
-    /// an `SSps` crafted so the rewrite emits `.. 00 00 02 ..` (`uiLevelIdc = 0` puts
-    /// two zero bytes after `profile_idc`; `iSpsId = 63`'s exp-Golomb prefix makes the
-    /// next byte `0x02`), which `rbsp_to_ebsp` must escape.
+    /// The rewrite reports the **escaped** length. The writer is driven with an `SSps`
+    /// crafted so the rewrite emits `.. 00 00 02 ..` (`uiLevelIdc = 0` puts two zero
+    /// bytes after `profile_idc`; `iSpsId = 63`'s exp-Golomb prefix makes the next byte
+    /// `0x02`), which `rbsp_to_ebsp` must escape.
     #[test]
     fn subset_sps_rewrite_reports_the_escaped_length_when_an_escape_is_needed() {
         use crate::decoder::decoder_context::SSpsBsInfo;
@@ -3207,8 +3139,7 @@ mod au_list_tests {
             let len = row.uiSpsBsLen as usize;
             assert_eq!(&row.pSpsBsBuf[..5], &[0x00, 0x00, 0x00, 0x01, 0x67]);
             // De-escape the payload the length names: every inserted byte is a
-            // `03` after `00 00`. The count is the whole disagreement with
-            // upstream — its stored length is exactly `escapes` bytes short.
+            // `03` after `00 00`.
             let payload = &row.pSpsBsBuf[5..len];
             let mut escapes = 0usize;
             let mut i = 0usize;
@@ -3227,7 +3158,7 @@ mod au_list_tests {
             );
             // The length reaches exactly the end of the written NAL: the RBSP
             // trailing stop bit makes the final byte nonzero, so a length cut
-            // short by the escape count (upstream's) could not end here.
+            // short by the escape count could not end here.
             assert_ne!(
                 payload.last().copied(),
                 Some(0),
@@ -3237,8 +3168,7 @@ mod au_list_tests {
 
         // The reached arm: `4D 00 00 02` forces one emulation-prevention byte.
         verify(&craft(0, 63), 1);
-        // The control: an ordinary level has no zero pair and the two length
-        // formulas agree.
+        // The control: an ordinary level has no zero pair, so nothing is escaped.
         verify(&craft(30, 0), 0);
     }
 }

@@ -1,5 +1,5 @@
 //! Integration test for Long-Term Reference (LTR) marking and recovery.
-//! Ported from `test/api/ltr_test.cpp`.
+//! `test/api/ltr_test.cpp`.
 
 use openh264_rs::api::codec_api::*;
 

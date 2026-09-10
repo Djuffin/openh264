@@ -3,23 +3,17 @@
 // All rights reserved.
 //
 // The C++ counterpart is `codec/common/inc/WelsThreadPool.h` /
-// `codec/common/src/WelsThreadPool.cpp`, as `wels_task_management.cpp` uses it:
-// a set of threads created once, fed tasks from a queue, signalling an event when
-// a frame's task count reaches zero. Nothing here is a line-by-line port of that;
-// the shape that is kept is the one the encoder relies on — persistent threads,
-// one wake-up and one completion signal per frame.
+// `codec/common/src/WelsThreadPool.cpp`: threads created once, fed tasks from a
+// queue, signalling when a frame's task count reaches zero.
 
 //! # The persistent worker pool
 //!
-//! The encoder's three slice forks (`EncodeFixedSlicesForked`,
+//! [`WorkerPool`] keeps `N` threads alive for the encoder's lifetime and offers
+//! `std::thread::scope`'s API — `pool.scope(|s| { s.spawn(..) .. h.join() })` — to
+//! the encoder's three slice forks (`EncodeFixedSlicesForked`,
 //! `EncodeSizeLimitedSlicesForked`, `UpdateMbMapForked` in
-//! `slice_multi_threading.rs`) used to open a `std::thread::scope` per frame,
-//! which creates and destroys one OS thread per worker per frame: a 2 MiB stack
-//! mapped and unmapped, a guard page protected, a thread created and joined,
-//! roughly 30 µs of an 80 µs QVGA frame. [`WorkerPool`] keeps the threads alive
-//! for the encoder's lifetime and gives the forks the same API — `pool.scope(|s|
-//! { s.spawn(..) .. h.join() })` — so their borrow structure, which is the port's
-//! whole multi-threading argument, is unchanged.
+//! `slice_multi_threading.rs`), which would otherwise create and destroy one OS
+//! thread per worker per frame.
 //!
 //! # Shape
 //!
@@ -32,12 +26,11 @@
 //! * Per job: a packet holding the result (`Ok(T)` or the panic payload) and a
 //!   `done` flag.
 //!
-//! The calling thread **helps**: while it waits in [`JobHandle::join`] or at the
-//! end of [`WorkerPool::scope`] it runs any job still in the queue itself, so a
-//! frame never waits on a worker's wake-up latency for a job nobody has started,
-//! and a pool of zero workers runs everything inline. A job is still a whole
-//! worker's share of a frame — the pool decides which thread runs a job, never
-//! how the slices are grouped into jobs.
+//! The calling thread helps: while it waits in [`JobHandle::join`] or at the end of
+//! [`WorkerPool::scope`] it runs any job still in the queue itself, so a frame never
+//! waits on a worker's wake-up latency for a job nobody has started, and a pool of
+//! zero workers runs everything inline. The pool decides which thread runs a job,
+//! never how the slices are grouped into jobs.
 //!
 //! Idle threads spin for a bounded time before parking (`WORKER_SPIN`,
 //! `CALLER_SPIN`), and only when the pool leaves a core free for the caller:
@@ -50,8 +43,7 @@
 //! `'static`, so the closure has to cross that boundary: it is boxed as
 //! `Box<dyn FnOnce() + Send + 'scope>` and its lifetime is erased to `'static`
 //! at the one `unsafe` site in this module (`Scope::spawn`). The argument is
-//! `std::thread::scope`'s (`library/std/src/thread/scoped.rs`, whose
-//! `Scope::spawn` goes through `Builder::spawn_unchecked` for the same reason):
+//! `std::thread::scope`'s:
 //!
 //! 1. **The scope does not return, and does not unwind past its own frame, until
 //!    every job it spawned has completed.** `ScopeData::running` is incremented
@@ -61,7 +53,7 @@
 //!    also waits, then resumes unwinding. The wait's `Acquire` load against the
 //!    worker's `Release` decrement is the happens-before edge that publishes
 //!    everything the job wrote to whatever reads it after the scope; the
-//!    reconstruction seam (`rec_view.rs`) relies on exactly that edge.
+//!    reconstruction seam (`rec_view.rs`) relies on that edge.
 //! 2. **The decrement is the last thing a job does with anything borrowed.** The
 //!    user's closure is consumed by its call, so its captures are dropped when it
 //!    returns; the result `T` (which may itself borrow `'scope`) is stored in the
@@ -70,9 +62,8 @@
 //!    too. After the decrement the thread touches only the `Arc<ScopeData>` it
 //!    owns, which is heap, and its own queue.
 //! 3. **`'scope` cannot shrink.** `Scope` is invariant in `'scope` (the
-//!    `PhantomData<&'scope mut &'scope ()>` marker, as in `std`), and `spawn`
-//!    demands `F: 'scope`, so a job cannot capture a local that dies before `f`
-//!    returns — that is a compile error, the same one `std` gives.
+//!    `PhantomData<&'scope mut &'scope ()>` marker), and `spawn` demands
+//!    `F: 'scope`, so a job cannot capture a local that dies before `f` returns.
 //!
 //! So the erased `'static` is never relied on: the closure is called, and its
 //! captures dropped, strictly before the borrows it holds can end. Panics inside
@@ -80,14 +71,14 @@
 //! which the forks map to `ENC_RETURN_UNEXPECTED`; a job that panicked and was
 //! never joined makes `scope` panic at its end, as `std` does.
 //!
-//! # What is not claimed
+//! # Ownership and thread-safety
 //!
 //! The pool's threads are owned by [`WorkerPool`] and joined in its `Drop`.
-//! Nothing here claims `Sync` by hand: `WorkerPool` is `Sync` by its fields
-//! (atomics, a mutex, thread handles), which is what lets `&sWelsEncCtx` — which
-//! holds the pool through `pSliceThreading` — cross a spawn. `Scope` and
-//! `JobHandle` are deliberately `!Sync`/`!Send`: a handle is joined on the thread
-//! that owns the scope, because that is the thread a completing job unparks.
+//! `WorkerPool` is `Sync` by its fields (atomics, a mutex, thread handles), never
+//! by hand, which is what lets `&sWelsEncCtx` — which holds the pool through
+//! `pSliceThreading` — cross a spawn. `Scope` and `JobHandle` are `!Sync`/`!Send`:
+//! a handle is joined on the thread that owns the scope, because that is the thread
+//! a completing job unparks.
 //!
 //! # Invariants the encoder relies on
 //!
@@ -109,8 +100,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
-/// A job as the queue holds it: type-erased, lifetime-erased (see the module
-/// header for why the `'static` is honest).
+/// A job as the queue holds it: type-erased and lifetime-erased; the module header
+/// carries the soundness argument for the `'static`.
 type Job = ScopedJob<'static>;
 type ScopedJob<'a> = Box<dyn FnOnce() + Send + 'a>;
 /// A panic payload, as `std::thread::Result` carries it.
@@ -118,22 +109,16 @@ pub type Payload = Box<dyn Any + Send + 'static>;
 
 /// How long an idle worker spins for the next job before parking.
 ///
-/// Short on purpose, and measured rather than reasoned: on the QVGA bars row at
-/// four threads (an M1, four performance and four efficiency cores, 8 s runs,
-/// three per point) the bound has a sharp optimum — 0 µs 14.3k fps, 15 µs 13k,
-/// **20 µs 19.2k**, 25 µs 17.3k, 30 µs 14.2k, 100 µs 13.7k, 200 µs 11.3k — and
-/// the same at two threads above 20 µs. Four workers spinning through the
-/// caller's serial work between forks are a fifth busy thread on four fast
-/// cores, and the longer they spin the likelier the scheduler moves one of
-/// the frame's threads onto a slow core, which the frame then waits for. At
-/// larger pictures the workers park once per frame either way and the wake is
-/// microseconds against milliseconds of work.
+/// Short on purpose: workers spinning through the caller's serial work between
+/// forks are one more busy thread, and the longer they spin the likelier the
+/// scheduler moves one of the frame's threads onto a slow core, which the frame
+/// then waits for. At larger pictures the workers park once per frame either way
+/// and the wake is microseconds against milliseconds of work.
 const WORKER_SPIN: Duration = Duration::from_micros(20);
-/// How long the calling thread spins for the last job of a scope before
-/// parking. The jobs of a frame are of similar size, so the last one lands
-/// within microseconds of the caller's own; without this spin the caller parks
-/// every frame and the QVGA row falls back to the per-frame-spawn rate (9.7k
-/// fps). Measured as a plateau: 40 to 100 µs all within noise of 19k fps.
+/// How long the calling thread spins for the last job of a scope before parking.
+/// The jobs of a frame are of similar size, so the last one lands within
+/// microseconds of the caller's own; without this spin the caller parks every
+/// frame.
 const CALLER_SPIN: Duration = Duration::from_micros(50);
 /// Spin iterations between clock reads.
 const SPIN_BATCH: u32 = 32;
@@ -197,11 +182,11 @@ impl Shared {
     /// Wakes one parked worker, if there is one. A spinning worker needs no
     /// wake: it reads `pending`.
     ///
-    /// The lost-wake-up argument: the producer increments `pending` and then
-    /// reads `parked`; the worker sets `parked` and then reads `pending`; all
-    /// four are `SeqCst`, so at least one side sees the other's write — either
-    /// the worker skips the park or the producer claims and unparks it. An
-    /// `unpark` before the `park` is not lost: the token is kept.
+    /// No wake-up is lost: the producer increments `pending` then reads `parked`,
+    /// the worker sets `parked` then reads `pending`, and all four are `SeqCst`, so
+    /// at least one side sees the other's write — either the worker skips the park
+    /// or the producer claims and unparks it. An `unpark` before the `park` keeps
+    /// its token.
     fn wake_one(&self) {
         for slot in &self.workers {
             if slot.parked.load(Ordering::SeqCst)
@@ -319,7 +304,7 @@ impl WorkerPool {
     }
 
     /// [`WorkerPool::new`] with an explicit `(worker, caller)` spin budget in
-    /// place of [`spin_budget`]'s — the latency micro-test's instrument.
+    /// place of [`spin_budget`]'s.
     #[cfg(test)]
     fn with_spin(workers: usize, spin: Option<(Duration, Duration)>) -> Self {
         Self::try_new_with_spin(workers, spin).expect("failed to spawn a worker thread")
@@ -406,8 +391,8 @@ impl WorkerPool {
         // still be borrowing them.
         let result = catch_unwind(AssertUnwindSafe(|| f(&scope)));
 
-        // The wait, on both paths. This is what makes the erased `'static` in
-        // `spawn` honest (module header, point 1).
+        // The wait, on both paths: what makes the erased `'static` in `spawn` sound
+        // (module header, point 1).
         scope.wait_all();
 
         match result {
@@ -434,12 +419,11 @@ impl Drop for WorkerPool {
         self.shared.stop.store(true, Ordering::SeqCst);
         for slot in &self.shared.workers {
             // A `swap`, not a `store`: the read half of the RMW is what
-            // synchronises with the worker's own write of `parked`, and through
-            // it with the registration of `thread` before that write. A plain
-            // store has no read, so the handle could legitimately read as unset
-            // here and the worker would stay parked — Miri's weak-memory
-            // emulation showed exactly that. A worker that has not parked yet
-            // reads `stop` (`SeqCst`, stored above) before it would.
+            // synchronises with the worker's own write of `parked`, and through it
+            // with the registration of `thread` before that write. A plain store
+            // has no read, so the handle could read as unset here and the worker
+            // would stay parked. A worker that has not parked yet reads `stop`
+            // (`SeqCst`, stored above) before it would.
             let was_parked = slot.parked.swap(false, Ordering::SeqCst);
             if let Some(t) = slot.thread.get() {
                 t.unpark();
@@ -481,8 +465,8 @@ struct ScopeData {
 pub struct Scope<'scope, 'env: 'scope> {
     shared: &'env Arc<Shared>,
     data: Arc<ScopeData>,
-    /// Invariance over `'scope` — the `std` marker, for the `std` reason: without
-    /// it a job could spawn a job borrowing one of its own locals.
+    /// Invariance over `'scope`: without it a job could spawn a job borrowing one
+    /// of its own locals.
     scope: PhantomData<&'scope mut &'scope ()>,
     env: PhantomData<&'env mut &'env ()>,
     /// `!Sync` (and `!Send`): jobs are spawned and joined on the owning thread,
@@ -532,13 +516,12 @@ impl<'scope, 'env> Scope<'scope, 'env> {
         };
 
         let boxed: ScopedJob<'scope> = Box::new(wrapper);
-        // SAFETY: lifetime erasure only — the same trait object, `'scope` read
-        // as `'static`; the fat pointer's layout is identical. It is sound
-        // because the closure is called, and every capture and result dropped,
-        // before `'scope` can end: `scope` waits for `ScopeData::running` to
-        // reach zero on both its return and its unwind path, and the wrapper
-        // above decrements only after `f` has been consumed and its result
-        // handed over. See the module header.
+        // SAFETY: lifetime erasure only — the same trait object with `'scope` read
+        // as `'static`, an identical fat-pointer layout. Sound because the closure
+        // is called, and every capture and result dropped, before `'scope` can end:
+        // `scope` waits for `ScopeData::running` to reach zero on both its return
+        // and its unwind path, and the wrapper above decrements only after `f` has
+        // been consumed and its result handed over. See the module header.
         let job: Job = unsafe { std::mem::transmute::<ScopedJob<'scope>, Job>(boxed) };
         self.shared.push(job);
 
@@ -649,9 +632,8 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     /// Jobs borrow the frame's locals — a `Vec` and a counter — and their writes
-    /// are visible after the scope. Repeated so that under Miri the drop of the
-    /// locals after each scope is checked against a job that might still hold
-    /// them.
+    /// are visible after the scope. Repeated so the drop of the locals after each
+    /// scope is checked against a job that might still hold them.
     #[test]
     fn jobs_borrow_locals_and_publish_their_writes() {
         let pool = WorkerPool::new(3);
@@ -771,8 +753,7 @@ mod tests {
 
     /// A job's result with a destructor that touches the frame: when the handle
     /// is dropped without a join, the worker drops the result before its
-    /// decrement, so by the end of the scope the borrow is gone. Under Miri the
-    /// assertion is the retag of `dropped` inside `Drop`.
+    /// decrement, so by the end of the scope the borrow is gone.
     #[test]
     fn an_unjoined_result_is_dropped_before_the_scope_ends() {
         struct Tally<'a>(&'a AtomicU32);
@@ -946,9 +927,7 @@ mod tests {
 
     /// The scope micro-timing: `scope` with N trivial jobs, against
     /// `std::thread::scope` with N trivial spawns in the same process. A
-    /// measurement, not a check, so it runs only when asked — on an idle machine:
-    /// `POOL_LATENCY=1 cargo test --release --lib worker_pool::tests::latency -- --nocapture`.
-    /// (Not `#[ignore]`: the gate battery pins the crate's ignored-test count.)
+    /// measurement, not a check, so it runs only when `POOL_LATENCY` is set.
     #[test]
     fn latency_micro_timing() {
         if std::env::var_os("POOL_LATENCY").is_none() {

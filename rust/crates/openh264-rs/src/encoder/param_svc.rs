@@ -1,6 +1,6 @@
 //! Configurable parameters, temporal scalability mapping, and parameter set management in H.264/SVC Encoder.
 //!
-//! Translated from `codec/encoder/core/inc/param_svc.h`.
+//! C++: `codec/encoder/core/inc/param_svc.h`.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
@@ -11,7 +11,7 @@ use crate::{
     SSpatialLayerConfig, SliceMode,
 };
 // Profile/level/complexity/SPS-id enumerators live in api::codec_api (one definition
-// per type); glob-import the variants so the C++ spellings stay bare, as in the C++.
+// per type); glob-import the variants so the C++ spellings stay bare.
 use crate::api::codec_api::ECOMPLEXITY_MODE::*;
 use crate::api::codec_api::ELevelIdc::*;
 use crate::api::codec_api::EParameterSetStrategy::*;
@@ -30,21 +30,20 @@ pub const MAX_DEPENDENCY_LAYER: usize = 4;
 pub const MAX_SPATIAL_LAYER_NUM: usize = 4;
 pub const MAX_FNAME_LEN: usize = 256;
 pub const MAX_SPS_COUNT: usize = 32;
-/// The **encoder's** PPS ceiling — `wels_const.h:51` sets `MAX_PPS_COUNT` to
+/// The encoder's PPS ceiling — `wels_const.h:51` sets `MAX_PPS_COUNT` to
 /// `MAX_PPS_COUNT_LIMITED` (57), not the standard's 256, "because of known
 /// limitation of receiver endpoints".
 pub use crate::encoder::encoder_context::MAX_PPS_COUNT;
 pub const MAX_SLICEGROUP_IDS: usize = 8;
 /// `codec_app_def.h:56` — `(MAX_NAL_UNITS_IN_LAYER - SAVED_NALUNIT_NUM_TMP) / 3`
-/// = (128 - 21) / 3 = **35**. Both `ParamTranscode` and `FillDefault`
-/// compute `kiLesserSliceNum = min (MAX_SLICES_NUM, MAX_SLICES_NUM_TMP)`
-/// (param_svc.h:203).
+/// = (128 - 21) / 3 = 35. Both `ParamTranscode` and `FillDefault` compute
+/// `kiLesserSliceNum = min (MAX_SLICES_NUM, MAX_SLICES_NUM_TMP)` (param_svc.h:203).
 pub use crate::api::codec_api::MAX_SLICES_NUM_TMP;
 /// `svc_enc_slice_segment.h:62` — `(MAX_NAL_UNITS_IN_LAYER - SAVED_NALUNIT_NUM) / 3`
 /// = (128 - 21) / 3 = 35.
 pub use crate::encoder::wels_encoder_ext::MAX_SLICES_NUM;
 
-/// `wels_const.h:60` says **60**.
+/// `wels_const.h:60`: `MAX_FRAME_RATE` is 60.
 pub use crate::encoder::wels_encoder_ext::{MAX_FRAME_RATE, MIN_FRAME_RATE};
 
 pub const UNSPECIFIED_BIT_RATE: i32 = 0;
@@ -102,9 +101,8 @@ pub fn WELS_LOG2(x: u32) -> i32 {
     }
 }
 
-/// Computes base-2 logarithm scaling factor of `(upper / base)`.
-/// Returns `round(log2(upper / base))` if `(upper / base)` is a power of 2 within floating-point tolerance,
-/// or `u32::MAX` otherwise.
+/// `round(log2(upper / base))` when `(upper / base)` is a power of 2 within
+/// floating-point tolerance, `u32::MAX` otherwise.
 #[inline]
 pub fn GetLogFactor(base: f32, upper: f32) -> u32 {
     let dLog2factor = (1.0f64 * upper as f64 / base as f64).log10() / 2.0f64.log10();
@@ -121,11 +119,10 @@ pub fn GetLogFactor(base: f32, upper: f32) -> u32 {
 /// Dependency Layer Internal Runtime Parameters
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-/// `TagDLayerParam` — `codec/encoder/core/inc/param_svc.h:82`. 68 bytes.
+/// `TagDLayerParam` — `codec/encoder/core/inc/param_svc.h:82`.
 ///
-/// `sRecFileName` is **not** a member: `param_svc.h:98` guards it with
-/// `#ifdef ENABLE_FRAME_DUMP`, and `as264_common.h:61-75` only defines that under
-/// `WELS_TESTBED` or `__UNITTEST__`, neither of which the library build sets.
+/// `sRecFileName` is not a member: `param_svc.h:98` guards it with
+/// `#ifdef ENABLE_FRAME_DUMP`, which the library build does not define.
 pub struct SSpatialLayerInternal {
     pub iActualWidth: i32,
     pub iActualHeight: i32,
@@ -179,9 +176,9 @@ pub struct SUsedPicRect {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SWelsSvcCodingParam {
-    // SEncParamExt base, in the exact order of api/codec_api.rs. C++ derives
-    // (TagWelsSvcCodingParam: SEncParamExt, param_svc.h:106) so the base must be a
-    // byte-identical 924-byte prefix.
+    // SEncParamExt base, in the exact order of api/codec_api.rs. The C++ derives
+    // (TagWelsSvcCodingParam: SEncParamExt, param_svc.h:106), so the base has to stay
+    // a byte-identical prefix.
     pub iUsageType: EUsageType,
     pub iPicWidth: i32,
     pub iPicHeight: i32,
@@ -493,15 +490,14 @@ impl SWelsSvcCodingParam {
 
         while iIdxSpatial < self.iSpatialLayerNum {
             let idx = iIdxSpatial as usize;
-            // `sSpatialLayers->uiProfileIdc` in the C++ is `sSpatialLayers[0]`, on
-            // every iteration -- not `[iIdxSpatial]`. Five fields here decay the
-            // array to a pointer that way (uiProfileIdc, uiLevelIdc,
-            // iSpatialBitrate, iMaxSpatialBitrate, iDLayerQp) and five index it
-            // properly (fFrameRate, iVideoWidth/Height and the two internal ones).
-            // Writing both is not "a superset": at more than one spatial layer the
-            // reference leaves `[1..]`'s profile, level, bitrate and QP at whatever
-            // FillDefault left, and `[0]`'s profile ends at PRO_SCALABLE_BASELINE
-            // because the last iteration rewrites it. Faithful to param_svc.h:222.
+            // `sSpatialLayers->uiProfileIdc` is `sSpatialLayers[0]` on every
+            // iteration, not `[iIdxSpatial]`. Five fields decay the array to a pointer
+            // that way (uiProfileIdc, uiLevelIdc, iSpatialBitrate, iMaxSpatialBitrate,
+            // iDLayerQp) and five index it properly (fFrameRate, iVideoWidth/Height and
+            // the two internal ones). So at more than one spatial layer `[1..]`'s
+            // profile, level, bitrate and QP keep whatever FillDefault left, and
+            // `[0]`'s profile ends at PRO_SCALABLE_BASELINE because the last iteration
+            // rewrites it (param_svc.h:222).
             self.sSpatialLayers[0].uiProfileIdc = uiProfileIdc;
             self.sSpatialLayers[0].uiLevelIdc = LEVEL_UNKNOWN;
 
@@ -521,7 +517,7 @@ impl SWelsSvcCodingParam {
             self.sDependencyLayers[idx].iActualHeight = self.iPicHeight;
 
             // `sSpatialLayers->iSpatialBitrate = sSpatialLayers[iIdxSpatial]
-            // .iSpatialBitrate = ...` -- this one really does write both.
+            // .iSpatialBitrate = ...` — this one writes both.
             self.sSpatialLayers[idx].iSpatialBitrate = pCodingParam.iTargetBitrate;
             self.sSpatialLayers[0].iSpatialBitrate = pCodingParam.iTargetBitrate;
 
@@ -594,7 +590,7 @@ impl SWelsSvcCodingParam {
         self.bEnableLongTermReference = pCodingParam.bEnableLongTermReference;
         self.iLtrMarkPeriod = pCodingParam.iLtrMarkPeriod;
         self.bIsLosslessLink = pCodingParam.bIsLosslessLink;
-        // These five are *copied* here (`param_svc.h:349-353`); the constants above
+        // These five are copied here (`param_svc.h:349-353`); the constants above
         // belong to `FillDefault`.
         self.bFixRCOverShoot = pCodingParam.bFixRCOverShoot;
         self.iIdrBitrateRatio = pCodingParam.iIdrBitrateRatio;
@@ -641,10 +637,8 @@ impl SWelsSvcCodingParam {
             self.iMaxNumRefFrame = self.iNumRefFrame;
         }
 
-        // `param_svc.h:384`: `iLTRRefNum = (bEnableLongTermReference ?
-        // pCodingParam.iLTRRefNum : 0)`. `WelsCheckNumRefSetting` (`au_set.rs`)
-        // overwrites the field with `LONG_TERM_REF_NUM` on every init path that
-        // reaches it.
+        // `param_svc.h:384`. `WelsCheckNumRefSetting` (`au_set.rs`) overwrites the
+        // field with `LONG_TERM_REF_NUM` on every init path that reaches it.
         self.iLTRRefNum = if pCodingParam.bEnableLongTermReference {
             pCodingParam.iLTRRefNum
         } else {
@@ -750,8 +744,7 @@ impl SWelsSvcCodingParam {
         }
     }
 
-    /// Base-class slice of the C++ `TagWelsSvcCodingParam : SEncParamExt`
-    /// inheritance, which the flattened Rust struct has to spell out.
+    /// The `SEncParamExt` base-class slice of `TagWelsSvcCodingParam`.
     pub fn to_param_ext(&self) -> SEncParamExt {
         SEncParamExt {
             iUsageType: self.iUsageType,
@@ -855,16 +848,16 @@ impl SWelsSvcCodingParam {
     }
 }
 
-/// A parameter set's **position in the encoder context's array of them**.
+/// A parameter set's position in the encoder context's array of them.
 ///
-/// **Position, not the syntax element.** `SWelsSPS::uiSpsId` and `SWelsPPS::iPpsId`
-/// are what goes on the wire, and the id strategy may add an offset to the latter
-/// when it does (`GetPpsIdOffset`). They agree with the position today because
-/// `WelsGenerateSps`/`WelsGeneratePps` stamp each set with its own index — but they
-/// are different things, and only one of them can index an array.
+/// Position, not the syntax element: `SWelsSPS::uiSpsId` and `SWelsPPS::iPpsId` are
+/// what goes on the wire, and the id strategy may add an offset to the latter
+/// (`GetPpsIdOffset`). They agree with the position while `WelsGenerateSps` and
+/// `WelsGeneratePps` stamp each set with its own index, but only the position indexes
+/// an array.
 ///
-/// The widths are `SDqIdc`'s, which are the C++'s: the arrays are bounded by
-/// `MAX_SPS_COUNT` and `MAX_PPS_COUNT` (57), so both fit several times over.
+/// The widths are `SDqIdc`'s: the arrays are bounded by `MAX_SPS_COUNT` and
+/// `MAX_PPS_COUNT` (57), so both fit several times over.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SpsId(pub u8);
 
@@ -874,10 +867,9 @@ pub struct PpsId(pub u16);
 
 /// A subset SPS's position in `sWelsEncCtx::pSubsetArray` — see [`SpsId`].
 ///
-/// **Its own type, because the id strategy has its own space for it**:
-/// `PARA_SET_TYPE_AVCSPS`, `PARA_SET_TYPE_SUBSETSPS` and `PARA_SET_TYPE_PPS` are
-/// three separate id counters in `paraset_strategy.rs`, and the context keeps three
-/// separate arrays.
+/// Its own type because the id strategy keeps its own space for it:
+/// `PARA_SET_TYPE_AVCSPS`, `PARA_SET_TYPE_SUBSETSPS` and `PARA_SET_TYPE_PPS` are three
+/// separate id counters in `paraset_strategy.rs`, over three separate arrays.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SubsetSpsId(pub u8);
 
@@ -935,11 +927,9 @@ pub struct SWelsSPS {
     pub sAspectRatioExtHeight: u16,
 }
 
-/// **The C++'s `memset (pSps, 0, sizeof (SWelsSPS))`, spelled out.**
-///
-/// `WelsInitSps` and `WelsInitSubsetSps` begin with that memset. It is deliberately
-/// **not** [`Default`](SWelsSPS::default), which seeds `uiProfileIdc = PRO_BASELINE`
-/// and the VUI `*_UNDEF` values.
+/// An all-zero SPS, the state `WelsInitSps` and `WelsInitSubsetSps` start from.
+/// Deliberately not [`Default`](SWelsSPS::default), which seeds
+/// `uiProfileIdc = PRO_BASELINE` and the VUI `*_UNDEF` values.
 impl SWelsSPS {
     pub const ZERO: Self = Self {
         uiSpsId: 0,
@@ -955,8 +945,8 @@ impl SWelsSPS {
             iCropBottom: 0,
         },
         iNumRefFrames: 0,
-        // 0 is not `PRO_BASELINE`; `WelsInitSps` sets it, and its subset-SPS caller
-        // deliberately takes `uiProfileIdc` verbatim with no fallback for 0.
+        // 0 is not `PRO_BASELINE`: `WelsInitSps` sets this, and its subset-SPS caller
+        // takes `uiProfileIdc` as it stands, with no fallback for 0.
         uiProfileIdc: 0,
         iLevelIdc: 0,
         bGapsInFrameNumValueAllowedFlag: false,
@@ -966,7 +956,7 @@ impl SWelsSPS {
         uiVideoFormat: 0,
         bFullRange: false,
         bColorDescriptionPresent: false,
-        // 0 in each of these three is *not* the `*_UNDEF` that `Default` seeds.
+        // 0 in each of these three is not the `*_UNDEF` that `Default` seeds.
         uiColorPrimaries: 0,
         uiTransferCharacteristics: 0,
         uiColorMatrix: 0,
@@ -991,10 +981,10 @@ impl SSpsSvcExt {
     };
 }
 
-/// The zero image of a PPS — `WelsMallocz`'s zeros for `pCtx->pPPSArray`, spelled
-/// out. [`Default`](SWelsPPS::default) happens to agree field for field today; this
-/// exists so that if it ever stops agreeing — as `SWelsSPS`'s already does — the
-/// array does not silently change with it. See [`SWelsSPS::ZERO`].
+/// The zero image of a PPS, the state `pCtx->pPPSArray` starts in.
+/// [`Default`](SWelsPPS::default) agrees field for field today; this is kept separate
+/// so the array cannot drift with `Default`, as `SWelsSPS`'s has. See
+/// [`SWelsSPS::ZERO`].
 impl SWelsPPS {
     pub const ZERO: Self = Self {
         iSpsId: 0,
@@ -1007,8 +997,8 @@ impl SWelsPPS {
     };
 }
 
-/// The zero image of a whole subset SPS — `WelsInitSubsetSps`'s
-/// `memset (pSubsetSps, 0, sizeof (SSubsetSps))`. See [`SWelsSPS::ZERO`].
+/// The zero image of a whole subset SPS, the state `WelsInitSubsetSps` starts from.
+/// See [`SWelsSPS::ZERO`].
 impl SSubsetSps {
     pub const ZERO: Self = Self {
         pSps: SWelsSPS::ZERO,
@@ -1071,13 +1061,12 @@ pub struct SSubsetSps {
 
 /// Picture Parameter Set (PPS) syntax structure.
 ///
-/// `TagWelsPPS` — `codec/encoder/core/inc/parameter_sets.h:136`. **16 bytes**, with
-/// `iPicInitQp` at offset 8.
+/// `TagWelsPPS` — `codec/encoder/core/inc/parameter_sets.h:136`.
 ///
 /// The nine FMO fields (`uiNumSliceGroups` … `uiSliceGroupId`) sit inside
-/// `#if !defined(DISABLE_FMO_FEATURE)`, and
-/// `codec/encoder/core/inc/as264_common.h:53` defines `DISABLE_FMO_FEATURE`
-/// unconditionally — so they are **not** part of the struct the C++ encoder compiles.
+/// `#if !defined(DISABLE_FMO_FEATURE)`, which
+/// `codec/encoder/core/inc/as264_common.h:53` defines unconditionally, so they are not
+/// part of the struct.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SWelsPPS {
@@ -1133,12 +1122,9 @@ impl Default for SExistingParasetList {
 
 /// The encoder's own copy of the coding parameters.
 ///
-/// **The starting image is `Default`'s, not a memset's**: the C++ zeroes the block
-/// and then calls `FillDefault`, which writes some of it. `SWelsSvcCodingParam`
-/// holds `repr(C)` enums whose zero is not in every case a declared variant, so
-/// there is no safe zero image to reproduce. It is unobservable:
-/// `WelsInitEncoderExt` assigns the caller's whole parameter struct over this one
-/// on the very next line, and it is the only live caller.
+/// The starting image is `Default`'s rather than all-zero: `SWelsSvcCodingParam` holds
+/// `repr(C)` enums whose zero is not in every case a declared variant. `FillDefault`
+/// then writes the fields it owns.
 pub fn NewCodingParam() -> Box<SWelsSvcCodingParam> {
     let mut p = Box::new(SWelsSvcCodingParam::default());
     p.FillDefault();

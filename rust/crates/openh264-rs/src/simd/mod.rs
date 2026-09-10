@@ -4,8 +4,8 @@
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
-/// The NEON kernels. Compiled out under Miri, which cannot interpret them — see the
-/// module's own header — so that lane keeps the scalar forwards it always had.
+/// The NEON kernels. Compiled out under Miri, which cannot interpret them; that build
+/// uses the scalar forwards.
 #[cfg(all(target_arch = "aarch64", not(miri)))]
 pub mod aarch64;
 
@@ -41,55 +41,38 @@ pub use aarch64 as kernels;
 pub use scalar as kernels;
 #[cfg(all(feature = "wide", not(feature = "scalar")))]
 pub use wide as kernels;
-/// **The kernel set, and the whole of the dispatch.** Every direct call site and every
+/// The kernel set, and the whole of the dispatch. Every direct call site and every
 /// `WELS_CPU_SSE2` table install names its kernel `kernels::<family>::<kernel>`, and
-/// this alias decides what that resolves to. Each dispatch file imports it once at
-/// module level rather than spelling the path per call, because a kernel shares its
-/// name with the scalar it was ported from — `pixel_avg` is both — and the module
+/// this alias decides what that resolves to. Dispatch files import it once at module
+/// level; a kernel shares its name with the scalar body it replaces, and the module
 /// qualifier is what tells them apart.
 ///
-/// **The alias is total, and it is the selection.** Every build lands on exactly one
-/// arm, and there is no runtime test in front of it:
+/// Selection is total and build-time: every build lands on exactly one arm, with no
+/// runtime test in front of it.
 ///
 /// | build | resolves to | what runs |
 /// |---|---|---|
 /// | x86_64, default | [`x86_64`] | `core::arch` SSE2 intrinsics |
-/// | aarch64, default | [`aarch64`] | `core::arch` NEON intrinsics, ported from upstream's arm64 asm |
+/// | aarch64, default | [`aarch64`] | `core::arch` NEON intrinsics |
 /// | `--features wide` | [`wide`] | portable `wide` lanes — NEON on aarch64 |
 /// | `--features scalar` | [`scalar`] | forwards to the scalar body |
 /// | no kernels for this target, or Miri on aarch64 | [`scalar`] | likewise |
 ///
 /// `scalar` wins over `wide`, which wins over the default, so the two feature flags
-/// compose rather than conflict.
+/// compose rather than conflict. Dispatch sites carry no `#[cfg]` and no branch.
 ///
-/// **This is how the reference does it too.** Upstream dispatches every kernel through
-/// its `pfXxx` tables under `#if defined(X86_ASM)`, has no environment switch anywhere
-/// in `codec/`, and gets a scalar build from `USE_ASM=No` at the Makefile.
-/// `--features scalar` is that flag. Selecting a kernel set is a build-time question,
-/// asked once here, and the sites carry no `#[cfg]` and no branch.
-///
-/// The four modules export the same entry points with the same signatures, which
-/// `tests::the_kernel_sets_expose_the_same_entry_points` holds; the sites therefore do
-/// not change when the selection does, only this block does. The intrinsic set for
-/// the host and [`wide`] are both compiled whenever they can be, which is what lets
-/// `benches/kernel_bench.rs` time the implementations of one kernel in one process.
+/// The four modules export the same entry points with the same signatures, so a
+/// dispatch site does not change when the selection does. The intrinsic set for the
+/// host and [`wide`] are both compiled whenever they can be.
 #[cfg(all(target_arch = "x86_64", not(feature = "wide"), not(feature = "scalar")))]
 pub use x86_64 as kernels;
 
 use crate::common::cpu_core::*;
 
-/// Detects available CPU SIMD features, once per process.
+/// Detects available CPU SIMD features, once per process. The word says which vector
+/// kernels this build has; `--features scalar` makes it `0`.
 ///
-/// **What selects scalar is the build, not the environment.** `OPENH264_NO_SIMD` used
-/// to clear this word, and it was removed with the per-call `has_simd()` sites it was
-/// the other half of: with the twenty-two direct sites now calling [`kernels`]
-/// unconditionally, clearing the word would take the `pfXxx` tables scalar and leave
-/// motion compensation, deblocking, the IDCTs and the VAA statistics on the vector
-/// kernels — a switch that half-applies is worse than none. `--features scalar` is the
-/// switch now, and it is the reference's own (`USE_ASM=No`); see the per-arch
-/// `arch_cpu_features`.
-///
-/// Latching keeps this to one probe per process. Out-of-line initialiser so the
+/// Latching keeps this to one probe per process; the initialiser is out of line so the
 /// steady-state read is an acquire load and a compare.
 #[inline]
 pub fn detect_cpu_features() -> u32 {
@@ -101,7 +84,7 @@ pub fn detect_cpu_features() -> u32 {
     latch_cpu_features()
 }
 
-/// Runs once per process; see [`detect_cpu_features`] for why it is out of line.
+/// Runs once per process.
 #[cold]
 #[inline(never)]
 fn latch_cpu_features() -> u32 {
@@ -118,9 +101,8 @@ fn latch_cpu_features() -> u32 {
 /// instruction set, so those bits are unconditional.
 #[cfg(target_arch = "x86_64")]
 fn arch_cpu_features() -> u32 {
-    // `--features scalar` is this port's `USE_ASM=No`: `kernels` is the scalar set, so
-    // there is no vector kernel for any slot and no bit to report. The `pfXxx` tables
-    // then install the scalar arm directly rather than a forward to it.
+    // Under `--features scalar` there is no vector kernel for any slot, so no bit is
+    // reported and the `pfXxx` tables install their scalar arms directly.
     if cfg!(feature = "scalar") {
         return 0;
     }
@@ -152,28 +134,19 @@ fn arch_cpu_features() -> u32 {
     flags
 }
 
-/// The aarch64 probe. Upstream's is `cpu.cpp`'s `WelsCPUFeatureDetect` for
-/// `HAVE_NEON_AARCH64`, which does no runtime detection at all — NEON is mandatory on
-/// every AArch64 CPU — and returns `WELS_CPU_VFPv3 | WELS_CPU_NEON`. This answers the
-/// same way, with one more bit.
+/// The aarch64 probe — `codec/common/src/cpu.cpp`'s `WelsCPUFeatureDetect` for
+/// `HAVE_NEON_AARCH64`. No runtime detection: NEON is mandatory on every AArch64 CPU.
 ///
-/// **`WELS_CPU_SSE2` names a slot here, not an instruction set.** It is upstream's
-/// flag word (`codec/common/src/cpu.cpp`), which the port keeps because the `pfXxx`
-/// tables are built from it exactly as the C++ builds them — but what the bit *means*
-/// to this port is "there is a vector kernel for this slot". Upstream's tables test
-/// `WELS_CPU_NEON` on arm64 and `WELS_CPU_SSE2` on x86 to install the same slots; the
-/// port's tables test the one bit on every target, so the aarch64 kernel set — or
-/// [`wide`], whose lanes lower to NEON here — reports it. `WELS_CPU_NEON` is set
-/// alongside because it is what the hardware is; nothing dispatches on it.
+/// `WELS_CPU_SSE2` names a slot here, not an instruction set: the bit means "there is
+/// a vector kernel for this slot". The `pfXxx` tables test that one bit on every
+/// target, so the aarch64 kernel set — or [`wide`], whose lanes lower to NEON here —
+/// reports it. `WELS_CPU_NEON` is set alongside; nothing dispatches on it.
 ///
-/// **`WELS_CPU_AVX2` is deliberately left clear.** It is the one place a second
-/// runtime test picks a second kernel for a slot already filled, and there is no
-/// wider register file here to pick it for: neither set's `_avx2` entry points are a
-/// different kernel on this target.
+/// `WELS_CPU_AVX2` stays clear: no `_avx2` entry point is a different kernel on this
+/// target, and there is no wider register file to pick one for.
 ///
-/// `--features scalar` is `USE_ASM=No`, as on x86_64: the word is `0` and the tables
-/// install their scalar arms. So is a Miri run without `--features wide`, where the
-/// NEON module is compiled out and `kernels` is the scalar set.
+/// The word is `0` under `--features scalar`, and under Miri without `--features
+/// wide`, where the NEON module is compiled out and `kernels` is the scalar set.
 #[cfg(target_arch = "aarch64")]
 fn arch_cpu_features() -> u32 {
     let neon_kernels = cfg!(all(not(miri), not(feature = "wide")));
@@ -183,14 +156,10 @@ fn arch_cpu_features() -> u32 {
     WELS_CPU_SSE2 | WELS_CPU_NEON
 }
 
-/// Off x86_64 and aarch64 the answer is a question about the build, not about the
-/// CPU: [`wide`] compiles and runs wherever the crate does, so under `--features
-/// wide` the slots are filled and `WELS_CPU_SSE2` — the slot bit, see above — is
-/// set. Without the feature there is no kernel set to point at, so every bit stays
-/// clear and every dispatch site takes its scalar fallback.
-///
-/// Split out per arch rather than `#[cfg]`-ing a block inside one function, so that
-/// `flags` is only `mut` where it is actually mutated (`lib.rs` denies `unused_mut`).
+/// Off x86_64 and aarch64 the answer is about the build, not the CPU: [`wide`]
+/// compiles and runs wherever the crate does, so under `--features wide` the slots are
+/// filled and `WELS_CPU_SSE2` — the slot bit — is set. Without the feature
+/// every bit stays clear and every dispatch site takes its scalar fallback.
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 fn arch_cpu_features() -> u32 {
     if cfg!(all(feature = "wide", not(feature = "scalar"))) {
@@ -204,32 +173,22 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// The process-wide feature word, and whether it has been computed yet.
 ///
-/// **Two cells rather than a sentinel bit inside the word.** Every bit of the `u32` is
-/// spoken for — `WELS_CPU_CACHELINE_128` is `0x8000_0000` (`common/cpu_core.rs:49`) and
-/// upstream sets it for real (`codec/common/src/cpu.cpp:207`) — so a marker inside the
-/// word would be masked out of a live flag as soon as `arch_cpu_features` grows to
-/// report cache-line size. A separate cell cannot collide with any future flag.
-///
-/// `0` has to stay a legitimate answer, and is: `arch_cpu_features` returns it under
-/// `--features scalar` and on every non-x86_64 target without `--features wide`.
+/// Two cells rather than a sentinel bit inside the word: every bit of the `u32` is a
+/// real flag (`WELS_CPU_CACHELINE_128` is `0x8000_0000`), and `0` is a legitimate
+/// answer.
 static CPU_FEATURES: AtomicU32 = AtomicU32::new(0);
 static CPU_FEATURES_READY: AtomicBool = AtomicBool::new(false);
 
 /// Returns true if this build has the AVX2 kernels and the CPU can run them.
 ///
-/// Unlike SSE2 this is not x86_64 baseline, so it is a real runtime question: the AVX2
+/// Unlike SSE2 this is not x86_64 baseline, so the runtime test is required: the AVX2
 /// SAD kernels execute `vpsadbw` and fault on any pre-Haswell Intel or pre-Excavator
 /// AMD part.
 ///
-/// The `cfg!` folds the branch away for a build that already guarantees AVX2, and is
-/// false by default on every `x86_64-*` target. **It cannot replace the runtime test:**
-/// `-C target-feature=+avx2` applies to the whole crate, so LLVM would vectorise
-/// everything else with it too and the `cdylib` a C consumer `dlopen`s would fault on
-/// an older CPU. Per-function AVX2 codegen is `#[target_feature(enable = "avx2")]`,
-/// which `sad_16x_avx2` carries. On such a build this answers `true` on the `cfg!`
-/// alone, which is consistent — that binary is AVX2 throughout. Under `--features
-/// scalar` the feature word is `0`, so the `cfg!` is the only way it can be true; also
-/// consistent, since a `+avx2` build asked for AVX2 everywhere.
+/// The `cfg!` only folds the branch away for a build that already guarantees AVX2, and
+/// is false by default on every `x86_64-*` target; it cannot replace the runtime test,
+/// because `-C target-feature=+avx2` applies to the whole crate. Per-function AVX2
+/// codegen is `#[target_feature(enable = "avx2")]`, which `sad_16x_avx2` carries.
 #[inline(always)]
 pub fn has_avx2() -> bool {
     cfg!(target_feature = "avx2") || (detect_cpu_features() & WELS_CPU_AVX2) != 0
@@ -264,11 +223,8 @@ mod tests {
     /// The text before the file's test module, so a helper inside one is never mistaken
     /// for an entry point and a name used only by a test never counts as "reached".
     ///
-    /// The cut is at `#[cfg(test)]\nmod `, not at `#[cfg(test)]` alone: twenty-one sites
-    /// in this crate put that attribute on a test-only `use` in the middle of a file's
-    /// imports, and cutting there would discard the whole file below it — which is
-    /// exactly what it did on `encoder/sample.rs`, hiding every SAD dispatch site and
-    /// making this test report the entire SAD family as unreached.
+    /// The cut is at `#[cfg(test)]\nmod `, not at `#[cfg(test)]` alone: that attribute
+    /// also sits on test-only `use` items among a file's imports.
     fn without_tests(src: &str) -> &str {
         src.split("#[cfg(test)]\nmod ").next().unwrap_or(src)
     }
@@ -302,14 +258,13 @@ mod tests {
         out
     }
 
-    /// **Kernels internal to a module**, which no dispatch site can or should name: the
-    /// generic workers the shaped entry points instantiate (`sad_16x` and friends), the
-    /// 16-sample inner loops of the deblocking filters, the `#[target_feature]` body
-    /// `satd_4x4` delegates to, and `wide`'s load/store/permute helpers.
+    /// Kernels internal to a module, which no dispatch site names: the generic workers
+    /// the shaped entry points instantiate (`sad_16x` and friends), the 16-sample inner
+    /// loops of the deblocking filters, the `#[target_feature]` body `satd_4x4`
+    /// delegates to, and `wide`'s load/store/permute helpers.
     ///
-    /// This list is the only thing maintained by hand, and it fails **closed**: a new
-    /// kernel that nothing dispatches is not on it, so the test names it. Forgetting to
-    /// add a genuine helper costs one line and a failing test, never silent coverage.
+    /// Maintained by hand; it fails closed — an unlisted kernel that nothing dispatches
+    /// makes the test fail.
     const INTERNAL: &[&str] = &[
         "deblock_chroma_eq4_16",
         "deblock_chroma_lt4_16",
@@ -341,35 +296,22 @@ mod tests {
         "widen_lo",
     ];
 
-    /// **A kernel that is written but never reached is the failure this tier is most
-    /// exposed to**, and it is invisible to everything else: the output of a parity port
-    /// is the scalar's output, so a slot left holding the scalar passes every parity
-    /// test, the conformance suites and the byte-parity sweep. It has happened twice
-    /// here — the two Hadamard "kernels" that were the scalar copied verbatim, and the
-    /// `BLOCK_4x4`/`8x4`/`4x8` SAD slots that had kernels written and tested but no
-    /// table entry.
+    /// Every kernel entry point is either named somewhere outside `src/simd/` or listed
+    /// in [`INTERNAL`]. A slot left holding the scalar passes every parity and
+    /// conformance test, so an unreached kernel is invisible to everything else.
     ///
-    /// So ask it of the kernels directly: every entry point either is named somewhere
-    /// outside `src/simd/`, or is on [`INTERNAL`]. This reads source text rather than
-    /// comparing function pointers, which is what lets it survive the scalar
-    /// `simd::kernels` alias — under which two distinct forwards to the same scalar
-    /// body have different addresses, so the pointer-identity spelling this replaced
-    /// would have gone green while nothing was accelerated.
-    ///
-    /// What it does not claim: that the site *executes* (a reference inside a `#[cfg]`
-    /// block that is off still counts), or that a slot holds the *right* kernel. Neither
-    /// did the assertions it replaced.
+    /// The check matches source text rather than function pointers, so it does not
+    /// claim that the site executes (a reference inside a disabled `#[cfg]` still
+    /// counts) or that a slot holds the right kernel.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn every_kernel_is_named_by_a_dispatch_site() {
-        // **Reached means "named through the alias", not "this token appears".** The
-        // kernels deliberately share their names with the scalars they were ported from
-        // — `copy_8x16` is both the kernel and the scalar — so a bare-token search finds
-        // every kernel name in the codec whether or not anything dispatches it, and
-        // reports success for a slot that was never wired. Follow `kernels::…::` instead.
+        // Reached means "named through the alias", not "this token appears": a kernel
+        // shares its name with the scalar body it replaces, so a bare-token search
+        // would report success for a slot that was never wired.
         //
-        // The exception is the two sites that glob-import a kernel module and then call
-        // its entries bare; for those, every token in the file counts. Both are
+        // The exception is the sites that glob-import a kernel module and then call its
+        // entries bare; for those, every token in the file counts. Both are
         // `intra_pred`, whose `enc_`/`dec_` names no scalar shares.
         let mut used: BTreeSet<String> = BTreeSet::new();
         for f in rs_files(&src_root()) {
@@ -427,7 +369,7 @@ mod tests {
 
     /// The four kernel sets have to agree on their entry points, or `simd::kernels`
     /// would resolve differently per build and a dispatch site would compile on one
-    /// target and not another. Cheaper to learn here than from a cross-compile.
+    /// target and not another.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn the_kernel_sets_expose_the_same_entry_points() {

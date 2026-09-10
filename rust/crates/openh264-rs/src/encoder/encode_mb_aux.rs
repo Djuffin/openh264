@@ -26,17 +26,18 @@
 // ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-//! # Macroblock Auxiliary Encoding Kernels (`encode_mb_aux.rs`)
+//! Macroblock auxiliary encoding kernels — the computational forward core for
+//! H.264 / AVC macroblock encoding.
 //!
-//! Translated from `codec/encoder/core/inc/encode_mb_aux.h` and `codec/encoder/core/src/encode_mb_aux.cpp`.
+//! C++: `codec/encoder/core/inc/encode_mb_aux.h`,
+//! `codec/encoder/core/src/encode_mb_aux.cpp`.
 //!
-//! Implements the computational forward core for H.264 / AVC macroblock encoding:
-//! 1. Forward 4x4 Integer Discrete Cosine Transform (FDCT): `WelsDctT4_c`, `WelsDctFourT4_c`
-//! 2. Forward Hadamard Transforms: `WelsHadamardT4Dc_c`, `WelsHadamardQuant2x2_c`, `WelsHadamardQuant2x2Skip_c`
-//! 3. Dead-Zone Forward Quantization: `WelsQuant4x4_c`, `WelsQuant4x4Dc_c`, `WelsQuantFour4x4_c`, `WelsQuantFour4x4Max_c`
-//! 4. Zigzag Coefficient Scanning: `WelsScan4x4DcAc_c`, `WelsScan4x4Ac_c`, `WelsScan4x4Dc`
-//! 5. Non-Zero Count & Bit-Cost Estimation: `WelsGetNoneZeroCount_c`, `WelsCalculateSingleCtr4x4_c`
-//! 6. Dynamic SIMD Dispatch Table Initialization: `WelsInitEncodingFuncs`
+//! 1. Forward 4x4 integer DCT: `WelsDctT4_c`, `WelsDctFourT4_c`
+//! 2. Forward Hadamard transforms: `WelsHadamardT4Dc_c`, `WelsHadamardQuant2x2_c`, `WelsHadamardQuant2x2Skip_c`
+//! 3. Dead-zone forward quantization: `WelsQuant4x4_c`, `WelsQuant4x4Dc_c`, `WelsQuantFour4x4_c`, `WelsQuantFour4x4Max_c`
+//! 4. Zigzag coefficient scanning: `WelsScan4x4DcAc_c`, `WelsScan4x4Ac_c`, `WelsScan4x4Dc`
+//! 5. Non-zero count and bit-cost estimation: `WelsGetNoneZeroCount_c`, `WelsCalculateSingleCtr4x4_c`
+//! 6. SIMD dispatch table initialization: `WelsInitEncodingFuncs`
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
@@ -44,11 +45,7 @@
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
 // ============================================================================
-// CPU Feature Flag Bitmasks (matching cpu_core.h)
-// ============================================================================
-
-// ============================================================================
-// Quantization Lookup Tables (16-byte aligned in C)
+// Quantization Lookup Tables
 // ============================================================================
 
 /// Inter macroblock dead-zone rounding offset table `g_kiQuantInterFF[58][8]`.
@@ -304,19 +301,15 @@ pub fn hadamard_dc_span(a: &[i16], off: usize) -> &[i16; 241] {
 // Encoder Function Pointer Table (SWelsFuncPtrList)
 // ============================================================================
 
-// The two pixel-reading kernels (the forward DCTs) reach forward only from their
-// own (0, 0) — no `-1` column, no `-stride` row. The DCT and Hadamard
-// intermediates are `i32`; on all in-contract inputs the values stay far inside
-// `i32` (the per-kernel bounds are derived in the doc comments below), so none of
-// these kernels can panic in a debug build. The `as i16` narrowings are the C++'s
-// own implicit `int -> int16_t` conversions, kept where the C++ has them.
+// The forward DCTs reach forward only from their own (0, 0) — no `-1` column, no
+// `-stride` row. The DCT and Hadamard intermediates are `i32` and stay far inside it
+// on every in-contract input, so none of these kernels can panic in a debug build.
 
 use crate::safe::plane::SampleCursor;
 
-/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by default,
-/// `simd::wide` under `--features wide`. Imported rather than spelled in full at each
-/// site because the kernels share their names with the scalars in this module — which
-/// is the point of the naming, and the reason the module qualifier has to stay.
+/// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
+/// default, `simd::wide` under `--features wide`. These kernels share their names with
+/// the scalars in this module, so the module qualifier has to stay.
 use crate::simd::kernels;
 
 /// Residual of two 4x4 pixel blocks, then the 2-D forward integer DCT, into
@@ -324,13 +317,10 @@ use crate::simd::kernels;
 ///
 /// C++: `WelsDctT4_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
 ///
-/// Bound derivation (why this is total): inputs are `u8` pixels, so each
-/// residual is in `[-255, 255]`; one 1-D pass gains at most 6x
-/// (`|2a + b - c - 2d| <= 6 * 255`), so after both passes every value is
-/// inside `+-36 * 255 = +-9180` — no `i32` intermediate and no `i16` store
-/// can overflow on any input the signature admits. (The C++ computes the same
-/// values in `int16_t` scratch; the two agree everywhere because the values
-/// fit `i16` too.)
+/// Bound: inputs are `u8` pixels, so each residual is in `[-255, 255]`; one 1-D pass
+/// gains at most 6x (`|2a + b - c - 2d| <= 6 * 255`), so after both passes every
+/// value is inside `+-36 * 255 = +-9180` — no `i32` intermediate and no `i16` store
+/// can overflow on any input the signature admits.
 pub fn dct_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 16], pix1: &A, pix2: &B) {
     let mut data = [0i32; 16];
     let mut s = [0i32; 4];
@@ -391,12 +381,10 @@ pub fn dct_four_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 64], pix1:
 
 /// Dead-zone quantization of one coefficient: `sign(v) * (((ff + |v|) * mf) >> 16)`.
 ///
-/// Bound derivation (why the widths hold): `|v| <= 32767` and the tables'
-/// `ff <= 767 << 1`, `mf <= 26214`, so `(ff + |v|) * mf < 2^31` — but the
-/// contract this family actually needs is weaker and worth stating once:
-/// for any **non-negative** `ff` and `mf` up to `i16::MAX`,
-/// `(ff + |v|) * mf <= 65534 * 32767 < i32::MAX`, so the product cannot
-/// overflow. A negative `mf` could, and no table contains one.
+/// Bound: `|v| <= 32767` and the tables' `ff <= 767 << 1`, `mf <= 26214`, so
+/// `(ff + |v|) * mf < 2^31`. More generally, for any **non-negative** `ff` and `mf` up
+/// to `i16::MAX`, `(ff + |v|) * mf <= 65534 * 32767 < i32::MAX`. A negative `mf` could
+/// overflow, and no table contains one.
 #[inline(always)]
 fn quant_one(v: i16, ff: i32, mf: i32) -> i16 {
     let sign = (v as i32) >> 31;
@@ -406,8 +394,7 @@ fn quant_one(v: i16, ff: i32, mf: i32) -> i16 {
 }
 
 /// In-place dead-zone forward quantization of a 4x4 block. `ff`/`mf` are one
-/// 8-lane row of the QP tables; lane `i & 0x07` quantizes coefficient `i`,
-/// exactly the C++'s indexing.
+/// 8-lane row of the QP tables; lane `i & 0x07` quantizes coefficient `i`.
 ///
 /// C++: `WelsQuant4x4_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
 pub fn quant_4x4(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
@@ -465,9 +452,8 @@ pub fn quant_four_4x4_max(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8], max
 }
 
 /// The four chroma DC coefficients a 2x2 Hadamard reads, at raster positions
-/// 0, 16, 32 and 48 of the chroma coefficient group — index 48 is the reach,
-/// which is why the parameter is `[i16; 49]` and not `[i16; 64]`: 49 elements
-/// is exactly the span the kernel touches.
+/// 0, 16, 32 and 48 of the chroma coefficient group — index 48 is the reach, which is
+/// why the parameter is `[i16; 49]`.
 #[inline(always)]
 fn hadamard_2x2_butterfly(rs: &[i16; 49]) -> [i32; 4] {
     let (r0, r16, r32, r48) = (rs[0] as i32, rs[16] as i32, rs[32] as i32, rs[48] as i32);
@@ -503,9 +489,8 @@ pub fn hadamard_quant_2x2_skip(rs: &[i16; 49], ff: i16, mf: i16) -> i32 {
 /// `dct` and `block`, and the DC positions of `rs` cleared. Returns the count
 /// of non-zero quantized levels.
 ///
-/// The butterfly is computed in `i32` and narrowed per the C++'s implicit
-/// `int -> int16_t` store (`|d| <= 4 * 32767` can exceed `i16`, and the
-/// truncation is the C++'s own behaviour, kept).
+/// The butterfly is computed in `i32` and truncated on the `i16` store: `|d|` can
+/// reach `4 * 32767`, which exceeds `i16`.
 ///
 /// C++: `WelsHadamardQuant2x2_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
 pub fn hadamard_quant_2x2(
@@ -539,9 +524,8 @@ pub fn hadamard_quant_2x2(
 ///
 /// `dct` is the macroblock's 256-coefficient luma buffer; the DC of raster
 /// block `k` sits at `dct[k * 16]`, and the highest one read is block 15's at
-/// index 240 — hence `[i16; 241]`, the exact reach. Computed in `i32` with an
-/// explicit clip, as the C++ does (`WELS_CLIP3`), so it is total over the full
-/// `i16` input range.
+/// index 240 — hence `[i16; 241]`, the exact reach. Computed in `i32` and clipped
+/// (`WELS_CLIP3`), so it is total over the full `i16` input range.
 ///
 /// C++: `WelsHadamardT4Dc_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
 pub fn hadamard_t4_dc(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
@@ -646,9 +630,8 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
 /// Both pixel cursors are anchored at sample `(0, 0)` of their 4x4 block and are
 /// only read; the kernel reaches forward only — no `-1` column, no `-stride` row.
 ///
-/// Every call path is a `pfDctT4` table slot; its one caller, `WelsEncRecI4x4Y`
-/// (`svc_encode_mb.rs`), hands a source macroblock cursor and the stride-4 I4x4
-/// prediction scratch.
+/// The `pfDctT4` table slot; its one caller, `WelsEncRecI4x4Y`, hands a source
+/// macroblock cursor and the stride-4 I4x4 prediction scratch.
 ///
 /// # Panics
 /// If `pDct` holds fewer than 16 coefficients, or if either cursor's 4x4 block
@@ -700,30 +683,17 @@ pub fn WelsDctFourT4_sse2(
 }
 
 // ============================================================================
-// Forward Quantization Functions
-// ============================================================================
-
-// ============================================================================
-// Forward Hadamard Transforms
-// ============================================================================
-
-// ============================================================================
 // Zigzag Scanning Functions
 // ============================================================================
 
 /// Reorders 16 DC coefficients into 1D zigzag scan order (identical to `WelsScan4x4DcAc_c`).
 ///
 /// Unlike its two neighbours this one is **not** installed in an `SWelsFuncPtrList`
-/// slot and the encoder never calls it; its only caller in the workspace is
-/// `tests/kernels_differential_phase2.rs`.
+/// slot, and the encoder never calls it.
 #[inline]
 pub fn WelsScan4x4Dc(pLevel: &mut [i16; 16], pDct: &[i16; 16]) {
     scan_4x4_dc_ac(pLevel, pDct);
 }
-
-// ============================================================================
-// Non-Zero Count and CAVLC Bit Scoring
-// ============================================================================
 
 // ============================================================================
 // Pixel Block Copy Fallbacks (matching copy_mb.h)
@@ -804,14 +774,6 @@ pub fn WelsCopy16x16_c(
     crate::encoder::rec_view::copy_rows_shared::<16>(pDst, pSrc, 16);
 }
 
-// ARM NEON fallbacks
-
-// AArch64 NEON fallbacks
-
-// Loongson MMI fallbacks
-
-// Loongson LSX / LASX fallbacks
-
 // ============================================================================
 // Function Dispatch Table Initialization
 // ============================================================================
@@ -849,8 +811,7 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
     f.pfQuantizationFour4x4Max = quant_four_4x4_max;
 
     if (uiCpuFlag & WELS_CPU_SSE2) != 0 {
-        // Both 16x16 slots take the unaligned kernel; `simd/x86_64/copy.rs`
-        // explains why upstream's aligned/not-aligned split is not reproduced.
+        // Both 16x16 slots take the unaligned kernel; see `simd/x86_64/copy.rs`.
         f.pfCopy16x16Aligned = kernels::copy::copy_16x16;
         f.pfCopy16x16NotAligned = kernels::copy::copy_16x16;
         f.pfCopy16x8NotAligned = kernels::copy::copy_16x8;
@@ -859,9 +820,8 @@ pub extern "C" fn WelsInitEncodingFuncs(pFuncList: &mut SWelsFuncPtrList, uiCpuF
 
         f.pfCalculateSingleCtr4x4 = kernels::score::calculate_single_ctr_4x4;
 
-        // `pfScan4x4` and `pfScan4x4Ac` stay scalar on purpose: `scan_4x4_dc_ac`
-        // already compiles to a shorter shuffle sequence than `score.asm`'s, for
-        // the reason `simd/x86_64/score.rs` sets out.
+        // `pfScan4x4` and `pfScan4x4Ac` stay scalar: `scan_4x4_dc_ac` compiles to a
+        // shorter shuffle sequence than the asm's; see `simd/x86_64/score.rs`.
 
         f.pfDctT4 = WelsDctT4_sse2;
         f.pfDctFourT4 = WelsDctFourT4_sse2;
@@ -890,10 +850,8 @@ mod tests {
     use super::*;
     use crate::safe::plane::PlaneCursor;
 
-    /// **`pfScan4x4` and `pfScan4x4Ac` are scalar by decision, not by omission.**
-    /// Both kernels were written, measured against the scalar, and dropped — the
-    /// reasons are at `simd/x86_64/score.rs`. Wiring one in should have to come here
-    /// and delete this test, rather than happening quietly.
+    /// `pfScan4x4` and `pfScan4x4Ac` hold the same kernel under the SIMD flag as
+    /// without it; see `simd/x86_64/score.rs`.
     #[test]
     fn the_scan_slots_stay_scalar_under_the_simd_flag() {
         use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
@@ -922,16 +880,11 @@ mod tests {
         }
     }
 
-    /// The DCT kernels are generic over [`SampleCursor`], and the source operand
-    /// reaches them as a `RecCursor` over a shared interior-mutable plane rather
-    /// than as a `PlaneCursor` over a slice — because the source picture is
-    /// written in-fork by `VaaBackgroundMbDataUpdate`. Two storages, one kernel:
-    /// this pins that they read identically.
+    /// The DCT kernels are generic over [`SampleCursor`], and read a `RecCursor` over a
+    /// shared interior-mutable plane exactly as a `PlaneCursor` over a slice.
     ///
-    /// The second assertion biases the shared cursor by one sample and requires
-    /// the outputs to *differ* — if the kernel ignored its source operand, or if
-    /// both arms silently read the same cursor, the equality above would pass for
-    /// the wrong reason and this line would fail.
+    /// The second assertion biases the shared cursor by one sample and requires the
+    /// outputs to *differ*, so the equality above cannot pass for the wrong reason.
     #[test]
     fn dct_reads_a_shared_source_plane_exactly_as_a_slice_cursor_does() {
         use crate::encoder::rec_view::shared_plane_for_test;

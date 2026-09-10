@@ -55,8 +55,8 @@ pub fn deblock_chroma_eq4(
     deblock_chroma_eq4_scalar(cb, cr, step_x, step_y, alpha, beta)
 }
 
-/// The boundary strengths of one macroblock — see
-/// [`bs_calc_scalar`](crate::encoder::deblocking::bs_calc_scalar), which this is.
+/// Boundary strengths of one macroblock — see
+/// [`bs_calc_scalar`](crate::encoder::deblocking::bs_calc_scalar).
 #[inline(always)]
 pub fn bs_calc(
     cur_nzc: &[i8; 24],

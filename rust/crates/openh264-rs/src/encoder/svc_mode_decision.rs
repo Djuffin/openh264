@@ -2,7 +2,7 @@
 
 //! SVC Spatial Enhancement Layer Mode Decision & Screen Content Coding Engine.
 //!
-//! Translated from `codec/encoder/core/inc/svc_mode_decision.h` and
+//! C++: `codec/encoder/core/inc/svc_mode_decision.h`,
 //! `codec/encoder/core/src/svc_mode_decision.cpp`.
 
 #![deny(unsafe_code)]
@@ -190,7 +190,7 @@ pub type pJudgeSkipFun = extern "C" fn(
 ) -> bool;
 
 // ============================================================================
-// Core Structures Matching C/C++ Layout
+// Core Structures
 // ============================================================================
 
 #[repr(C)]
@@ -266,12 +266,10 @@ pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
 /// `svc_base_layer_md.cpp:1924`.
 pub fn WelsMdInterUpdatePskip(kiChromaQpIndexOffset: i32, pSlice: &mut SSlice, pCurMb: &mut SMB) {
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    //add pEnc&rec to MD--2010.3.15
     pCurMb.uiCbp = 0;
     pCurMb.uiLumaQp = pSlice.uiLastMbQp;
-    // The offset is the slice context's, which `WelsMdInterMbLoop` already held in
-    // `kuiChromaQpIndexOffset`; this used to resolve the layer's PPS per macroblock
-    // for a value that cannot change inside a slice.
+    // The offset is the slice context's `kuiChromaQpIndexOffset`: it cannot change
+    // inside a slice, so it arrives as a value rather than through the layer's PPS.
     pCurMb.uiChromaQp = g_kuiChromaQpTable
         [WELS_CLIP3(pCurMb.uiLumaQp as i32 + kiChromaQpIndexOffset, 0, 51) as usize];
     pMbCache.bCollocatedPredFlag = LD32_MV(&pCurMb.sMv[0]) == 0;
@@ -389,7 +387,6 @@ pub extern "C" fn WelsMdIntraSecondaryModesEnc(
          WelsMdIntraFinePartition[Vaa] before any macroblock is coded",
     )(pEncCtx, pWelsMd, pCurMb, pMbCache);
 
-    //add pEnc&rec to MD--2010.3.15
     if IS_INTRA16x16(pCurMb.uiMbType) {
         pCurMb.uiCbp = 0;
         WelsEncRecI16x16Y(pEncCtx, pCurMb, pMbCache);
@@ -402,7 +399,6 @@ pub extern "C" fn WelsMdIntraSecondaryModesEnc(
         pMbCache,
         pWelsMd.iLambda,
     );
-    //add pEnc&rec to MD--2010.3.15
     WelsIMbChromaEncode(pEncCtx, pCurMb, pMbCache);
     pCurMb.uiChromPredMode = pMbCache.uiChmaI8x8Mode as u32;
     pCurMb.iSadCost = 0;
@@ -411,7 +407,7 @@ pub extern "C" fn WelsMdIntraSecondaryModesEnc(
 /// Reconstructs a **P_SKIP** macroblock by copying motion-compensated samples directly
 /// to the reconstructed frame buffer and clearing non-zero coefficient counts.
 ///
-/// Translated from `WelsRecPskip` in `codec/encoder/core/src/svc_encode_mb.cpp:315`.
+/// C++: `WelsRecPskip`, `codec/encoder/core/src/svc_encode_mb.cpp:315`.
 pub fn WelsRecPskip(mbc: &MbCursors<'_>, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     // The three destinations are the macroblock's reconstruction cursors, which the
     // loop built once from the same `(iMbX, iMbY)` that `SPicData` carries.
@@ -426,29 +422,19 @@ pub fn WelsRecPskip(mbc: &MbCursors<'_>, pCurMb: &mut SMB, pMbCache: &mut SMbCac
 /// Copies the current/reference luma & chroma blocks for a background MB into the VAA
 /// info so future-frame background comparisons stay in sync.
 ///
-/// Translated from `VaaBackgroundMbDataUpdate` in
+/// C++: `VaaBackgroundMbDataUpdate`,
 /// `codec/encoder/core/src/svc_base_layer_md.cpp:1341`.
 ///
-/// `pCur*` is the **destination**: the copy runs previous-source -> current-source
+/// `pCur*` is the destination: the copy runs previous-source -> current-source
 /// in-fork, into the picture the encoder is reading, which is why both operands are
 /// cursors over cells. The two views are the VAA block's own, not the layer's, so
-/// these six cursors are not the macroblock's — but the `Option` pair was unwrapped
-/// once, into the context.
+/// these six cursors are not the macroblock's.
 ///
-/// The three copies go **straight to the kernels** rather than through
-/// `pfCopy16x16Aligned`/`pfCopy8x8Aligned`. Those slots hold exactly these functions
-/// on every build that has them — `WelsInitEncodingFuncs` installs
-/// `kernels::copy::copy_16x16`/`copy_8x8` under the feature bit and the scalar bodies
-/// without it, and the scalar kernel set forwards to those same bodies — so the call
-/// is the same call with the indirection removed, the copies inline into this
-/// function, and the site is one the kernel scanner can see.
-///
-/// **The six cursors stay here** rather than joining the nine on [`MbCursors`], and
-/// that was measured: hoisting them cost more in the macroblocks that are not
-/// background than it saved in the ones that are. `MbCursors` is stamped for every
-/// macroblock and copied out of `SWelsMD` at each use, so six more of them took
-/// `MbCursors::at` from 1.5% of the 720p `smptebars` frame to 5.5% and put 1.4% into
-/// `memmove`, against the 4.1% the slot call cost.
+/// The three copies call the kernels directly rather than through
+/// `pfCopy16x16Aligned`/`pfCopy8x8Aligned`, which hold exactly these functions in
+/// every build. The six cursors stay local rather than joining the nine on
+/// [`MbCursors`], which is stamped for every macroblock and copied at each use:
+/// hoisting them costs more on non-background macroblocks than it saves here.
 #[inline(always)]
 fn VaaBackgroundMbDataUpdate(sc: &MdSliceCtx<'_>, pCurMb: &mut SMB) {
     let (Some(curView), Some(refView)) = (sc.vaa_cur, sc.vaa_ref) else {
@@ -475,7 +461,7 @@ fn VaaBackgroundMbDataUpdate(sc: &MdSliceCtx<'_>, pCurMb: &mut SMB) {
 /// zero MV, then either reconstructs it as `P_SKIP` (`bSkipMbFlag`) or falls through to a
 /// regular 16x16 inter encode.
 ///
-/// Translated from `WelsMdBackgroundMbEnc` in
+/// C++: `WelsMdBackgroundMbEnc`,
 /// `codec/encoder/core/src/svc_base_layer_md.cpp:1352`.
 pub extern "C" fn WelsMdBackgroundMbEnc(
     pEncCtx: &sWelsEncCtx,
@@ -485,16 +471,12 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     bSkipMbFlag: bool,
 ) {
     // The slice's context and the macroblock's cursors, both resolved before the
-    // macroblock loop reached this: what used to be one `current_layer_expect`, one
-    // `func_list`, **three** `layer_ref_view_expect` builds, an
-    // `layer_enc_view_expect`, a `layer_rec_view_expect`, a `vaa_expect`, a
-    // `layer_pps_ref` and seven `plane(i).cursor(..)` calls, per macroblock.
+    // macroblock loop reached this.
     let sc = *pWelsMd.sc();
-    // **The three cursors this needs, not the struct.** `*pWelsMd.mbc()` copied all
-    // nine — 288 bytes through `memmove`, 0.8% of the flat 1080p frame — because
-    // `pWelsMd` is written further down. A `RecCursor` is a slice, an offset and a
-    // stride; the four the body reads are taken by field and stay in registers, and
-    // the reconstruction cursors are read from their own borrows where they are used.
+    // The three cursors this needs, not the struct: `*pWelsMd.mbc()` would copy all
+    // nine because `pWelsMd` is written further down. The four the body reads are
+    // taken by field, and the reconstruction cursors are read from their own borrows
+    // where they are used.
     let (cEncLuma, cRefLuma, cRefCb, cRefCr) = {
         let mbc = pWelsMd.mbc();
         (mbc.enc_y, mbc.ref_y, mbc.ref_cb, mbc.ref_cr)
@@ -502,11 +484,11 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let sMvp = SMVUnitXY::default();
 
-    // The destination is one of two disjoint cache regions, chosen by the same flag
-    // the C++ chose it by: `sSkipMb`'s three panes when the macroblock will be coded
-    // as a background skip, `sMemPredMb`'s luma/chroma halves when it falls through to
-    // the 16x16 inter encode. Both are plain arrays on `SMbCache`, so each is a slice,
-    // and the halves' offsets are `md.rs`'s own `mem_pred_*_off`.
+    // The destination is one of two disjoint cache regions, chosen by `bSkipMbFlag`:
+    // `sSkipMb`'s three panes when the macroblock will be coded as a background skip,
+    // `sMemPredMb`'s luma/chroma halves when it falls through to the 16x16 inter
+    // encode. Both are plain arrays on `SMbCache`, and the halves' offsets are
+    // `md.rs`'s `mem_pred_*_off`.
 
     // MC
     {
@@ -748,25 +730,22 @@ pub extern "C" fn UpdateP16x16MotionInfo(
 // ============================================================================
 // `codec/encoder/core/src/mv_pred.cpp:195-436` — motion info / cache updates
 //
-// The C++ writes these through `ST16`/`ST32`/`ST64` on `BUTTERFLY*`-replicated
-// words. `BUTTERFLY1x2(b)` is `((b)<<8)|(b)` on an `int8_t` promoted to `int`, so
-// for a negative reference index the two bytes are *not* equal — the high byte
-// picks up the sign extension. `ST16`/`ST64` are therefore reproduced as raw
-// unaligned stores of the same word rather than as element-wise assignment, so the
-// transcription holds for any `kiRef`, not only the non-negative ones the encoder
-// happens to pass.
+// These are `ST16`/`ST32`/`ST64` stores of `BUTTERFLY*`-replicated words.
+// `BUTTERFLY1x2(b)` is `((b)<<8)|(b)` on an `int8_t` promoted to `int`, so for a
+// negative reference index the two bytes are not equal — the high byte picks up the
+// sign extension. The stores are therefore raw stores of the whole word rather than
+// element-wise assignment, which holds for any `kiRef`, not only non-negative ones.
 // ============================================================================
 
-/// `BUTTERFLY1x2` (`macros.h:275`) applied to a reference index, as C++ evaluates it:
+/// `BUTTERFLY1x2` (`macros.h:275`) applied to a reference index:
 /// `int8_t` -> `int` -> `|<<8` -> truncated to `uint16_t`.
 #[inline]
 fn butterfly1x2_ref(kiRef: i8) -> u16 {
     (((kiRef as i32) << 8) | (kiRef as i32)) as u16
 }
 
-/// `ST16 (&pMvComp->iRefIndexCache[k], kuiRef16)` — the same two bytes, written as
-/// two bytes. The sign extension `BUTTERFLY1x2` puts in the high byte is what it
-/// exists to carry; `to_ne_bytes` carries it identically.
+/// `ST16 (&pMvComp->iRefIndexCache[k], kuiRef16)` — two bytes, carrying the sign
+/// extension `BUTTERFLY1x2` puts in the high byte.
 #[inline]
 fn st16_ref_cache(pCache: &mut [i8; 30], k: usize, kuiRef16: u16) {
     let kaRef16 = kuiRef16.to_ne_bytes();
@@ -830,9 +809,7 @@ pub extern "C" fn UpdateP16x8MotionInfo(
     pMvCache[kiCacheIdx + 9] = *pMv;
 }
 
-/// `mv_pred.cpp:235`. The C++ really does spell this one in snake case; the name is
-/// kept verbatim.
-/// `kiPartIdx` must be 0 or 4.
+/// `mv_pred.cpp:235`. `kiPartIdx` must be 0 or 4.
 pub extern "C" fn update_P8x16_motion_info(
     pMvComp: &mut SMVComponentUnit,
     pCurMb: &mut SMB,
@@ -950,8 +927,7 @@ pub extern "C" fn UpdateP8x8Motion2Cache(
 /// callers that are not inside the P-slice macroblock loop and so have no
 /// [`MbCursors`] stamped: the I-slice path and the unit tests.
 ///
-/// Answers `i32::MAX` — "no intra candidate" — where no layer is stamped, which is
-/// the guard the layer-taking form has always had.
+/// Answers `i32::MAX` — no intra candidate — where no layer is stamped.
 pub fn WelsMdI16x16FromLayer(
     pFunc: &SWelsFuncPtrList,
     pCurDqLayer: Option<&SDqLayer>,
@@ -977,12 +953,9 @@ pub fn WelsMdI16x16FromLayer(
 
 /// The 16x16 luma predictor for `mode`, reached without `pfGetLumaI16x16Pred`.
 ///
-/// **The arms are what the table holds, mode by mode**, which is not one family:
-/// `WelsInitIntraPredFuncs` installs the four scalar bodies and then overwrites
-/// only `V`, `H`, `DC` and `P` under the SIMD bit — the three remaining DC
-/// variants have no kernel and are always the `_c` body. Under `--features scalar`
-/// the four kernel names are the scalar set's own, which are those same bodies'
-/// generics. So each arm below is the function the slot actually held.
+/// The arms are what that table holds mode by mode, which is not one family:
+/// `WelsInitIntraPredFuncs` overwrites only `V`, `H`, `DC` and `P` under the SIMD
+/// bit, so the three remaining DC variants are always the `_c` body.
 #[inline(always)]
 fn I16x16LumaPred(iMode: i32, pPred: &mut [u8; 256], cRec: &RecCursor<'_>) {
     use crate::encoder::get_intra_predictor as gip;
@@ -1007,8 +980,8 @@ pub fn WelsMdI16x16(
 ) -> i32 {
     // `svc_base_layer_md.cpp:369` reads pMemPredMb, not pMemPredLuma. The two are
     // equal on entry only because WelsMdIntraInit re-points pMemPredLuma at
-    // pMemPredMb; this function then *moves* pMemPredLuma to the losing ping-pong
-    // half before returning, so reading pMemPredLuma here would follow the previous
+    // pMemPredMb; this function then moves pMemPredLuma to the losing ping-pong half
+    // before returning, so reading pMemPredLuma here would follow the previous
     // macroblock's pointer whenever WelsMdIntraInit had not just run.
     let mut iBestMode;
     let mut iBestCost = i32::MAX;
@@ -1019,9 +992,8 @@ pub fn WelsMdI16x16(
     let kpAvailMode = &g_kiIntra16AvaliMode[iOffset];
 
     // `svc_base_layer_md.cpp:402` costs with pfMdCost, which SetFastCodingFunc points
-    // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd. The selection is made
-    // per slice, so the slot arrives resolved rather than being looked up and
-    // unwrapped here for every macroblock.
+    // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd. The selection is per
+    // slice, so the slot arrives resolved.
 
     iBestMode = kpAvailMode[0] as i32;
     for i in 0..iAvailCount {
@@ -1054,8 +1026,7 @@ pub fn WelsMdI16x16(
     iBestCost
 }
 
-/// `svc_base_layer_md.cpp:964`, `static inline` in C++ so it is inlined here as a
-/// private helper rather than exported.
+/// `svc_base_layer_md.cpp:964`, `static inline` there and private here.
 #[inline]
 pub(crate) fn InitMe<'a>(
     iMbPixX: i32,
@@ -1144,8 +1115,8 @@ pub fn WelsMdP16x16<'a>(
     }
 
     mbs.cur_mut().sP16x16Mv = pMe16x16.sMv;
-    // `is_empty()` is the port's spelling of the C++'s null test: a picture built
-    // without `bNeedMbInfo` carries no MV list at all.
+    // A picture built without `bNeedMbInfo` carries no MV list at all, so the
+    // emptiness test stands in for the null test.
     let sMvList = layer_rec_view_expect(pCurLayer).mv_list();
     if !sMvList.is_empty() {
         sMvList.set(mbs.cur().iMbXY as usize, pMe16x16.sMv);
@@ -1196,10 +1167,9 @@ pub extern "C" fn WelsMdP8x8<'a>(
         );
 
         {
-            // Trap, and the reason this reads the index *here*:
-            // `SetBlockStaticIdcToMd` stamps the four indices **before** the
-            // static/scrolled skip tests, and P8x8 reads them only after those
-            // tests have failed.
+            // The index is read here because `SetBlockStaticIdcToMd` stamps the
+            // four indices before the static/scrolled skip tests, and P8x8 reads
+            // them only after those tests have failed.
             let pEncPicture = layer_enc_view_expect(pCurDqLayer);
             let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
             pFunc.pfMotionSearch[pWelsMd.iBlock8x8StaticIdc[i as usize] as usize]
@@ -1260,7 +1230,7 @@ pub extern "C" fn WelsInterMbEncode(pEncCtx: &sWelsEncCtx, pSlice: &mut SSlice, 
 
 /// Retrieves the collocated base-layer reference macroblock in dyadic SVC downsampling.
 ///
-/// The base layer is a *different* `SDqLayer` than `pCurDqLayer`, which is why this
+/// The base layer is a different `SDqLayer` than `pCurDqLayer`, which is why this
 /// reads through the list rather than through the current layer.
 #[inline(always)]
 pub fn GetRefMb(pEncCtx: &sWelsEncCtx, pCurMb: &SMB) -> SMB {
@@ -1271,23 +1241,11 @@ pub fn GetRefMb(pEncCtx: &sWelsEncCtx, pCurMb: &SMB) -> SMB {
         .expect("the base layer is built before its enhancement layer encodes");
     let kiRefMbIdx =
         ((pCurMb.iMbY as i32 >> 1) * kpRefLayer.iMbWidth as i32) + (pCurMb.iMbX as i32 >> 1);
-    // **The index is CLAMPED to the base layer's last record, a deliberate
-    // divergence from upstream.** The `>> 1` pair above is only an address when the
-    // base layer really is half size on both axes, which is what upstream's own
-    // comment at `svc_mode_decision.cpp:125` asserts and never checks:
-    //
-    // ```cpp
-    // const int32_t kiRefMbIdx = (pCurMb->iMbY >> 1) * kpRefLayer->iMbWidth + (pCurMb->iMbX >> 1);
-    //   //because current lower layer is half size on both vertical and horizontal
-    // return (&kpRefLayer->sMbDataP[kiRefMbIdx]);
-    // ```
-    //
-    // Simulcast can break the invariant, and then upstream indexes past `sMbDataP`
-    // and returns whatever follows the allocation.
-    //
-    // Clamping is byte-identical wherever the invariant holds, because there the
-    // index is already in bounds and `min` is the identity; where it does not hold,
-    // upstream reads out of bounds and this reads a real record.
+    // The index is clamped to the base layer's last record. The `>> 1` pair above is
+    // an address only while the base layer is half size on both axes, which
+    // `svc_mode_decision.cpp:125` assumes and never checks; simulcast can break it.
+    // Where the assumption holds the index is already in bounds and `min` is the
+    // identity.
     let ref_mbs = kpRefLayer.sMbDataP.dims().count();
     // A base layer with no macroblocks at all cannot be a reference layer (it
     // would have no reconstruction to predict from), so this leaves the checked
@@ -1406,8 +1364,8 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
     } else {
         // Base layer is Intra (BLMODE == SVC_INTRA)
         let pMbCache = &mut pSlice.sMbCacheInfo;
-        // The two cursors, not the struct: `WelsMdI16x16` reads a luma pair and
-        // `*pWelsMd.mbc()` copied all nine to hand it two.
+        // The two cursors, not the struct: `WelsMdI16x16` reads only a luma pair,
+        // while `*pWelsMd.mbc()` would copy all nine.
         let (cRecLuma, cEncLuma) = {
             let mbc = pWelsMd.mbc();
             (mbc.rec_y, mbc.enc_y)
@@ -1451,8 +1409,7 @@ pub fn WelsMdInterMbEnhancelayer<'a>(
 /// `svc_mode_decision.cpp:171`.
 ///
 /// The reference picture's slice type and this macroblock's `pMbSkipSad` arrive as
-/// values, stamped with the cursors: what was an `Option` test, a `Vec` deref and
-/// two bounds-checked reads of the same entry is two comparisons.
+/// values, stamped with the cursors, so the body is two comparisons.
 #[inline(always)]
 pub fn IsCostLessEqualSkipCost(
     iCurCost: i32,
@@ -1470,21 +1427,13 @@ pub fn IsCostLessEqualSkipCost(
 }
 
 pub fn CheckChromaCost(pWelsMd: &mut SWelsMD<'_>, pMbCache: &mut SMbCache) -> bool {
-    // The two picture views and the four chroma cursors come off the slice context:
-    // this used to be a `func_list`, a `current_layer_expect`, a
-    // `layer_enc_view_expect`, a `layer_ref_view_expect` *build* and four `cursor`
-    // calls per operand, twice.
+    // The two picture views and the four chroma cursors come off the slice context.
     let mbi = pWelsMd.mbi;
 
-    // **The two SADs, from a borrow and straight to the kernel.** `GetChromaCost`
-    // was `pfSampleSad[BLOCK_8x8]` — a pointer to the closure the table holds, an
-    // indirect call nothing can inline — and the borrow was a *copy* of all nine
-    // cursors (`memmove` was 0.9% of the flat 1080p frame here alone) because
-    // `pWelsMd` is written a few lines below. Both go: the values are taken inside a
-    // scope that ends before the write, and `pfSampleSad[BLOCK_8x8]` is
-    // `kernels::sad::sample_sad_8x8` in every build that installs kernels — under
-    // `--features scalar` it is the scalar set's forward to the same generic — so
-    // this is the same call with the indirection removed.
+    // The two SADs go straight to `kernels::sad::sample_sad_8x8`, which is what
+    // `pfSampleSad[BLOCK_8x8]` holds in every build. The values are taken inside a
+    // scope that ends before `pWelsMd` is written a few lines below, so no copy of
+    // the nine cursors is needed.
     let (iCbSad, iCrSad) = {
         let mbc = pWelsMd.mbc();
         (
@@ -1704,8 +1653,8 @@ pub extern "C" fn JudgeScrollSkip(
     let kiMbY = pCurMb.iMbY as i32;
     let kiMbWidth: i32 = pCurDqLayer.iMbWidth as i32;
     let kiMbHeight: i32 = pCurDqLayer.iMbHeight as i32;
-    // `None` for camera content (no extension exists there), which takes the same
-    // exit the `bScrollDetectFlag == false` arm below always took.
+    // `None` for camera content (no extension exists there), taking the same exit as
+    // the `bScrollDetectFlag == false` arm below.
     let Some(pVaaExt) = pEncCtx.vaa_ext_ref() else {
         return false;
     };
@@ -1776,7 +1725,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
         iMvY: sCandidateMv.iMvY,
     };
 
-    // Note the third line: **plane 2 takes stride index 1**, which is what
+    // Note the third line: plane 2 takes stride index 1, which is what
     // `WelsMdInterInit`'s single `kiCurStrideUV` applied to both chroma planes.
     let pRefPic = layer_ref_pic_expect(pEncCtx, pCurDqLayer);
     let pd = &pMbCache.SPicData;
@@ -1784,7 +1733,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
     // The anchors: `mb_offset(stride, 0)` is `(iMbX << 4) + (iMbY << 4) * stride`,
     // and `iOffsetY` adds `(mvX >> 2) + (mvY >> 2) * stride` — together a cursor at
     // `(iMbX*16 + mvX>>2, iMbY*16 + mvY>>2)`. Chroma is the same at `<< 3` and
-    // `>> 3`, and **plane 2 keeps stride index 1**.
+    // `>> 3`, and plane 2 keeps stride index 1.
     let (lx, ly) = pd.luma_origin();
     let (cx, cy) = pd.chroma_origin();
     let (dx_l, dy_l) = (
@@ -2137,14 +2086,12 @@ pub fn WelsMdInterFinePartitionVaaOnScreen<'a>(
 
 /// `SetScrollingMvToMd` — `svc_mode_decision.cpp:675-687`. The frame's detected
 /// scroll vector, stamped as the directional MV of the 16x16 block and all four
-/// 8x8s; `WelsMotionEstimateSearchScrolled` is what reads it.
+/// 8x8s; `WelsMotionEstimateSearchScrolled` reads it.
 ///
 /// The two scroll components are `int32_t` on the extension and `int16_t` in
-/// `SMVUnitXY`; the narrowing is the C++'s own assignment
-/// (`sTempMv.iMvX = pVaaExt->sScrollDetectInfo.iScrollMvX`), and
-/// `DetectSceneChangeScreen` has already clamped them to `±iMvRange`. The units
-/// are **integer pel** — `MeEndIntepelSearch` scales by four downstream, so
-/// nothing is pre-scaled here.
+/// `SMVUnitXY`; `DetectSceneChangeScreen` has already clamped them to `±iMvRange`,
+/// so the narrowing is safe. The units are integer pel — `MeEndIntepelSearch` scales
+/// by four downstream, so nothing is pre-scaled here.
 pub fn SetScrollingMvToMd(pVaaExt: Option<&SVAAFrameInfoExt>, pWelsMd: &mut SWelsMD<'_>) {
     let sTempMv = match pVaaExt {
         Some(pVaaExt) => SMVUnitXY {
@@ -2162,25 +2109,22 @@ pub fn SetScrollingMvToMd(pVaaExt: Option<&SVAAFrameInfoExt>, pWelsMd: &mut SWel
 }
 
 /// Intentional no-op mode decision scrolling MV callback.
-/// Matches `void SetScrollingMvToMdNull (SVAAFrameInfo* pVaa, SWelsMD* pWelsMd)` in `svc_mode_decision.cpp:689`.
+/// C++: `SetScrollingMvToMdNull`, `svc_mode_decision.cpp:689`.
 pub fn SetScrollingMvToMdNull(_pVaaExt: Option<&SVAAFrameInfoExt>, _pWelsMd: &mut SWelsMD<'_>) {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `SetBlockStaticIdcToMd` reads the right four bytes of the right row.
-    ///
-    /// The store is given three rows with different contents and the **second** is
-    /// selected. A reader that silently used row 0, or dropped the stride, fails here.
+    /// `SetBlockStaticIdcToMd` reads the right four bytes of the right row: the store
+    /// is given three rows with different contents and the second is selected.
     #[test]
     fn set_block_static_idc_reads_the_selected_row_at_the_cpp_indices() {
         use crate::encoder::wels_preprocess::SVAAFrameInfoExt;
 
         // 5x3 macroblocks -> a 10x6 grid of 8x8 blocks, 60 of them. The stride is
         // wider than the grid on purpose: `iCountMax8x8BNum` is sized from the
-        // encoder's maximum geometry, not this layer's, so a reader that assumed
-        // "row length == kiBlocks" would pass on a coincidence.
+        // encoder's maximum geometry, not this layer's.
         const MB_W: i16 = 5;
         const MB_H: i16 = 3;
         const STRIDE: usize = 64;
@@ -2195,7 +2139,7 @@ mod tests {
                 .row_mut(Some(r), STRIDE)
                 .expect("just allocated");
             for (i, b) in row.iter_mut().enumerate() {
-                // Distinct per row *and* per index, so a wrong row and a wrong
+                // Distinct per row and per index, so a wrong row and a wrong
                 // offset are different failures.
                 *b = (r * 100 + i) as u8;
             }
@@ -2214,8 +2158,7 @@ mod tests {
         let mut md = SWelsMD::default();
         SetBlockStaticIdcToMd(&ext, &mut md, &mut mb, &layer);
 
-        // svc_mode_decision.cpp:516-519, arithmetic transcribed rather than
-        // reproduced from the body under test:
+        // svc_mode_decision.cpp:516-519:
         //   kiWidth        = iMbWidth * 2                     = 10
         //   kiBlockIndexUp  = (iMbY * 2)     * kiWidth + iMbX * 2 = 24
         //   kiBlockIndexLow = (iMbY * 2 + 1) * kiWidth + iMbX * 2 = 34
@@ -2227,12 +2170,12 @@ mod tests {
         assert_eq!(md.iBlock8x8StaticIdc[2], byte(low));
         assert_eq!(md.iBlock8x8StaticIdc[3], byte(low + 1));
 
-        // And the refusals: nothing selected, a row past the end, and a row too
-        // short for the layer's grid.
+        // The refusals: nothing selected, a row past the end, and a row too short
+        // for the layer's grid.
         let kiBlocks = (MB_W as usize * 2) * (MB_H as usize * 2);
         assert_eq!(ext.pVaaBlockStaticIdc.row(None, kiBlocks), None);
         assert_eq!(ext.pVaaBlockStaticIdc.select(ROWS), None);
-        // A row is `stride` bytes and not one more. The sixteen live in one
+        // A row is `stride` bytes and not one more: the sixteen live in one
         // allocation, so an over-long request must be refused rather than served out
         // of the next reference's row.
         assert_eq!(ext.pVaaBlockStaticIdc.row(Some(SELECTED), STRIDE + 1), None);
@@ -2251,14 +2194,10 @@ mod tests {
         );
     }
 
-    /// One source plane, the in-fork background writer, and a mode-decision reader.
-    ///
-    /// `SPicture::new` is the picture `AllocPicture` hands out; `RoPicView::build` is
-    /// the view `WelsInitCurrentLayer` stamps and `layer_enc_view` hands back; the
-    /// writer is `VaaBackgroundMbDataUpdate`'s luma copy (`pfCopy16x16Aligned` over
-    /// `pCurView.plane(0)`, sixteen 16-sample rows) reduced to one macroblock; the
-    /// reader is the 16x16 source fetch every `WelsMdI16x16`-family body performs.
-    /// Two macroblocks side by side in one plane, disjoint by construction.
+    /// One source plane, the in-fork background writer, and a mode-decision reader:
+    /// the writer is `VaaBackgroundMbDataUpdate`'s luma copy reduced to one
+    /// macroblock, the reader is the 16x16 source fetch the `WelsMdI16x16` family
+    /// performs. Two macroblocks side by side in one plane, disjoint by construction.
     #[test]
     fn source_plane_reads_do_not_race_the_in_fork_background_copy() {
         use crate::encoder::picture::SPicture;
@@ -2267,16 +2206,14 @@ mod tests {
         const ROUNDS: usize = 64;
 
         // 32x16 luma: macroblock 0 at (0, 0) is what the background copy writes,
-        // macroblock 1 at (16, 0) is what the mode decision reads. `bNeedMbInfo`
-        // false — the side arrays are the reconstruction seam's business, not this
-        // one's.
+        // macroblock 1 at (16, 0) is what the mode decision reads. `bNeedMbInfo` is
+        // false — the side arrays are not read here.
         let pic = SPicture::new(32, 16, false);
         let view = RoPicView::build(&pic);
 
         std::thread::scope(|s| {
             // The writer: `VaaBackgroundMbDataUpdate` -> `pfCopy16x16Aligned`, whose
-            // destination cursor is `pCurView.plane(0).cursor(iMbX << 4, iMbY << 4)`
-            // and whose body is sixteen `write_row::<16>` calls.
+            // destination cursor is `pCurView.plane(0).cursor(iMbX << 4, iMbY << 4)`.
             s.spawn(|| {
                 let dst = view.plane(0).cursor(0, 0);
                 for r in 0..ROUNDS {
@@ -2329,9 +2266,7 @@ mod tests {
 
     #[test]
     fn test_pred_skip_mv_zero_ref() {
-        // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
-        // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
-        // MV cache, so the rest comes from Default.
+        // Only the MV cache matters here; the rest comes from Default.
         let mut mb_cache = SMbCache {
             uiRefMbType: 0,
             sMvComponents: SMVComponentUnit::default(),
@@ -2357,9 +2292,7 @@ mod tests {
 
     #[test]
     fn test_pred_inter_16x8_8x16_mv() {
-        // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
-        // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
-        // MV cache, so the rest comes from Default.
+        // Only the MV cache matters here; the rest comes from Default.
         let mut mb_cache = SMbCache {
             uiRefMbType: 0,
             sMvComponents: SMVComponentUnit::default(),
@@ -2389,9 +2322,7 @@ mod tests {
 
     #[test]
     fn test_update_p16x16_motion_info() {
-        // iSadCost/iSadCostSkip/bMbTypeSkip are fixed arrays in C++
-        // (mb_cache.h:81, :110, :111), not pointers; these tests only need the
-        // MV cache, so the rest comes from Default.
+        // Only the MV cache matters here; the rest comes from Default.
         let mut mb_cache = SMbCache {
             uiRefMbType: 0,
             sMvComponents: SMVComponentUnit::default(),
@@ -2443,8 +2374,8 @@ mod tests {
     #[allow(unsafe_code)]
     fn test_wels_md_i16x16_cost() {
         unsafe {
-            // The function-pointer tables must be populated the way the real caller
-            // does it: WelsInitIntraPredFuncs installs pfGetLumaI16x16Pred and
+            // The function-pointer tables are populated the way the real caller does
+            // it: WelsInitIntraPredFuncs installs pfGetLumaI16x16Pred and
             // WelsInitSampleSadFunc installs pfSampleSad, which SetFastCodingFunc then
             // selects via pfMdCost.
             let mut func_list = SWelsFuncPtrList::default();
@@ -2483,9 +2414,8 @@ mod tests {
             }
             let src_pool = crate::encoder::picture::SrcPicPool::new(vec![src_pic]);
             let src_id = src_pool.at(0);
-            // The prediction ping-pong is `SMbCache::sMemPredMb` — `[u8; 2 * 256 + 16]`,
-            // and the `+ 16` is documented on the field. Delete the `+ 16` and the raw
-            // 16x16 SAD's one-past-the-row pointer takes this test red under Miri.
+            // The prediction ping-pong is `SMbCache::sMemPredMb`, `[u8; 2 * 256 + 16]`;
+            // the `+ 16` covers the raw 16x16 SAD's one-past-the-row pointer.
             let mut mb_cache = SMbCache {
                 SPicData: SPicData {
                     iMbX: MB_X,
@@ -2529,12 +2459,11 @@ mod tests {
             // The winning prediction lands in the luma half and the scratch half is
             // handed to the chroma search — one selector bit, two halves of one array.
             //
-            // Order matters: each accessor call retags the whole `SMbCache` (it takes
-            // a raw pointer, and passing `&mut mb_cache` is a `Unique` retag over all
-            // 5600 bytes), so a pointer derived from `sMemPredMb` *before* the calls
-            // is popped by them and reading through it afterwards is UB. The accessor
-            // answers are taken first and the expectation is derived last, so the tag
-            // that reads the buffer is on top.
+            // Order matters: each accessor call retags the whole `SMbCache`, so a
+            // pointer derived from `sMemPredMb` before the calls is popped by them and
+            // reading through it afterwards is UB. The accessor answers are taken
+            // first and the expectation derived last, so the tag that reads the buffer
+            // is on top.
             assert_eq!(mb_cache.uiMemPredLumaHalf, 0);
             let pLuma = std::ptr::addr_of_mut!(mb_cache.sMemPredMb)
                 .cast::<u8>()
@@ -2578,7 +2507,7 @@ mod tests {
         for i in 0..4 {
             assert_eq!(sMd.sMe.sMe8x8[i].sDirectionalMv, want, "sMe8x8[{i}]");
         }
-        // the two 16x8 / 8x16 families are not among the five the C++ writes
+        // the two 16x8 / 8x16 families are not among the five that are written
         assert_eq!(sMd.sMe.sMe16x8[0].sDirectionalMv, SMVUnitXY::default());
         assert_eq!(sMd.sMe.sMe8x16[0].sDirectionalMv, SMVUnitXY::default());
 

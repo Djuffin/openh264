@@ -4,9 +4,7 @@
 
 //! Types shared by the encoder and the decoder.
 //!
-//! Translated from `codec/common/inc/wels_common_defs.h`. Both codecs include that
-//! header in C++, so these types have exactly one definition here rather than one
-//! copy per module.
+//! C++: `codec/common/inc/wels_common_defs.h`.
 
 use crate::safe::plane::PlaneCursor;
 
@@ -172,7 +170,7 @@ impl Default for SNalUnitHeaderExt {
 
 /// `EWelsSliceType` — `codec/common/inc/wels_common_defs.h:163`.
 ///
-/// Note `P_SLICE` is **0** and `I_SLICE` is **2**.
+/// `P_SLICE` is 0 and `I_SLICE` is 2.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum EWelsSliceType {
@@ -185,9 +183,8 @@ pub enum EWelsSliceType {
     UNKNOWN_SLICE = 5,
 }
 
-/// `g_kuiGolombUELength` — `codec/common/src/common_tables.cpp:886`, declared at
-/// `codec/common/inc/wels_common_defs.h:79`. The number of bits `ue(v)` needs for
-/// each value 0..255.
+/// `g_kuiGolombUELength` — `codec/common/src/common_tables.cpp:886`. The number of
+/// bits `ue(v)` needs for each value 0..255.
 pub const g_kuiGolombUELength: [u32; 256] = [
     1, 3, 3, 5, 5, 5, 5, 7, 7, 7, 7, 7, 7, 7, 7, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
     11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
@@ -207,7 +204,7 @@ pub const g_kuiGolombUELength: [u32; 256] = [
 // ============================================================================
 
 /// `CONST_FACTOR_PSNR` — utils.cpp:78. `10.0 / log(10.0)`, in `double`.
-pub const CONST_FACTOR_PSNR: f64 = 4.342944819032518; // 10.0 / ln(10.0)
+pub const CONST_FACTOR_PSNR: f64 = 4.342944819032518;
 
 /// `CALC_PSNR` — utils.cpp:79. The multiply `65025.0 * w * h` is `double`; only
 /// the final result narrows to `float`.
@@ -219,14 +216,8 @@ pub fn CALC_PSNR(w: i32, h: i32, s: i64) -> f32 {
 /// `WelsCalcPsnr` — `codec/common/src/utils.cpp:101`. The mean-square error of
 /// `tar` against `refc` over a `kiWidth` x `kiHeight` rectangle, as a PSNR in dB.
 ///
-/// Returns the saturating `99.99` for an exact match, which is the reference's own
-/// sentinel rather than an error. `iSqe` accumulates in `i64` and the per-pixel
-/// difference is `i32`, exactly as the C++ (`int64_t` / `int32_t`); the widths are
-/// part of the contract, not an implementation choice.
-///
-/// The C++'s `-1.0` "no picture bound" answer is the caller's:
-/// `encoder_ext.rs`'s `LayerPlanePsnr` returns `-1.0` for an unresolved picture or
-/// an empty plane.
+/// Returns the `99.99` sentinel for an exact match. `iSqe` accumulates in `i64` and
+/// the per-pixel difference is `i32`; both widths are part of the contract.
 pub fn calc_psnr(
     tar: &PlaneCursor<'_>,
     refc: &PlaneCursor<'_>,
@@ -253,8 +244,8 @@ pub fn calc_psnr(
 mod psnr_tests {
     use super::*;
 
-    /// Expectations **measured** against `libopenh264.a`, not derived: a probe
-    /// called `WelsCalcPsnr` on the same inputs and printed these values.
+    /// Pins the PSNR of identical, bit-flipped, inverted and pseudo-random planes,
+    /// and of a pair with distinct strides.
     #[test]
     fn test_wels_calc_psnr_matches_cxx() {
         const W: i32 = 32;

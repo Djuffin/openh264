@@ -1,14 +1,10 @@
-//! Deblocking on `wide` lane types — the twin of `simd::x86_64::deblock`: the
-//! luma bS<4 and bS==4 filters and the chroma pair, for both edge directions.
+//! Deblocking on `wide` lane types: the luma bS<4 and bS==4 filters and the chroma
+//! pair, for both edge directions.
 //!
-//! The arithmetic is word-lane throughout and maps one-to-one: `max`/`min`,
-//! `simd_lt`/`simd_gt`, shifts, and `select` for the
-//! intrinsic file's `and`/`andnot`/`or` triples — the same three ops on an SSE2
-//! baseline, `pblendvb` where the build has SSE4.1. The early-outs use `none()`,
-//! which is `pmovmskb` on the mask.
-//!
-//! The edge-direction wrappers at the bottom are the intrinsic file's, unchanged:
-//! they were already safe code, and the preconditions they state apply here too.
+//! The arithmetic is word-lane throughout: `max`/`min`, `simd_lt`/`simd_gt`, shifts,
+//! and `select` (an `and`/`andnot`/`or` triple on an SSE2 baseline, `pblendvb` where
+//! the build has SSE4.1). The early-outs use `none()`, which is `pmovmskb` on the
+//! mask.
 
 #![forbid(unsafe_code)]
 
@@ -292,12 +288,12 @@ pub fn deblock_chroma_eq4_16(
 }
 
 // ============================================================================
-// Edge-direction dispatch — the intrinsic file's, unchanged
+// Edge-direction dispatch
 // ============================================================================
 
-/// The luma bS<4 filter over an edge. Preconditions as the intrinsic twin's: the
-/// cross-line step must be the cursor's own stride, which the direction guard alone
-/// does not establish; the `debug_assert!`s are what keep that true.
+/// The luma bS<4 filter over an edge. The cross-line step must be the cursor's own
+/// stride; the direction guard alone does not establish that, so `debug_assert!`s
+/// check it.
 pub fn deblock_luma_lt4(
     pix: &mut impl PlaneSamples,
     step_x: isize,
@@ -308,8 +304,7 @@ pub fn deblock_luma_lt4(
 ) {
     if step_y == 1 {
         debug_assert_eq!(step_x, pix.stride() as isize);
-        // Taps `-3 .. 2`: one 16-wide, 6-tall span, indexed from its own row 0,
-        // rather than six `row_n` calls with a bounds check each.
+        // Taps `-3 .. 2`: one 16-wide, 6-tall span, indexed from its own row 0.
         let (mut p2, mut p1, mut p0, mut q0, mut q1, mut q2) = {
             let s = pix.span::<16, 6>(-3, 0);
             (
@@ -365,7 +360,6 @@ pub fn deblock_luma_lt4(
 
         // Write back only the columns the filter can modify; at `iEdge == 0` the
         // outer columns belong to the previous macroblock.
-        // Sixteen lines as one block, one bounds check for all of them.
         let out: [[u8; 4]; 16] = std::array::from_fn(|i| rows[i][2..6].try_into().expect("p1..q1"));
         pix.set_block::<4, 16>(0, -2, &out);
     } else {
@@ -635,12 +629,9 @@ pub fn deblock_chroma_eq4(
     }
 }
 
-/// The boundary strengths of one macroblock.
-///
-/// A forward to the scalar, for the reason `super::super::x86_64::deblock::bs_calc`
-/// gives: this module is that one written a second time in portable lanes, and there
-/// is nothing there to write. See
-/// [`bs_calc_scalar`](crate::encoder::deblocking::bs_calc_scalar).
+/// The boundary strengths of one macroblock. Forwards to
+/// [`bs_calc_scalar`](crate::encoder::deblocking::bs_calc_scalar); there is no lane work
+/// to do.
 #[inline(always)]
 pub fn bs_calc(
     cur_nzc: &[i8; 24],

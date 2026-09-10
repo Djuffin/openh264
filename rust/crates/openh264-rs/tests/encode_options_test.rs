@@ -1,5 +1,4 @@
 //! Integration test for dynamic encoder options and runtime reconfiguration.
-//! Ported from `test/api/encode_options_test.cpp`.
 
 use openh264_rs::api::codec_api::*;
 
@@ -84,11 +83,7 @@ fn test_encoder_set_and_get_options() {
 }
 
 /// Every `ENCODER_OPTION_*` value `CWelsH264SVCEncoder` handles, driven through
-/// `SetOption`/`GetOption` and compared against the C++ reference.
-///
-/// The expectations are **measured**, not derived: a probe linked against
-/// `libopenh264.a` called the same sequence on the same 160x96 configuration and
-/// printed each return code and the fields it wrote.
+/// `SetOption`/`GetOption` on a 160x96 configuration.
 #[test]
 fn test_set_get_option_matches_cxx_for_every_option() {
     use openh264_rs::encoder::ref_list_mgr_svc::{SLTRMarkingFeedback, SLTRRecoverRequest};
@@ -112,9 +107,9 @@ fn test_set_get_option_matches_cxx_for_every_option() {
             CM_RESULT_SUCCESS
         );
 
-        // ---- GetOption: which ids the reference answers at all ----------------
-        // C++ `GetOption` has 11 cases and a `default: return cmInitParaError`.
-        // Measured return code for every id 0..=31.
+        // ---- GetOption: which ids are answered at all -------------------------
+        // 11 cases and a `default: return cmInitParaError`; the return code for every
+        // id 0..=31.
         const GET_EXPECTED: [i32; 32] = [
             0, 0, 0, 0, 0, 0, 0, 0, // DATAFORMAT..INTER_SPATIAL_PRED
             1, 1, 1, 1, 1, 1, 1, 1, // RC_MODE..LTR_RECOVERY_REQUEST
@@ -127,7 +122,7 @@ fn test_set_get_option_matches_cxx_for_every_option() {
             if id == ENCODER_OPTION::ENCODER_OPTION_BITRATE as i32
                 || id == ENCODER_OPTION::ENCODER_OPTION_MAX_BITRATE as i32
             {
-                // A layer id outside SPATIAL_LAYER_* is a legitimate error in C++.
+                // A layer id outside `SPATIAL_LAYER_*` is a legitimate error.
                 let bi = buf.as_mut_ptr() as *mut SBitrateInfo;
                 (*bi).iLayer = LAYER_NUM::SPATIAL_LAYER_ALL;
             }
@@ -172,8 +167,8 @@ fn test_set_get_option_matches_cxx_for_every_option() {
         assert_eq!(setopt!(ENCODER_OPTION_ENABLE_SSEI, true), 0);
         assert_eq!(setopt!(ENCODER_OPTION_ENABLE_PREFIX_NAL_ADDING, true), 0);
         assert_eq!(setopt!(ENCODER_OPTION_SPS_PPS_ID_STRATEGY, 1i32), 0);
-        // Out of range: C++ logs, leaves eNewStrategy at CONSTANT_ID, and still
-        // applies it. It is *not* an error.
+        // Out of range: logged, `eNewStrategy` stays at `CONSTANT_ID`, and it is
+        // still applied — not an error.
         assert_eq!(setopt!(ENCODER_OPTION_SPS_PPS_ID_STRATEGY, 99i32), 0);
         assert_eq!(
             setopt!(
@@ -212,8 +207,7 @@ fn test_set_get_option_matches_cxx_for_every_option() {
                 ENCODER_OPTION_DELIVERY_STATUS,
                 SDeliveryStatus {
                     bDeliveryFlag: true,
-                    // The header's other two fields, "reserved" upstream and read
-                    // by nothing. They are here because the struct a caller passes
+                    // Reserved fields, read by nothing; the struct a caller passes
                     // is 12 bytes, not 1.
                     iDropFrameType: 0,
                     iDropFrameSize: 0,
@@ -259,9 +253,8 @@ fn test_set_get_option_matches_cxx_for_every_option() {
             0
         );
 
-        // C++'s `default: return cmInitParaError` has no testable counterpart:
-        // `SetOption` takes a typed `ENCODER_OPTION`, so an out-of-range id is
-        // not constructible.
+        // The `cmInitParaError` default has no testable counterpart: `SetOption`
+        // takes a typed `ENCODER_OPTION`, so an out-of-range id is not constructible.
 
         // ---- read back what those options wrote ------------------------------
         let mut ext = SEncParamExt::default();

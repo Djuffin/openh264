@@ -26,15 +26,13 @@
 // ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-//! # Macroblock Encoding & Local Reconstruction Engine (`svc_encode_mb`)
-//!
-//! Translated from `codec/encoder/core/inc/svc_encode_mb.h` and
+//! Macroblock encoding and local reconstruction —
 //! `codec/encoder/core/src/svc_encode_mb.cpp`.
 //!
-//! This module coordinates forward DCT transformation, Hadamard transformation,
-//! dead-zone scalar quantization, coefficient zigzag scanning, JVT-O079 fast zero-residual
-//! early termination, inverse quantization/IDCT, and local reconstruction loops for H.264 / AVC / SVC
-//! macroblock modes (Intra 16x16, Intra 4x4, Inter P/B luma, Chroma UV, and P_SKIP).
+//! Forward DCT, Hadamard transform, dead-zone scalar quantization, coefficient zigzag
+//! scanning, JVT-O079 fast zero-residual early termination, inverse quantization/IDCT
+//! and local reconstruction, for Intra 16x16, Intra 4x4, Inter P/B luma, chroma UV and
+//! P_SKIP macroblocks.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
@@ -300,29 +298,28 @@ pub type PDeQuantizationIHadamard4x4Func = unsafe extern "C" fn(*mut i16, u16);
 pub type PCopyAlignedFunc = unsafe extern "C" fn(*mut u8, i32, *mut u8, i32);
 
 // ============================================================================
-// Math & Transform Helpers (C reference fallbacks)
+// Math & Transform Helpers
 // ============================================================================
 
-/// 4x4 Inverse Hadamard transform for Intra 16x16 Luma DC
+/// 4x4 inverse Hadamard transform for Intra 16x16 luma DC.
 ///
-/// Inputs above ±2047 can overflow the kernel's plain `i16` intermediates — a
-/// debug panic where the C++ wraps; the in-contract DC levels stay far below it.
+/// Inputs above ±2047 overflow the kernel's `i16` intermediates and panic in debug;
+/// in-contract DC levels stay far below that.
 #[inline]
 pub fn WelsIHadamard4x4Dc(pRes: &mut [i16; 16]) {
     ihadamard_4x4_dc(pRes);
 }
 
-/// Dequantization of 4x4 Luma DC coefficients for QP < 12
+/// Dequantization of 4x4 luma DC coefficients for QP < 12.
 ///
-/// `kiQp` must be in `0..12`: at 12+ the shift count goes negative, which is a
-/// debug panic. The one caller is gated on `uiQp < 12`. Not expressible in the
-/// type, so it stays a prose contract.
+/// `kiQp` must be in `0..12`: at 12 and above the shift count goes negative, which
+/// panics in debug. The one caller is gated on `uiQp < 12`.
 #[inline]
 pub fn WelsDequantLumaDc4x4(pRes: &mut [i16; 16], kiQp: i32) {
     dequant_luma_dc_4x4(pRes, kiQp);
 }
 
-/// 2x2 Inverse Hadamard and dequantization for Chroma DC
+/// 2x2 inverse Hadamard and dequantization for chroma DC.
 #[inline]
 pub fn WelsDequantIHadamard2x2Dc(pDct: &mut [i16; 4], kuiMF: u16) {
     dequant_ihadamard_2x2_dc(pDct, kuiMF);
@@ -332,9 +329,8 @@ pub fn WelsDequantIHadamard2x2Dc(pDct: &mut [i16; 4], kuiMF: u16) {
 // Core Macroblock Encoding Functions
 // ============================================================================
 
-/// Computes forward 4x4 integer DCT on all sixteen 4x4 luma blocks within a 16x16 macroblock.
-///
-/// Divides the 16x16 macroblock into four 8x8 quadrants and executes `pfDctFourT4` once per quadrant.
+/// Forward 4x4 integer DCT over all sixteen 4x4 luma blocks of a macroblock, as four
+/// 8x8 quadrants with one `pfDctFourT4` call each.
 #[inline]
 pub fn WelsDctMb(
     pRes: &mut [i16],
@@ -354,14 +350,13 @@ pub fn WelsDctMb(
     }
 }
 
-/// Full DCT, DC Hadamard, quantization, scanning, inverse quantization, and local reconstruction
-/// for an **Intra 16x16 Luma** macroblock.
+/// Full DCT, DC Hadamard, quantization, scanning, inverse quantization and local
+/// reconstruction for an Intra 16x16 luma macroblock.
 pub fn WelsEncRecI16x16Y(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     let mut aDctT4Dc = [0i16; 16];
     let pFuncList = pEncCtx.func_list();
     let pCurDqLayer = current_layer_expect(pEncCtx);
-    // The prediction scratch is an owned `[u8; 2*256+16]` on the cache.
-    // Stride 16 is the scratch's own geometry.
+    // The prediction scratch is owned by the cache and has stride 16.
     let pBestPred = RecCursor::over_owned(
         &mut pMbCache.sMemPredMb,
         mem_pred_luma_off(pMbCache.uiMemPredLumaHalf),
@@ -434,16 +429,14 @@ pub fn WelsEncRecI16x16Y(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut
         }
 
         // The scanned luma DC returns to block `k`'s DC slot, `sCoeffLevel[k * 16]`,
-        // in the C++'s raster-to-zigzag order.
+        // in raster-to-zigzag order.
         const KI_DC_SCAN: [usize; 16] = [0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15];
         for (k, &src) in KI_DC_SCAN.iter().enumerate() {
             pMbCache.sCoeffLevel[k << 4] = aDctT4Dc[src];
         }
 
-        // The four `pBestPred` offsets `0 / 8 / 128 / 136` at stride 16 are the
-        // quadrant grid `(0,0) (8,0) (0,8) (8,8)`, which is also what the four
-        // `pPred` offsets spell against `kiRecStride`; writing it once as
-        // `QUADS` makes the two agree by construction instead of by inspection.
+        // The 8x8 quadrant grid, applied to both the prediction scratch at stride 16
+        // and the reconstruction plane at its own stride.
         const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
         let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
@@ -458,8 +451,6 @@ pub fn WelsEncRecI16x16Y(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut
             );
         }
     } else if uiCountI16x16Dc > 0 {
-        // This site writes the reconstruction plane from the same
-        // `pPred` / `pBestPred` pair as the four calls above.
         let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
         let kiPredOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
@@ -470,8 +461,8 @@ pub fn WelsEncRecI16x16Y(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut
             &aDctT4Dc,
         );
     } else {
-        // The residual-free branch: the prediction *is* the reconstruction,
-        // copied straight across from `sMemPredMb`'s luma half.
+        // Residual-free: the prediction is the reconstruction, copied straight across
+        // from `sMemPredMb`'s luma half.
         let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
         let kiPredOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
@@ -482,8 +473,8 @@ pub fn WelsEncRecI16x16Y(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut
     }
 }
 
-/// Forward DCT, quantization, zigzag scan, inverse quantization, and local reconstruction
-/// for a single **Intra 4x4 Luma** sub-block.
+/// Forward DCT, quantization, zigzag scan, inverse quantization and local reconstruction
+/// for a single Intra 4x4 luma sub-block.
 pub fn WelsEncRecI4x4Y(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -497,8 +488,8 @@ pub fn WelsEncRecI4x4Y(
     let iRecStride = pCurDqLayer.iCsStride[0];
 
     let uiOffset = g_kuiMbCountScan4Idx[uiI4x4Idx as usize] as usize;
-    // Source plane through the frame's read-only view, prediction scratch
-    // through its own owned `[u8; 2*16]`. Stride 4 is the blk4 scratch's geometry.
+    // The source plane comes through the frame's read-only view; the prediction scratch
+    // is owned by the cache and has stride 4.
     let encView = layer_enc_view_expect(pCurDqLayer);
     let pEncMb = pMbCache.SPicData.mb_cursor_ro(encView, 0);
     let pBestPred = RecCursor::over_owned(
@@ -525,9 +516,8 @@ pub fn WelsEncRecI4x4Y(
             .expect("the dec block-offset table is built")[uiI4x4Idx as usize] as isize;
 
     let func = pFuncList.pfDctT4;
-    // `advance(n, 0)` moves the centre by exactly `n` bytes — the block offset is
-    // a byte offset, not a sample coordinate. The prediction scratch's stride 4
-    // rides in its cursor.
+    // `advance(n, 0)` moves the centre by exactly `n` bytes; the block offset is a byte
+    // offset, not a sample coordinate.
     func(
         &mut pMbCache.sCoeffLevel,
         &pEncMb.advance(enc_block_offset, 0),
@@ -548,11 +538,10 @@ pub fn WelsEncRecI4x4Y(
             blk4x4_mut(&mut pMbCache.sCoeffLevel, 0),
             &g_kuiDequantCoeff[uiQp as usize],
         );
-        // `dec_block_offset` is a flat byte offset into a plane of `iRecStride`
-        // — so `(off % stride, off / stride)` is the same address. The 4x4 blocks
-        // sit at `dx, dy` in `{0,4,8,12}` and the stride is never below 16, so
-        // neither term can wrap into the other. Prediction is `sMemPredBlk4` at
-        // stride 4 (not 16 — this is the 4x4 arena, and its rows are four bytes).
+        // `dec_block_offset` is a flat byte offset into a plane of `iRecStride`, so
+        // `(off % stride, off / stride)` names the same address. The 4x4 blocks sit at
+        // `dx, dy` in `{0,4,8,12}` and the stride is never below 16, so neither term
+        // can wrap into the other. The prediction is `sMemPredBlk4` at stride 4.
         let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
         let (dx, dy) = (
@@ -567,9 +556,7 @@ pub fn WelsEncRecI4x4Y(
             blk4x4(&pMbCache.sCoeffLevel, 0),
         );
     } else {
-        // As the `pfIDctT4` branch above: `dec_block_offset` divides by
-        // `iRecStride` into the 4x4 block's `(dx, dy)` within the macroblock, and
-        // the prediction is `sMemPredBlk4` at stride 4.
+        // Same address arithmetic as the branch above.
         let view = layer_rec_view_expect(pCurDqLayer);
         let (lx, ly) = pMbCache.SPicData.luma_origin();
         let (dx, dy) = (
@@ -585,7 +572,7 @@ pub fn WelsEncRecI4x4Y(
 }
 
 /// Quantization, coefficient zigzag scanning, JVT-O079 fast zero-residual thresholding,
-/// dequantization, and CBP assignment for **Inter Luma (P/B frames)**.
+/// dequantization and CBP assignment for inter luma (P/B frames).
 pub fn WelsEncInterY(pFuncList: &SWelsFuncPtrList, pCurMb: &mut SMB, pMbCache: &mut SMbCache) {
     let pfQuantizationFour4x4Max = pFuncList.pfQuantizationFour4x4Max;
     let pfScan4x4 = pFuncList.pfScan4x4;
@@ -614,7 +601,6 @@ pub fn WelsEncInterY(pFuncList: &SWelsFuncPtrList, pCurMb: &mut SMB, pMbCache: &
             let k = (i << 2) + j;
             let max_val = aMax[k];
             if max_val == 0 {
-                // `WelsSetMemZero_c(pBlock, 32)` — 32 bytes is one 4x4 block of i16.
                 pMbCache.sDct.iLumaBlock[k].fill(0);
             } else {
                 let func = pfScan4x4;
@@ -633,12 +619,11 @@ pub fn WelsEncInterY(pFuncList: &SWelsFuncPtrList, pCurMb: &mut SMB, pMbCache: &
         iSingleCtrMb += iSingleCtr8x8[i];
     }
 
-    // `WelsSetMemZero (pCurMb->pNonZeroCount, 16)` — the 16 luma entries only.
+    // The 16 luma entries only.
     (&mut pCurMb.iNonZeroCount)[0..16].fill(0);
 
     if iSingleCtrMb < 6 {
-        // JVT-O079 zero-residual early cutoff
-        // `WelsSetMemZero_c(pRes, 768)` — 768 bytes is all 384 coefficients.
+        // JVT-O079 zero-residual early cutoff: all 384 coefficients.
         pMbCache.sCoeffLevel.fill(0);
     } else {
         let mut kpNoneZeroCountIdx = 0usize;
@@ -658,7 +643,6 @@ pub fn WelsEncInterY(pFuncList: &SWelsFuncPtrList, pCurMb: &mut SMB, pMbCache: &
                 );
                 pCurMb.uiCbp |= 1 << i;
             } else {
-                // `WelsSetMemZero_c(pRes + i*64, 128)` — 128 bytes is one 64-coefficient quadrant.
                 pMbCache.sCoeffLevel[i << 6..(i << 6) + 64].fill(0);
                 kpNoneZeroCountIdx += 4;
             }
@@ -666,18 +650,15 @@ pub fn WelsEncInterY(pFuncList: &SWelsFuncPtrList, pCurMb: &mut SMB, pMbCache: &
     }
 }
 
-/// 2x2 Chroma DC Hadamard transform, 4x4 AC quantization, JVT-O079 thresholding,
-/// and inverse dequantization for Chroma planes (`iUV = 1` for Cb, `iUV = 2` for Cr).
+/// 2x2 chroma DC Hadamard transform, 4x4 AC quantization, JVT-O079 thresholding and
+/// inverse dequantization for one chroma plane (`iUV = 1` for Cb, `iUV = 2` for Cr).
 ///
-/// `kiResOff` is not `(iUV - 1) * 64` off a fixed base. The two callers
-/// use *different* bases: `WelsIMbChromaEncode` passes `pCoeffLevel + 0`
-/// (`svc_encode_slice.cpp:475`) and `WelsPMbChromaEncode` passes `pCoeffLevel + 256`
-/// (`:499`). The offset is caller state, not a function of `iUV`, so it stays a
-/// parameter.
+/// `kiResOff` is the caller's base into `sCoeffLevel`, not a function of `iUV`:
+/// `WelsIMbChromaEncode` passes 0 and `WelsPMbChromaEncode` passes 256.
 ///
 /// # Panics
-/// If `kiResOff .. kiResOff + 64` is out of bounds of `pMbCache.sCoeffLevel` —
-/// one chroma group is 64 coefficients (the C's `128` counts bytes).
+/// If `kiResOff .. kiResOff + 64` is out of bounds of `pMbCache.sCoeffLevel`; one
+/// chroma group is 64 coefficients.
 pub fn WelsEncRecUV(
     pFuncList: &SWelsFuncPtrList,
     pCurMb: &mut SMB,
@@ -751,7 +732,6 @@ pub fn WelsEncRecUV(
     }
 
     if iSingleCtr8x8 < 7 {
-        // `WelsSetMemZero_c(pRes, 128)` — one 64-coefficient chroma group.
         pMbCache.sCoeffLevel[kiResOff..kiResOff + 64].fill(0);
         pCurMb.iNonZeroCount[16 + uiNoneZeroCountOffset] = 0;
         pCurMb.iNonZeroCount[16 + uiNoneZeroCountOffset + 1] = 0;
@@ -785,11 +765,8 @@ pub fn WelsEncRecUV(
     }
 }
 
-/// Fast early-termination test evaluating whether Luma (Y) residual qualifies for `P_SKIP`.
-///
-/// # Returns
-/// - `true`: Residual is zero or negligible ($iSingleCtrMb < 6$), qualifying for `P_SKIP`.
-/// - `false`: Non-zero significant residual detected.
+/// Whether the luma residual qualifies for `P_SKIP`: `true` when it is zero or
+/// negligible (`iSingleCtrMb < 6`).
 pub fn WelsTryPYskip(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMbCache) -> bool {
     let mut iSingleCtrMb = 0i32;
     let kuiQp = pCurMb.uiLumaQp;
@@ -825,11 +802,8 @@ pub fn WelsTryPYskip(pEncCtx: &sWelsEncCtx, pCurMb: &mut SMB, pMbCache: &mut SMb
     true
 }
 
-/// Fast early-termination test evaluating whether Chroma (U or V) residual qualifies for `P_SKIP`.
-///
-/// # Returns
-/// - `true`: Chroma residual is zero or negligible, qualifying for `P_SKIP`.
-/// - `false`: Non-zero chroma DC or significant AC residual detected.
+/// Whether the chroma residual for plane `iUV` qualifies for `P_SKIP`: `true` when both
+/// the DC and the significant AC are zero.
 pub fn WelsTryPUVskip(
     pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
@@ -903,8 +877,7 @@ mod tests {
         let mut dc_buf = [0i16; 16];
         dc_buf[0] = 16;
         WelsIHadamard4x4Dc(&mut dc_buf);
-        // Since forward Hadamard on a DC impulse distributes energy across all 16 cells,
-        // all 16 cells should equal 16.
+        // A DC impulse spreads evenly across all 16 cells.
         for val in dc_buf.iter() {
             assert_eq!(*val, 16);
         }
@@ -915,11 +888,7 @@ mod tests {
         let mut dct2x2 = [2i16, 0, 0, 0];
         let mf: u16 = 10;
         WelsDequantIHadamard2x2Dc(&mut dct2x2, mf);
-        // kiSumU = 2 + 0 = 2, kiDelU = 2 - 0 = 2, kiSumD = 0, kiDelD = 0
-        // pDct[0] = ((2 + 0) * 10) >> 1 = 10
-        // pDct[1] = ((2 - 0) * 10) >> 1 = 10
-        // pDct[2] = ((2 + 0) * 10) >> 1 = 10
-        // pDct[3] = ((2 - 0) * 10) >> 1 = 10
+        // ((2 +- 0) * 10) >> 1 = 10 in every cell.
         assert_eq!(dct2x2, [10, 10, 10, 10]);
     }
 

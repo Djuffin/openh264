@@ -4,26 +4,19 @@
 //! `codec/encoder/core/arm64/reconstruct_aarch64_neon.S`, and
 //! `IdctResAddPred_AArch64_neon` in `codec/decoder/core/arm64/block_add_aarch64_neon.S`.
 //!
-//! # The IDCT's widths, and where this departs from both asm files
+//! # The IDCT's widths
 //!
-//! The C's inverse transform (`IdctResAddPred_c`, `WelsIDctT4Rec_c`) stores its row
-//! pass into `int16_t` and runs its column pass in `int`, and both halves are
-//! observable on a full-range coefficient block: the narrowing wraps, the column pass
-//! does not. Upstream's two arm64 IDCTs each keep one half and drop the other.
-//! `WelsIDctT4Rec_AArch64_neon` is `.8h` throughout — right about the narrowing, but
-//! its column pass wraps where the C saturates, the same defect the x86_64 file
-//! records in `SSE2_IDCT_4x4P`. `IdctResAddPred_AArch64_neon` widens the *row* pass
-//! to `.4s` and never narrows it, so it disagrees with its C on any row whose sum
-//! leaves `i16`. The port's scalar keeps the C's behaviour exactly, and so does this:
-//! the row pass is the encoder asm's 16-bit `ROW_TRANSFORM_1_STEP_TOTAL_16BITS`, the
-//! column pass is the decoder asm's 32-bit `COL_TRANSFORM_1_STEP`, and `rshrn #6`
-//! narrows the rounded result, which is exact because `|32 + t1 ± t2| <= 114720` puts
-//! every residual inside `[-1792, 1792]`. `idct_vertical_pass_does_not_wrap_at_16_bits`
-//! and `idct_row_pass_narrows_like_the_scalar` pin the two ends.
+//! The inverse transform stores its row pass into `i16` and runs its column pass in
+//! `i32`: the narrowing wraps, the column pass does not, and both halves are
+//! observable on a full-range coefficient block. The two upstream arm64 kernels each
+//! keep only one of those halves, so the row pass here is the encoder asm's 16-bit
+//! `ROW_TRANSFORM_1_STEP_TOTAL_16BITS`, the column pass is the decoder asm's 32-bit
+//! `COL_TRANSFORM_1_STEP`, and `rshrn #6` narrows the rounded result — exact because
+//! `|32 + t1 ± t2| <= 114720` puts every residual inside `[-1792, 1792]`.
 //!
-//! Everything else is the asm as written. The forward DCT is `.8h` end to end with the
-//! same `uzp`/`trn` traffic; its values are bounded by `36 * 255` and cannot overflow.
-//! The DC reconstruction's `srshr #6` is the scalar's `(dc + 32) >> 6`.
+//! The forward DCT is `.8h` end to end with the same `uzp`/`trn` traffic; its values
+//! are bounded by `36 * 255` and cannot overflow. The DC reconstruction's `srshr #6`
+//! is `(dc + 32) >> 6`.
 //!
 //! # Entry points
 //!
@@ -32,7 +25,7 @@
 //! in the asm) — under a different way of reaching the prediction and the
 //! destination: a plane cursor pair, one cursor in place, a `RecCursor` with an arena
 //! prediction, or a `RecCursor` in place. The arithmetic exists twice, once per
-//! width, and each wrapper is the load/add/`sqxtun`/store the asm does after it.
+//! width, and each wrapper is the load/add/`sqxtun`/store around it.
 #![allow(unsafe_code)]
 
 use core::arch::aarch64::*;
@@ -205,7 +198,7 @@ fn dct_four_4x4_neon<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 64], pix1
 /// `WelsDctT4_AArch64_neon`.
 #[inline]
 pub fn dct_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 16], pix1: &A, pix2: &B) {
-    // SAFETY: NEON is baseline on aarch64; see the module header.
+    // SAFETY: NEON is baseline on aarch64.
     unsafe { dct_4x4_neon(dct, pix1, pix2) }
 }
 
@@ -545,7 +538,7 @@ fn idct_rec_i16x16_dc_to_view_neon(
 /// `IdctResAddPred_AArch64_neon`, with the widths the header explains.
 #[inline]
 pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
-    // SAFETY: NEON is baseline on aarch64; see the module header.
+    // SAFETY: NEON is baseline on aarch64.
     unsafe { idct_res_add_pred_neon(pred, rs) }
 }
 
@@ -653,8 +646,8 @@ mod tests {
         ((*seed >> 32) & 0xFF) as u8
     }
 
-    /// Coefficients over the **full `i16` range**, which is what the decoder hands the
-    /// IDCT: `rs` comes from the bitstream by way of dequantisation.
+    /// Coefficients over the full `i16` range, which is what dequantisation hands the
+    /// IDCT.
     fn lcg_i16(seed: &mut u64) -> i16 {
         *seed = seed
             .wrapping_mul(6364136223846793005)
@@ -684,7 +677,7 @@ mod tests {
     }
 
     /// The ends of the residual range — every pixel 255 against 0 and back — reach
-    /// the DCT's `36 * 255` bound, where a lane that had widened wrongly would show.
+    /// the DCT's `36 * 255` bound.
     #[test]
     fn dct_4x4_at_the_residual_extremes() {
         let (w, h, pad, stride) = (16usize, 16usize, 16usize, 64usize);
@@ -795,8 +788,7 @@ mod tests {
     }
 
     /// The other end: a row whose sum leaves `i16`. `rs[0] = rs[2] = 32767` makes
-    /// `t0 = 65534` and `iSrc[0] = t0 + t3` wraps in the C's `int16_t` — which the
-    /// scalar keeps and `IdctResAddPred_AArch64_neon`'s `.4s` row pass would not.
+    /// `t0 = 65534`, so `iSrc[0] = t0 + t3` wraps in the 16-bit row pass.
     #[test]
     fn idct_row_pass_narrows_like_the_scalar() {
         let (w, h, pad, stride) = (16usize, 16usize, 16usize, 64usize);
@@ -872,8 +864,8 @@ mod tests {
     }
 
     // ========================================================================
-    // The multi-block and reconstruction-seam entry points, each referenced against
-    // the scalar applied per block at the sub-offsets, over whole allocations.
+    // The multi-block and reconstruction-seam entry points, each against the scalar
+    // applied per block at the sub-offsets, over whole allocations.
     // ========================================================================
 
     fn twin_planes(seed: &mut u64) -> (PaddedPlane, PaddedPlane) {

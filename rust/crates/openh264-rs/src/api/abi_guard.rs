@@ -1,32 +1,9 @@
-//! **Compile-time pins on the layout of every type that crosses the C ABI.**
+//! Compile-time pins on the layout of every type that crosses the C ABI.
 //!
 //! These types are shared verbatim with `codec/api/wels/codec_api.h`,
 //! `codec_app_def.h` and `codec_def.h`. Callers written against those headers pass
 //! pointers straight into [`crate::api::codec_api`], so a field reordering or a width
 //! change here is silent memory corruption, not a compile error.
-//!
-//! # Where the numbers come from
-//!
-//! **Every number below is copied from `rust/tools/abi_sizes.txt`**, which is the
-//! output of `rust/tools/abi_sizes.c` — a C program compiled against the upstream
-//! headers that prints `sizeof`/`_Alignof` for each type and `offsetof` for each
-//! pinned field. Running `rust/tools/abi_sizes.sh --check` rebuilds the dumper as
-//! C++ and diffs the two front ends' answers.
-//!
-//! The header is the contract; if this file stops compiling, the question is which
-//! side is wrong, and the answer is in the header.
-//!
-//! # Coverage: 51 types
-//!
-//! Every named typedef in the three public headers that a C caller can pass or
-//! receive — as a parameter, a return, a field of such a type, or a documented
-//! `SetOption`/`GetOption` payload. That is 51 of the 53 the headers declare.
-//!
-//! The two that are not here are `SliceInfo` and `SRateThresholds`
-//! (`codec_def.h:168`, `:182`). They are declared in a public header and **named by
-//! nothing at all** — `grep -rn` over `codec/` finds only their own declarations, in
-//! no signature, no field and no option payload — and the port does not declare them
-//! either. There is nothing to pin and nothing to diverge.
 
 #![allow(non_snake_case, non_camel_case_types)]
 #![forbid(unsafe_code)]
@@ -44,18 +21,16 @@ macro_rules! assert_size {
     };
 }
 
-/// Alignment is half of a layout. A struct can keep its size and change its
-/// alignment (a `#[repr(C, packed)]` slip, or a field whose Rust type is more
-/// aligned than the C one) and every size pin still passes while a caller's array
-/// of them walks off its stride.
+/// A struct can keep its size while its alignment changes, which leaves every size
+/// pin passing but a caller's array of them walking off its stride.
 macro_rules! assert_align {
     ($t:ty, $n:expr) => {
         const _: () = assert!(align_of::<$t>() == $n, concat!(stringify!($t), " align"));
     };
 }
 
-/// `offset_of!` is stable since 1.77; keep the check in a const block so a
-/// mismatch is a compile error rather than a test failure.
+/// Checked in a const block, so a mismatch is a compile error rather than a test
+/// failure.
 macro_rules! assert_offset {
     ($t:ty, $f:ident, $n:expr) => {
         const _: () = assert!(
@@ -254,15 +229,11 @@ assert_align!(SLevelInfo, 4);
 assert_size!(SDeliveryStatus, 12);
 assert_align!(SDeliveryStatus, 4);
 
-/// **The one place in these headers where the C data model shows through.**
-/// `SEncoderStatistics` ends in three `unsigned long`s (`codec_app_def.h:767`),
-/// which is 8 bytes under LP64 — the Darwin/Linux hosts `abi_sizes.txt` was dumped
-/// on — and 4 under Windows' LLP64. The port's fields are `c_ulong`, so they already
-/// follow the platform; the pin has to follow it too instead of hard-coding the
-/// host that generated the dump. Everything up to and including `iStatisticsTs` is
-/// fixed-width, so the tail is the whole of the difference:
+/// `SEncoderStatistics` ends in three `unsigned long`s (`codec_app_def.h:767`) — 8
+/// bytes each under LP64, 4 under Windows' LLP64. Everything up to and including
+/// `iStatisticsTs` is fixed-width, so the tail is the whole of the difference:
 ///
-///   LP64   64 + 3*8 = 88            (`abi_sizes.txt:54`)
+///   LP64   64 + 3*8 = 88
 ///   LLP64  64 + 3*4 = 76, rounded up to the struct's 8-byte alignment = 80
 ///
 /// The alignment and every offset pin below are the same on both — `iStatisticsTs`
@@ -314,12 +285,9 @@ assert_offset!(ISVCDecoderVtbl, SetOption, 64);
 assert_offset!(ISVCDecoderVtbl, GetOption, 72);
 
 // ===========================================================================
-// The enums. C enums are `int` here on every target this project builds for, and
-// they cross as struct fields (`SDecodingParam::eEcActiveIdc`,
-// `SVideoProperty::eVideoBsType`, `SLayerBSInfo::eFrameType`, ...) and as
-// `SetOption`/`GetOption` selectors. A `#[repr(C)]` Rust enum matches; a
-// `#[repr(u8)]` one silently would not, and the caller's next field would land in
-// the wrong place.
+// The enums. C enums are `int` on every target this project builds for, and they
+// cross as struct fields and as `SetOption`/`GetOption` selectors, so each must be
+// 4 bytes: a `#[repr(u8)]` one would put the caller's next field in the wrong place.
 // ===========================================================================
 
 assert_size!(EVideoFormatType, 4);
@@ -373,8 +341,7 @@ assert_align!(EParameterSetStrategy, 4);
 mod tests {
     use super::*;
 
-    /// The const asserts above already fail the build on a mismatch; this test
-    /// exists so `cargo test` reports the module by name.
+    /// Restates the const asserts so `cargo test` reports these layout pins by name.
     #[test]
     fn abi_layout_matches_c_headers() {
         assert_eq!(size_of::<SFrameBSInfo>(), 7192);
@@ -391,8 +358,7 @@ mod tests {
         assert_eq!(size_of::<SVuiSarInfo>(), 12);
     }
 
-    /// The two vtables *are* the ABI's slot order, and their sizes say how many
-    /// slots there are: nine encoder, ten decoder, one pointer each.
+    /// Vtable sizes give the slot counts: nine encoder, ten decoder, one pointer each.
     #[test]
     fn the_vtables_have_the_slot_counts_the_header_declares() {
         assert_eq!(size_of::<ISVCEncoderVtbl>(), 9 * size_of::<usize>());

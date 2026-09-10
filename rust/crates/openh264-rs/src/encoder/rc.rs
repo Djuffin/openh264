@@ -28,12 +28,12 @@
 
 //! # Rate Control Engine (`rc.h` & `ratectl.cpp`)
 //!
-//! Translated from `codec/encoder/core/inc/rc.h` and `codec/encoder/core/src/ratectl.cpp`.
+//! `codec/encoder/core/inc/rc.h`, `codec/encoder/core/src/ratectl.cpp`.
 //!
-//! This module implements OpenH264's multi-level hierarchical rate control subsystem,
-//! governing bit allocation across Virtual GOPs, frame-level quantization parameter ($QP$) derivation,
-//! Group of Macroblocks (GOM) adaptive quantization, Virtual Buffer Verifier (VBV) leaky-bucket
-//! management, and dynamic frame skipping for temporal and spatial layers.
+//! Multi-level hierarchical rate control: bit allocation across Virtual GOPs, frame-level
+//! quantization parameter ($QP$) derivation, Group of Macroblocks (GOM) adaptive
+//! quantization, Virtual Buffer Verifier (VBV) leaky-bucket management, and dynamic frame
+//! skipping for temporal and spatial layers.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
@@ -435,17 +435,15 @@ pub struct SRCSlicing {
 
 /// `SWelsRcFunc` — `rc.h:132`.
 ///
-/// **`eInstalledMode` is deliberately *not* `pSvcParam->iRCMode`, and the two can
-/// legitimately differ.** `WelsEncoderParamAdjust`'s no-reset arm assigns
-/// `pOldParam->iRCMode = pNewParam->iRCMode` and does **not** re-point the table —
-/// upstream's own "Any else initialization/reset for rate control here?" sits a few
-/// lines below it — so from that moment the encoder runs the *previous* mode's
-/// callbacks until something re-inits. `SetOption(ENCODER_OPTION_RC_MODE)` is the
-/// path that does re-point, and it is the only one.
+/// `eInstalledMode` is not `pSvcParam->iRCMode`, and the two can legitimately differ:
+/// `WelsEncoderParamAdjust`'s no-reset arm assigns `pOldParam->iRCMode =
+/// pNewParam->iRCMode` without re-pointing the table, so from that moment the encoder
+/// runs the previously installed mode's callbacks until something re-inits.
+/// `SetOption(ENCODER_OPTION_RC_MODE)` is the only path that re-points it.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct SWelsRcFunc {
-    /// The mode the callbacks were **installed** for — see the type note.
+    /// The mode the callbacks were installed for — see the type note.
     pub eInstalledMode: RCMode,
 }
 
@@ -604,7 +602,7 @@ pub fn RcInitLayerMemory(pWelsSvcRc: &mut SWelsSvcRc, kiMaxTl: i32) {
 }
 
 impl SWelsSvcRc {
-    /// A layer's **GOM SAD array** — `pCurrentFrameGomSad`.
+    /// A layer's GOM SAD array — `pCurrentFrameGomSad`.
     #[inline]
     pub fn gom_sad(&self) -> &[i32] {
         &self.pCurrentFrameGomSad
@@ -1362,10 +1360,9 @@ pub fn RcGomTargetBits(pEncCtx: &sWelsEncCtx, pSOverRc: &mut SRCSlicing) {
     } else {
         let pWelsSvcRc_Base = RcJudgeBaseUsability(pEncCtx).unwrap_or(pWelsSvcRc);
 
-        // `int32_t iSumSad` in C++, and it really does overflow: under `GOM_VAR`
-        // each `pCurrentFrameGomSad[j]` is a whole GOM's luma variance, which at
-        // 720p is order 1e9, so a sum over 20+ GOMs wraps. Keep the wrap — a
-        // debug-build `+` traps here instead.
+        // The sum really does overflow: under `GOM_VAR` each `pCurrentFrameGomSad[j]`
+        // is a whole GOM's luma variance, order 1e9 at 720p, so a sum over 20+ GOMs
+        // wraps. The wrap is intended; a plain `+` would trap in a debug build.
         let mut iSumSad: i32 = 0;
         for i in (kiComplexityIndex + 1)..=iLastGomIndex {
             iSumSad = iSumSad.wrapping_add(pWelsSvcRc_Base.gom_sad()[i as usize]);
@@ -1394,10 +1391,10 @@ pub fn RcCalculateGomQp(pEncCtx: &sWelsEncCtx, pSOverRc: &mut SRCSlicing, _pCurM
         pSOverRc.iCalculatedQpSlice += 2;
     } else {
         let iBitsRatio = 10000 * iLeftBits / (iTargetLeftBits + 1);
-        // The order of the last two arms is `ratectl.cpp:760-767` verbatim and is
-        // load-bearing: `> 10600` is tested first, so the `-= 2` arm is unreachable
-        // (every ratio above 11900 is also above 10600). Sorting the thresholds
-        // "correctly" makes every ratio above 11900 drop the QP by 2 instead of 1.
+        // The order of the last two arms is load-bearing (`ratectl.cpp:760-767`):
+        // `> 10600` is tested first, so the `-= 2` arm is unreachable (every ratio above
+        // 11900 is also above 10600). Sorting the thresholds "correctly" would drop the
+        // QP by 2 for every ratio above 11900 instead of 1.
         if iBitsRatio < 8409 {
             //2^(-1.5/6)*10000
             pSOverRc.iCalculatedQpSlice += 2;
@@ -1991,10 +1988,10 @@ pub extern "C" fn WelsRcPictureInitGom(pEncCtx: &mut sWelsEncCtx, uiTimeStamp: i
     }
 }
 
-/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+/// Gate for the RC dump; see `encoder::dump_enabled`.
 static RC_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
-/// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
+/// Gate for the RC dump; see `encoder::dump_enabled`.
 static RC_MB_DUMP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 pub extern "C" fn WelsRcPictureInfoUpdateGom(pEncCtx: &mut sWelsEncCtx, iLayerSize: i32) {
@@ -2410,7 +2407,7 @@ pub extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(pEncCtx: &mut sWelsEncCtx,
 /// Populates the rate control function dispatch table.
 ///
 /// Its two callers — `InitFunctionPointers` and `SetOption(ENCODER_OPTION_RC_MODE)`
-/// — are the **only** places the installed mode may change.
+/// — are the only places the installed mode may change.
 pub fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
     pRcf.eInstalledMode = iRcMode;
 }

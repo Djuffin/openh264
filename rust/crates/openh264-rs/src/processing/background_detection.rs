@@ -1,18 +1,18 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-//! Port of `codec/processing/src/backgrounddetection/BackgroundDetection.cpp` —
-//! the plugin reached through `METHOD_BACKGROUND_DETECTION`.
+//! Background detection — the plugin reached through `METHOD_BACKGROUND_DETECTION`.
+//!
+//! `codec/processing/src/backgrounddetection/BackgroundDetection.cpp`.
 //!
 //! `CWelsPreProcess::AnalyzeSpatialPic` calls it for every P slice when
-//! `bEnableBackgroundDetection` is set, which `FillDefault` leaves **on**. It fills
+//! `bEnableBackgroundDetection` is set, which `FillDefault` leaves on. It fills
 //! `pVaa->pVaaBackgroundMbFlag`, one byte per macroblock, which
 //! `WelsMdInterJudgeBGDPskip` uses to force P_SKIP on static background and which
 //! `CComplexityAnalysis`'s background-excluding SAD kernels read.
 //!
 //! The work happens on 16x16 "OU"s (`BGD_OU_SIZE`), which at
 //! `LOG2_BGD_OU_SIZE == 4` is exactly one macroblock — `OU_SIZE_IN_MB` is 1 — so
-//! the OU grid and the macroblock grid coincide for the sizes this encoder builds.
-//! The code is transcribed as written rather than specialised to that.
+//! the OU grid and the macroblock grid coincide.
 
 #![forbid(unsafe_code)]
 
@@ -87,9 +87,8 @@ fn WELS_MIN(a: i32, b: i32) -> i32 {
     if a < b { a } else { b }
 }
 
-/// The three planes of each picture [`CBackgroundDetection::Process`] reads,
-/// from the logical origin — the family's `ScdPlanes` shape, three planes wide
-/// (the chroma edge check reads U and V).
+/// The three planes of each picture [`CBackgroundDetection::Process`] reads, from the
+/// logical origin. The chroma edge check reads U and V.
 pub struct BgdPlanes<'a> {
     pub cur: [&'a [u8]; 3],
     pub refp: [&'a [u8]; 3],
@@ -149,7 +148,7 @@ impl CBackgroundDetection {
         pBgdOU.iSAD = iSubSAD[0] + iSubSAD[1] + iSubSAD[2] + iSubSAD[3];
         pBgdOU.iSD = pBgdOU.iSD.abs();
 
-        // `iSubMAD` is `uint8_t[4]` in C++ and every use widens to `int`.
+        // Every use of the MAD quadruple widens to `i32`.
         let m: [i32; 4] = [
             iSubMAD[0] as i32,
             iSubMAD[1] as i32,
@@ -362,9 +361,8 @@ impl CBackgroundDetection {
     /// `CBackgroundDetection::ForegroundDilationAndBackgroundErosion` —
     /// `BackgroundDetection.cpp:329`.
     ///
-    /// The C++ carries four raw neighbour pointers into the same array it is
-    /// mutating. Rust's aliasing rules make that awkward, so each iteration copies
-    /// the four neighbours by value before touching the current OU.
+    /// The four neighbours live in the array being mutated, so each iteration copies
+    /// them by value before touching the current OU.
     fn ForegroundDilationAndBackgroundErosion(
         &mut self,
         planes: &BgdPlanes<'_>,
@@ -379,15 +377,15 @@ impl CBackgroundDetection {
         let kiRowStep = (OU_SIZE_IN_MB * iPicWidthInMb) as isize;
         let mut iRowBase: isize = 0;
 
-        // Indices into pOU_array, mirroring the C++'s pointers.
+        // Indices into pOU_array.
         let mut cur = 0usize; // pBackgroundOU
         let mut nb_top = 0isize; // pOUNeighbours[2]
 
         for j in 0..iPicHeightInOU {
             let mut iSkipFlag = iRowBase;
             let mut nb_left = cur as isize;
-            // `pBackgroundOU + (iPicWidthInOU & ((j == iPicHeightInOU-1) - 1))`:
-            // the mask is 0 on the last row and -1 (all ones) otherwise.
+            // `iPicWidthInOU & ((j == iPicHeightInOU-1) - 1)`: the mask is 0 on the
+            // last row and -1 (all ones) otherwise.
             let last_row = j == iPicHeightInOU - 1;
             let mut nb_bottom = cur as isize + (iPicWidthInOU & ((last_row as i32) - 1)) as isize;
 

@@ -5,17 +5,14 @@
 //! One decoder `SPicture` is reachable through up to nine locations at once (the DPB
 //! pool, both ref lists, `pDec`, `pECRefPic`, the per-picture `pRefPic` graph — which
 //! has *cycles* —, `SDeblockingFilter::pRefPics`, …). None of those aliases owns it;
-//! they are all "which picture". One owner, `Copy` handles, and the cyclic `pRefPic`
-//! graph becomes plain data, because a handle does not own what it names.
+//! they are all "which picture". With one owner and `Copy` handles the cyclic
+//! `pRefPic` graph is plain data.
 //!
-//! **Identity is handle equality**: `picture.rs`'s `same_picture` compares the slot
-//! each picture was allocated into. The comparisons it serves are boundary strength's
-//! "same reference picture?" (`deblocking.rs`), error concealment's four self-copy
-//! guards, and `manage_dec_ref.rs`'s EC prefetch overlap test.
+//! Identity is handle equality: `picture.rs`'s `same_picture` compares the slot each
+//! picture was allocated into.
 //!
-//! This is generalised over `T` rather than written against `Picture`: the encoder
-//! needs the same shape for its own picture pool. `PicId` is an alias over [`Id`]
-//! (`pic_queue.rs`).
+//! Generic over `T`: the encoder needs the same shape for its own picture pool.
+//! `PicId` is an alias over [`Id`] (`pic_queue.rs`).
 
 use std::num::NonZeroU32;
 
@@ -27,24 +24,19 @@ use std::num::NonZeroU32;
 ///
 /// # Staleness
 ///
-/// Recycling can hand out a slot that an old handle still names, exactly as the C++
-/// can hand out a `SPicture*` to memory a new picture now occupies. That hazard is
-/// *preserved* rather than fixed, because fixing it would change decode behaviour;
-/// but in a debug build each slot carries a generation counter that
-/// [`Pool::replace`] bumps and every accessor checks, so the tests catch logic rot
-/// that release builds would silently tolerate.
+/// Recycling can hand out a slot that an old handle still names, and in a release
+/// build the handle keeps working — it names the new occupant. In a debug build each
+/// slot carries a generation counter that [`Pool::replace`] bumps and every accessor
+/// checks, so stale use panics there.
 ///
-/// **Equality never consults the generation**, in either profile: a handle names a
-/// slot, and two handles to one slot are equal — a debug build that answered
-/// differently would be a debug/release semantic split.
+/// Equality never consults the generation, in either profile: a handle names a slot,
+/// and two handles to one slot are equal.
 ///
 /// # Representation
 ///
-/// The field holds **`slot + 1`**, so `Id` has a niche and `Option<Id>` is one word
-/// with no separate discriminant. The consumers that make this worth spelling
-/// out are the reference-id arrays deblocking fills and compares per macroblock
-/// (`[[Option<PicId>; 16]; 2]`, `deblocking.rs`): a niche halves them and makes `==`
-/// one comparison instead of two.
+/// The field holds `slot + 1`, so `Id` has a niche and `Option<Id>` is one word with no
+/// separate discriminant. That keeps deblocking's per-macroblock
+/// `[[Option<PicId>; 16]; 2]` arrays one word per entry and their `==` one comparison.
 #[derive(Clone, Copy, Debug)]
 pub struct Id {
     /// `slot + 1`. Never read directly — [`Id::index`] subtracts the bias.
@@ -89,8 +81,8 @@ pub struct Pool<T> {
 }
 
 impl<T> Pool<T> {
-    /// Takes ownership of `slots`. The pool never grows or shrinks: the C++ picture
-    /// queues are sized once at initialisation and recycled thereafter.
+    /// Takes ownership of `slots`. The pool is sized once at initialisation and
+    /// recycled thereafter; see [`grow`](Self::grow) for the one exception.
     pub fn new(slots: Vec<T>) -> Self {
         #[cfg(debug_assertions)]
         let generations = vec![0u32; slots.len()];
@@ -138,8 +130,7 @@ impl<T> Pool<T> {
         }
     }
 
-    /// Handles to every slot, in order — the iteration the recycling predicates do
-    /// (`find_free`-style searches over `bUsedAsRef`/`iRefCount`).
+    /// Handles to every slot, in order — the iteration the recycling predicates do.
     pub fn ids(&self) -> impl Iterator<Item = Id> + '_ {
         (0..self.slots.len()).map(|i| self.id(i))
     }
@@ -227,28 +218,20 @@ impl<T> Pool<T> {
         )
     }
 
-    /// Appends slots to the end of the pool.
+    /// Appends slots to the end of the pool. `WelsRequestMem`'s third arm resizes the
+    /// decoder's picture pool in place when a stream changes its reference-frame count
+    /// without changing resolution.
     ///
-    /// **This is the one place the "never grows or shrinks" contract above is
-    /// relaxed.** `WelsRequestMem`'s third arm resizes the decoder's picture pool in
-    /// place when a stream changes its reference-frame count without changing
-    /// resolution (`decoder.cpp:493-509`).
-    ///
-    /// Existing slots keep their index **and their generation**, so every outstanding
-    /// handle stays valid. That is the faithful reading of `IncreasePicBuff`
-    /// (`decoder.cpp:143`), which `memcpy`s the old `PPicture` array into the front of
-    /// the new one: a picture keeps its position, so a handle keeps its meaning. New
-    /// slots start one past the highest generation now live, not at 0, so an index
-    /// reused after a `reorder_and_shrink` cannot match a handle taken before it.
+    /// Existing slots keep their index and their generation, so every outstanding handle
+    /// stays valid (`IncreasePicBuff`). New slots start one past the highest generation
+    /// now live, not at 0, so an index reused after a `reorder_and_shrink` cannot match
+    /// a handle taken before it.
     pub fn grow(&mut self, extra: Vec<T>) {
         #[cfg(debug_assertions)]
         {
-            // Past every generation now live. `grow` after `reorder_and_shrink`
-            // **reuses indices the shrink dropped**, and a slot dropped at generation
-            // 0 and re-created at generation 0 would accept a handle taken before the
-            // shrink — the one confusion the counter exists to prevent. Derived
-            // rather than stored: a pool of sixteen slots makes this a sixteen-element
-            // max on a path that runs once per sequence.
+            // Past every generation now live: `grow` after `reorder_and_shrink` reuses
+            // indices the shrink dropped, and a slot dropped and re-created at
+            // generation 0 would accept a handle taken before the shrink.
             let fresh = self
                 .generations
                 .iter()
@@ -266,28 +249,21 @@ impl<T> Pool<T> {
     /// was at old index `order[i]`. Returns every value no index in `order` named, in
     /// old-index order.
     ///
-    /// This is `DecreasePicBuff` (`decoder.cpp:170`), which is not a truncation: when
-    /// the DPB's previously-decoded picture sits beyond the new size it is moved to
-    /// slot 0 and the rest shift up by one. The returned values are what the C++
-    /// `FreePicture`s — by construction rather than by its `if (iPrevPicIdx !=
-    /// iPicIdx)` guard, since a value can only be moved out once.
+    /// `DecreasePicBuff` is not a truncation: when the DPB's previously-decoded picture
+    /// sits beyond the new size it is moved to slot 0 and the rest shift up by one. The
+    /// returned values are the ones it frees.
     ///
     /// # Generations
     ///
     /// A slot that receives a *different* value has its generation bumped, so a
     /// handle made before the reorder faults on access in a debug build instead of
     /// silently naming another picture. A slot that keeps its own value
-    /// (`order[i] == i`) keeps its generation and its handles.
-    ///
-    /// **This is stricter than the C++ and deliberately so.** Here identity is the
-    /// slot, so a caller that keeps an [`Id`] across this call must re-derive it.
-    /// `DecreasePicBuff` re-derives the one id the C++ deliberately preserves and
-    /// clears the rest, which is why nothing faults.
+    /// (`order[i] == i`) keeps its generation and its handles. A caller holding an
+    /// [`Id`] across this call must re-derive it.
     ///
     /// # Panics
     /// If `order` is longer than the pool, names an index out of range, or names one
-    /// twice — each would mean a slot had to be duplicated or invented, which is a
-    /// caller bug and not a state to recover from.
+    /// twice.
     pub fn reorder_and_shrink(&mut self, order: &[usize]) -> Vec<T> {
         let old_len = self.slots.len();
         assert!(
@@ -332,9 +308,8 @@ impl<T> Pool<T> {
     /// Replaces a slot's contents, invalidating every outstanding handle to it in
     /// debug builds.
     ///
-    /// This is the recycling operation (`AllocPicture`/`FreePicture`'s slot reuse):
-    /// in release it is a plain assignment with C-identical semantics, including the
-    /// hazard that an old handle now names the new occupant.
+    /// The recycling operation (`AllocPicture`/`FreePicture`'s slot reuse). In release it
+    /// is a plain assignment, so an old handle silently names the new occupant.
     pub fn replace(&mut self, id: Id, value: T) -> T {
         self.check(id);
         #[cfg(debug_assertions)]
@@ -347,8 +322,7 @@ impl<T> Pool<T> {
 
 /// Read access to every slot of a [`Pool`] except the one held mutably.
 ///
-/// Produced by [`Pool::mut_and_rest`]; lives only for the call chain that made it
-/// (this is one of the module's three ephemeral view types — see [`crate::safe`]).
+/// Produced by [`Pool::mut_and_rest`]; lives only for the call chain that made it.
 #[derive(Debug)]
 pub struct PoolRest<'a, T> {
     lo: &'a [T],
@@ -358,12 +332,9 @@ pub struct PoolRest<'a, T> {
     generations: &'a [u32],
 }
 
-// `Copy` is hand-written because `#[derive]` would add a `T: Copy` bound, and the
-// `T` this view is built over is `Option<Box<SPicture>>` — the slots are not
-// copyable and are not being copied: the fields above are two shared slices and an
-// index, and copying them is copying *borrows*. A `PoolRest` that is not `Copy`
-// forces every signature it is threaded through to take it by reference, which grows
-// a second lifetime across the whole macroblock tree.
+// `Copy` is hand-written because `#[derive]` would add a `T: Copy` bound, and `T` here
+// is `Option<Box<SPicture>>`. The fields are two shared slices and an index, so copying
+// them copies borrows, not slots.
 impl<T> Clone for PoolRest<'_, T> {
     #[inline]
     fn clone(&self) -> Self {
@@ -376,8 +347,8 @@ impl<T> Copy for PoolRest<'_, T> {}
 impl<'a, T> PoolRest<'a, T> {
     /// The slot `id` names.
     ///
-    /// **The borrow is the view's, not this call's**: the rest is two shared slices
-    /// with lifetime `'a`, so a result may outlive the `&self` that asked for it.
+    /// The borrow is the view's, not this call's: the rest is two shared slices with
+    /// lifetime `'a`, so a result may outlive the `&self` that asked for it.
     ///
     /// # Panics
     /// If `id` names the slot that is held mutably, or is out of range, or — debug
@@ -428,12 +399,9 @@ mod tests {
 
     #[test]
     fn an_optional_handle_costs_no_more_than_a_handle() {
-        // The niche, pinned: `Id`'s field is `slot + 1`, so `None` is the zero and
-        // `Option<Id>` needs no discriminant. `deblocking.rs` fills
-        // `[[Option<PicId>; 16]; 2]` per macroblock and compares six of them per
-        // edge; this is what keeps that one word and one comparison.
+        // `Id`'s field is `slot + 1`, so `None` is the zero and needs no discriminant.
         assert_eq!(size_of::<Option<Id>>(), size_of::<Id>());
-        // And the bias is invisible from outside: slot 0 round-trips.
+        // The bias is invisible from outside: slot 0 round-trips.
         assert_eq!(pool_of(1).id(0).index(), 0);
     }
 
@@ -531,8 +499,7 @@ mod tests {
         let old: Vec<Id> = p.ids().collect();
         p.grow(vec![30, 40, 50]);
         assert_eq!(p.len(), 6);
-        // the old handles still name the same values — `IncreasePicBuff` memcpy's the
-        // old array into the front, so a picture keeps its position
+        // The old handles still name the same values: a picture keeps its position.
         for (i, id) in old.iter().enumerate() {
             assert_eq!(*p.get(*id), i as i32 * 10);
         }
@@ -563,12 +530,9 @@ mod tests {
     }
 
     /// A slot that keeps its own value keeps its handles; a slot that receives a
-    /// different value does not. Without this, a `PicId` taken before the resize
-    /// would silently name another picture — the failure `DecreasePicBuff` has to
-    /// re-derive around, and the reason it clears every `pRefPic` entry.
-    // `#[cfg]` rather than `#[ignore]`, matching
-    // `debug_builds_catch_a_handle_to_a_recycled_slot` below: generations do not
-    // exist in a release build.
+    /// different value does not. Otherwise a `PicId` taken before the resize would
+    /// silently name another picture.
+    // Generations do not exist in a release build.
     #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "stale handle")]
@@ -604,7 +568,7 @@ mod tests {
         p.grow(vec![70, 80]); // indices 2 and 3 exist again, holding 70 and 80
         assert_eq!(p.len(), 4);
         // `slot3` names index 3 at generation 0; `grow` stamps fresh slots past every
-        // generation the shrink left live, so slot 3 is not at 0 any more.
+        // generation the shrink left live.
         let _ = p.get(slot3);
     }
 
@@ -641,8 +605,8 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn a_stale_handle_still_compares_equal_to_a_fresh_one() {
-        // Release builds cannot tell these apart at all; debug builds must not either,
-        // or identity semantics would differ between profiles.
+        // Release builds cannot tell these apart, and debug builds must not either, or
+        // identity semantics would differ between profiles.
         let mut p = pool_of(3);
         let old = p.id(1);
         p.replace(old, 77);

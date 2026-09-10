@@ -2,15 +2,11 @@
 //! serving both the encoder's packed candidate buffers and the decoder's in-place
 //! reconstruction through the same `PredOut` seam.
 //!
-//! The two plane fills are word multiplies, adds, an arithmetic shift and a
-//! `packuswb`, all direct `wide` calls. The 16x16 DC mean is where the intrinsic
-//! kernel used `psadbw` against zero as a byte sum; here it is two zero-extends and
-//! a `pmaddwd` reduce. The 4x4 predictors were a `_mm_setr_epi8` and a store in the
-//! intrinsic file, which is a 16-byte array assignment by another name, and that is
-//! what they are here.
+//! The two plane fills are word multiplies, adds, an arithmetic shift and a saturating
+//! narrow. The 16x16 DC mean is two zero-extends and a widening multiply-add reduce.
 //!
-//! Names keep the intrinsic file's `_sse2` suffix where it has one, so the install
-//! tables resolve the same identifiers against either module.
+//! Names keep the `_sse2` suffix where the install tables use it, so the same
+//! identifiers resolve against either module.
 
 #![forbid(unsafe_code)]
 
@@ -315,7 +311,7 @@ pub fn dec_chroma_pred_plane(pred: &mut PlaneCursorMut<'_>) {
 #[inline]
 pub fn enc_i4x4_luma_pred_v(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let top = rec.row_n::<4>(-1, 0);
-    // The intrinsic kernel's `_mm_set1_epi32` and store: one dword to four lanes.
+    // One dword splatted to four lanes.
     *pred = cast(u32x4::splat(u32::from_ne_bytes(top)));
 }
 
@@ -666,19 +662,15 @@ mod tests {
     // ========================================================================
     // The decoder-side predictors.
     //
-    // The three tests above cover the twelve `enc_*` kernels — the encoder's packed
-    // candidate buffers — and nothing covered the thirteen `dec_*` ones, which are the
-    // in-place reconstructors the decoder installs at `decoder_core.rs:1817..1830`.
-    // They are a different shape, not a different arithmetic: the encoder writes a
-    // dense `[u8; N]` candidate, the decoder writes back into the picture through a
-    // `PlaneCursorMut` whose neighbours are the samples it just read. That shape is
-    // exactly where an off-by-one row or column hides, so these compare the *whole
-    // allocation* of two identically built planes rather than the block.
+    // The `dec_*` kernels are the in-place reconstructors the decoder installs at
+    // `decoder_core.rs:1817..1830`. Where an `enc_*` kernel writes a dense `[u8; N]`
+    // candidate, these write back into the picture through a `PlaneCursorMut` whose
+    // neighbours are the samples just read — the shape an off-by-one row or column
+    // hides in — so they compare the whole allocation of two identically built planes
+    // rather than the block.
     //
-    // The reference on the other side is `decoder::get_intra_predictor`, which has no
-    // SIMD dispatch of its own — these kernels are installed over it in the table,
-    // never called from it — so no assertion here can route back into the kernel under
-    // test.
+    // The reference is `decoder::get_intra_predictor`, which has no SIMD dispatch of
+    // its own, so no assertion here can route back into the kernel under test.
     // ========================================================================
 
     /// Two planes with identical content, both padded, for an in-place kernel pair.

@@ -1,5 +1,4 @@
-//! Port of `codec/encoder/core/src/svc_enc_slice_segment.cpp` — the slice-argument
-//! validation group.
+//! Slice-argument validation — `codec/encoder/core/src/svc_enc_slice_segment.cpp`.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
@@ -27,14 +26,12 @@ use crate::encoder::wels_encoder_ext::{
 /// `MAX_SLICES_NUM`. Used as the initial slice count in `SM_SIZELIMITED_SLICE`.
 pub const AVERSLICENUM_CONSTRAINT: usize = MAX_SLICES_NUM;
 
-/// The GOM size in macroblocks for a frame `kiMbWidth` macroblocks wide.
+/// The GOM size in macroblocks for a frame `kiMbWidth` macroblocks wide — the shared
+/// prologue of `GomValidCheckSliceNum` (svc_enc_slice_segment.cpp:226) and
+/// `GomValidCheckSliceMbNum` (:271).
 ///
-/// Shared prologue of `GomValidCheckSliceNum` (svc_enc_slice_segment.cpp:226) and
-/// `GomValidCheckSliceMbNum` (:271), which compute it identically.
-///
-/// The default RC is bitrate mode, but this has to hold for both: `GOM_ROW_MODE0_?P`
-/// is an integer multiple of `GOM_ROW_MODE1_?P` (see `rc.h`), so MODE0 is taken as the
-/// initial value because the RC mode can change from outside without refreshing this.
+/// `GOM_ROW_MODE0_?P` is an integer multiple of `GOM_ROW_MODE1_?P` (`rc.h`), so MODE0
+/// serves both RC modes: the mode can change from outside without refreshing this.
 #[inline]
 fn GomSizeForMbWidth(kiMbWidth: i32) -> i32 {
     if kiMbWidth <= MB_WIDTH_THRESHOLD_90P {
@@ -53,8 +50,7 @@ fn GomSizeForMbWidth(kiMbWidth: i32) -> i32 {
 /// Slice parameter check for `SM_FIXEDSLCNUM_SLICE`: divides the frame evenly and puts
 /// the remainder in the last slice.
 ///
-/// C++ aliases `uiSliceMbNum` (a `uint32_t[]`) through an `int32_t*`, so the
-/// assignments and the `iNumMbLeft <= 0` test are signed; that is reproduced here.
+/// The assignments into `uiSliceMbNum` and the `iNumMbLeft <= 0` test are signed.
 ///
 /// # Panics
 /// Panics if `uiSliceNum` is zero (division by zero), or greater than
@@ -196,7 +192,7 @@ pub fn GomValidCheckSliceMbNum(
     let kiMbNumPerSlice = kiMbNumInFrame / kuiSliceNum as i32;
     let mut iNumMbLeft = kiMbNumInFrame;
 
-    let mut iMaximalMbNum: i32; // dynamically assigned later
+    let mut iMaximalMbNum: i32;
     let iGomSize = GomSizeForMbWidth(kiMbWidth);
 
     let mut uiSliceIdx: u32 = 0;
@@ -206,11 +202,9 @@ pub fn GomValidCheckSliceMbNum(
         WELS_DIV_ROUND(INT_MULTIPLY * kiMbNumPerSlice, iGomSize * INT_MULTIPLY) * iGomSize;
     let mut iCurNumMbAssigning: i32;
 
-    // C++ initialises iMinimalMbNum to kiMbWidth ("in theory we need only 1 SMB, here
-    // let it as one SMB row required") and then immediately overwrites it with iGomSize.
     let iMinimalMbNum = iGomSize;
-    // Ensure that the minimum macroblock requirement across all slices does not exceed
-    // total frame capacity, preventing negative calculations for remaining macroblocks.
+    // One GOM per slice must fit in the frame, or the remaining-macroblock arithmetic
+    // goes negative.
     if iMinimalMbNum * kuiSliceNum as i32 > kiMbNumInFrame {
         return false;
     }
@@ -300,9 +294,8 @@ pub fn SliceArgumentValidationFixedSliceMode(
     }
 
     if kiRCMode != RC_OFF_MODE {
-        // multiple slices verified with gom
-        // check uiSliceNum and set uiSliceMbNum with the current uiSliceNum. C++ only
-        // logs when this returns false; uiSliceNum has already been corrected in place.
+        // Multiple slices verified with gom. `uiSliceNum` is corrected in place, so a
+        // false return needs no handling here.
         GomValidCheckSliceNum(iMbWidth, iMbHeight, &mut pSliceArgument.uiSliceNum);
 
         if pSliceArgument.uiSliceNum <= 1
@@ -345,11 +338,8 @@ fn new_mb_map(kiCountMbNum: i32) -> Vec<AtomicU16> {
 
 /// `AssignMbMapMultipleSlices` — svc_enc_slice_segment.cpp:70.
 ///
-/// Note the C++ returns **1** on the normal `SM_RASTER_SLICE`/`SM_FIXEDSLCNUM_SLICE`
-/// path — the `return 0` is only in the `uiSliceMbNum[0] == 0` raster special case, and
-/// the shared tail falls through to `return 1` with the comment "extention for other
-/// multiple slice type in the future". `InitSliceSegment` returns that value directly,
-/// so multi-slice `InitSlicePEncCtx` reports failure while still having filled the map.
+/// Returns 0 only in the `uiSliceMbNum[0] == 0` raster case; every other path returns
+/// 1, which `InitSliceSegment` passes straight on.
 ///
 /// # Panics
 /// Panics if `sSliceEncCtx.pOverallMbMap` holds fewer than `iMbNumInFrame` entries.
@@ -410,7 +400,7 @@ pub fn AssignMbMapMultipleSlices(pCurDq: &mut SDqLayer, kpSliceArgument: &SSlice
     } else if pSliceSeg.uiSliceMode == SM_SIZELIMITED_SLICE {
         // do nothing, pSliceSeg->pOverallMbMap will be initialised later
     } else {
-        // any else uiSliceMode? C++ asserts here.
+        // Any other uiSliceMode is a bug.
         debug_assert!(false, "AssignMbMapMultipleSlices: unexpected uiSliceMode");
     }
 
@@ -530,8 +520,8 @@ pub fn UninitSliceSegment(pCurDq: &mut SDqLayer) {
 
 /// `InitSlicePEncCtx` — svc_enc_slice_segment.cpp:482.
 ///
-/// `bFmoUseFlag` and `pPpsArg` are accepted and unused, as in C++, and the return
-/// value of `InitSliceSegment` is discarded — C++ returns a literal 0 here.
+/// `bFmoUseFlag` is unused, `InitSliceSegment`'s return value is discarded, and the
+/// result is always 0.
 pub fn InitSlicePEncCtx(
     pCurDq: &mut SDqLayer,
     _bFmoUseFlag: bool,

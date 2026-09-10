@@ -28,12 +28,9 @@
 
 //! # OpenH264 Decoder: Error Concealment Engine
 //!
-//! Translated from `codec/decoder/core/inc/error_concealment.h` and
-//! `codec/decoder/core/src/error_concealment.cpp`.
-//!
-//! Provides spatial and temporal error concealment algorithms (full frame copy,
-//! selective collocated slice macroblock copy, and motion-compensated vector extrapolation)
-//! to restore video continuity and decodability during network packet loss.
+//! Spatial and temporal error concealment (full frame copy, collocated slice
+//! macroblock copy, and motion-compensated vector extrapolation) to keep video
+//! decodable across packet loss.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
@@ -46,7 +43,6 @@ use crate::decoder::decoder_context::{active_sps, dec_pic, prev_dpb_id};
 // ============================================================================
 
 /// Error concealment method selector enumeration (`ERROR_CON_IDC`).
-// Same enum as the public API's; the decoder context stores the caller's value.
 pub use crate::api::codec_api::ERROR_CON_IDC;
 
 // Error status bitmask flags
@@ -108,17 +104,14 @@ pub fn WELS_MIN<T: Ord>(x: T, y: T) -> T {
 // Function Pointer Types & Helper Structs
 // ============================================================================
 
-/// The C++ needs the indirection because it selects a SIMD form from the CPU
-/// flags; this port has no SIMD.
+/// Availability of the copy kernels used by concealment.
 #[derive(Debug, Copy, Clone)]
 pub struct SCopyFunc {
     pub bInstalled: bool,
 }
 
 impl SCopyFunc {
-    /// The zero pattern — `bInstalled: false`, the state the decoder context is born
-    /// in and leaves at `WelsInitDecoderFuncs`. [`Default`] is the *installed* table,
-    /// which is what every other constructor of this type wants.
+    /// The zeroed state, `bInstalled: false`. [`Default`] is the installed table.
     pub fn memset_zero() -> Self {
         Self { bInstalled: false }
     }
@@ -287,9 +280,8 @@ pub extern "C" fn DoErrorConSliceCopy(
         pSrcPic = RefSlot::Empty;
     }
 
-    // The self-copy arm returns **before the loop**, so it never reaches
-    // `iMbEcedNum`. That is a third behaviour, not a second: an empty slot conceals
-    // (counting each macroblock) and the current picture does nothing at all.
+    // Self-copy returns before the loop, so `iMbEcedNum` stays untouched; an empty
+    // slot instead conceals and counts every macroblock.
     if matches!(pSrcPic, RefSlot::Current) {
         return;
     }
@@ -320,10 +312,8 @@ pub extern "C" fn DoErrorConSliceCopy(
                         }
                     }
                 }
-                // The installed-but-no-source arm and the not-installed arm are
-                // **different**: with no source the C++ gray-fills, and with no
-                // kernels installed it called through a null slot, which this port
-                // answered by doing nothing.
+                // No source gray-fills; a source with no kernels installed writes
+                // nothing.
                 None => {
                     for (plane, size) in [(0usize, 16isize), (1, 8), (2, 8)] {
                         let (x, y) = ((iMbX as isize) * size, (iMbY as isize) * size);
@@ -348,8 +338,7 @@ pub struct EcMvCtx {
     pub ec_ref: Option<PicId>,
     /// `pCtx->iECMVs[0]`.
     pub iECMVs: [i32; 2],
-    /// `pCtx->sFrameCrop`, or `None` when the active SPS does not crop — the
-    /// `bFrameCroppingFlag` test, answered at the caller where the SPS is reachable.
+    /// `pCtx->sFrameCrop`, or `None` when `bFrameCroppingFlag` is unset.
     pub crop: Option<SFrameCrop>,
 }
 
@@ -366,9 +355,8 @@ fn BaseMC(
     let iFullMVx = (iXOffset << 2) + (iMVs[0] as i32);
     let iFullMVy = (iYOffset << 2) + (iMVs[1] as i32);
 
-    // The C added `(iFullMVx >> 2) + (iFullMVy >> 2) * iSrcLineLuma` to the source
-    // *plane origin*, so what is left once the stride belongs to the plane is the
-    // sample coordinate; chroma shifts by three, as `decode_slice.rs`'s `BaseMC` does.
+    // Source sample coordinates: the full MV shifted by two for luma, three for
+    // chroma.
     let (sx_l, sy_l) = ((iFullMVx >> 2) as isize, (iFullMVy >> 2) as isize);
     let (sx_c, sy_c) = ((iFullMVx >> 3) as isize, (iFullMVy >> 3) as isize);
     let (dx_l, dy_l) = (iXOffset as isize, iYOffset as isize);
@@ -377,9 +365,7 @@ fn BaseMC(
     if !bCopyInstalled {
         return;
     }
-    // The C's three `!pDst*.is_null() && !pSrc*.is_null()` guards are the two
-    // pictures' planes being allocated; an empty `PaddedPlane` is what a null
-    // `pData[i]` was, and the cursor would panic rather than read it.
+    // Unallocated planes are skipped; a cursor over an empty plane panics.
     if src.plane(0).is_empty() || dst.plane(0).is_empty() {
         return;
     }
@@ -450,7 +436,6 @@ fn DoMbECMvCopy(
         iPicWidthLeftLimit = crop.iLeftOffset * 2;
         iPicWidthRightLimit = iPicWidth - crop.iRightOffset * 2;
         iPicHeightTopLimit = crop.iTopOffset * 2;
-        // The C reads `iTopOffset` twice here rather than `iBottomOffset`; kept.
         iPicHeightBottomLimit = iPicHeight - crop.iTopOffset * 2;
     }
 
@@ -690,8 +675,7 @@ pub fn DoErrorConSliceMVCopy(
     };
     let iEcRefFramePoc = pRefs.classify(ec_ref).poc();
 
-    // `RefSlot::Current` is the `same_picture(pDstPic, pSrcPic)` early return, and
-    // `RefSlot::Empty` is the null source that falls through to the grey fill.
+    // No source picture falls through to the grey fill below.
     let pSrcPic = match pRefs.classify(prev) {
         RefSlot::Current => return,
         RefSlot::Other(pic) => Some(pic),
@@ -715,7 +699,7 @@ pub fn DoErrorConSliceMVCopy(
                         iPicWidth,
                         iPicHeight,
                     ),
-                    // The grey fill, on plane cursors.
+                    // Grey fill.
                     None => {
                         let (x, y) = ((iMbX as isize) << 4, (iMbY as isize) << 4);
                         let mut cur = pDstPic.plane_mut(0).cursor_mut(x, y);
@@ -801,7 +785,6 @@ pub extern "C" fn ImplementErrorCon(
 // Unit Tests
 // ============================================================================
 
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
 pub use crate::common::cpu_core::{WELS_CPU_LSX, WELS_CPU_MMXEXT, WELS_CPU_NEON, WELS_CPU_SSE2};
 
 #[cfg(test)]
@@ -837,22 +820,20 @@ mod tests {
         }
     }
 
-    /// `DoErrorConSliceCopy`: when the previous decoded picture *is* the
-    /// destination, the function returns before writing anything. A second picture
-    /// with the same POC is a different picture and must be copied from.
+    /// `DoErrorConSliceCopy` returns before writing anything when the previous
+    /// decoded picture is the destination. A distinct picture with the same POC is
+    /// still a valid concealment source.
     #[test]
     fn p3_slice_copy_self_copy_guard_is_by_identity() {
         const W: usize = 2;
         const H: usize = 2;
         const STRIDE: usize = W * 16;
-        // A kernel transliterated from C bumps its row pointer *after* the last
-        // row, so a test buffer sized exactly `h * stride` is UB at the final
-        // `offset`. One spare row on every plane.
+        // The copy kernels advance the row pointer past the last row, so every
+        // plane carries one spare row.
         const PLANE: usize = STRIDE * (H * 16 + 1);
 
-        // Unpadded (`origin` 0) and `STRIDE`-wide — the function derives the
-        // chroma stride as `iDstStride / 2` from luma and never reads
-        // `linesize(1)`.
+        // Unpadded and `STRIDE`-wide: the chroma stride is derived as luma / 2,
+        // never read from `linesize(1)`.
         let planes = |fill: u8| {
             [
                 PaddedPlane::from_parts(vec![fill; PLANE], STRIDE, 0, W * 16, H * 16),
@@ -882,9 +863,8 @@ mod tests {
             let mut ctx = SWelsDecoderContext::new_boxed();
 
             {
-                // Slot 0 is the destination, slot 1 the source; `PicPool::over`
-                // stamps each with its `PicId`, which is what makes the identity
-                // this test is about a slot comparison.
+                // Slot 0 is the destination, slot 1 the source; each is stamped
+                // with its own `PicId`.
                 let pool = crate::decoder::pic_queue::PicPool::over(vec![
                     Some(Box::new(dst)),
                     Some(Box::new(src)),
@@ -900,13 +880,11 @@ mod tests {
                 ctx.pPicBuff = Some(pool);
                 ctx.pDec = Some(dst_id);
                 ctx.pLastDecPicInfo = last;
-                // The copy itself goes through the context's copy-function pair;
-                // `new_boxed()` leaves it zeroed, which would make both arms write
-                // nothing and the test vacuous.
+                // `new_boxed()` leaves the copy table zeroed, which would make both
+                // arms write nothing and the test vacuous.
                 ctx.sCopyFunc = SCopyFunc::default();
                 DoErrorConSliceCopy(&mut ctx, Some(&mut dq_layer));
-                // The destination is the pool's, so the marker is read back out
-                // of the slot.
+                // Read the marker back out of the pool slot.
                 let pool = ctx.pPicBuff.as_deref().expect("the fixture's pool");
                 pool.slot(dst_id)
                     .expect("the fixture's slot")
@@ -970,9 +948,8 @@ mod tests {
                     id: 0,
                     subset: false,
                 });
-                // `new_boxed` zeroes the context, so `bInstalled` starts `false`.
-                // `Initialize` sets it; without this line the copy arm below would
-                // pass for the wrong reason.
+                // `bInstalled` starts `false`; without this the copy arm below
+                // would pass for the wrong reason.
                 ctx.sCopyFunc.bInstalled = true;
                 ctx.pPicBuff = Some(pool);
                 ctx.pDec = Some(dst_id);

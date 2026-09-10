@@ -3,56 +3,38 @@ name = "openh264-rs"
 version = "0.1.0"
 edition = "2024"
 
-# **The drop-in, made real** (T8.C3). `rlib` is what the tests, benches, examples and
-# `rust_enc` link; `cdylib` is what a C consumer `dlopen`s and what
-# `tools/abi_exports.sh` checks exports exactly upstream's seven symbols; `staticlib`
-# is the same object set for a consumer that links rather than loads. Adding the two
-# native targets does not change the rlib the in-process gates use — it adds link
-# steps, which is why `cargo build --all-targets` got slower and nothing else moved.
+# `rlib` is what the tests, benches, examples and `rust_enc` link; `cdylib` is what a
+# C consumer `dlopen`s, exporting exactly upstream's seven symbols; `staticlib` is the
+# same object set for a consumer that links rather than loads.
 [lib]
 crate-type = ["rlib", "cdylib", "staticlib"]
 
-# **The shipped library has no dependencies at all** (Phase 9 exit condition 2,
-# session J). `libc` was a `[dependencies]` entry with **zero uses in `src/`** — the
-# one grep hit is a comment in `wels_trace.rs` naming `libc::fprintf` as the thing
-# the port does *not* call. Its real users are the two benches, which `dlopen` the
-# C++ dylib to compare against it (`libc::dlopen`/`dlsym`, 8 sites), so it moves to
-# `[dev-dependencies]` rather than being deleted: the cdylib a consumer links now
-# pulls in nothing, and the comparison harness keeps the one thing it needs.
+# The shipped library has no dependencies. `libc` is a dev-dependency only: its users
+# are the two benches, which `dlopen` the C++ dylib to compare against.
 [dependencies]
-# **Off by default, so the shipped library still has no dependencies.** `--features
-# wide` compiles `src/simd/wide/`, a further set of SIMD kernels written against the
-# `wide` crate's portable lane types instead of `core::arch` intrinsics, and points
-# `simd::kernels` at it so every dispatch site takes the wide kernel — in place of
-# the SSE2 set on x86_64 and the NEON set on aarch64. The host's intrinsic set is
-# still compiled under the feature, which is what lets `benches/kernel_bench.rs`
-# time scalar, intrinsics and wide in one binary.
+# Off by default, so the shipped library stays dependency-free. `--features wide`
+# compiles `src/simd/wide/`, a set of SIMD kernels written against the `wide` crate's
+# portable lane types instead of `core::arch` intrinsics, and points `simd::kernels` at
+# it so every dispatch site takes the wide kernel — in place of the SSE2 set on x86_64
+# and the NEON set on aarch64. The host's intrinsic set is still compiled under the
+# feature, which is what lets `benches/kernel_bench.rs` time scalar, intrinsics and wide
+# in one binary.
 #
-# Pinned exactly, because the numbers in the README's *Performance* section are a claim
-# about a particular version: on x86_64 they are `wide`'s SSE2 fallbacks, on aarch64 what
-# LLVM lowers its lanes to. They were taken on 1.3.0 and still hold, which is the point
-# of the paragraph below.
-#
-# **1.3.0 -> 1.7.0 was measured, and moved nothing**: 0.998x on the geometric mean over
-# `kernel_bench`'s 41 rows, alternating best-of-two against a scalar control that held
-# to 0.997x. 1.7 does bring much more NEON in the byte and word types (`u8x16` more than
-# doubles its intrinsic count), but the kernels that lose on aarch64 lose to the
-# *emulations*, and the two that matter are still absent in 1.7: there is no
-# absolute-difference/SAD primitive and no rounded byte average, so `sad.rs` still pays
-# seven ops a row where `psadbw` pays two, and `mc.rs` still spells `pavgb` by hand. A
-# release that adds either is the one worth re-measuring.
+# Pinned exactly, because the performance numbers in the README are a claim about a
+# particular version: on x86_64 they are `wide`'s SSE2 fallbacks, on aarch64 what LLVM
+# lowers its lanes to. The two primitives that would move aarch64 are still absent — no
+# absolute-difference/SAD primitive and no rounded byte average — so `sad.rs` pays seven
+# ops a row where `psadbw` pays two, and `mc.rs` spells `pavgb` by hand. A release that
+# adds either is the one worth re-measuring.
 wide = { version = "=1.7.0", optional = true }
 
 [features]
 wide = ["dep:wide"]
 
-# **`USE_ASM=No`, as a feature.** The reference has no runtime way to turn its SIMD
-# off — `codec/` contains no `getenv`, and `WelsCPUFeatureDetect` reports what CPUID
-# says — so a scalar build there is `USE_ASM=No` at the Makefile. This is that switch:
-# it points `simd::kernels` at `src/simd/scalar/`, which forwards every entry point to
-# the scalar body, and clears the feature word so the `pfXxx` tables install the scalar
-# directly. Three builds, one per kernel set, is how SIMD is measured against scalar
-# and how the suite is run both ways.
+# The scalar build. The reference has no runtime way to turn its SIMD off, so this is
+# that switch: it points `simd::kernels` at `src/simd/scalar/`, which forwards every
+# entry point to the scalar body, and clears the feature word so the `pfXxx` tables
+# install the scalar directly.
 scalar = []
 
 [dev-dependencies]
@@ -71,57 +53,29 @@ harness = false
 name = "decode_1080p_bench"
 harness = false
 
-# `sad_bodies_bench` stood here — Phase 4a's raw-vs-safe body-cost instrument
-# for the parked SAD/SATD families. Session F retired the raw bodies with
-# T9.B25's transitional tables (the swap it existed to price landed
-# byte-identically across B2..F), so its question is closed and its raw side
-# is gone; the bench's own header says a retrospective rebuilds it from git.
-# The phase-exit perf position is D-perf-4's instrument (c_vs_rust_bench).
-
-# `cargo test` in debug was spending minutes decoding a handful of large assets:
-# `test_asset_vid_1280x720_cabac_temporal_direct` alone ran **62.3s**, and the six
-# `VID_*_temporal_direct` conformance streams (2.6-4.7 MB each) were the whole of the
-# suite's tail. This manifest declared no `[profile]`, so they ran at Cargo's default
-# `opt-level = 0`. It is a DSP codec; unoptimised it runs like one. Same finding, same
-# fix, and near-identical numbers to `rust/tools/diffharness/rust_enc/Cargo.toml` —
-# read the long comment there, it is the primary write-up.
+# This is a DSP codec, and unoptimised it decodes like one: at Cargo's default
+# `opt-level = 0` a single 1280x720 CABAC conformance asset took 62s, and the large
+# `VID_*_temporal_direct` streams were the whole of the debug suite's tail. `opt-level =
+# 3` cuts that to 4.5s for a few seconds of extra build time.
 #
-# Measured here on the 1280x720 CABAC asset (two rounds, interleaved with rotating
-# order after letting the machine settle, per `diffharness_perf.md`'s methodology
-# warning), against the cold `cargo test --no-run` for the same binary:
+# Both check flags stay on, and they are the reason a debug test run exists at all:
+# `overflow-checks` turns a C++ signed overflow into a loud Rust panic, and
+# `debug-assertions` keeps the `debug_assert!` sites live. They cost about 1.4x against
+# release — cost worth keeping, and never to be traded away for speed.
 #
-#   opt-level = 0   62.3s   1.0x    build  5.3s   <- was
-#   opt-level = 1    5.3s  11.7x    build  7.6s
-#   opt-level = 2    4.7s  13.3x    build  8.0s
-#   opt-level = 3    4.5s  13.9x    build  8.9s   <- is
-#   release          3.3s  18.9x
+# `[profile.bench]` inherits from `release`, not from here, so benchmark numbers are
+# untouched. `rust_enc` is its own workspace root with its own identical profile.
 #
-# The residual 1.4x to release is the arithmetic checks, which is cost to keep.
-#
-# **Both check flags are the reason a debug test run exists and both stay on.**
-# `overflow-checks` turns a C++ signed overflow into a loud Rust panic (the F8/F9 class
-# in `phase2_findings.md`); `debug-assertions` keeps the port's `debug_assert!` sites
-# live. Verified, not assumed: `cargo test --no-run -v` passes `-C debug-assertions=on`
-# and `-C opt-level=3` to rustc, and the `attempt to add with overflow` panic string is
-# present in the resulting test binaries and absent from the release ones.
-# **Never trade these two away for speed** — the `opt-level` is a free 14x, dropping
-# the checks buys 1.4x and deletes the reason this run exists.
-#
-# `[profile.bench]` inherits from `release`, not from here, so the benchmarks and every
-# number in `perf_baseline.md` are untouched. `rust_enc` is its own workspace root and
-# carries its own identical profile, so it is unaffected either way.
-#
-# **The consequence to watch**, exactly as `rust_enc` hit it: a debug build running at
-# near-release speed widens every thread window, so any load-sensitive race the old
-# 62s-per-asset pace was holding shut can now appear here too. `multithread_decoder_test`
-# is the exposed surface. The full suite was re-run green after this landed.
+# One consequence to watch: a debug build running at near-release speed widens every
+# thread window, so a load-sensitive race that the old pace held shut can appear here.
+# `multithread_decoder_test` is the exposed surface.
 [profile.dev]
 opt-level = 3
 debug-assertions = true
 overflow-checks = true
 
-# Clippy lints that argue with a line-by-line port of C++: index loops, wide
-# signatures, C-shaped conditionals and declaration-before-assignment.
+# Clippy lints that argue with C-shaped code: index loops, wide signatures, C-shaped
+# conditionals and declaration-before-assignment.
 [lints.clippy]
 needless_range_loop = "allow"
 collapsible_if = "allow"
@@ -141,7 +95,7 @@ type_complexity = "allow"
 # `drop()` here ends a borrow so the next statement can reborrow; the type not
 # being Drop is the point, not a mistake.
 drop_non_drop = "allow"
-# The explicit zero-guard mirrors the C++; `Result<_, ()>` is right when the only
+# The explicit zero-guard is deliberate; `Result<_, ()>` is right when the only
 # failure is an allocation; boxing the big variant adds a per-frame allocation;
 # renaming `as_mut` ripples; the literal groupings mark bitstream field edges.
 manual_checked_ops = "allow"

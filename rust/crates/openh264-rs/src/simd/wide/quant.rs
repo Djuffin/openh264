@@ -199,8 +199,8 @@ fn ihadamard_butterfly(a0: i16x8, a1: i16x8, a2: i16x8, a3: i16x8) -> (i16x8, i1
 
 /// C++: `WelsDequantIHadamard4x4_sse2`, `codec/encoder/core/x86/quant.asm:332`.
 ///
-/// Transpose, butterfly, transpose, butterfly, multiply on the way out — the
-/// intrinsic kernel's shape, with every op wrapping as the C++'s `int16_t` does.
+/// Transpose, butterfly, transpose, butterfly, multiply on the way out, with every
+/// op wrapping as `int16_t` does.
 #[inline]
 pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
     let row = |k: usize| {
@@ -381,10 +381,10 @@ mod tests {
     // ========================================================================
     // The two luma-DC Hadamard kernels.
     //
-    // Both sweep the **full `i16` input range**, which is not decoration: the ihadamard
-    // is `int16_t` end to end in the C++ and its overflow is observable output, so a
-    // kernel that widened anywhere would pass a small-coefficient sweep and diverge on
-    // a real stream. `hadamard_t4_dc`'s clamp is only reachable from large inputs too.
+    // Both sweep the full `i16` input range: the ihadamard is `int16_t` end to end and
+    // its overflow is observable output, so a kernel that widened anywhere would pass a
+    // small-coefficient sweep and diverge on a real stream. `hadamard_t4_dc`'s clamp is
+    // only reachable from large inputs too.
     // ========================================================================
 
     fn lcg_full_i16(seed: &mut u64) -> i16 {
@@ -479,9 +479,8 @@ mod tests {
         }
     }
 
-    /// The wrapping is load-bearing — the C++ is `int16_t` throughout — so pin that this
-    /// kernel wraps rather than saturates, with inputs chosen to overflow every
-    /// intermediate.
+    /// Pins that this kernel wraps rather than saturates — `int16_t` throughout — with
+    /// inputs chosen to overflow every intermediate.
     #[test]
     fn dequant_ihadamard_4x4_wraps_like_the_scalar() {
         for &v in &[i16::MIN, i16::MAX, -1, 1] {

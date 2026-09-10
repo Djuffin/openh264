@@ -1,13 +1,9 @@
-//! **The reset-arm reachability sweep.**
+//! The reset-arm reachability sweep: every `res/*.264` stream under every base
+//! concealment mode under both bitstream declarations, in one pass, pinning which
+//! error classes are reachable at all.
 //!
-//! It is the widest decode this project runs: every `res/*.264` under every base
-//! concealment mode under both bitstream declarations, in one pass. The conformance
-//! 60 pin *output* on a curated set; the malformed corpus pins *codes* on damaged
-//! prefixes of eleven streams plus `Error_I_P`; this pins **which error classes the
-//! whole asset tree can produce at all**.
-//!
-//! **Release only** (`cfg(not(debug_assertions))`), deliberately: it is one pass over
-//! ~250 whole-stream decodes and the debug suite already carries the conformance 60.
+//! Release only (`cfg(not(debug_assertions))`): it is one pass over ~250 whole-stream
+//! decodes.
 #![cfg(not(debug_assertions))]
 // `c_long` is i64 here and i32 on Windows; the widening is not dead there.
 #![allow(clippy::useless_conversion)]
@@ -15,9 +11,8 @@
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
 
-/// The four base concealment modes — the `CROSS_IDR` and `MV_COPY` variants are
-/// compositions of these and the sweep is about reaching *decoder* arms, not about
-/// enumerating the option space (`error_concealment_api_test.rs` does that).
+/// The four base concealment modes; the `CROSS_IDR` and `MV_COPY` variants are
+/// compositions of these.
 const EC_MODES: [ERROR_CON_IDC; 4] = [
     ERROR_CON_IDC::ERROR_CON_DISABLE,
     ERROR_CON_IDC::ERROR_CON_FRAME_COPY,
@@ -36,13 +31,11 @@ const BS_TYPES: [VIDEO_BITSTREAM_TYPE; 2] = [
 /// `0x02 dsRefLost | 0x04 dsBitstreamError | 0x10 dsNoParamSets | 0x20
 /// dsDataErrorConcealed`.
 ///
-/// **This is pinned in both directions on purpose.** A bit appearing means a decode
-/// path became reachable that was not; a bit disappearing means one stopped being
-/// reachable.
+/// Pinned in both directions: a bit appearing means a decode path became reachable,
+/// a bit disappearing means one stopped being reachable.
 const EXPECTED_UNION: i32 = 0x36;
 
-/// The two arms this sweep exists to keep honest: reachable from **no** stream in
-/// `res/`.
+/// The two arms reachable from no stream in `res/`.
 const UNREACHED: [(i32, &str); 2] = [(0x4000, "dsOutOfMemory"), (0x0040, "dsRefListNullPtrs")];
 
 fn assets() -> Vec<std::path::PathBuf> {
@@ -61,7 +54,8 @@ fn assets() -> Vec<std::path::PathBuf> {
 /// One whole-stream decode; returns the OR of every state the decoder reported.
 ///
 /// # Safety
-/// Drives the C ABI exactly as `malformed_stream_parity.rs` does.
+/// Drives the C ABI: the decoder object is created, used and destroyed inside this
+/// call.
 unsafe fn sweep_one(data: &[u8], ec: ERROR_CON_IDC, bs: VIDEO_BITSTREAM_TYPE) -> i32 {
     unsafe {
         let mut decoder: *mut ISVCDecoder = std::ptr::null_mut();
@@ -124,12 +118,10 @@ fn every_res_stream_under_every_concealment_mode_reaches_a_known_set_of_states()
         files.len()
     );
 
-    // **Forked across the asset list.** Serially this is ~90s of whole-stream
-    // decodes, which is too much to add to a per-commit gate; the decodes are
-    // independent — one decoder object per (stream, mode, declaration), created and
-    // destroyed inside the thread that uses it, and no `*mut ISVCDecoder` ever crosses
-    // a thread — so the work parallelises exactly. Nothing here relies on `Decoder`
-    // being `Send`, which it is not.
+    // Forked across the asset list: the decodes are independent — one decoder object
+    // per (stream, mode, declaration), created and destroyed inside the thread that
+    // uses it, and no `*mut ISVCDecoder` ever crosses a thread. Nothing here relies on
+    // `Decoder` being `Send`, which it is not.
     let nthreads = std::thread::available_parallelism()
         .map_or(4, |n| n.get())
         .min(files.len().max(1));

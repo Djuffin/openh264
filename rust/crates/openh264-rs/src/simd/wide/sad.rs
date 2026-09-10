@@ -1,20 +1,14 @@
 //! SAD and four-point SAD on `wide` lane types — the twin of `simd::x86_64::sad`.
 //!
-//! # The instruction that is missing
-//!
-//! `psadbw` sums sixteen absolute byte differences into one word in a single
-//! instruction, and the intrinsic kernels are nothing but that and an add per row.
-//! `wide` 1.7 still has no wrapper for it, so the difference here is `max - min` on
-//! `u8x16` (three ops), zero-extended to two `i16x8` (two ops) and accumulated (two
-//! adds) — seven ops per row where the intrinsic uses two — with a `pmaddwd` reduce at
-//! the end. This is the family where the portable API pays most.
-//!
-//! # How the rows are addressed
+//! `psadbw` sums sixteen absolute byte differences into one word in a single instruction,
+//! and the intrinsic kernels are nothing but that and an add per row. `wide` 1.7 has no
+//! wrapper for it, so the difference here is `max - min` on `u8x16` (three ops),
+//! zero-extended to two `i16x8` (two ops) and accumulated (two adds) — seven ops per row
+//! where the intrinsic uses two — with a `pmaddwd` reduce at the end.
 //!
 //! Each operand is cut into a `RefSamples::span` — a slice the compiler knows to be
-//! `(H - 1) * stride + W` long — and the rows are indexed inside it, which leaves one
-//! cut per operand where a `row_n` walk left two checks per row. See
-//! `RefSamples::span`, and `simd::aarch64::sad` for the same treatment measured.
+//! `(H - 1) * stride + W` long — and the rows are indexed inside it, which leaves one cut
+//! per operand where a `row_n` walk left two checks per row.
 //!
 //! The four-point kernels cut a `W + 2` by `G + 2` window of `sample2` per group of
 //! `G` rows — the reach of all four probes of those rows — reading the up and down
@@ -57,10 +51,10 @@ fn sad_16x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, d
 
 /// Two rows per step through `u8x32` — the shape of the AVX2 kernel.
 ///
-/// `wide` selects its instruction set at compile time, so on a build without
-/// `+avx2` in the target features `u8x32` is two `u8x16`s and this is the 16-wide
-/// loop unrolled by two. It is a distinct kernel so the AVX2 table slot still points
-/// at something other than the baseline slot, which `sample.rs`'s install test pins.
+/// `wide` selects its instruction set at compile time, so on a build without `+avx2` in
+/// the target features `u8x32` is two `u8x16`s and this is the 16-wide loop unrolled by
+/// two. A distinct kernel so the AVX2 table slot still points at something other than the
+/// baseline slot, which `sample.rs`'s install test pins.
 #[inline(always)]
 fn sad_16x_two_rows<S: RefSamples, const H: usize>(
     sample1: &S,
@@ -248,10 +242,8 @@ pub fn sample_sad_16x16<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 
 /// The AVX2 slot's kernel. Safe to install anywhere: nothing here needs AVX2, see
 /// [`sad_16x_two_rows`].
-// Only the kernel set `simd::kernels` currently aliases has a caller for this
-// (`encoder/sample.rs`'s AVX2 slot); every set carries the pair because every
-// set has to satisfy that dispatch, and the sets that are compiled but not
-// aliased — which `--features wide` / `--features scalar` decide — go dead.
+// Only the kernel set `simd::kernels` aliases has a caller (`encoder/sample.rs`'s AVX2
+// slot); every set carries the pair, so an unaliased set's copy goes dead.
 #[allow(dead_code)]
 #[inline(always)]
 pub(crate) fn sample_sad_16x16_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
@@ -264,10 +256,7 @@ pub fn sample_sad_16x8<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 }
 
 /// See [`sample_sad_16x16_avx2`].
-// Only the kernel set `simd::kernels` currently aliases has a caller for this
-// (`encoder/sample.rs`'s AVX2 slot); every set carries the pair because every
-// set has to satisfy that dispatch, and the sets that are compiled but not
-// aliased — which `--features wide` / `--features scalar` decide — go dead.
+// Dead in an unaliased kernel set, as above.
 #[allow(dead_code)]
 #[inline(always)]
 pub(crate) fn sample_sad_16x8_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
@@ -370,12 +359,9 @@ mod tests {
         assert_eq!(sample_sad_4x8(&c1, &c2), sample_sad::<4, 8, _>(&c1, &c2));
     }
 
-    /// The `_avx2` pair, which is not AVX2 code and needs no probe to run.
-    ///
-    /// `wide` has no runtime dispatch, so these two are 128-bit bodies that step two
-    /// rows — the same lanes as every other kernel here, filling the slots the
-    /// intrinsic twin fills with `vpsadbw`. There is no instruction to test for, on
-    /// any target, so this simply runs.
+    /// The `_avx2` pair, which is not AVX2 code and needs no probe to run: `wide` has no
+    /// runtime dispatch, so these two are 128-bit bodies that step two rows, filling the
+    /// slots the intrinsic twin fills with `vpsadbw`.
     #[test]
     fn test_avx2_sad_parity() {
         let (p1, p2) = make_test_planes(64, 64);
@@ -431,16 +417,10 @@ mod tests {
     }
 
     // ========================================================================
-    // Input and anchor coverage.
-    //
-    // The three tests above reach all sixteen kernels, but each at one anchor over one
-    // input pattern, so a kernel wrong at another alignment — or only on inputs a ramp
-    // never produces — passes them all.
-    //
-    // The sweep below runs every kernel over four anchors, one per residue class mod 8,
-    // and five distributions. The all-`0xFF`/all-`0x00` pair and the near-identical
-    // pair are the ends of the accumulator's range, where a `psadbw` accumulation that
-    // widened or saturated wrongly would show.
+    // Input and anchor coverage: every kernel over four anchors, one per residue class
+    // mod 8, and five distributions. The all-`0xFF`/all-`0x00` pair and the
+    // near-identical pair are the ends of the accumulator's range, where an accumulation
+    // that widened or saturated wrongly would show.
     // ========================================================================
 
     /// A 64-bit LCG, so a failing seed is replayable.
@@ -590,23 +570,17 @@ mod tests {
         }
     }
 
-    /// The table site is the only thing standing between these kernels and a SIGILL,
-    /// so pin what it installs.
-    ///
+    /// The table site is the only thing standing between these kernels and a SIGILL:
     /// `WelsInitSampleSadFunc` fills `pfSampleSad[BLOCK_16x16]` from the AVX2 kernel
-    /// exactly when `uiCpuFlag` asks for AVX2 *and* this CPU has it.
+    /// exactly when `uiCpuFlag` asks for AVX2 and this CPU has it.
     ///
-    /// **What this catches, and where.** The flag half is pinned on every host: drop
-    /// the `uiCpuFlag & WELS_CPU_AVX2` test and the `WELS_CPU_SSE2`-only case starts
-    /// returning the AVX2 pointer. The hardware half — dropping `has_avx2()` — can only
-    /// fail this test on a machine without AVX2, because on one with it both spellings
-    /// install the same kernel. That is the machine where it matters, and it is not
-    /// this one, so treat a green run here as covering the flag half only.
+    /// The flag half is pinned on every host. The hardware half — dropping `has_avx2()` —
+    /// can only fail on a machine without AVX2, because on one with it both spellings
+    /// install the same kernel.
     ///
-    /// Function-pointer identity is the comparison, so the caveat on
-    /// `common/mc.rs`'s `init_mc_func_cpu_flags` applies: both addresses come from the
-    /// same `WelsInitSampleSadFunc` instantiation, which makes them comparable, but
-    /// Miri mints a fresh synthetic address per reification and is excluded.
+    /// Function-pointer identity is the comparison: both addresses come from the same
+    /// `WelsInitSampleSadFunc` instantiation, which makes them comparable, but Miri mints
+    /// a fresh synthetic address per reification and is excluded.
     #[test]
     #[cfg_attr(miri, ignore)]
     fn init_sample_sad_installs_avx2_only_where_the_cpu_has_it() {
@@ -625,11 +599,10 @@ mod tests {
         let asked_for_avx2 = slot(WELS_CPU_SSE2 | WELS_CPU_AVX2);
         assert!(baseline.is_some() && asked_for_avx2.is_some());
 
-        // **The oracle is `has_avx2()`, not `is_x86_feature_detected!`.** They are not the
-        // same question: the table arm consults the port's probe, which answers from the
-        // build as well as the CPU — under `--features scalar` the feature word is `0`, so
-        // a host that *has* AVX2 must still get the baseline entry. Asking the CPU
-        // directly made this test fail there.
+        // The oracle is `has_avx2()`, not `is_x86_feature_detected!`: the table arm
+        // consults `simd::has_avx2`, which answers from the build as well as the CPU —
+        // under `--features scalar` the feature word is `0`, so a host that has AVX2 must
+        // still get the baseline entry.
         if crate::simd::has_avx2() {
             assert_ne!(
                 asked_for_avx2, baseline,

@@ -1,11 +1,9 @@
 //! `CWelsDecoder::DecodeFrame2`'s error-reporting block, the three
 //! `DecoderConfigParam` statements it depends on, and the live re-initialisation
-//! rebuild, as covering tests.
+//! rebuild.
 //!
-//! Every arm below is a *status code, a recovery action, or a statistic*.
-//!
-//! The reference is `codec/decoder/plus/src/welsDecoderExt.cpp:813–905` (the block)
-//! and `codec/decoder/core/src/decoder.cpp:649–676` (`DecoderConfigParam`).
+//! C++: `codec/decoder/plus/src/welsDecoderExt.cpp:813–905` (the block) and
+//! `codec/decoder/core/src/decoder.cpp:649–676` (`DecoderConfigParam`).
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
@@ -31,11 +29,10 @@ fn asset(name: &str) -> Vec<u8> {
 
 /// A decoder created and initialised with `param`, as a C caller does it.
 ///
-/// The parameter block is handed over as a **raw pointer into a byte image**, never
-/// as `&SDecodingParam`: several of these tests put values in `eEcActiveIdc` that
-/// the Rust enum has no variant for — which is the entire point of the clamp at
-/// `decoder.cpp:654` — and a reference to such a block is undefined before the
-/// callee can do anything about it.
+/// The parameter block is passed as a raw pointer into a byte image, never as
+/// `&SDecodingParam`: some tests put values in `eEcActiveIdc` that the Rust enum has
+/// no variant for (the clamp at `decoder.cpp:654` exists for exactly those), and a
+/// reference to such a block would be undefined.
 struct Dec(*mut ISVCDecoder);
 
 impl Dec {
@@ -171,10 +168,6 @@ fn test_error_con_idc_out_of_range_is_clamped_at_set_option() {
 }
 
 /// **`decoder.cpp:663–664`** — parse-only decoding disables concealment.
-///
-/// Inert on output today only because `DecodeParser` is a stub, and *not* inert as
-/// a configuration: the mode the caller asked for stays in the context's parameter
-/// block and selects `sCopyFunc`'s kernels.
 #[test]
 fn test_parse_only_disables_error_concealment() {
     let mut param = SDecodingParam::default();
@@ -201,9 +194,9 @@ fn test_parse_only_disables_error_concealment() {
 
 /// **`welsDecoderExt.cpp:407–409`.**
 ///
-/// `CWelsDecoder::InitDecoder` calls `InitDecoderCtx` for every context, and
-/// `InitDecoderCtx` opens with `UninitDecoderCtx (pCtx)` and then allocates a fresh
-/// one. So in the reference a second `Initialize` on a live decoder is a rebuild.
+/// `CWelsDecoder::InitDecoder` calls `InitDecoderCtx` for every context, which opens
+/// with `UninitDecoderCtx (pCtx)` and allocates a fresh one, so a second `Initialize`
+/// on a live decoder is a rebuild.
 ///
 /// The observable is the reordering buffer: a B-frame stream stopped mid-GOP leaves
 /// pictures buffered, `DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER` counts
@@ -241,7 +234,6 @@ fn test_second_initialize_rebuilds_the_context() {
             "the asset never buffered a picture — this test no longer covers the rebuild"
         );
 
-        // The transition the reference rebuilds through.
         let mut buf = std::mem::MaybeUninit::<SDecodingParam>::uninit();
         std::ptr::copy_nonoverlapping(
             std::ptr::from_ref(&param).cast::<u8>(),
@@ -275,27 +267,20 @@ unsafe fn remaining_in_buffer(dec: &Dec) -> i32 {
 /// **`decoder.cpp:667–671`, `eVideoType`, and `welsDecoderExt.cpp:833–842`, its
 /// one reader.**
 ///
-/// The field's reader is the key-frame-loss notification inside the `DecodeFrame2`
-/// error block — *"for AVC bitstream, as long as error occur, SHOULD notify upper
-/// layer key frame loss"* — which raises `bParamSetsLostFlag` when concealment is
-/// off. `UpdateAccessUnit`'s mosaic-avoidance block then counts one `uiIDRLostNum`
-/// for the next access unit that arrives without an IDR.
+/// The field's reader is the key-frame-loss notification in the `DecodeFrame2` error
+/// block: for an AVC bitstream any error raises `bParamSetsLostFlag` when concealment
+/// is off, and `UpdateAccessUnit`'s mosaic-avoidance block then counts one
+/// `uiIDRLostNum` for the next access unit that arrives without an IDR.
 ///
-/// **The observable is that counter and not the frame count.**
-/// `bParamSetsLostFlag` is already true whenever a frame failed to construct, so the
-/// arm only adds something when an error arrives on a call that *did* construct a
-/// frame — one truncated slice in an otherwise clean stream. Whole streams never
-/// produce that coincidence; one truncated slice in `BA_MW_D.264` produces it on
-/// every unit from the fourth on, and it moves `uiIDRLostNum` by exactly one while
-/// the emitted frame count does not move at all. That is the notification the
-/// reference documents: an accounting event for the upper layer, not a change of
-/// output.
+/// The observable is that counter, not the frame count: `bParamSetsLostFlag` is
+/// already true whenever a frame failed to construct, so the arm only adds something
+/// when an error arrives on a call that did construct a frame — hence one truncated
+/// slice in an otherwise clean stream.
 #[test]
 fn test_avc_bitstream_type_notifies_key_frame_loss_when_ec_is_off() {
     let data = asset("BA_MW_D.264");
     // One slice NAL cut in half, deep enough into the stream that the frames around
-    // it construct cleanly — which is what clears `bParamSetsLostFlag` and leaves
-    // the arm something to do.
+    // it construct cleanly and so clear `bParamSetsLostFlag`.
     let mut units: Vec<Vec<u8>> = split_annexb_units(&data)
         .iter()
         .map(|u| u.to_vec())

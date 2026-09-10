@@ -1,11 +1,5 @@
-//! A mid-stream resolution change must reallocate the picture pool.
-//!
-//! `res/Error_I_P.264` is the only stream in `res/` that changes resolution while
-//! decoding: 352x288 → 640x480 → 352x288.
-//!
-//! The numbers below are the C++ decoder's, taken from
-//! `rust/tools/ecref/ecref res/Error_I_P.264 61251 --frames` against
-//! `libopenh264.dylib` — not from the port.
+//! A mid-stream resolution change must reallocate the picture pool. The stream
+//! decoded here runs 352x288 → 640x480 → 352x288.
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
@@ -14,10 +8,8 @@ use openh264_rs::split_annexb_units;
 mod common;
 use common::Sha1Hasher;
 
-/// The reference's answer, per emitted frame: `(width, height, sha1-of-planes)`.
-///
-/// Five frames, and the two 640x480 ones are what a decoder that cannot change
-/// resolution never reaches.
+/// Expected output per emitted frame: `(width, height, sha1-of-planes)`. The two
+/// 640x480 frames are only reached once the pool is reallocated.
 const CPP_FRAMES: &[(i32, i32, &str)] = &[
     (352, 288, "0f786183de107a429a903cdd838d08268ea34bbe"),
     (352, 288, "477e333c677615c2e3e369793358f327ca4fac61"),
@@ -26,17 +18,16 @@ const CPP_FRAMES: &[(i32, i32, &str)] = &[
     (352, 288, "b1e052919cf52ecff84fa100eeddaf8c762957c4"),
 ];
 
-/// The reference's `DecodeFrame2` return code per call, in call order (the last is
-/// the end-of-stream drain call). `0x20` is `dsDataErrorConcealed`.
+/// `DecodeFrame2` return code per call, in call order; the last call is the
+/// end-of-stream drain. `0x20` is `dsDataErrorConcealed`.
 const CPP_CODES: &[i32] = &[
     0x0, 0x0, 0x0, 0x20, 0x0, 0x0, 0x20, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x20, 0x20, 0x0, 0x20,
 ];
 
-/// …and its `iBufferStatus` per call.
+/// `iBufferStatus` per call.
 const CPP_BUFS: &[i32] = &[0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0];
 
-/// SHA-1 over the three planes at the strides `UsrData` reports — the same digest
-/// `ecref`, `portref` and the malformed corpus all compute.
+/// SHA-1 over the three planes at the strides `UsrData` reports.
 ///
 /// # Safety
 /// `dst` must be the plane pointers `DecodeFrame2` just wrote with
@@ -72,8 +63,8 @@ fn resolution_change_stream_matches_the_reference_and_does_not_abort() {
     let mut bufs = Vec::new();
     let mut frames: Vec<(i32, i32, String)> = Vec::new();
 
-    // The same flow `malformed_stream_parity.rs` and `ecref` use: annex-B split,
-    // `ERROR_CON_SLICE_COPY`, one NAL per call, then the end-of-stream drain.
+    // Annex-B split, `ERROR_CON_SLICE_COPY`, one NAL per call, then the
+    // end-of-stream drain.
     unsafe {
         let mut decoder: *mut ISVCDecoder = std::ptr::null_mut();
         assert_eq!(WelsCreateDecoder(&mut decoder), CM_RESULT_SUCCESS as i64);

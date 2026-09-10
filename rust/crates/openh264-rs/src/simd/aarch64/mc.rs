@@ -10,48 +10,40 @@
 //! along the row), the vertical one (taps down a six-row window) and, with the
 //! `_AVERAGE_WITH_0`/`_1` tails — a rounded average against the centre tap or the
 //! one after it — the four fused quarter-pel kernels `McHorVer10/30/01/03`, which
-//! [`mc_luma`] dispatches to directly as upstream's `McLuma_AArch64_neon` does. The
-//! other eight quarter-pel positions are `common::mc`'s composites over this file's
-//! leaves, as they are upstream (`McHorVer11_AArch64_neon` and the rest are C++
-//! wrappers over the same asm leaves).
+//! [`mc_luma`] dispatches to directly. The other eight quarter-pel positions are
+//! `common::mc`'s composites over this file's leaves.
 //!
-//! # The centre kernel, and where this departs from the asm
+//! # The centre kernel
 //!
 //! `McHorVer22` filters vertically into 16-bit intermediates and then horizontally
-//! over those. The asm's horizontal pass (`FILTER_3_IN_16BITS_TO_8BITS`) keeps its
-//! `.8h` lanes by computing `(a - 5b + 20c) / 16` as `(((a - b) >> 2 - b + c) >> 2) + c`
-//! — an exact decomposition, but one whose intermediate `((a - b) >> 2) - b + c` can
-//! reach -33150 on adversarial neighbouring columns and wrap. The C computes the
-//! 6-tap in `int`, and so does the scalar here, so this pass widens to `.4s`
-//! (`saddl`, `mla`/`mls` by scalar, `sqrshrun #10`) and agrees with it everywhere.
-//! The vertical pass is the asm's `FILTER_6TAG_8BITS_TO_16BITS`, exact in `.8h`.
+//! over those. The horizontal pass widens to `.4s` (`saddl`, `mla`/`mls` by scalar,
+//! `sqrshrun #10`) rather than keeping `.8h` lanes as `FILTER_3_IN_16BITS_TO_8BITS`
+//! does: computing `(a - 5b + 20c) / 16` as `(((a - b) >> 2 - b + c) >> 2) + c` is an
+//! exact decomposition, but its intermediate `((a - b) >> 2) - b + c` can reach -33150
+//! on adversarial neighbouring columns and wrap, where the scalar computes the 6-tap in
+//! `int`. The vertical pass is `FILTER_6TAG_8BITS_TO_16BITS`, exact in `.8h`.
 //!
 //! # Shapes, spans and windows
 //!
 //! Every kernel here takes its block's `W` and `H` as **const parameters** and reads
 //! through [`RefSamples::span`](crate::safe::plane::RefSamples::span): one
-//! bounds-checked cut per operand per block rather than a `row_view` per row, which
-//! on the shared cell view the encoder hands them was a zeroed `RowBuf` and a
-//! cell-by-cell copy loop before the vector load. `common::mc`'s `hor_shaped`,
-//! `ver_shaped`, `cen_shaped`, `avg_shaped` and `chroma_shaped` are the dispatch onto
-//! those shapes, and their tables are the codec's own call sites.
+//! bounds-checked cut per operand per block rather than a row view per row.
+//! `common::mc`'s `hor_shaped`, `ver_shaped`, `cen_shaped`, `avg_shaped` and
+//! `chroma_shaped` are the dispatch onto those shapes.
 //!
 //! Inside a kernel the rows come a [`ROW_GROUP`] at a time through
-//! [`BlockRows::window`](crate::safe::plane::BlockRows::window) — see that constant
-//! for why the block's own span is not enough — and the six taps of a filtered row
-//! through [`hor_chunk`], which explains why they are separate loads and why the
-//! chunking is a macro.
+//! [`BlockRows::window`](crate::safe::plane::BlockRows::window), and the six taps of a
+//! filtered row through [`hor_chunk`].
 //!
 //! # Widths
 //!
-//! Upstream has one routine per width (4, 8, 16) and separate `Width5/9/17` routines
-//! for the encoder's half-pel search buffers, which the port reaches through the same
-//! entry points with `kiW + 1`. Each kernel here takes any width: sixteen-, eight-
-//! and four-lane chunks, and for the odd column of a 5-, 9- or 17-wide row one more
-//! chunk, ending at the last column and overlapping the one before — the overlap
-//! rewrites bytes with the values they already hold, and it is cheaper than the
-//! asm's one-lane `FILTER_SINGLE_TAG_8BITS`, let alone a scalar tail. Loads at the
-//! six tap offsets replace the asm's `ext` chains; both are one instruction per tap.
+//! Each kernel takes any width, where upstream has one routine per width (4, 8, 16)
+//! plus `Width5/9/17` for the encoder's half-pel search buffers, reached here through
+//! the same entry points with `kiW + 1`: sixteen-, eight- and four-lane chunks, and for
+//! the odd column of a 5-, 9- or 17-wide row one more chunk, ending at the last column
+//! and overlapping the one before — the overlap rewrites bytes with the values they
+//! already hold. Loads at the six tap offsets replace the asm's `ext` chains; both are
+//! one instruction per tap.
 //!
 //! `pixel_avg` is `urhadd`, the one-instruction form of the asm's `uaddl`/`rshrn #1`
 //! pair; `mc_chroma` is `umull`/`umlal` by the four byte weights and `rshrn #6`.
@@ -123,42 +115,31 @@ fn filter6_16(p: &[uint8x16_t; 6]) -> uint8x16_t {
 
 /// Rows per window cut.
 ///
-/// **The row loops below are past the unroller's threshold at their real heights.**
-/// A six-tap filter body is fifteen-odd instructions and a block is up to seventeen
-/// rows, so LLVM keeps the loop — which leaves `y * stride` symbolic, and no span
-/// length can be shown to contain a symbolic row offset (see
-/// [`RefSamples::span`](crate::safe::plane::RefSamples::span)). Every per-row bounds
-/// check then stays, which on a 16x16 average is ninety-six branches around three
-/// instructions of work.
-///
-/// Cutting a window every `ROW_GROUP` rows restores the constant offsets: two checks
-/// per operand per group, and none inside it, because a constant row index times the
-/// window's own narrowed stride provably lands inside the window's own length. The
-/// group's body is small enough to unroll, which is what makes the indices constant.
-/// Four is the largest group that stays under the threshold for the six-tap filters,
-/// and it divides every height the codec uses; the 5-, 9- and 17-row refinement
+/// A six-tap filter body over up to seventeen rows is past the unroller's threshold, so
+/// `y * stride` stays symbolic, and no span length can be shown to contain a symbolic
+/// row offset (see [`RefSamples::span`](crate::safe::plane::RefSamples::span)): every
+/// per-row bounds check stays. Cutting a window every `ROW_GROUP` rows restores the
+/// constant offsets — two checks per operand per group and none inside it, because a
+/// constant row index times the window's own narrowed stride provably lands inside its
+/// length. Four is the largest group that stays under the threshold for the six-tap
+/// filters and it divides every height the codec uses; the 5-, 9- and 17-row refinement
 /// blocks leave one row over, which the tail loop takes a row at a time.
 const ROW_GROUP: usize = 4;
 
 /// The six taps of `N` outputs at column `x` of window row `y`, filtered and stored
 /// — `N` is 16, 8 or 4, and `AVG` is [`hor_row`]'s.
 ///
-/// # Why the taps come from a window, and why this is a macro
-///
 /// [`BlockRows::row`] hands a row over **by value**, which is right where the vector
-/// load consumes the whole of it — a `[u8; 16]` is one `ldr q` and LLVM forwards it —
-/// and wrong for a six-tap filter, whose row is `W + 5` samples read in six
-/// overlapping loads: a `[u8; 21]` would be spilled to the stack and read back six
-/// times. Loading each tap as its own `row::<N>(y, x + k)` keeps every load against
-/// the original storage, plane or cell view alike.
+/// load consumes the whole of it — a `[u8; 16]` is one `ldr q` — and wrong for a
+/// six-tap filter, whose row is `W + 5` samples read in six overlapping loads: a
+/// `[u8; 21]` would be spilled to the stack and read back six times. Loading each tap
+/// as its own `row::<N>(y, x + k)` keeps every load against the original storage, plane
+/// or cell view alike.
 ///
 /// That only pays if `y` and `x` are **constants** at the point the bounds checks are
-/// decided, so that each tap's offset provably lands inside the window the caller
-/// cut. As a function this was two chunks' worth of body at width 17, past what LLVM
-/// will inline, and the row index arrived as an argument — which brought all twelve
-/// checks back and cost the 17-wide refinement filter its whole speedup. A
-/// `#[target_feature]` function cannot be `#[inline(always)]`, so the expansion has
-/// to happen here.
+/// decided, so that each tap's offset provably lands inside the window the caller cut.
+/// Hence a macro: a `#[target_feature]` function cannot be `#[inline(always)]`, and as
+/// a function the row index arrives symbolic and all twelve checks come back.
 macro_rules! hor_chunk {
     (16, $out:expr, $r:expr, $y:expr, $x:expr, $avg:expr) => {{
         let (r, y, x) = (&$r, $y, $x);
@@ -192,9 +173,8 @@ macro_rules! hor_chunk {
         }
         st8(&mut $out[x..], v);
     }};
-    // The asm reads nine bytes and `ext`s between them; six four-byte loads against a
-    // window that has already been bounds-checked are the same instruction count
-    // without the shuffles.
+    // The asm reads nine bytes and `ext`s between them; six four-byte loads against an
+    // already bounds-checked window are the same instruction count without the shuffles.
     (4, $out:expr, $r:expr, $y:expr, $x:expr, $avg:expr) => {{
         let (r, y, x) = (&$r, $y, $x);
         let t = [
@@ -220,12 +200,8 @@ macro_rules! hor_chunk {
 /// `_AVERAGE_WITH_0` kernels, quarter-pel `(1, 0)`) or 3 (`src[1]`,
 /// `_AVERAGE_WITH_1`, quarter-pel `(3, 0)`).
 ///
-/// **This is a macro rather than a function, and that is not cosmetic.** At width 17
-/// the body is two chunks and LLVM declines to inline it; the row index then arrives
-/// as an argument rather than a constant, and with it symbolic every tap's bounds
-/// check against the window comes back — which is the whole cost
-/// [`ROW_GROUP`] exists to remove. A `#[target_feature]` function cannot be
-/// `#[inline(always)]`, so the expansion has to happen here.
+/// A macro for the reason [`hor_chunk`] is one: the row index has to stay a constant at
+/// the point the bounds checks are decided.
 macro_rules! hor_row {
     ($out:expr, $r:expr, $y:expr, $w:expr, $avg:expr) => {{
         let out: &mut [u8; W] = $out;
@@ -263,13 +239,12 @@ macro_rules! hor_row {
     }};
 }
 
-/// The horizontal filter over one const-shape block: **one span for the source, one
-/// for the destination**, and `hor_row` per row over an `SW = W + 5` array.
+/// The horizontal filter over one const-shape block: one span for the source, one for
+/// the destination, and `hor_row` per row over an `SW = W + 5` array.
 ///
-/// The rows come out of the span by value — a `[u8; SW]` the vector loads read
-/// straight from, one `ldr q` on the plane cursors and one gathered load on the
-/// shared cell view — where `row_view` handed the cell view a zeroed `RowBuf` and a
-/// copy loop first. See [`RefSamples::span`](crate::safe::plane::RefSamples::span).
+/// The rows come out of the span by value — a `[u8; SW]` the vector loads read straight
+/// from, one `ldr q` on the plane cursors and one gathered load on the shared cell view.
+/// See [`RefSamples::span`](crate::safe::plane::RefSamples::span).
 #[inline]
 #[target_feature(enable = "neon")]
 fn hor_block<
@@ -300,8 +275,7 @@ fn hor_block<
     }
 }
 
-/// The run-time-shape twin — cold, and scalar: a shape the const table does not
-/// carry is not one to write a vector tail for. See [`McLeaves`].
+/// The run-time-shape twin — cold, and scalar; see [`McLeaves`].
 fn hor_any<S: RefSamples + Copy, const AVG: usize>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -330,8 +304,7 @@ fn hor_any<S: RefSamples + Copy, const AVG: usize>(
 /// output row, the window sliding by one.
 ///
 /// The rows come from **one `SH = H + 5` row span**, so the six taps of every output
-/// row are constant offsets into a slice already proven long enough; the sliding
-/// window is unchanged.
+/// row are constant offsets into a slice already proven long enough.
 #[inline]
 #[target_feature(enable = "neon")]
 fn ver16_block<S: RefSamples + Copy, const H: usize, const SH: usize, const AVG: usize>(
@@ -523,7 +496,7 @@ fn ver_block<
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
-    // SAFETY: NEON is baseline on aarch64; see the module header.
+    // SAFETY: NEON is baseline on aarch64.
     unsafe {
         match W {
             16 => ver16_block::<S, H, SH, AVG>(src, dst),
@@ -584,13 +557,13 @@ fn hor6_16bit(t: &[i16]) -> uint8x8_t {
 }
 
 /// One row of the centre kernel's six-row window, as up to three eight-column
-/// vectors — the chunking the vertical pass filters in, and never more than three
-/// because `SW <= 22` (see the header's width paragraph).
+/// vectors — the chunking the vertical pass filters in, never more than three because
+/// `SW <= 22`.
 ///
-/// The row arrives as **vectors, not bytes**: the window slides by one output row,
-/// so a byte array here would be five array copies a row on top of the load. `r` is
-/// a one-row window of width `SW`, which is what makes the chunk offsets constants
-/// that fold — see [`taps16`].
+/// The row arrives as **vectors, not bytes**: the window slides by one output row, so a
+/// byte array here would be five array copies a row on top of the load. `r` is a
+/// one-row window of width `SW`, which keeps the chunk offsets constant — see
+/// [`taps16`].
 #[inline]
 #[target_feature(enable = "neon")]
 fn cen_row<R: BlockRows, const SW: usize>(r: &R, y: usize) -> [uint8x8_t; 3] {
@@ -618,10 +591,9 @@ fn cen_row<R: BlockRows, const SW: usize>(r: &R, y: usize) -> [uint8x8_t; 3] {
 /// One output row of the centre kernel: the vertical 6-tap into `tmp`, the window
 /// slide, then the horizontal 6-tap over `tmp` into `out`.
 ///
-/// A macro for the reason [`hor_row`] is one — the row index has to stay a constant
-/// at the point the bounds checks are decided, and a `#[target_feature]` function
-/// cannot be `#[inline(always)]`. `W` and `SW` come from the block kernel's own const
-/// parameters.
+/// A macro for the reason [`hor_row`] is one: the row index has to stay a constant at
+/// the point the bounds checks are decided. `W` and `SW` come from the block kernel's
+/// own const parameters.
 macro_rules! cen_out_row {
     ($out:expr, $new:expr, $tmp:expr, $w0:ident, $w1:ident, $w2:ident, $w3:ident, $w4:ident) => {{
         let w5 = $new;
@@ -672,12 +644,10 @@ macro_rules! cen_out_row {
     }};
 }
 
-/// `McHorVer22WidthEq16_AArch64_neon` and the `Width17/9/5` forms; see the header
-/// for the widths and for the horizontal pass's precision.
+/// `McHorVer22WidthEq16_AArch64_neon` and the `Width17/9/5` forms; see the header for
+/// the widths and for the horizontal pass's precision.
 ///
-/// The reach is `SW = W + 5` columns by `SH = H + 5` rows and it is cut **once**;
-/// the two passes and their arithmetic are unchanged, including the widened `.4s`
-/// horizontal pass the header documents as this port's departure from the asm.
+/// The reach is `SW = W + 5` columns by `SH = H + 5` rows, cut **once**.
 #[inline]
 #[target_feature(enable = "neon")]
 fn cen_block<
@@ -690,16 +660,14 @@ fn cen_block<
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
-    // `iTmp` is `int16_t[17 + 5]` in the C++ and the widest caller is `md.rs`'s
-    // `kiW + 1` with `kiW = 16`. The scratch here is wider so the eight-lane loads of
-    // the horizontal pass may run past the last valid column, but the contract on
-    // `width` is the C++'s, and the one the x86_64 kernel asserts.
+    // The widest caller is `md.rs`'s `kiW + 1` with `kiW = 16`. The scratch is wider
+    // than `iTmp`'s `17 + 5` so the eight-lane loads of the horizontal pass may run
+    // past the last valid column.
     let s = src.span::<SW, SH>(-2, -2);
     let mut d = dst.span_mut::<W, H>(0, 0);
     let mut tmp = [0i16; 32];
-    // Five separate row values rather than one array the window slides through:
-    // each is three vectors, and keeping them as their own bindings is what lets the
-    // slide below be register renaming instead of a `copy_within` over 144 bytes.
+    // Five separate row values rather than one array the window slides through: each is
+    // three vectors, so the slide below is register renaming, not a `copy_within`.
     let (mut w0, mut w1, mut w2, mut w3, mut w4) = (
         cen_row::<_, SW>(&s, 0),
         cen_row::<_, SW>(&s, 1),
@@ -740,8 +708,8 @@ fn cen_block<
     }
 }
 
-/// The run-time-shape twin — cold; see [`McLeaves`]. The `width <= 17` contract is
-/// the C++'s and is what sizes `iTmp`.
+/// The run-time-shape twin — cold; see [`McLeaves`]. The `width <= 17` contract is what
+/// sizes `iTmp`.
 fn cen_any<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -952,7 +920,7 @@ fn chroma_block<
     dst: &mut PlaneCursorMut<'_>,
     w: &[u8; 4],
 ) {
-    // SAFETY: NEON is baseline on aarch64; see the module header.
+    // SAFETY: NEON is baseline on aarch64.
     unsafe {
         match W {
             8 => chroma8_block::<S, H, SH>(src, dst, w),
@@ -989,8 +957,8 @@ fn chroma_any<S: RefSamples + Copy>(
 // The entry points, named as the slots they fill
 // ============================================================================
 
-/// **The NEON leaf set** — `McLeaves` over the const-shape blocks above, for the
-/// shape dispatch and the quarter-pel composites in `common/mc.rs`.
+/// The NEON leaf set — `McLeaves` over the const-shape blocks above, for the shape
+/// dispatch and the quarter-pel composites in `common/mc.rs`.
 pub struct NeonLeaves;
 
 impl McLeaves for NeonLeaves {
@@ -1009,7 +977,7 @@ impl McLeaves for NeonLeaves {
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     ) {
-        // SAFETY: NEON is baseline on aarch64; see the module header.
+        // SAFETY: NEON is baseline on aarch64.
         unsafe { hor_block::<S, W, SW, H, AVG>(src, dst) }
     }
     #[inline(always)]
@@ -1054,7 +1022,7 @@ impl McLeaves for NeonLeaves {
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     ) {
-        // SAFETY: NEON is baseline on aarch64; see the module header.
+        // SAFETY: NEON is baseline on aarch64.
         unsafe { cen_block::<S, W, SW, H, SH>(src, dst) }
     }
     #[inline(always)]
@@ -1072,7 +1040,7 @@ impl McLeaves for NeonLeaves {
         a: &A,
         b: &B,
     ) {
-        // SAFETY: NEON is baseline on aarch64; see the module header.
+        // SAFETY: NEON is baseline on aarch64.
         unsafe { avg_block::<A, B, W, H>(dst, a, b) }
     }
     #[inline(always)]
@@ -1141,14 +1109,10 @@ pub fn mc_chroma<S: RefSamples + Copy>(
     mc_chroma_frac(src, dst, mv_x, mv_y, width, height)
 }
 
-/// The fractional half of [`mc_chroma`], **out of line on purpose**.
-///
-/// The whole-sample vector is the common chroma case and it is a block copy; with the
-/// bilinear dispatch in the same body the entry point was too large to inline, so
-/// `mc_copy`'s width and height arrived as run-time values at a call site that had
-/// them as constants, and the copy paid two jump tables it should not have. Split,
-/// the entry point is a test and a copy — small enough to inline — and this is one
-/// call on the path that does real work.
+/// The fractional half of [`mc_chroma`], out of line so the entry point stays small
+/// enough to inline. The whole-sample vector is the common chroma case and a block copy;
+/// with the bilinear dispatch in the same body, `mc_copy` lost its constant width and
+/// height at that call site.
 #[inline(never)]
 fn mc_chroma_frac<S: RefSamples + Copy>(
     src: &S,
@@ -1198,10 +1162,9 @@ pub fn mc_hor_ver22<S: RefSamples + Copy>(
     cen_shaped::<NeonLeaves, S>(src, dst, width, height)
 }
 
-/// `McLuma_AArch64_neon`: the four fused quarter-pel kernels where upstream has
-/// them, and the composites over the NEON leaves elsewhere — the split
-/// [`McLeaves::FUSED_QPEL`] makes, inside `mc_luma_with`'s shape dispatch so the
-/// fused arms are instantiated at the luma partitions and nowhere else.
+/// `McLuma_AArch64_neon`: the four fused quarter-pel kernels where upstream has them
+/// and the composites over the NEON leaves elsewhere — the split
+/// [`McLeaves::FUSED_QPEL`] makes, inside `mc_luma_with`'s shape dispatch.
 #[inline]
 pub fn mc_luma<S: RefSamples + Copy>(
     src: &S,
@@ -1244,10 +1207,9 @@ mod tests {
         v
     }
 
-    /// The pattern the header's overflow analysis is about: columns alternating
-    /// between the filter's extremes, so the vertical outputs hit `10710` and
-    /// `-2550` on neighbouring columns and the centre kernel's horizontal pass sees
-    /// its largest intermediates.
+    /// Columns alternating between the filter's extremes, so the vertical outputs hit
+    /// `10710` and `-2550` on neighbouring columns and the centre kernel's horizontal
+    /// pass sees its largest intermediates.
     fn adversarial_plane() -> Vec<u8> {
         let mut v = vec![0u8; STRIDE * ROWS];
         for y in 0..ROWS {
@@ -1463,9 +1425,8 @@ mod tests {
         check_ver02(&adversarial_plane());
     }
 
-    /// The centre kernel over noise and over the adversarial plane — the latter is
-    /// where the asm's 16-bit horizontal pass would wrap, and where this one's
-    /// widened pass has to agree with the scalar.
+    /// The centre kernel over noise and over the adversarial plane, where a 16-bit
+    /// horizontal pass would wrap and the widened one has to agree with the scalar.
     #[test]
     fn test_mc_hor_ver22_parity() {
         check_ver22(&filled_plane());

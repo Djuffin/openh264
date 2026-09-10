@@ -2,13 +2,8 @@
 
 //! Error plumbing for the safe vocabulary types.
 //!
-//! Deliberately minimal: the codec keeps returning the C++ `int32_t` error codes
-//! internally, so this is a transparent newtype over exactly those codes and
-//! nothing more. No hierarchy, no `Display`, no conversion layer. Its whole job is
-//! to keep a `Result` shape at the call sites, so that "forgot to check the error"
-//! stops being possible while the *values* stay bit-identical to the C++.
-//!
-//! The codes themselves are **reused, never redefined**.
+//! A transparent newtype over the C++ `int32_t` error codes, so call sites can keep a
+//! `Result` shape. The codes themselves are reused, never redefined.
 
 use crate::decoder::{bit_stream, dec_golomb};
 
@@ -28,7 +23,7 @@ impl ErrInfo {
     /// `ERR_INFO_READ_LEADING_ZERO` — an Exp-Golomb prefix of 32+ zero bits.
     pub const READ_LEADING_ZERO: Self = Self(dec_golomb::ERR_INFO_READ_LEADING_ZERO);
 
-    /// The raw `int32_t` the C++ would have returned.
+    /// The raw `int32_t` code.
     #[inline]
     pub const fn code(self) -> i32 {
         self.0
@@ -49,9 +44,7 @@ mod tests {
     #[test]
     fn codes_agree_with_the_duplicate_definitions() {
         // `decoder/bit_stream.rs` and `decoder/dec_golomb.rs` each declare their own
-        // copy of these constants. This port has shipped duplicated constants
-        // holding *different* values; this test is the tripwire for that happening
-        // to the codes the safe reader returns.
+        // copy of these constants; this is the tripwire for the two drifting apart.
         assert_eq!(
             bit_stream::ERR_INFO_INVALID_ACCESS,
             dec_golomb::ERR_INFO_INVALID_ACCESS

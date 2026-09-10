@@ -26,20 +26,16 @@
 // ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-//! # CABAC Binary Arithmetic Encoding Engine (`set_mb_syn_cabac.rs`)
+//! # CABAC Binary Arithmetic Encoding Engine
 //!
-//! Translated from `codec/encoder/core/inc/set_mb_syn_cabac.h` and
+//! C++: `codec/encoder/core/inc/set_mb_syn_cabac.h`,
 //! `codec/encoder/core/src/set_mb_syn_cabac.cpp`.
 //!
-//! Provides the Context-Adaptive Binary Arithmetic Coding (CABAC) entropy encoder
-//! for H.264 / AVC video encoding, including:
-//! - 64-bit integer low register interval updates (`cabac_low_t` / `uint64_t`).
-//! - Context state model management and transitions (`SStateCtx` / `SCabacCtx`).
-//! - Fast-path regular bin decision coding (`WelsCabacEncodeDecision`).
-//! - Equiprobable bypass coding (`WelsCabacEncodeBypassOne`).
-//! - Exp-Golomb multi-bin bypass coding (`WelsCabacEncodeUeBypass`).
-//! - Slice terminating symbol coding and RBSP bitstream flush (`WelsCabacEncodeTerminate`, `WelsCabacEncodeFlush`).
-//! - Carry bit propagation across output byte streams (`PropagateCarry`).
+//! The Context-Adaptive Binary Arithmetic Coding (CABAC) entropy encoder for
+//! H.264 / AVC: the 64-bit low register (`cabac_low_t`), the context state models
+//! (`SStateCtx` / `SCabacCtx`), regular bin decisions, equiprobable and Exp-Golomb
+//! bypass coding, the slice terminating symbol and RBSP flush, and carry propagation
+//! across output bytes.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 // ============================================================================
@@ -100,11 +96,9 @@ impl SStateCtx {
 
     /// Packs and updates the 6-bit state index and 1-bit MPS symbol.
     ///
-    /// `set_mb_syn_cabac.h:62` is `m_uiStateMps = uiState * 2 + uiMps`, evaluated in
-    /// `int` after integer promotion and narrowed on assignment. Written that way
-    /// rather than as `(uiState << 1) | (uiMps & 1)`: the two agree only while
-    /// `uiMps` is 0 or 1, and the shift form would also overflow-panic in debug for
-    /// `uiState >= 128`.
+    /// `uiState * 2 + uiMps` (`set_mb_syn_cabac.h:62`), not `(uiState << 1) | (uiMps &
+    /// 1)`: the two agree only while `uiMps` is 0 or 1, and the shift form would
+    /// overflow-panic in debug for `uiState >= 128`.
     #[inline(always)]
     pub fn Set(&mut self, uiState: u8, uiMps: u8) {
         self.m_uiStateMps = (uiState as u32 * 2 + uiMps as u32) as u8;
@@ -127,13 +121,13 @@ pub struct SCabacCtx {
     pub m_uiRange: u32,
     /// Array of 460 packed probability context model state machines.
     pub m_sStateCtx: [SStateCtx; WELS_CONTEXT_COUNT],
-    /// Offset of **this slice's** first byte in the output buffer — not the
-    /// allocation's base. `PropagateCarry`'s backward walk stops here.
+    /// Offset of this slice's first byte in the output buffer, not the allocation's
+    /// base. `PropagateCarry`'s backward walk stops here.
     pub m_iBufStart: usize,
     /// One past the last byte the caller intends the coder to use.
     ///
-    /// Written by `WelsCabacEncodeInit` and read by nothing, here or upstream:
-    /// the limit it names is not enforced at any write site.
+    /// Written by `WelsCabacEncodeInit` and read nowhere: the limit it names is not
+    /// enforced at any write site.
     pub m_iBufEnd: usize,
     /// Current byte-write cursor, as an offset into the output buffer.
     pub m_iBufCur: usize,
@@ -794,17 +788,16 @@ pub const g_kiCabacGlobalContextIdx: [[[i8; 2]; 4]; WELS_CONTEXT_COUNT] = [
 /// If byte `buf[iBufCur - 1]` overflows (`0xFF + 1 = 0x00`), the carry bit ripples
 /// backwards to the preceding byte until a non-overflowing byte is incremented.
 ///
-/// Two things are load-bearing about the loop condition and neither is stylistic:
+/// Two properties of the loop condition are load-bearing:
 ///
-/// * It is `>`, not `>=`, and it is checked **before** the decrement — so
-///   `iBufCur - 1` is only ever evaluated where `iBufCur > iBufStart >= 0`.
-///   On `usize` the alternative wraps to `usize::MAX` and indexes out of the
-///   universe.
-/// * The bound is `iBufStart`, **the slice's first byte**, not `0`. The walk
-///   must not cross into a previous slice's bytes.
+/// * It is `>`, not `>=`, and is checked before the decrement, so `iBufCur - 1` is
+///   only ever evaluated where `iBufCur > iBufStart >= 0`. On `usize` the alternative
+///   wraps to `usize::MAX`.
+/// * The bound is `iBufStart`, the slice's first byte, not `0`: the walk must not
+///   cross into a previous slice's bytes.
 ///
-/// The `!= 0` early exit is the codec's business — it stops the ripple at the
-/// first byte that was not `0xFF`. Memory safety does not depend on it.
+/// The `!= 0` early exit stops the ripple at the first byte that was not `0xFF`;
+/// memory safety does not depend on it.
 #[inline]
 pub fn PropagateCarry(buf: &mut [u8], mut iBufCur: usize, iBufStart: usize) {
     while iBufCur > iBufStart {
@@ -1114,7 +1107,6 @@ mod tests {
         assert_eq!(cb_ctx.m_uiRange, 510);
         assert_eq!(cb_ctx.m_iBufCur, 0);
 
-        // Encode a few bypass bits
         WelsCabacEncodeBypassOne(&mut buf, &mut cb_ctx, 1);
         WelsCabacEncodeBypassOne(&mut buf, &mut cb_ctx, 0);
 
@@ -1122,8 +1114,8 @@ mod tests {
         assert!(WelsCabacEncodePos(&cb_ctx) > 0);
     }
 
-    /// A slice that does not start at the allocation's base: the walk must stop
-    /// at `m_iBufStart`, leaving the byte below it — a previous slice's — alone.
+    /// The walk stops at `m_iBufStart`, leaving the byte below it — a previous
+    /// slice's — alone.
     #[test]
     fn test_propagate_carry() {
         let mut buf = [5u8, 0xFFu8, 0u8];
@@ -1138,8 +1130,8 @@ mod tests {
         assert_eq!(buf[1], 0);
         assert_eq!(buf[0], 5, "carry escaped below m_iBufStart");
 
-        // The degenerate case the comparison exists for: cur == start. One
-        // `pos - 1` here would wrap a usize and index out of the universe.
+        // The degenerate case the comparison exists for: cur == start, where a
+        // `pos - 1` would wrap a usize.
         let mut buf = [0xFFu8; 2];
         PropagateCarry(&mut buf, 0, 0);
         assert_eq!(buf, [0xFF, 0xFF]);

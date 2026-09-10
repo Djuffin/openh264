@@ -1,11 +1,10 @@
-//! In-Process Side-by-Side Performance & Bitstream SHA-1 Hash Comparison:
-//! Native C++ OpenH264 Library (libopenh264.so) vs. Rust OpenH264 Encoder (openh264-rs).
+//! Side-by-side timing and bitstream SHA-1 comparison, in one process: the dlopen'd
+//! C++ `libopenh264` against this crate's encoder.
 //!
 //! Both encoders are driven through the same call sequence — `GetDefaultParams`,
 //! `InitializeExt`, then `EncodeFrame` per frame — over the same `SSourcePicture`
 //! array, so the only variable is the implementation. Every row reports the SHA-1
-//! of the whole bitstream alongside the timing: a speedup over work that is not
-//! byte-for-byte the same work is not a speedup, and the row says so.
+//! of the whole bitstream alongside the timing.
 //!
 //! Environment knobs:
 //!
@@ -19,19 +18,15 @@
 //! | `BENCH_LOAD_BALANCING=0\|1` | `bUseLoadBalancing`, always forced on both sides (default `0`, i.e. off) |
 //! | `BENCH_USAGE=0\|1` | `iUsageType`: 0 camera (default), 1 `SCREEN_CONTENT_REAL_TIME` |
 //!
-//! **`BENCH_LOAD_BALANCING`, and why it exists.** `GetDefaultParams` sets
-//! `bUseLoadBalancing = true` on both sides. With `uiSliceMode = 1` and
-//! `iMultipleThreadIdc >= uiSliceNum` that reaches `AdjustBaseLayer` →
-//! `DynamicAdjustSlicing`, whose slice boundaries for frame N+1 are computed from
-//! frame N's measured per-slice encode *times* — so the bitstream is a function of
-//! the schedule. The C++ header says so itself (`codec_app_def.h:579`: the result of
-//! each run may be different). A row on that path can never be bit-identical, and
-//! the default slice mode puts every row on it, so the bench overrides
-//! `bUseLoadBalancing` to `false` on both sides unless `BENCH_LOAD_BALANCING=1`
-//! asks for the C++ default back.
+//! `bUseLoadBalancing` defaults to `true`, and with `uiSliceMode = 1` and
+//! `iMultipleThreadIdc >= uiSliceNum` it reaches `DynamicAdjustSlicing`, whose slice
+//! boundaries for frame N+1 come from frame N's measured per-slice encode *times*
+//! (`codec_app_def.h:579`) — the bitstream is then a function of the schedule and can
+//! never be bit-identical, so the bench forces it `false` on both sides unless
+//! `BENCH_LOAD_BALANCING=1`.
 //!
 //! Exits non-zero if any configuration's bitstreams disagree, after running and
-//! reporting all of them — one mismatch should not cost you the other 29 rows.
+//! reporting all of them.
 
 #![allow(non_snake_case)]
 
@@ -66,8 +61,7 @@ fn compute_sha1(data: &[u8]) -> String {
 }
 
 /// Where a configuration's pixels came from. The synthetic fallback is high-entropy
-/// noise — roughly worst-case for an encoder and not representative of video — so a
-/// run that silently used it would report throughput for a workload nobody has.
+/// noise, roughly worst case for an encoder, so rows that use it are tagged.
 #[derive(Clone, Copy, PartialEq)]
 enum InputSource {
     Ffmpeg,
@@ -154,8 +148,8 @@ struct CppLibrary {
 impl CppLibrary {
     pub fn load() -> Option<Self> {
         let root = workspace_root();
-        // The names the Windows builds produce: MSVC drops the prefix
-        // (`build/msvc-common.mk:42`), MinGW and Cygwin keep it (`Makefile:12`).
+        // The names the Windows builds produce: MSVC drops the `lib` prefix,
+        // MinGW and Cygwin keep it.
         let lib_paths = [
             root.join("libopenh264.so"),
             root.join("libopenh264.dylib"),
@@ -201,8 +195,8 @@ impl CppLibrary {
 #[derive(Clone, Copy, PartialEq)]
 struct SliceSpec {
     mode: SliceModeEnum,
-    /// `uiSliceNum` for modes 1 and 2 (**0 means "one slice per thread"**, resolved
-    /// per row); `uiSliceSizeConstraint` in bytes for mode 3.
+    /// `uiSliceNum` for modes 1 and 2 (0 means one slice per thread, resolved per
+    /// row); `uiSliceSizeConstraint` in bytes for mode 3.
     arg: u32,
 }
 
@@ -259,9 +253,8 @@ struct RunResult {
     sha1: String,
 }
 
-/// The parameter set both encoders are initialized with. Kept in one place so the
-/// two sides cannot drift: a benchmark whose halves configure differently is
-/// measuring two different questions.
+/// The parameter set both encoders are initialized with, kept in one place so the
+/// two sides cannot drift.
 unsafe fn fill_params(
     enc: *mut ISVCEncoder,
     width: i32,
@@ -274,10 +267,9 @@ unsafe fn fill_params(
     let mut param: SEncParamExt = unsafe { std::mem::zeroed() };
     let vtbl = unsafe { &*(*enc).lpVtbl };
     unsafe { (vtbl.GetDefaultParams)(enc, &mut param) };
-    // `GetDefaultParams` writes `CAMERA_VIDEO_REAL_TIME`. Under screen usage the
-    // encoder's own `ParamValidation` then forces `bEnableSceneChangeDetect` ON and
-    // `bEnableAdaptiveQuant`/`bEnableBackgroundDetection` OFF on both sides
-    // (`encoder_ext.cpp:274-290`), so the two remain configured identically.
+    // `GetDefaultParams` writes `CAMERA_VIDEO_REAL_TIME`. Under screen usage
+    // `ParamValidation` (`encoder_ext.cpp:274-290`) then forces `bEnableSceneChangeDetect`
+    // on and `bEnableAdaptiveQuant`/`bEnableBackgroundDetection` off on both sides.
     param.iUsageType = usage;
     param.iPicWidth = width;
     param.iPicHeight = height;
@@ -304,8 +296,7 @@ unsafe fn fill_params(
             arg.uiSliceNum = 1;
         }
         _ => {
-            // 0 = "one slice per thread", which is the shape that makes the thread
-            // axis mean something; anything else is taken literally.
+            // 0 = one slice per thread; anything else is taken literally.
             arg.uiSliceNum = if slice.arg == 0 {
                 threads.max(1) as u32
             } else {
@@ -321,13 +312,11 @@ unsafe fn fill_params(
 
 /// Initialize `enc`, encode `pics`, and return timing plus the bitstream hash.
 ///
-/// Both implementations run through this one function, reached through the same
-/// `ISVCEncoderVtbl`. For the dlopen'd C++ library that vtable is the real Itanium-ABI
-/// vtable of `ISVCEncoder`: its nine pure-virtual methods occupy slots 0..8 in
-/// declaration order, and the virtual destructor is declared last so its slots land
-/// after them. (`ForceIntraFrame` is the one member whose Rust signature is not
-/// call-compatible with C++ — the C++ declaration has a defaulted second parameter.
-/// Nothing here calls it.)
+/// Both implementations run through the same `ISVCEncoderVtbl`. For the dlopen'd C++
+/// library that is the real Itanium-ABI vtable of `ISVCEncoder`: nine pure-virtual
+/// methods in slots 0..8 in declaration order, the virtual destructor declared last so
+/// its slots land after them. `ForceIntraFrame` is not call-compatible — the C++
+/// declaration has a defaulted second parameter — and nothing here calls it.
 unsafe fn run_encoder(
     enc: *mut ISVCEncoder,
     width: i32,
@@ -350,9 +339,8 @@ unsafe fn run_encoder(
 
     let mut bs_info = SFrameBSInfo::default();
 
-    // Warmup. Deliberately outside the timed loop, and deliberately on the same
-    // encoder instance: it primes caches and lets rate control settle, which is what
-    // the steady-state numbers below are meant to describe.
+    // Warmup outside the timed loop, on the same encoder instance: primes caches and
+    // lets rate control settle, so the timings describe steady state.
     for pic in pics.iter().take(3) {
         let _ = unsafe { (vtbl.EncodeFrame)(enc, black_box(pic), black_box(&mut bs_info)) };
     }
@@ -503,9 +491,6 @@ fn main() {
         ),
     ];
 
-    // `BENCH_FRAMES` caps every configuration. Useful while a known bitstream
-    // divergence sits partway into a sequence: capping below it gives comparable
-    // work on both sides and therefore meaningful timings, at the cost of coverage.
     let frame_cap: Option<usize> = std::env::var("BENCH_FRAMES")
         .ok()
         .and_then(|v| v.parse().ok());
@@ -519,10 +504,7 @@ fn main() {
         .map(|v| v.split(',').filter_map(SliceSpec::parse).collect())
         .filter(|v: &Vec<SliceSpec>| !v.is_empty())
         .unwrap_or_else(|| vec![SliceSpec::DEFAULT]);
-    // Only tag the rows when the axis actually has something on it.
     let tag_rows = slice_specs.len() > 1 || slice_specs[0] != SliceSpec::DEFAULT;
-    // `0`/unset is camera and `1` is `SCREEN_CONTENT_REAL_TIME`. Anything else is a
-    // panic rather than a silent fallback to camera.
     let usage: EUsageType = match std::env::var("BENCH_USAGE").ok().as_deref() {
         None | Some("") | Some("0") => EUsageType::CAMERA_VIDEO_REAL_TIME,
         Some("1") => EUsageType::SCREEN_CONTENT_REAL_TIME,
@@ -531,7 +513,7 @@ fn main() {
         ),
     };
     let screen = usage == EUsageType::SCREEN_CONTENT_REAL_TIME;
-    // Default to false for deterministic multi-slice bitstream comparison, overrideable by BENCH_LOAD_BALANCING.
+    // Off by default, so multi-slice bitstreams stay deterministic.
     let load_balancing: Option<bool> = Some(
         std::env::var("BENCH_LOAD_BALANCING")
             .ok()
@@ -604,10 +586,7 @@ fn main() {
             let spec = *spec;
             for threads in &thread_counts {
                 let threads = *threads;
-                // The tag goes INSIDE the bracket: `perfpair.py`'s row regex is
-                // `\[(\d+) thread([^\]]*)\]`, so everything up to the `]` travels
-                // into the row key and a `u=1` row can never be paired against a
-                // camera row of the same size and thread count.
+                // The tag goes inside the bracket, so it is part of the row key.
                 let usage_tag = if screen { " u=1" } else { "" };
                 let row = if tag_rows {
                     format!("{:1} thread {}{}", threads, spec.label(threads), usage_tag)
@@ -638,8 +617,7 @@ fn main() {
                     &src_pics,
                 );
 
-                // A speedup over work that is not the same work is not a speedup. Report
-                // it either way, but never label a mismatched row with one.
+                // Only a bit-identical row gets a speedup figure.
                 let identical = c.bytes > 0 && rust.bytes > 0 && c.sha1 == rust.sha1;
                 let verdict = if identical {
                     format!("{:5.2}x [bit-identical]", rust.fps / c.fps)

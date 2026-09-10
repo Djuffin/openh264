@@ -1,33 +1,17 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-//! Port of `codec/processing/src/downsample/` — the plugin reached through
-//! `METHOD_DOWNSAMPLE`. `CWelsPreProcess::SingleLayerPreprocess` scales the source
-//! into each lower spatial layer through `DownsamplePadding`, one step per layer.
+//! Resamplers for the lower spatial layers — `codec/processing/src/downsample/`, the
+//! plugin reached through `METHOD_DOWNSAMPLE`. `CWelsPreProcess::SingleLayerPreprocess`
+//! scales the source into each lower spatial layer through `DownsamplePadding`, one step
+//! per layer.
 //!
-//! # Which downsampler this is a port of
-//!
-//! This module is **not** a transliteration of `downsample.cpp`. Two things in that
-//! file read the opposite way round from how they behave:
-//!
-//! 1. **The dispatch table is what differs, not the kernels.**
-//!    `InitDownsampleFuncs` binds `pfGeneralRatioLuma` to
-//!    `GeneralBilinearFastDownsampler_c` in the scalar table and then *rebinds it to
-//!    the accurate wrapper* on aarch64 (`downsample.cpp:130-140`) — there is no NEON
-//!    fast downsampler. Fast and Accurate are different functions. This module
-//!    therefore uses **Accurate for luma and chroma alike**, and does not port
-//!    `GeneralBilinearFastDownsampler_c` at all: on this target nothing can reach it.
-//!
-//! 2. **`m_bNoSampleBuffer` selects the *other* arm than it reads like.** It is
-//!    `AllocateSampleBuffer()`'s return value, `false` on success and `true` only
-//!    when a `WelsMalloc` failed. So [`Downsample`]'s second arm — repeated halving
-//!    through a scratch buffer — is the normal path, and the first arm is the
-//!    out-of-memory / oversized fallback. In particular a 4:1 step is **two cascaded
-//!    half-averages, not `pfQuarterDownsampler`**.
-//!
-//! The first arm is still reachable: `ParamValidationExt` admits any picture up to
-//! `MAX_MBS_PER_FRAME << 8` = 9437184 samples, so a source wider than
-//! `2 * MAX_SAMPLE_WIDTH` (3840) or taller than `2 * MAX_SAMPLE_HEIGHT` (2176) takes
-//! it — 4096x2304 is legal and does.
+//! Dyadic half, quarter and one-third box averages, plus a general-ratio bilinear
+//! resample; luma and chroma both take the accurate general-ratio kernel and there is no
+//! fast variant. [`Downsample`]'s second arm — repeated halving through a scratch buffer
+//! — is the normal path, so a 4:1 step is two cascaded half-averages rather than the
+//! quarter kernel. The first arm takes sources too large for the scratch: wider than
+//! `2 * MAX_SAMPLE_WIDTH` (3840) or taller than `2 * MAX_SAMPLE_HEIGHT` (2176), which
+//! `ParamValidationExt` admits.
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -54,8 +38,7 @@ fn WELS_ROUND(x: f32) -> i32 {
 /// the rounding done in two halves: each row pair first, then the two rows.
 ///
 /// `kiSrcWidth` is **not** the picture width — see [`DownsampleHalfAverage`], which
-/// rounds it up to a multiple of 32 or 16 and so writes into the destination's
-/// padding. That is the reference's behaviour.
+/// rounds it up to a multiple of 32 or 16 and so writes into the destination's padding.
 fn DyadicBilinearDownsampler(
     pDst: &mut [u8],
     kiDstStride: usize,
@@ -109,9 +92,8 @@ fn DyadicBilinearQuarterDownsampler(
 
 /// `DyadicBilinearOneThirdDownsampler_c` — `downsamplefuncs.cpp:95`.
 ///
-/// Note the last parameter: unlike its two siblings this one takes the
-/// **destination** height, not the source height (the C++ names it `kiDstHeight` and
-/// `Process` passes `iDstHeightY`). Reachable only through [`Downsample`]'s first arm.
+/// Unlike its two siblings the last parameter is the **destination** height, not the
+/// source height. Reachable only through [`Downsample`]'s first arm.
 fn DyadicBilinearOneThirdDownsampler(
     pDst: &mut [u8],
     kiDstStride: usize,
@@ -137,15 +119,13 @@ fn DyadicBilinearOneThirdDownsampler(
 
 /// `GeneralBilinearAccurateDownsampler_c` — `downsamplefuncs.cpp:187`.
 ///
-/// A 16.15 fixed-point bilinear resample. Two details that are not decoration:
+/// A 16.15 fixed-point bilinear resample.
 ///
 /// * the **last column of every row** and the **whole last row** are nearest-neighbour
-///   copies, not interpolations — the C++ special-cases them to avoid reading one
-///   past the source, and the sampled position differs from what interpolation would
-///   give;
-/// * the accumulator is 64-bit. The four weight products reach `(2^15-1)^2 * 255`,
-///   which overflows `i32`; the fast variant avoids this by pre-shifting each term,
-///   and is the reason the two are not the same function.
+///   copies, not interpolations, which avoids reading one past the source; the sampled
+///   position differs from what interpolation would give;
+/// * the accumulator is 64-bit: the four weight products reach `(2^15-1)^2 * 255`,
+///   which overflows `i32`.
 fn GeneralBilinearAccurateDownsampler(
     pDst: &mut [u8],
     kiDstStride: usize,
@@ -218,11 +198,9 @@ fn GeneralBilinearAccurateDownsampler(
 
 /// `CDownsampling::DownsampleHalfAverage` — `downsample.cpp:279`.
 ///
-/// Both slots of the aarch64 table (`pfHalfAverageWidthx32` and
-/// `pfHalfAverageWidthx16`) land on the same kernel, so the branch here changes only
-/// the **width passed**: the source width rounded up to a multiple of 32 when the
-/// source stride is 32-aligned, of 16 otherwise. That rounding is why the destination
-/// gets more columns than its nominal width — the reference writes into the padding.
+/// The branch selects only the **width passed**: the source width rounded up to a
+/// multiple of 32 when the source stride is 32-aligned, of 16 otherwise. That rounding
+/// is why the destination gets more columns than its nominal width, its padding written.
 fn DownsampleHalfAverage(
     pDst: &mut [u8],
     iDstStride: usize,
@@ -242,9 +220,8 @@ fn DownsampleHalfAverage(
 /// The scratch the multi-pass arm halves through — `m_pSampleBuffer[2][3]`,
 /// `downsample.cpp:56-66`.
 ///
-/// The C++ allocates all six buffers in the constructor and records whether that
-/// failed; here they are `Vec`s grown on first use. Growing lazily keeps the ~6 MB
-/// off every single-layer encoder, which is all of them outside this path.
+/// The six buffers are `Vec`s grown on first use, which keeps the ~6 MB off every
+/// encoder that never takes this path.
 #[derive(Default)]
 pub struct SampleBuffer {
     bufs: [[Vec<u8>; 3]; 2],
@@ -263,8 +240,7 @@ impl SampleBuffer {
 }
 
 /// `CDownsampling` — `downsample.h:170`. The plugin object; the scratch is its only
-/// state, `m_pfDownsample` having collapsed into direct calls (the aarch64 binding is
-/// fixed at compile time here, where the C++ picks it at run time from a CPU flag).
+/// state.
 #[derive(Default)]
 pub struct CDownsampling {
     pub m_pSampleBuffer: SampleBuffer,
@@ -295,9 +271,9 @@ impl CDownsampling {
 
 /// `CDownsampling::Process`'s body — `downsample.cpp:144`.
 ///
-/// Free rather than a method for the same reason `denoise::Denoise` is: the caller
-/// holds the two pictures and the plugin through one `&mut CWelsPreProcess`, and
-/// those borrows are disjoint in fact but not in what a method call can express.
+/// Free rather than a method: the caller holds the two pictures and the plugin through
+/// one `&mut CWelsPreProcess`, and those borrows are disjoint in fact but not in what a
+/// method call can express.
 pub fn Downsample(
     scratch: &mut SampleBuffer,
     pSrc: &DownsampleSrc<'_>,
@@ -323,8 +299,7 @@ pub fn Downsample(
     let dst_stride = pDst.stride;
 
     // ---- arm 1: no scratch big enough (an oversized source). One pass, kernel
-    // picked by the exact ratio. `m_bNoSampleBuffer` cannot be true here — see the
-    // module docs — so only the size test can select this.
+    // picked by the exact ratio.
     if (iSrcWidthY >> 1) > MAX_SAMPLE_WIDTH || (iSrcHeightY >> 1) > MAX_SAMPLE_HEIGHT {
         let [dy, du, dv] = &mut pDst.planes;
         if (iSrcWidthY >> 1) == iDstWidthY && (iSrcHeightY >> 1) == iDstHeightY {
@@ -404,7 +379,6 @@ pub fn Downsample(
                 iDstHeightUV,
             );
         } else {
-            // aarch64 binds luma to the *accurate* wrapper, not the fast one
             GeneralBilinearAccurateDownsampler(
                 dy,
                 dst_stride[0],
@@ -450,8 +424,7 @@ pub fn Downsample(
     let mut stU = pSrc.stride[1];
     let mut stV = pSrc.stride[2];
     // Which buffer the *source* currently lives in. `None` on the first pass, when it
-    // is still the caller's picture; `Some(i)` afterwards. The C++ ping-pongs
-    // `iIdx` over the two scratch sets for exactly this reason.
+    // is still the caller's picture; `Some(i)` afterwards.
     let mut src_at: Option<usize> = None;
     let mut write_to = 0usize;
 
@@ -563,9 +536,8 @@ mod tests {
             .collect()
     }
 
-    /// The 2x2 box average rounds **twice**: each row pair first, then the pair of
-    /// row results. That is not the same as one flat `(sum + 2) >> 2`, and the
-    /// difference is what the goldens contain.
+    /// The 2x2 box average rounds **twice**: each row pair first, then the pair of row
+    /// results, which is not the same as one flat `(sum + 2) >> 2`.
     #[test]
     fn dyadic_rounds_in_two_halves() {
         // [3 0 / 0 0]: rows give 2 and 0, then (2+0+1)>>1 = 1.
@@ -574,15 +546,13 @@ mod tests {
         assert_eq!(dst[0], 1);
 
         // [255 254 / 253 252]: rows give 255 and 253, then 254 — a flat
-        // (255+254+253+252+2)>>2 would give 254 too, so take a cell where the
-        // per-row `+1` survives into the second rounding:
+        // (255+254+253+252+2)>>2 gives 254 too, so this cell does not discriminate.
         let mut dst = [0u8; 1];
         DyadicBilinearDownsampler(&mut dst, 1, &[255u8, 254, 253, 252], 2, 2, 2);
         assert_eq!(dst[0], 254);
 
-        // [1 0 / 1 0]: rows both give 1 (the +1 rounds each up), then 1.
-        // Flat: (1+0+1+0+2)>>2 = 1.  [1 0 / 0 0]: rows 1 and 0 -> 1; flat
-        // (1+2)>>2 = 0.  That one discriminates.
+        // [1 0 / 0 0]: rows give 1 (the +1 rounds it up) and 0, then 1; a flat
+        // (1+2)>>2 gives 0. This cell does.
         let mut dst = [0u8; 1];
         DyadicBilinearDownsampler(&mut dst, 1, &[1u8, 0, 0, 0], 2, 2, 2);
         assert_eq!(
@@ -638,9 +608,8 @@ mod tests {
         assert_eq!(last[0] % 15, 0, "and it is a source row verbatim");
     }
 
-    /// `Process` refuses a non-downsample: the reference returns `RET_INVALIDPARAM`
-    /// when the destination is not strictly smaller in both dimensions, and the
-    /// caller relies on that rather than on the sizes being pre-checked.
+    /// `Process` returns `RET_INVALIDPARAM` when the destination is not strictly
+    /// smaller in both dimensions; the caller relies on that check.
     #[test]
     fn refuses_upsample_and_equal_size() {
         let mut ds = CDownsampling::default();

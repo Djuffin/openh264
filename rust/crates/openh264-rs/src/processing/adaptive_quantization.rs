@@ -1,26 +1,20 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
-//! Port of `codec/processing/src/adaptivequantization/AdaptiveQuantization.cpp` —
-//! the plugin reached through `METHOD_ADAPTIVE_QUANT`.
+//! Adaptive quantization —
+//! `codec/processing/src/adaptivequantization/AdaptiveQuantization.cpp`, the plugin
+//! reached through `METHOD_ADAPTIVE_QUANT`.
 //!
 //! `CWelsPreProcess::AnalyzeSpatialPic` calls it for every P slice when
-//! `bEnableAdaptiveQuant` is set, which `FillDefault` leaves **on**. It writes a
+//! `bEnableAdaptiveQuant` is set, which `FillDefault` leaves on. It writes a
 //! per-macroblock QP delta into `pMotionTextureIndexToDeltaQp`, which
 //! `RcCalculateMbQp` adds to the slice QP, and a frame average into
 //! `iAverMotionTextureIndexToDeltaQp`, which `RcCalculatePictureQp` and
 //! `WelsRcPictureInitDisable` subtract from the global QP.
 //!
-//! ## Integer widths are load-bearing
-//!
-//! `SampleVariance16x16_c` accumulates the two sums in `uint16_t` and the two
-//! squares in `uint32_t`. Both are `u16` here with `wrapping_add`, faithfully —
-//! but **neither sum can actually reach the wrap**: a 16x16 block is 256 samples of
-//! at most 255, so both top out at 65280, 255 short of `uint16_t`'s range. The
-//! `wrapping_add`s stay regardless.
-//!
-//! The products `uiSum * uiSum` and `uiCurSum * uiCurSum` are `int` in C++ (integer
-//! promotion of `uint16_t`), and the result is stored back into a `uint16_t` field,
-//! so the truncation happens at the store.
+//! Integer widths are load-bearing: the variance kernel's two sums are `u16` and its
+//! two squares `u32`. Neither sum can reach the wrap — a 16x16 block is 256 samples of
+//! at most 255, so both top out at 65280 — but the sum-of-squares products are computed
+//! wide and truncated at the store into a `u16` field.
 
 #![forbid(unsafe_code)]
 
@@ -31,23 +25,23 @@ use crate::encoder::wels_preprocess::{
 use super::vaacalc::RET_SUCCESS;
 use crate::processing::vaacalc::VaaCalcPlanes;
 
-/// `util.h:61-64`.
+/// Fixed-point scales for the model arithmetic below — `util.h`.
 const AQ_INT_MULTIPLY: i64 = 10000000;
 const AQ_TIME_INT_MULTIPLY: i64 = 10000;
 const AQ_QSTEP_INT_MULTIPLY: i64 = 100;
 const AQ_PESN: i64 = 10;
 
-/// `AdaptiveQuantization.cpp:38-42`.
+/// Model constants, pre-scaled by the fixed-point multipliers above.
 const AVERAGE_TIME_MOTION: i64 = 3000;
 const AVERAGE_TIME_TEXTURE_QUALITYMODE: i64 = 10000;
 const AVERAGE_TIME_TEXTURE_BITRATEMODE: i64 = 8750;
 const MODEL_ALPHA: i64 = 9910;
 const MODEL_TIME: i64 = 58185;
 
-/// `MB_WIDTH_LUMA` — `wels_const_common.h:50`.
+/// `MB_WIDTH_LUMA` — `wels_const_common.h`.
 const MB_WIDTH_LUMA: i32 = 16;
 
-/// `EAQModes` — `IWelsVP.h:198`.
+/// `EAQModes` — `IWelsVP.h`.
 pub const AQ_QUALITY_MODE: i32 = 0;
 pub const AQ_BITRATE_MODE: i32 = 1;
 
@@ -72,16 +66,14 @@ pub fn mb_span(stride: usize) -> usize {
     15 * stride + 16
 }
 
-/// C++: `SampleVariance16x16_c`, `AdaptiveQuantization.cpp:245`.
+/// The variance proxies for one macroblock: `uiMotionIndex` from the difference against
+/// the reference, `uiTextureIndex` from the current picture alone. `SampleVariance16x16`
+/// in `AdaptiveQuantization.cpp`.
 ///
-/// The variance proxies for one macroblock: `uiMotionIndex` from the difference
-/// against the reference, `uiTextureIndex` from the current picture alone.
-///
-/// The C++ accumulates the two sums in `uint16_t` and the two squares in `uint32_t`,
-/// so `uiSum` and `uiCurSum` wrap at 65536 — `uiCurSum` reaches 65280 for a block of
-/// maximum-brightness samples and stops just short. The products then promote to
-/// `int` and truncate at the store into the `uint16_t` field. Every one of those
-/// widths is reproduced below, wrap for wrap: nothing is widened, nothing is clamped.
+/// The two sums are `u16` and the two squares `u32`, so both sums wrap at 65536;
+/// `cur_sum` reaches 65280 for a block of maximum-brightness samples and stops just
+/// short. The final products are computed wide and truncate at the store into the `u16`
+/// result fields.
 pub fn sample_variance_16x16(
     refy: &[u8],
     ref_stride: usize,
@@ -110,8 +102,6 @@ pub fn sample_variance_16x16(
         }
     }
 
-    // `uiSum * uiSum` promotes to `int` in C++ and the store back into the
-    // `uint16_t` field truncates.
     sum >>= 8;
     cur_sum >>= 8;
     SMotionTextureUnit {
@@ -147,15 +137,13 @@ impl CAdaptiveQuantization {
         RET_SUCCESS
     }
 
-    /// `CAdaptiveQuantization::Process` — `AdaptiveQuantization.cpp:57`. `calc` is
-    /// the VAA statistics of this picture pair, handed over at the call (the C++
-    /// stored `pCalcResult` in the parameter block).
+    /// `CAdaptiveQuantization::Process`. `calc` carries the VAA statistics of this
+    /// picture pair.
     pub fn Process(
         &mut self,
         pSrcPixMap: &SPixMap,
         _pRefPixMap: &SPixMap,
-        // The two luma planes as borrows (`ScdPlanes`' shape); the pixel maps
-        // carry geometry only.
+        // The two luma planes; the pixel maps carry geometry only.
         planes: VaaCalcPlanes<'_>,
         calc: &SVAACalcResult,
         pMotionTexture: &mut [SMotionTextureUnit],
@@ -173,9 +161,8 @@ impl CAdaptiveQuantization {
         let iRefStride = _pRefPixMap.iStride[0];
         let iCurStride = pSrcPixMap.iStride[0];
 
-        // Reuse the VAA statistics when they were computed over exactly this pair
-        // of pictures; otherwise recompute per macroblock. The comparison is
-        // between addresses.
+        // Reuse the VAA statistics when they were computed over exactly this pair of
+        // pictures (compared by address); otherwise recompute per macroblock.
         if calc.pRefY == planes.refp.as_ptr() as usize && calc.pCurY == planes.cur.as_ptr() as usize
         {
             let mut iMbIndex = 0isize;
@@ -191,9 +178,8 @@ impl CAdaptiveQuantization {
                     let mut uiSum = calc.pSum16x16[(iMbIndex) as usize];
                     let iSQSum = calc.pSumOfSquare16x16[(iMbIndex) as usize];
 
-                    // Every one of these is `int32_t` in C++ and the result is
-                    // stored into a `uint16_t` field, so the truncation is at the
-                    // store, not at the arithmetic.
+                    // The arithmetic is 32-bit and truncates at the store into the
+                    // `u16` fields.
                     iSumDiff >>= 8;
                     let mt = &mut pMotionTexture[iMbIndex as usize];
                     mt.uiMotionIndex = ((iSQDiff >> 8) - iSumDiff * iSumDiff) as u16;
@@ -314,9 +300,8 @@ mod tests {
     use super::*;
 
     /// A block whose samples are all equal has zero texture index, and a block whose
-    /// difference from the reference is uniform has zero motion index — for any
-    /// stride pair. Checked against the C++ arithmetic by construction:
-    /// `uiSquare >> 8` is `(256 * d^2) >> 8 = d^2` and `(uiSum >> 8)^2` is
+    /// difference from the reference is uniform has zero motion index, at any stride
+    /// pair: `square >> 8` is `(256 * d^2) >> 8 = d^2` and `(sum >> 8)^2` is
     /// `((256 * d) >> 8)^2 = d^2`, so the two cancel exactly.
     #[test]
     fn variance_of_a_uniform_block_is_zero() {
@@ -334,20 +319,15 @@ mod tests {
         }
     }
 
-    /// The two strides are read independently, which is the one thing a shim sizing
-    /// both spans from a single stride would get wrong.
-    ///
-    /// The source plane is laid out so that its 16x16 block is uniform at its *own*
-    /// stride but would be ragged at the reference's, so a kernel that walked the
-    /// source at `iRefStride` reports a non-zero texture index where the right answer
-    /// is zero.
+    /// The two strides are read independently. The source plane's 16x16 block is uniform
+    /// at its own stride but ragged at the reference's, so walking the source at
+    /// `ref_stride` would report a non-zero texture index where zero is right.
     #[test]
     fn the_two_strides_are_independent() {
         let (ref_stride, src_stride) = (64usize, 20usize);
         let refy = vec![0u8; mb_span(ref_stride)];
-        // A whole 16 rows rather than `mb_span`, so the inter-row gap after the last
-        // row exists to be (wrongly) read. The kernel is still only entitled to
-        // `mb_span`; this test is about which bytes it picks, not how many.
+        // A whole 16 rows rather than `mb_span`, so the gap after the last row exists to
+        // be read; the kernel is still only entitled to `mb_span`.
         let mut srcy = vec![0u8; 16 * src_stride];
         for row in 0..16 {
             for col in 0..src_stride {
@@ -363,10 +343,8 @@ mod tests {
         assert_eq!(got.uiMotionIndex, 0);
     }
 
-    /// The kernel reads exactly `mb_span`: sixteen rows of sixteen samples reaching
-    /// forward only. A plane one byte shorter is a
-    /// panic, and this pins that the span is not over-stated either — the last byte
-    /// of the allocation is the last sample of the block, so it must be read.
+    /// The kernel reads exactly `mb_span`, neither more nor less: the last byte of the
+    /// allocation is the last sample of the block, so it must be read.
     #[test]
     fn the_span_is_exactly_the_block() {
         let stride = 24usize;

@@ -1,36 +1,20 @@
 //! x86_64 SSE2 fixed-shape macroblock copies.
 //!
-//! Translated from `codec/common/x86/mb_copy.asm`. These fill the encoder's
-//! `pfCopyNxM` slots, whose scalar bodies go through
+//! C++: `codec/common/x86/mb_copy.asm`. These fill the encoder's `pfCopyNxM` slots,
+//! whose scalar bodies go through
 //! [`copy_rows_shared`](crate::encoder::rec_view::copy_rows_shared).
 //!
-//! # What is actually being saved here
+//! Each kernel takes the block's whole span through
+//! [`RecCursor::block_span`](crate::encoder::rec_view::RecCursor::block_span) — one
+//! bounds check per operand for the whole block, rather than two per row per side —
+//! and strides through it itself.
 //!
-//! Not the moves. `copy_rows_shared` already lowers its `[u8; W]` row copy to a
-//! `movups` pair — the emitted `WelsCopy16x16_c` holds the 32 the block needs.
-//! What it also holds is **62 bounds-check branches**: each row re-derives its
-//! address from the cursor's anchor and re-slices both cells, twice per row per
-//! side. These kernels take the block's whole span through
-//! [`RecCursor::block_span`](crate::encoder::rec_view::RecCursor::block_span) —
-//! one check per operand for the whole block — and stride through it themselves,
-//! which is exactly what the asm's `lea r4, [r1+2*r1]` prologue sets up.
+//! A Rust slice carries no 16-byte alignment guarantee, so the aligned and unaligned
+//! `Copy16x16` slots both get the unaligned form; `movdqu` on aligned data matches
+//! `movdqa` on any CPU that runs this code.
 //!
-//! # Alignment, and why there is one kernel where upstream has two
-//!
-//! `mb_copy.asm` ships `WelsCopy16x16_sse2` (`movdqa` both sides) and
-//! `WelsCopy16x16NotAligned_sse2` (`movdqu` loads, `movdqa` stores) and wires
-//! them to separate slots. A Rust slice carries no 16-byte alignment guarantee,
-//! so both slots get the unaligned form. That costs nothing on any CPU that can
-//! run this port: `movdqu` on aligned data has matched `movdqa` since Nehalem,
-//! and the split survives upstream only because it predates that.
-//!
-//! # The 8-wide copies
-//!
-//! Upstream has these in MMX only (`WelsCopy8x8_mmx`, `WelsCopy8x16_mmx`), which
-//! is not worth reproducing: MMX aliases the x87 register file, so every kernel
-//! has to be paired with an `emms`, and the port has no MMX anywhere else. The
-//! 8-wide rows here use `movq` in its SSE2 encoding — `_mm_loadl_epi64` /
-//! `_mm_storel_epi64` — which touches no MMX state and needs no `emms`.
+//! The 8-wide rows use `movq` in its SSE2 encoding (`_mm_loadl_epi64` /
+//! `_mm_storel_epi64`), which touches no MMX state and needs no `emms`.
 
 #![allow(unsafe_code)]
 
@@ -40,18 +24,15 @@ use crate::encoder::rec_view::RecCursor;
 
 /// Copies `h` rows of 16 bytes from `src` to `dst`, each walking its own stride.
 ///
-/// **Two strides, not one.** `WelsMdBackgroundMbEnc` copies the mode-decision
-/// scratch — a stride-16 array — into a picture plane, so the operands routinely
-/// disagree; `copy_rows_shared` handles that by asking each cursor for its own
-/// row, and so does this.
+/// The strides may differ: `WelsMdBackgroundMbEnc` copies the stride-16
+/// mode-decision scratch into a picture plane.
 ///
 /// # Safety
 /// Each span must cover `(h - 1) * its own stride + 16` bytes, which is what
 /// [`RecCursor::block_span`] guarantees for the same `(16, h)`.
 ///
-/// Overlapping operands are fine, and the scalar's behaviour under them is
-/// preserved: a row is read whole before any of it is written back, exactly as
-/// `copy_rows_shared` reads into a `[u8; 16]` before writing.
+/// Overlapping operands are allowed: a row is read whole before any of it is
+/// written back.
 #[inline(always)]
 unsafe fn copy_rows16<const H: usize>(
     mut d: *mut u8,
@@ -150,8 +131,7 @@ unsafe fn copy_rows8<const H: usize>(
 /// `W` bytes of each of `H` rows, from one shared cursor to another.
 ///
 /// Panics through `block_span` if either block leaves its buffer, before any
-/// pointer is formed — which is what lets the kernels below be `unsafe` only
-/// over an already-validated span.
+/// pointer is formed, so the kernels below run only over a validated span.
 #[inline(always)]
 fn copy_block<const W: usize, const H: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     let s = src.block_span(0, 0, W, H);
@@ -166,8 +146,7 @@ fn copy_block<const W: usize, const H: usize>(dst: &RecCursor<'_>, src: &RecCurs
 }
 
 /// C++: `WelsCopy16x16_sse2` and `WelsCopy16x16NotAligned_sse2`,
-/// `codec/common/x86/mb_copy.asm:68` and `:135` — see the module header for why
-/// one kernel serves both.
+/// `codec/common/x86/mb_copy.asm:68` and `:135`.
 #[inline(always)]
 pub fn copy_16x16(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     copy_block::<16, 16>(dst, src);
@@ -179,14 +158,13 @@ pub fn copy_16x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     copy_block::<16, 8>(dst, src);
 }
 
-/// The SSE2 counterpart of `WelsCopy8x16_mmx`, `codec/common/x86/mb_copy.asm:245`
-/// — see the module header on why this is not MMX.
+/// C++: `WelsCopy8x16_mmx`, `codec/common/x86/mb_copy.asm:245`.
 #[inline(always)]
 pub fn copy_8x16(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     copy_block::<8, 16>(dst, src);
 }
 
-/// The SSE2 counterpart of `WelsCopy8x8_mmx`, `codec/common/x86/mb_copy.asm:311`.
+/// C++: `WelsCopy8x8_mmx`, `codec/common/x86/mb_copy.asm:311`.
 #[inline(always)]
 pub fn copy_8x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     copy_block::<8, 8>(dst, src);
@@ -210,10 +188,9 @@ mod tests {
             .collect()
     }
 
-    /// Runs one shape through both the scalar slot body and the SSE2 kernel over
-    /// identical planes, and requires the **whole plane** to match afterwards —
-    /// not just the block. A kernel that ran a row long, or that walked the wrong
-    /// stride, lands outside the block and only a whole-plane compare sees it.
+    /// Runs one shape through the scalar body and the SSE2 kernel over identical
+    /// planes and compares the whole plane, so a write that runs a row long or walks
+    /// the wrong stride is caught outside the block.
     fn check(
         w: usize,
         h: usize,
@@ -248,26 +225,17 @@ mod tests {
         }
     }
 
-    /// A stride equal to the block width leaves no gap between rows, so a kernel
-    /// that over-wrote its row would corrupt the next one instead of landing in
-    /// padding — the one geometry where an over-long store stays in bounds and
-    /// still changes the answer.
+    /// A stride equal to the block width leaves no inter-row padding, so an
+    /// over-long row store corrupts the next row instead of landing in padding.
     #[test]
     fn copy_is_exact_when_rows_are_contiguous() {
         check(16, 16, 16, WelsCopy16x16_c, copy_16x16);
         check(8, 8, 8, WelsCopy8x8_c, copy_8x8);
     }
 
-    /// The two operands do **not** have to share a stride, and the one call site
-    /// where they differ is the one this file exists for:
-    /// `WelsMdBackgroundMbEnc` hands `pfCopy16x16Aligned` a picture plane as the
-    /// destination and `RecCursor::over_owned(&mut sMemPredMb, .., 16)` — a
-    /// stride-16 scratch array — as the source.
-    ///
-    /// This is not hypothetical: a first cut of `copy_block` asserted the
-    /// strides equal, having only ever been run against the equal-stride shapes
-    /// `check` builds, and it would have panicked on the first background
-    /// macroblock. Nothing else in the suite reaches that path.
+    /// The two operands need not share a stride: `WelsMdBackgroundMbEnc` hands
+    /// `pfCopy16x16Aligned` a picture plane as the destination and a stride-16
+    /// scratch array as the source.
     #[test]
     fn copy_walks_each_operand_on_its_own_stride() {
         for &(dw, sw) in &[(64usize, 16usize), (16, 64), (33, 16), (16, 16)] {
@@ -298,12 +266,10 @@ mod tests {
         }
     }
 
-    /// The span's **length** is the whole of the kernels' bounds safety, and
-    /// nothing downstream reads it — they stride from `as_ptr()`. So a span that
-    /// is too short cannot show up as a wrong answer, only as a panic that does
-    /// not happen, and it takes a block sized to the gap to see it: this one
-    /// overruns its buffer by less than one row's width, which a span that
-    /// forgot to add `w` for the last row would accept.
+    /// The span's length is the whole of the kernels' bounds safety, since they
+    /// stride from `as_ptr()`. A block that overruns its buffer by less than one
+    /// row's width still panics: a span that omitted the last row's width would
+    /// accept it.
     #[test]
     #[should_panic(expected = "out of range")]
     fn copy_rejects_a_block_whose_last_row_overruns() {
@@ -316,9 +282,8 @@ mod tests {
         copy_16x16(&d, &s);
     }
 
-    /// `block_span` is what turns an out-of-range block into a panic instead of
-    /// a pointer, so the kernels inherit the scalar's bounds behaviour rather
-    /// than reading past the plane.
+    /// `block_span` turns an out-of-range block into a panic rather than a pointer
+    /// that reads past the plane.
     #[test]
     #[should_panic(expected = "out of range")]
     fn copy_panics_rather_than_running_off_the_plane() {

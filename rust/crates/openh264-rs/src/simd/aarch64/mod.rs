@@ -1,47 +1,19 @@
-//! The aarch64 NEON kernel set — every entry point of `super::x86_64`, transcribed
-//! from upstream's own arm64 assembly in `codec/common/arm64/`,
+//! The aarch64 NEON kernel set — every entry point of `super::x86_64`, from
+//! upstream's arm64 assembly under `codec/common/arm64/`,
 //! `codec/encoder/core/arm64/` and `codec/decoder/core/arm64/`.
 //!
-//! # What was ported, and from where
+//! NEON is part of the AArch64 baseline, so no feature test guards these kernels.
+//! Each body is a `#[target_feature(enable = "neon")]` function: inside one the
+//! value-only intrinsics are ordinary safe calls, and the only `unsafe` left is the
+//! `vld1`/`vst1` loads and stores, each over a slice or array whose length the type
+//! or the preceding index has already checked. The safe entry points call the bodies
+//! through one `unsafe` block apiece.
 //!
-//! | file | upstream source |
-//! |---|---|
-//! | `sad.rs`, `satd.rs` | `codec/encoder/core/arm64/pixel_aarch64_neon.S` |
-//! | `dct.rs`, `quant.rs` | `codec/encoder/core/arm64/reconstruct_aarch64_neon.S`, `codec/decoder/core/arm64/block_add_aarch64_neon.S` |
-//! | `mc.rs` | `codec/common/arm64/mc_aarch64_neon.S` |
-//! | `deblock.rs` | `codec/common/arm64/deblocking_aarch64_neon.S` |
-//! | `intra_pred.rs` | `codec/common/arm64/intra_pred_common_aarch64_neon.S`, `codec/{encoder,decoder}/core/arm64/intra_pred_aarch64_neon.S` |
-//! | `copy.rs` | `codec/common/arm64/copy_mb_aarch64_neon.S` |
-//! | `score.rs` | none — upstream keeps `WelsCalculateSingleCtr4x4_c` on arm64; see the file |
-//! | `vaa.rs` | `codec/processing/src/arm64/vaa_calc_aarch64_neon.S` |
+//! Every kernel is byte-exact with the scalar beside it, which in `quant.rs`,
+//! `dct.rs` and `mc.rs` means widening an intermediate the asm holds at 16 bits.
 //!
-//! Each kernel names the asm routine it came from, and each file's header says
-//! where and why it departs from the asm. There are four such departures, and every
-//! one is a place the asm disagrees with its own C at the ends of the input range —
-//! a 16-bit lane that wraps where the C's `int` does not. **This port's contract is
-//! byte parity with the scalar beside it**, checked by the unit tests over the full
-//! range, so those four places widen (`quant.rs`, `dct.rs`, `mc.rs`) or spell the
-//! sign step the scalar's way (`quant.rs`); the asm's instruction sequence is kept
-//! everywhere else.
-//!
-//! # The instruction set, and what `unsafe` covers
-//!
-//! NEON is part of the AArch64 baseline — every aarch64 target Rust ships enables it
-//! and upstream's `cpu.cpp` does no runtime probe on arm64 either — so there is no
-//! feature test in front of these kernels. Each body is a `#[target_feature(enable =
-//! "neon")]` function: inside one, the value-only intrinsics are ordinary safe calls,
-//! and the only `unsafe` left is the `vld1`/`vst1` pointer loads and stores, each
-//! over a slice or array whose length the type or the preceding index has already
-//! checked. The safe entry points call the bodies through one `unsafe` block apiece,
-//! which is the same shape as `super::x86_64`'s `_impl` functions.
-//!
-//! # Miri
-//!
-//! Miri interprets `core::arch` intrinsics only where it has a shim, and its NEON
-//! coverage stops at the first byte-difference instruction this set uses, so the
-//! module is compiled out under `cfg(miri)` and that lane takes the scalar forwards,
-//! exactly as it did before this module existed. The `unsafe` here is therefore not
-//! Miri-checked; it is the load/store shape Miri does check on x86_64.
+//! The module is compiled out under `cfg(miri)`, whose NEON shims stop short of the
+//! byte-difference instructions used here; that lane takes the scalar forwards.
 
 #![allow(unsafe_code)]
 
@@ -56,9 +28,8 @@ pub mod satd;
 pub mod score;
 pub mod vaa;
 
-/// Loads and stores shared by the kernels: the `ld1`/`st1` of the asm, with the
-/// bounds check the asm leaves to its caller done by the slice index in front of
-/// the pointer.
+/// Loads and stores shared by the kernels: the asm's `ld1`/`st1`, bounds-checked
+/// by the slice index in front of the pointer.
 mod lanes {
     use core::arch::aarch64::*;
 
@@ -82,8 +53,7 @@ mod lanes {
 
     /// `ld1 {v.s}[0]` — four bytes into the low four lanes, the upper four zero.
     ///
-    /// The asm leaves the upper lanes holding whatever the register had and reduces
-    /// over `.4h`; zeroing them lets every reduce here be the full-width one.
+    /// Zeroing the upper lanes lets every reduce here be the full-width one.
     #[inline]
     #[target_feature(enable = "neon")]
     pub(super) fn ld4(r: &[u8]) -> uint8x8_t {
@@ -175,8 +145,7 @@ mod lanes {
         unsafe { vst1_s16(out.as_mut_ptr(), v) }
     }
 
-    /// True when any lane of a byte mask is set — the asm's `ZERO_JUMP_END`, which
-    /// ORs the two halves of the register and branches on zero.
+    /// True when any lane of a byte mask is set — the asm's `ZERO_JUMP_END`.
     #[inline]
     #[target_feature(enable = "neon")]
     pub(super) fn any_set(m: uint8x16_t) -> bool {

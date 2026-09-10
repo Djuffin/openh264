@@ -1,20 +1,14 @@
-//! x86_64 SSE2 Intra Prediction Kernels (Phase 4).
+//! x86_64 SSE2 Intra Prediction Kernels.
 //!
-//! Accelerated implementations for 16x16 luma, 8x8 chroma, and 4x4 luma intra predictors,
-//! serving both the encoder candidate generator and the decoder in-place reconstructor.
+//! 16x16 luma, 8x8 chroma, and 4x4 luma intra predictors, serving both the encoder
+//! candidate generator and the decoder in-place reconstructor.
 //!
-//! **A kernel here is named for the operation, not for an instruction set** — the same
-//! name its twin has in `simd::wide`, because the module path is what says which
-//! implementation you get. So the name can no longer tell you whether a body is
-//! actually vectorized, and fourteen of these predictors are not: the pure V, H, DC
-//! and DC-NA fills are word-wide rewrites of their scalar twins, which the init tables
-//! install deliberately.
-//!
-//! `every_kernel_here_reaches_an_intrinsic` holds that line, by listing those fourteen
-//! and requiring intrinsics in every other public kernel. It is easy to break by
-//! accident, since swapping an `_mm_storeu_si128` for a `copy_from_slice` empties a
-//! kernel without touching its name — which is exactly how it was broken six times by
-//! the commit that first wrote the rule down.
+//! A kernel here is named for the operation, not for an instruction set — the same
+//! name its twin has in `simd::wide`, since the module path says which implementation
+//! is in use. Fourteen of these predictors are not vectorized: the pure V, H, DC and
+//! DC-NA fills are word-wide rewrites of their scalar twins, which the init tables
+//! install deliberately. `every_kernel_here_reaches_an_intrinsic` lists those fourteen
+//! and requires intrinsics in every other public kernel.
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
@@ -29,22 +23,18 @@ use crate::safe::plane::{PlaneCursorMut, RefSamples};
 // ============================================================================
 
 // ============================================================================
-// The enc/dec pairs, once
+// Shared enc/dec bodies
 // ============================================================================
 
-/// **Where a predictor's rows go — the only thing that differed between the pairs.**
-///
-/// The `enc_`/`dec_` pairs share their neighbour reads (`RefSamples::at` and `row_n`,
-/// which `RecCursor` and `PlaneCursorMut` both implement) and every line of arithmetic;
-/// they diverged only at the store — the encoder fills a packed candidate buffer at a
-/// fixed pitch, the decoder writes back through the same cursor it read from. So the
-/// bodies are generic over this trait and the entry points are three lines each. The
-/// stores are `copy_from_slice` over a fixed-size array, which is the same instruction
-/// as `_mm_storeu_si128` and one less `unsafe`.
+/// Where a predictor's rows go. The `enc_`/`dec_` pairs share their neighbour reads
+/// (`RefSamples::at` and `row_n`, which `RecCursor` and `PlaneCursorMut` both
+/// implement) and every line of arithmetic; they differ only at the store — the
+/// encoder fills a packed candidate buffer at a fixed pitch, the decoder writes back
+/// through the same cursor it read from.
 ///
 /// The decoder reads neighbours and writes rows through one cursor, so a body cannot
-/// hold `&S` and `&mut O` to it at once. Every collapsed body therefore reads and
-/// computes from `&S` first, then writes — the order the arithmetic was already in.
+/// hold `&S` and `&mut O` to it at once: every body reads and computes from `&S`
+/// first, then writes.
 trait PredOut {
     /// Writes `row` as row `dy` of the destination.
     fn put<const N: usize>(&mut self, dy: usize, row: &[u8; N]);
@@ -124,8 +114,8 @@ unsafe fn i16x16_plane_fill<O: PredOut>(
 
 /// The 16x16 DC mean over whichever of the two neighbour edges the variant uses.
 ///
-/// C++: `WelsI16x16LumaPredDc_c` and its `_T`/`_NA` siblings — one body, because the
-/// three differ only in which sums are in scope and what they are rounded by.
+/// C++: `WelsI16x16LumaPredDc_c` and its `_T`/`_NA` siblings, which differ only in
+/// which sums are in scope and the rounding.
 #[target_feature(enable = "sse2")]
 fn i16x16_dc_mean<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
     unsafe {
@@ -258,7 +248,6 @@ pub fn dec_i16x16_luma_pred_h(pred: &mut PlaneCursorMut<'_>) {
 /// DC 16x16 predictor for packed candidate buffer (encoder).
 #[inline]
 pub fn enc_i16x16_luma_pred_dc(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
-    // unsafe-cat: simd-kernel(x86_64)
     let mean = unsafe { i16x16_dc_mean(rec, true, true) };
     fill_rows(&mut Packed::<16>(pred), 16, &[mean; 16])
 }
@@ -266,7 +255,6 @@ pub fn enc_i16x16_luma_pred_dc(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
 /// DC 16x16 predictor in place (decoder).
 #[inline]
 pub fn dec_i16x16_luma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
-    // unsafe-cat: simd-kernel(x86_64)
     let mean = unsafe { i16x16_dc_mean(pred, true, true) };
     fill_rows(pred, 16, &[mean; 16])
 }
@@ -274,7 +262,6 @@ pub fn dec_i16x16_luma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
 /// DC Top 16x16 predictor (decoder).
 #[inline]
 pub fn dec_i16x16_luma_pred_dc_top(pred: &mut PlaneCursorMut<'_>) {
-    // unsafe-cat: simd-kernel(x86_64)
     let mean = unsafe { i16x16_dc_mean(pred, true, false) };
     fill_rows(pred, 16, &[mean; 16])
 }
@@ -289,7 +276,6 @@ pub fn dec_i16x16_luma_pred_dc_na(pred: &mut PlaneCursorMut<'_>) {
 #[inline]
 pub fn enc_i16x16_luma_pred_plane(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
     let (top_shift, left_shift, lt_shift) = i16x16_plane_coeffs(rec);
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe { i16x16_plane_fill(&mut Packed::<16>(pred), top_shift, left_shift, lt_shift) }
 }
 
@@ -297,7 +283,6 @@ pub fn enc_i16x16_luma_pred_plane(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
 #[inline]
 pub fn dec_i16x16_luma_pred_plane(pred: &mut PlaneCursorMut<'_>) {
     let (top_shift, left_shift, lt_shift) = i16x16_plane_coeffs(pred);
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe { i16x16_plane_fill(pred, top_shift, left_shift, lt_shift) }
 }
 
@@ -362,7 +347,6 @@ pub fn dec_chroma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
 #[inline]
 pub fn enc_chroma_pred_plane(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
     let (top_shift, left_shift, lt_shift) = chroma_plane_coeffs(rec);
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe { chroma_plane_fill(&mut Packed::<8>(pred), top_shift, left_shift, lt_shift) }
 }
 
@@ -370,7 +354,6 @@ pub fn enc_chroma_pred_plane(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
 #[inline]
 pub fn dec_chroma_pred_plane(pred: &mut PlaneCursorMut<'_>) {
     let (top_shift, left_shift, lt_shift) = chroma_plane_coeffs(pred);
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe { chroma_plane_fill(pred, top_shift, left_shift, lt_shift) }
 }
 
@@ -382,7 +365,6 @@ pub fn dec_chroma_pred_plane(pred: &mut PlaneCursorMut<'_>) {
 #[inline]
 pub fn enc_i4x4_luma_pred_v(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let top = rec.row_n::<4>(-1, 0);
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let t_u32 = i32::from_ne_bytes(top);
         let v = _mm_set1_epi32(t_u32);
@@ -408,7 +390,6 @@ pub fn enc_i4x4_luma_pred_h(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let l1 = rec.at(-1, 1) as i8;
     let l2 = rec.at(-1, 2) as i8;
     let l3 = rec.at(-1, 3) as i8;
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
             l0, l0, l0, l0, l1, l1, l1, l1, l2, l2, l2, l2, l3, l3, l3, l3,
@@ -437,7 +418,6 @@ pub fn enc_i4x4_luma_pred_dc(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
         sum += top[y] as i32;
     }
     let mean = (sum >> 3) as u8;
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_set1_epi8(mean as i8);
         _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
@@ -473,7 +453,6 @@ pub fn enc_i4x4_luma_pred_ddl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let ddl5 = ((2 + t(5) + t(7) + (t(6) << 1)) >> 2) as u8;
     let ddl6 = ((2 + t(6) + t(7) + (t(7) << 1)) >> 2) as u8;
 
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
             ddl0 as i8, ddl1 as i8, ddl2 as i8, ddl3 as i8, ddl1 as i8, ddl2 as i8, ddl3 as i8,
@@ -510,7 +489,6 @@ pub fn enc_i4x4_luma_pred_ddr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let ddr5 = ((l01 + l12) >> 2) as u8;
     let ddr6 = ((l12 + l23) >> 2) as u8;
 
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
             ddr0 as i8, ddr1 as i8, ddr2 as i8, ddr3 as i8, ddr4 as i8, ddr0 as i8, ddr1 as i8,
@@ -541,7 +519,6 @@ pub fn enc_i4x4_luma_pred_vr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let vr8 = ((2 + lt + (l0 << 1) + l1) >> 2) as u8;
     let vr9 = ((2 + l0 + (l1 << 1) + l2) >> 2) as u8;
 
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
             vr0 as i8, vr1 as i8, vr2 as i8, vr3 as i8, vr4 as i8, vr5 as i8, vr6 as i8, vr7 as i8,
@@ -572,7 +549,6 @@ pub fn enc_i4x4_luma_pred_hd(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let hd8 = ((2 + lt + (t0 << 1) + t1) >> 2) as u8;
     let hd9 = ((2 + t0 + (t1 << 1) + t2) >> 2) as u8;
 
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
             hd0 as i8, hd7 as i8, hd8 as i8, hd9 as i8, hd2 as i8, hd1 as i8, hd0 as i8, hd7 as i8,
@@ -598,7 +574,6 @@ pub fn enc_i4x4_luma_pred_vl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let vl8 = ((2 + t(3) + (t(4) << 1) + t(5)) >> 2) as u8;
     let vl9 = ((2 + t(4) + (t(5) << 1) + t(6)) >> 2) as u8;
 
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
             vl0 as i8, vl1 as i8, vl2 as i8, vl3 as i8, vl5 as i8, vl6 as i8, vl7 as i8, vl8 as i8,
@@ -625,7 +600,6 @@ pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let hu4 = (l23 >> 1) as u8;
     let hu5 = ((1 + l23 + (l3 << 1)) >> 2) as u8;
 
-    // unsafe-cat: simd-kernel(x86_64)
     unsafe {
         let v = _mm_setr_epi8(
             hu0 as i8, hu1 as i8, hu2 as i8, hu3 as i8, hu2 as i8, hu3 as i8, hu4 as i8, hu5 as i8,
@@ -799,19 +773,15 @@ mod tests {
     // ========================================================================
     // The decoder-side predictors.
     //
-    // The three tests above cover the twelve `enc_*` kernels — the encoder's packed
-    // candidate buffers — and nothing covered the thirteen `dec_*` ones, which are the
-    // in-place reconstructors the decoder installs at `decoder_core.rs:1817..1830`.
-    // They are a different shape, not a different arithmetic: the encoder writes a
-    // dense `[u8; N]` candidate, the decoder writes back into the picture through a
-    // `PlaneCursorMut` whose neighbours are the samples it just read. That shape is
-    // exactly where an off-by-one row or column hides, so these compare the *whole
-    // allocation* of two identically built planes rather than the block.
+    // The `dec_*` kernels are the in-place reconstructors the decoder installs at
+    // `decoder_core.rs:1817..1830`: they write back into the picture through a
+    // `PlaneCursorMut` whose neighbours are the samples just read, which is where an
+    // off-by-one row or column hides, so these compare the whole allocation of two
+    // identically built planes rather than the block.
     //
-    // The reference on the other side is `decoder::get_intra_predictor`, which has no
-    // SIMD dispatch of its own — the SSE2 kernels are installed over it in the table,
-    // never called from it — so no assertion here can route back into the kernel under
-    // test.
+    // The reference, `decoder::get_intra_predictor`, has no SIMD dispatch of its own —
+    // the SSE2 kernels are installed over it in the table, never called from it — so
+    // no assertion here routes back into the kernel under test.
     // ========================================================================
 
     /// Two planes with identical content, both padded, for an in-place kernel pair.
@@ -889,35 +859,15 @@ mod tests {
         assert_dec_parity("4x4 DC", dec::i4x4_luma_pred_dc, dec_i4x4_luma_pred_dc);
     }
 
-    /// **The naming rule, enforced rather than asserted in a comment.**
-    ///
-    /// The module header states it; this decides it. It reads this file's own source
-    /// and checks that every public kernel reaches at least one `_mm_*` intrinsic — in
-    /// its own body, or in a function it calls (one hop, which is how the wrappers here
-    /// delegate to their `_impl` and to the shared fills) — unless it is one of the
-    /// fourteen listed below as scalar by design.
-    ///
-    /// **Why the list, and why it is the strong form.** This check used to key off an
-    /// `_sse2` suffix: suffixed meant "has intrinsics", unsuffixed meant "does not".
-    /// The suffix is gone — a kernel is named for its operation now, the same name it
-    /// has in `simd::wide` — so the rule cannot be read off a name any more and has to
-    /// be written down. That is a gain, not a loss: keying off the list catches a
-    /// kernel that loses its intrinsics *and* its suffix, which the old spelling could
-    /// not see, and it makes emptying a kernel cost an edit here that says so.
-    ///
-    /// Why a test and not a review habit: the rule was written into the header and
-    /// broken six times by the same commit that wrote it. The `PredOut` collapse
-    /// replaced `_mm_storeu_si128` with `copy_from_slice`, which is the same instruction
-    /// and one less `unsafe`, but it silently emptied five kernels of every intrinsic
-    /// while leaving the suffix on. A reader looking for a kernel would not have found
-    /// one.
+    /// Every public kernel must reach at least one `_mm_*` intrinsic — in its own body,
+    /// or in a function it calls (one hop, which is how the wrappers here delegate to
+    /// the shared fills) — unless it is one of the fourteen listed below as scalar by
+    /// design. Decided by reading this file's own source.
     #[test]
     fn every_kernel_here_reaches_an_intrinsic() {
         /// The predictors that vectorize nothing, on purpose: a V fill is a row
-        /// broadcast, an H fill a byte splat, a DC fill a mean and a splat. Each is a
-        /// word-wide rewrite of its scalar twin, which is why the tables still install
-        /// it from here. Moving a name onto this list is the deliberate act the rule
-        /// exists to make visible.
+        /// broadcast, an H fill a byte splat, a DC fill a mean and a splat — each a
+        /// word-wide rewrite of its scalar twin.
         const SCALAR_BY_DESIGN: [&str; 14] = [
             "enc_i16x16_luma_pred_v",
             "dec_i16x16_luma_pred_v",
@@ -1016,10 +966,10 @@ mod tests {
             if intrinsics(body) {
                 continue;
             }
-            // One hop: any function this body *names as a whole identifier* that reaches
+            // One hop: any function this body names as a whole identifier that reaches
             // an intrinsic. Substring matching is not enough — `..._dc_na` contains
-            // `..._dc`, so a plain `contains` lets an empty kernel borrow a sibling's
-            // intrinsics and the check passes on a body that has none.
+            // `..._dc`, so a plain `contains` would let an empty kernel borrow a
+            // sibling's intrinsics.
             let called: std::collections::HashSet<&str> = body
                 .split(|c: char| !(c.is_alphanumeric() || c == '_'))
                 .filter(|t| !t.is_empty())
@@ -1039,8 +989,8 @@ mod tests {
              (see the module header): {offenders:?}"
         );
 
-        // The list is a claim about this file too: a name on it that no longer exists,
-        // or that grew intrinsics, is a stale exemption hiding a kernel nobody checks.
+        // A name on the list that no longer exists, or that grew intrinsics, is a
+        // stale exemption hiding a kernel nobody checks.
         for name in SCALAR_BY_DESIGN {
             let body = bodies.iter().find(|(n, _)| n == name).map(|(_, b)| *b);
             let body = body.unwrap_or_else(|| panic!("`{name}` is exempt but no longer exists"));

@@ -1,5 +1,5 @@
 //! Integration test for simple encode and decode pipeline flow.
-//! Ported from `test/api/simple_test.cpp`.
+//! C++: `test/api/simple_test.cpp`.
 
 use openh264_rs::api::codec_api::*;
 

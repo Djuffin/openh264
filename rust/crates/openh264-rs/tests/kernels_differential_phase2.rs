@@ -6,9 +6,8 @@ use common::prng::Prng;
 use openh264_rs::decoder::decode_mb_aux as dec_aux;
 use openh264_rs::safe::plane::PlaneCursorMut;
 
-/// Sample sizes are cut hard under Miri, which runs ~100x slower. The *shapes* are
-/// identical either way — every stride, every boundary case — only the PRNG sample
-/// counts shrink, and the full-size run happens on every `cargo test`.
+/// PRNG sample counts shrink under Miri; the shapes covered — every stride, every
+/// boundary case — do not.
 fn scale(n: usize) -> usize {
     if cfg!(miri) { (n / 100).max(2) } else { n }
 }
@@ -31,10 +30,9 @@ fn surface(rng: &mut Prng, stride: usize, bw: usize, bh: usize) -> (Vec<u8>, usi
 ///
 /// This is the I16x16 luma DC case: those DC coefficients arrive through a separate
 /// path and land in `pScaledTCoeff[k * 16]` after the NZC cache was filled, so
-/// `IdctFourResAddPred_c`'s skip test is `nzc[n] != 0 || pRs[k << 4] != 0`, and the
-/// second half of that disjunction is the whole reason 16x16 intra macroblocks decode
-/// correctly. A conversion that dropped it would still pass every random-input
-/// comparison in which some `nzc` happened to be non-zero, so it gets its own entry.
+/// `IdctFourResAddPred_c`'s skip test is `nzc[n] != 0 || pRs[k << 4] != 0` — and the
+/// second half of that disjunction is what makes 16x16 intra macroblocks decode
+/// correctly.
 #[test]
 fn idct_four_res_add_pred_transforms_a_dc_only_block_with_zero_nzc() {
     let mut rng = Prng::new(0x2DC7_0004);
@@ -83,10 +81,9 @@ fn idct_four_res_add_pred_transforms_a_dc_only_block_with_zero_nzc() {
 /// Strides worth driving: the minimum legal one, where an off-by-one in the span
 /// arithmetic shows up first, and two larger ones.
 ///
-/// Under Miri only the minimum survives. Miri is ~100x slower, so something has to
-/// go, and the cut falls on the stride sweep rather than the selector sweeps: a
-/// selector chooses which span a kernel declares, so those stay exhaustive either
-/// way, where a stride only re-runs the same span arithmetic with other numbers.
+/// Under Miri only the minimum survives; the selector sweeps stay exhaustive instead,
+/// since a selector chooses which span a kernel declares while a larger stride only
+/// re-runs the same arithmetic.
 fn strides(min: usize) -> Vec<usize> {
     let min = min.max(1);
     if cfg!(miri) {
@@ -110,8 +107,7 @@ use openh264_rs::encoder::rec_view::RecCursor;
 use openh264_rs::safe::plane::PlaneCursor;
 
 /// Dispatches the const-generic safe kernel for a runtime shape, so the tables below
-/// can stay tables. Every arm is also the assertion that the instantiation is wired to
-/// the shape its raw counterpart claims.
+/// can stay tables.
 fn safe_sad(w: usize, h: usize, c1: &PlaneCursor<'_>, c2: &PlaneCursor<'_>) -> i32 {
     match (w, h) {
         (4, 4) => sad::sample_sad::<4, 4, _>(c1, c2),
@@ -142,13 +138,11 @@ fn safe_sad_four(
     }
 }
 
-/// The safe SAD kernels' declared reach, proven by exact-span allocations: an
-/// over-read panics at the slice, and agreement with the same content in a
-/// padded surface proves the values depend on nothing outside the span.
-/// `sample_sad` reads `(h-1)*stride + w` from its anchor; `sample_sad_four`'s
-/// reference side reads one row and one column beyond the block on every side.
-/// The four-point arms are also checked to be four *distinct* points scoring
-/// inside their own block bound.
+/// The safe SAD kernels stay inside their declared reach — `sample_sad` reads
+/// `(h-1)*stride + w` from its anchor, `sample_sad_four`'s reference side one row and
+/// one column beyond the block on every side — checked with exact-span allocations and
+/// against the same content in a padded surface. The four-point arms must also score
+/// four *distinct* points inside their own block bound.
 #[test]
 fn sad_kernels_stay_inside_the_spans_they_declare() {
     let mut rng = Prng::new(0x5AD0_0501);
@@ -259,9 +253,8 @@ const SLACK_MBS: usize = 3;
 /// * heights that are not multiples of 16, where the last partial row is dropped.
 fn pictures() -> Vec<(i32, i32, i32)> {
     if cfg!(miri) {
-        // Miri is the only instrument that sees the over-claim half of this test and
-        // has to run, but at ~100x it cannot walk a 48x64 picture. The cut keeps a
-        // tight-span geometry and the step quirk, and drops the merely-larger ones.
+        // Miri cannot walk the larger pictures; the two kept are a tight-span geometry
+        // and the step quirk.
         return vec![(16, 16, 16), (40, 32, 64)];
     }
     vec![
@@ -277,10 +270,8 @@ fn pictures() -> Vec<(i32, i32, i32)> {
     ]
 }
 
-/// The byte offset of macroblock `mb`'s top-left sample, **restated independently**
-/// of `walk_picture` — step quirk included. If the two ever disagree this test
-/// fails, which is the point of restating it here rather than exporting it (the same
-/// convention as `Reach` for `mc.rs` above).
+/// The byte offset of macroblock `mb`'s top-left sample, **restated independently** of
+/// `walk_picture` — step quirk included — so that a disagreement fails the test.
 fn mb_origin(mb: usize, w: i32, h: i32, stride: i32) -> usize {
     let _ = h;
     let mb_width = (w >> 4) as usize;
@@ -313,14 +304,12 @@ fn noise_quads_u8(rng: &mut Prng, len: usize) -> Vec<[u8; 4]> {
         .collect()
 }
 
-/// **Span size.** Every plane is allocated to exactly `vaa_span`, so a shim that
-/// claims one byte more is UB that Miri reports at the `from_raw_parts`, and one that
-/// claims less panics inside the safe walk. The output arrays carry a noise tail that
-/// neither may touch.
+/// **Span size.** Every plane is allocated to exactly `vaa_span`, so a claim of one
+/// byte more is UB Miri reports at the `from_raw_parts` and one byte less panics inside
+/// the safe walk; the output arrays carry a noise tail that must stay untouched.
 ///
-/// All five walkers run, because they compute the same span from the same helper but
-/// each writes a different set of output arrays, and an over-run of `pMad8x8` is not
-/// caught by checking `pSad8x8`.
+/// All five walkers run: they compute the same span from the same helper, but each
+/// writes a different set of output arrays.
 #[test]
 fn vaa_shims_stay_inside_the_spans_they_declare() {
     let mut rng = Prng::new(0x7A08_5AA5);
@@ -440,11 +429,10 @@ fn vaa_shims_stay_inside_the_spans_they_declare() {
 
 /// **Span anchor**, which sizing does not pin.
 ///
-/// Here every 8x8 quadrant of every macroblock is given its own distinct constant
-/// difference, and each has to come back at its own index and nowhere else. A walk
-/// anchored one row or one column off, or one that mixed up two quadrants, or one
-/// that dropped the step quirk, lands the wrong constant somewhere — and because the
-/// constants are distinct the failure names the quadrant it came from.
+/// Every 8x8 quadrant of every macroblock gets its own distinct constant difference,
+/// and each has to come back at its own index and nowhere else, so a walk anchored one
+/// row or column off, one that mixed up two quadrants, or one that dropped the step
+/// quirk names the quadrant it went wrong on.
 #[test]
 fn vaa_shim_reads_each_quadrant_where_its_contract_says_it_does() {
     for &(w, h, stride) in &pictures() {
@@ -488,14 +476,12 @@ fn vaa_shim_reads_each_quadrant_where_its_contract_says_it_does() {
     }
 }
 
-/// The two extremes of the variance probe's input domain, which the random sweep
-/// never reaches and which are where the C++'s integer widths would bite if they
-/// could.
+/// The two extremes of the variance probe's input domain, which the random sweep never
+/// reaches.
 ///
 /// A 16x16 block holds 256 samples of at most 255, so the `uint16_t` sums top out at
-/// **65280** and the `uint32_t` squares at **16 646 400** — both short of wrapping.
-/// The `wrapping_add`s the port carries are therefore unreachable, and this is the
-/// test that says so.
+/// **65280** and the `uint32_t` squares at **16 646 400** — both short of wrapping, so
+/// the `wrapping_add`s cannot wrap.
 #[test]
 fn sample_variance_16x16_accumulators_cannot_wrap() {
     for (refv, srcv) in [(255u8, 0u8), (0, 255), (255, 255), (0, 0)] {
@@ -591,14 +577,12 @@ fn expand_picture_writes_every_padding_byte_and_reads_none() {
 // `encoder/encode_mb_aux.rs`, the forward transform / quant / scan family
 // ===========================================================================
 //
-// Two spans in this family are exact reaches over strided reads — the 2x2
-// Hadamard's `[i16; 49]` (DC raster positions 0/16/32/48 of the chroma group)
-// and the DC-Hadamard's `[i16; 241]` (block 15's DC at index 240 of the
-// 256-element luma buffer) — and the probes below hand each shim an allocation
-// of exactly that size (an over-claim is UB Miri reports; an under-claim panics
-// in the safe kernel), with a **golden direct run** of the safe kernel at
-// the contract's own geometry pinning the anchor, and untouched-byte
-// assertions pinning the touch set.
+// Two spans in this family are exact reaches over strided reads: the 2x2 Hadamard's
+// `[i16; 49]` (DC raster positions 0/16/32/48 of the chroma group) and the
+// DC-Hadamard's `[i16; 241]` (block 15's DC at index 240 of the 256-element luma
+// buffer). Each probe allocates exactly that size — an over-claim is UB Miri reports,
+// an under-claim panics in the safe kernel — runs the safe kernel directly at the
+// contract's own geometry to pin the anchor, and asserts which bytes stay untouched.
 
 use openh264_rs::encoder::encode_mb_aux as ema;
 
@@ -714,12 +698,11 @@ fn encode_mb_aux_shims_stay_inside_the_spans_they_declare() {
             ema::g_kiQuantMF[30][0] >> 1,
         );
 
-        // **The two kernels are deliberately not cross-asserted**: `skip`
-        // thresholds on `(1<<16 - 1) / mf - ff` in `i32` while the full kernel
-        // truncates each butterfly output to `i16` before quantising, so "skip says
-        // nothing survives" and "the full kernel counted zero" agree on every input
-        // the encoder produces but are not the same predicate. An assertion that
-        // they are is a test asserting its author's guess.
+        // **The two kernels are deliberately not cross-asserted**: `skip` thresholds on
+        // `(1<<16 - 1) / mf - ff` in `i32` while the full kernel truncates each
+        // butterfly output to `i16` before quantising, so "skip says nothing survives"
+        // and "the full kernel counted zero" agree on every input the encoder produces
+        // but are not the same predicate.
         let _ = ema::hadamard_quant_2x2_skip(&base, ff, mf);
 
         let mut g = base;

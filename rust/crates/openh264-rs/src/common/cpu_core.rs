@@ -4,11 +4,9 @@
 
 //! CPU feature flags — `codec/common/inc/cpu_core.h`.
 //!
-//! The single definition for every `WELS_CPU_*` bit. The values below are
-//! `cpu_core.h` verbatim, including the deliberate reuse
-//! across architectures (`WELS_CPU_NEON` and `WELS_CPU_SSE` are both `0x4`,
-//! `WELS_CPU_MMI` and `WELS_CPU_MMX` are both `0x1`): the header namespaces them
-//! by target, not by value, and so does this module.
+//! Values are reused across architectures (`WELS_CPU_NEON` and `WELS_CPU_SSE` are both
+//! `0x4`, `WELS_CPU_MMI` and `WELS_CPU_MMX` both `0x1`): the bits are namespaced by
+//! target, not by value.
 
 pub const WELS_CPU_MMX: u32 = 0x00000001;
 pub const WELS_CPU_MMXEXT: u32 = 0x00000002;
@@ -31,10 +29,7 @@ pub const WELS_CPU_AES: u32 = 0x00010000;
 pub const WELS_CPU_FMA: u32 = 0x00020000;
 pub const WELS_CPU_AVX: u32 = 0x00000800;
 
-/// `cpu_core.h:71-75` — `0x00040000` under `HAVE_AVX2`, otherwise `0`. The
-/// library build this port tracks does not define `HAVE_AVX2`; the value is kept
-/// at the defined one so the bit stays distinguishable, and no dispatch reads it
-/// on this target.
+/// `cpu_core.h:71-75` — `0x00040000` under `HAVE_AVX2`, otherwise `0`.
 pub const WELS_CPU_AVX2: u32 = 0x00040000;
 
 pub const WELS_CPU_AVX512F: u32 = 0x00080000;
@@ -63,7 +58,7 @@ pub const WELS_CPU_LASX: u32 = 0x00000004;
 mod tests {
     use super::*;
 
-    /// Values transcribed from `codec/common/inc/cpu_core.h:46-98`.
+    /// Flag values match `codec/common/inc/cpu_core.h:46-98`.
     #[test]
     fn test_cpu_flags_match_cpu_core_h() {
         assert_eq!(WELS_CPU_MMX, 0x00000001);

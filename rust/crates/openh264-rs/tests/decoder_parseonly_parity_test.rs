@@ -1,38 +1,28 @@
-//! `ISVCDecoder::DecodeParser` is a *different entry point* from `DecodeFrame2`, with
+//! `ISVCDecoder::DecodeParser` is a different entry point from `DecodeFrame2`, with
 //! a different output: an annex-B bitstream the caller can feed to another decoder,
 //! not planes.
 //!
-//! # What the rows are
+//! The flow driven here: annex-B split, `bParseOnly = true`,
+//! `ERROR_CON_SLICE_COPY`, one NAL per call, then the trailing
+//! `DecodeParser(NULL, 0)` that means end of stream on this slot. Each row is one
+//! call and pins the return code, the NAL count, the per-NAL lengths, the SPS
+//! dimensions, both timestamps, and a SHA-1 over the composed bytes.
 //!
-//! The C++ decoder's, from `rust/tools/ecref/ecref <asset> 99999999 --parse-only`
-//! against `libopenh264.dylib`. Its flow is transliterated below statement for
-//! statement: annex-B split,
-//! `bParseOnly = true`, `ERROR_CON_SLICE_COPY`, **one NAL per call**, then the
-//! trailing `DecodeParser(NULL, 0)` that means end of stream on this slot.
+//! Behaviour the rows record:
 //!
-//! Each row is one call and pins six things at once — the return code, the NAL count,
-//! the per-NAL lengths, the SPS dimensions, both timestamps, and a SHA-1 over the
-//! composed bytes. The bytes are the point: lengths alone would pass on a buffer
-//! full of zeros.
-//!
-//! # What the rows show, and what must not be "fixed"
-//!
-//! * **Output lags by one call.** An access unit closes when the parser meets the
-//!   first NAL of the *next* one, so a frame's bytes appear on the call after its
-//!   last slice. The first three or four calls of every asset emit nothing.
-//! * **`in=0` on every emitting call.** The reference's copy-out is a single
-//!   `memcpy` of a struct whose `uiInBsTimeStamp` **nothing ever writes**
-//!   (`welsDecoderExt.cpp:1239`), so a completed frame overwrites the caller's own
-//!   input timestamp with zero. Reproduced, not repaired — it is observable
-//!   behaviour on a documented out-parameter.
-//! * **An IDR emits three NALs, not one.** `[13,8,2363]` on `BA_MW_D.264` call 3 is
-//!   the active SPS and PPS written in front of the slice out of the parse-only
-//!   caches, whether or not the source stream repeated them. That prepend is what
-//!   makes the output independently decodable, and it is `sSpsBsInfo`'s only reader.
-//! * **Parse-only forces `eEcActiveIdc = ERROR_CON_DISABLE`**
+//! * Output lags by one call: an access unit closes when the parser meets the first
+//!   NAL of the next one, so a frame's bytes appear on the call after its last
+//!   slice, and the first three or four calls of every asset emit nothing.
+//! * `in=0` on every emitting call: the copy-out is a single `memcpy` of a struct
+//!   whose `uiInBsTimeStamp` nothing writes (`welsDecoderExt.cpp:1239`), so a
+//!   completed frame overwrites the caller's input timestamp with zero.
+//! * An IDR emits three NALs, not one: the active SPS and PPS are written in front
+//!   of the slice out of the parse-only caches, whether or not the source stream
+//!   repeated them. The prepend makes the output independently decodable, and is
+//!   `sSpsBsInfo`'s only reader.
+//! * Parse-only forces `eEcActiveIdc = ERROR_CON_DISABLE`
 //!   (`welsDecoderExt.cpp:1217`) on every call, so a damaged access unit is dropped
-//!   rather than concealed and the `rv=` column carries the error codes. That mode
-//!   is what `Error_I_P` referees — see [`ASSETS`].
+//!   rather than concealed and the `rv=` column carries the error codes.
 
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
@@ -41,27 +31,13 @@ use openh264_rs::split_annexb_units;
 mod common;
 use common::Sha1Hasher;
 
-/// The assets, chosen for what they make the parse-only path do rather than for
-/// coverage of the decoder: CAVLC with four IDRs (so the SPS/PPS prepend runs four
-/// times), CABAC with B-frames, all-IPCM, an error stream, a tiny grid, **two slices
-/// per picture** (`fmo_2groups_64x64`, the only `res` asset whose access units carry
-/// more than one VCL NAL), a stream carrying both an SPS and a subset SPS — and
-/// `Error_I_P`, the damaged stream below.
-///
-/// **`Error_I_P`.** A *damaged* stream, and parse-only decodes it with error
-/// concealment **disabled** — a combination nothing else referees: the malformed
-/// corpus runs every one of its 2707 rows with `ERROR_CON_SLICE_COPY`
-/// (`malformed_stream_parity.rs:490`) and the conformance assets are undamaged. It
-/// carries **three different SPSs** (ids 0/1/2 — 352x288, 640x480, 352x288), so
-/// every access-unit boundary here leans on `pActiveLayerSps`.
-///
-/// One column that is *expected* to differ and is therefore pinned by the port's
-/// own golden, not the reference's: `in=`, the input timestamp. Upstream's
-/// `DecodeParser` overwrites the caller's `uiInBsTimeStamp` on its way out; the
-/// port does not, so the reference reports 0 where the port reports what it was
-/// handed. (The checked-in golden's `in=` column carries the caller's values, which
-/// both implementations now produce on the rows that emit nothing; the emitting row
-/// pins `in=0` — the overwrite — which the port reproduces at the copy-out.)
+/// The assets, chosen for what they make the parse-only path do: CAVLC with four
+/// IDRs (so the SPS/PPS prepend runs four times), CABAC with B-frames, all-IPCM, a
+/// tiny grid, two slices per picture (`fmo_2groups_64x64`, whose access units carry
+/// more than one VCL NAL), a stream carrying both an SPS and a subset SPS, and
+/// `Error_I_P` — a damaged stream decoded with error concealment disabled, carrying
+/// three different SPSs (ids 0/1/2 — 352x288, 640x480, 352x288), so every
+/// access-unit boundary leans on `pActiveLayerSps`.
 const ASSETS: &[&str] = &[
     "BA_MW_D",
     "Cisco_Men_whisper_640x320_CABAC_Bframe_9",
@@ -72,11 +48,8 @@ const ASSETS: &[&str] = &[
     "Error_I_P",
 ];
 
-/// One `PARSE` row, rendered exactly as `ecref --parse-only` prints it.
-///
-/// A string and not a struct on purpose: the golden is the tool's own output, so a
-/// row that disagrees prints as a diff of the reference's line against the port's
-/// rather than as a field name and two integers.
+/// One `PARSE` row: the fields the golden pins, formatted so a mismatch prints as a
+/// line diff.
 fn row(call: usize, rv: i32, info: &SParserBsInfo, sha: &str) -> String {
     let mut lens = String::new();
     for i in 0..info.iNalNum {
@@ -102,12 +75,11 @@ fn row(call: usize, rv: i32, info: &SParserBsInfo, sha: &str) -> String {
     )
 }
 
-/// Drives one asset through `DecodeParser`, exactly as `ecref --parse-only` does.
+/// Drives one asset through `DecodeParser`, one NAL per call.
 ///
 /// # Safety
-/// Uses the C ABI as a consumer does; every pointer is valid for its call, and the
-/// two the decoder hands back are read before the next call, which is the window
-/// `codec_api.h` promises.
+/// Every pointer is valid for its call, and the two the decoder hands back are read
+/// before the next call — the window `codec_api.h` promises.
 unsafe fn parseonly_rows(data: &[u8]) -> Vec<String> {
     unsafe {
         let mut dec: *mut ISVCDecoder = std::ptr::null_mut();
@@ -200,7 +172,7 @@ unsafe fn parseonly_rows(data: &[u8]) -> Vec<String> {
 fn decode_parser_matches_the_reference_on_every_asset() {
     assert!(
         ASSETS.contains(&"Error_I_P"),
-        "F93's asset left the referee; see F199"
+        "Error_I_P must stay in the asset list; the comparison below depends on it"
     );
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let goldens =
@@ -214,9 +186,8 @@ fn decode_parser_matches_the_reference_on_every_asset() {
         let want: Vec<&str> = golden.lines().filter(|l| !l.is_empty()).collect();
         let got = unsafe { parseonly_rows(&data) };
 
-        // The call count before the rows: a stub that never emits and a port
-        // that emits the wrong bytes are different defects, and the first line of the
-        // report should say which one this is.
+        // Row count first: emitting nothing and emitting wrong bytes are
+        // different defects.
         if got.len() != want.len() {
             failures.push(format!(
                 "{asset}: {} rows, the reference has {}",
@@ -228,9 +199,8 @@ fn decode_parser_matches_the_reference_on_every_asset() {
         for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
             if g != *w {
                 failures.push(format!("{asset} row {i}:\n  ref:  {w}\n  port: {g}"));
-                // One row per asset is enough to name the defect; the rest of the
-                // asset's rows are almost always the same one repeating.
-                // `PARSEONLY_ALL=1` prints every diverging row instead.
+                // One row per asset by default; `PARSEONLY_ALL=1` prints every
+                // diverging row.
                 if std::env::var("PARSEONLY_ALL").is_err() {
                     break;
                 }

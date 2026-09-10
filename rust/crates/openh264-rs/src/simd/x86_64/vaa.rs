@@ -1,8 +1,6 @@
 //! The VAA (video analysis) statistics kernels — `VAACalcSad_sse2`,
 //! `VAACalcSadVar_sse2`, `VAACalcSadSsd_sse2`, `VAACalcSadBgd_sse2` and
-//! `VAACalcSadSsdBgd_sse2`, `codec/processing/src/x86/vaa.asm` (the 64-bit
-//! definitions; the `X86_32` copies above them differ only in where the arguments
-//! and the spills live).
+//! `VAACalcSadSsdBgd_sse2`, `codec/processing/src/x86/vaa.asm`.
 //!
 //! One whole-picture walk in five shapes: 16x16 macroblocks in raster order, four
 //! 8x8 quadrants each in the order top-left, top-right, bottom-left, bottom-right,
@@ -11,12 +9,9 @@
 //! for byte, and the five kernels are one body with three const flags rather than
 //! five copies, as they are there.
 //!
-//! # The asm's shape, and what is kept of it
-//!
 //! `psadbw` against a whole 16-byte register lands the sum of bytes 0..8 in the low
-//! quadword and of bytes 8..16 in the high one — which is exactly the two quadrants
-//! of a row, so the asm never splits a register to keep them apart, and neither does
-//! this. Everything else is the asm's too, macro for macro:
+//! quadword and of bytes 8..16 in the high one — exactly the two quadrants of a row, so a
+//! register is never split to keep them apart. The rest follows the asm's macros:
 //! `WELS_SAD_SD_MAD_16x1_SSE2`'s `psadbw` against zero for each side's sample sum
 //! (`sd` is `sum(cur) - sum(ref)`, per quadrant); `pmaxub`/`pminub`/`psubb` for the
 //! absolute difference, with a running `pmaxub` for `mad`;
@@ -29,22 +24,13 @@
 //! upper dword of each quadword is always zero. The `pmaddwd` accumulators peak at
 //! `256 * 255^2 = 16.6M` over a whole macroblock.
 //!
-//! # Where this departs from the asm
-//!
-//! - **The width loop counts macroblocks, not bytes.** The asm counts `pic_width`
-//!   down by 16, which only terminates on a width that is a multiple of 16. The port
-//!   loops `pic_width >> 4` times, as `VAACalcSad*_c` and
-//!   [`crate::processing::vaacalc::vaa_span`] do. The *step* between macroblock rows
-//!   is the asm's and the C's alike — `(pic_stride << 4) - pic_width` after sixteen
-//!   bytes per macroblock — including the quirk that a ragged width shifts every
-//!   macroblock row left by the remainder.
-//! - **Loads are unaligned.** The asm is `movdqa` throughout and upstream's
-//!   `vaacalculation.cpp` only installs it when the stride is a multiple of 16; the
-//!   port has no such precondition to lean on, so it is `movdqu`, which costs
-//!   nothing on any part that has run this code since Nehalem.
-//! - **`sd` and `sum` subtract and add after the reduce**, where the asm keeps
-//!   `sum_cur` and `sum_ref` in the two halves of one register and subtracts lane-
-//!   wise. Same value, in the same 32-bit width.
+//! The width loop counts `pic_width >> 4` macroblocks, as `VAACalcSad*_c` and
+//! [`crate::processing::vaacalc::vaa_span`] do, rather than counting `pic_width` down by
+//! 16. The step between macroblock rows is `(pic_stride << 4) - pic_width` after sixteen
+//! bytes per macroblock, including the quirk that a ragged width shifts every macroblock
+//! row left by the remainder. Loads are unaligned (`movdqu`), there being no alignment
+//! precondition on the stride. `sd` and `sum` subtract and add after the reduce, in the
+//! same 32-bit width.
 //!
 //! Every read stays inside `vaa_span(pic_width, pic_height, pic_stride)` bytes of
 //! each plane; the last macroblock's window is `15 * stride + 16` bytes.
@@ -60,12 +46,11 @@ use core::arch::x86_64::*;
 /// The six output arrays the five kernels write between them, one entry per
 /// macroblock each.
 ///
-/// **Every kernel names all six and writes the ones its flags select.** The three
-/// flags are const, so the writes a kernel does not make are not compiled and the
-/// slices behind them are never indexed — which is why the entry points pass
-/// `&mut []` for those. Handing the walk the arrays rather than a per-macroblock
-/// struct is what keeps a macroblock's results in registers: a struct handed to a
-/// callback by reference has to be materialised on the stack and read back.
+/// Every kernel names all six and writes the ones its flags select. The three flags are
+/// const, so the writes a kernel does not make are not compiled and the slices behind them
+/// are never indexed — which is why the entry points pass `&mut []` for those. Handing the
+/// walk the arrays rather than a per-macroblock struct keeps a macroblock's results in
+/// registers.
 struct Outputs<'a> {
     sad8x8: &'a mut [[i32; 4]],
     sd8x8: &'a mut [[i32; 4]],
@@ -136,8 +121,8 @@ fn half_mb<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     refp: &[u8],
     stride: usize,
 ) -> HalfStats {
-    // Trim both planes to **exactly** the eight rows this half reads, once, before
-    // the loop, for the reason `vaacalc.rs`'s `half_mb_stats` gives.
+    // Trim both planes to exactly the eight rows this half reads, once, before the loop,
+    // so the per-row bounds checks inside it fold away.
     let cur = &cur[..7 * stride + 16];
     let refp = &refp[..7 * stride + 16];
 
@@ -293,7 +278,7 @@ fn walk<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
 }
 
 // ============================================================================
-// The entry points, named as the kernels they replace
+// Entry points
 // ============================================================================
 
 /// `VAACalcSad_sse2`.
@@ -433,7 +418,7 @@ mod tests {
     use crate::processing::vaacalc as reference;
     use crate::processing::vaacalc::vaa_span;
 
-    /// Planes of **exactly** `vaa_span` bytes, so a kernel that reads one byte past
+    /// Planes of exactly `vaa_span` bytes, so a kernel that reads one byte past
     /// what the walk is allowed to touch panics here instead of silently working.
     fn planes(w: i32, h: i32, stride: i32, f: impl Fn(usize) -> (u8, u8)) -> (Vec<u8>, Vec<u8>) {
         let n = vaa_span(w, h, stride);
@@ -635,11 +620,8 @@ mod tests {
         );
     }
 
-    /// The step quirk: a width that is not a multiple of 16 shifts every macroblock
-    /// row left by the remainder, and the kernels must reproduce it rather than
-    /// correct it — `vaacalc.rs`'s
-    /// `calc_sad_reproduces_the_step_quirk_at_a_width_that_is_not_a_multiple_of_16`
-    /// is the scalar half of this.
+    /// The step quirk: a width that is not a multiple of 16 shifts every macroblock row
+    /// left by the remainder, and the kernels reproduce it rather than correct it.
     #[test]
     fn parity_at_a_width_that_is_not_a_multiple_of_16() {
         for &(w, h, stride) in &[(40, 32, 64), (24, 48, 32), (72, 32, 80), (33, 32, 64)] {

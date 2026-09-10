@@ -1,31 +1,22 @@
-//! **`GetOption`'s referee**.
+//! `GetOption`'s referee.
 //!
-//! # The goldens are the C++ decoder's
+//! `tests/data/decoder_options/<asset>.txt` holds one line per decode call: every
+//! get-able scalar option with both its return code and its value, because half the
+//! reference's arms answer `cmInitExpected` rather than writing. The sentinel
+//! `1592614637` (`0x5EED5EED`) goes into the caller's `int` before each call, so a "did
+//! not write" is visible rather than stack noise.
 //!
-//! `tests/data/decoder_options/<asset>.txt` is the literal stdout of
+//! The flow is an annex-B split, `ERROR_CON_SLICE_COPY`, one NAL per `DecodeFrame2`, the
+//! `END_OF_STREAM` option, a final `DecodeFrame2(NULL, 0)`, then `FlushFrame` for what
+//! `GetOption` reports remaining, capped at 24.
 //!
-//! ```text
-//! DYLD_LIBRARY_PATH=$PWD rust/tools/ecref/ecref res/<asset>.264 99999999 --options
-//! ```
-//!
-//! against `libopenh264.dylib` — one line per decode call, every get-able scalar
-//! option with **both** its return code and its value, because half the reference's
-//! arms answer `cmInitExpected` rather than writing. The sentinel `1592614637`
-//! (`0x5EED5EED`) is what `ecref` puts in the caller's `int` before each call, so a
-//! "did not write" is visible and reproducible instead of being stack noise.
-//!
-//! The flow below is `ecref`'s statement for statement: annex-B split,
-//! `ERROR_CON_SLICE_COPY`, one NAL per `DecodeFrame2`, the `END_OF_STREAM` option,
-//! a final `DecodeFrame2(NULL, 0)`, then `FlushFrame` for what `GetOption` reports
-//! remaining, capped at 24.
-//!
-//! # What the six assets are for
+//! What the six assets exercise:
 //!
 //! | asset | what it exercises |
 //! |---|---|
 //! | `BA_MW_D` | 100 frames of CAVLC baseline — `FRAME_NUM` counting and `VCL_NAL`'s alternation over a long run |
-//! | `Error_I_P` | the damaged stream: **two resolution changes**, so `PROFILE`/`LEVEL` move mid-stream and the `cmInitExpected` arm is exercised before the first SPS activates |
-//! | `MR2_TANDBERG_E` | the only kind of asset in `res/` that marks a long-term reference — `LTR_MARKING_FLAG` and `LTR_MARKED_FRAME_NUM` are non-trivial here and nowhere else |
+//! | `Error_I_P` | a damaged stream with two resolution changes, so `PROFILE`/`LEVEL` move mid-stream and the `cmInitExpected` arm is exercised before the first SPS activates |
+//! | `MR2_TANDBERG_E` | marks a long-term reference — `LTR_MARKING_FLAG` and `LTR_MARKED_FRAME_NUM` are non-trivial here and nowhere else |
 //! | `Cisco_Men_whisper_640x320_CABAC_Bframe_9` | CABAC with B-frames: `IS_REF_PIC` is 0 on the non-reference pictures |
 //! | `QCIF_2P_I_allIPCM` | all-IPCM, a different reconstruction path |
 //! | `narrow_16x16` | one macroblock, three IDR periods — `IDR_PIC_ID` increments |
@@ -33,7 +24,7 @@
 use openh264_rs::api::codec_api::*;
 use openh264_rs::split_annexb_units;
 
-/// The twelve ids `ecref --options` prints, in its order. `GET_STATISTICS` and
+/// The twelve scalar ids the transcript prints, in order. `GET_STATISTICS` and
 /// `GET_SAR_INFO` are struct-valued and are refereed by their own assertions below;
 /// `NUM_OF_THREADS` is the object's field and does not change per call.
 const OPTS: &[(&str, DECODER_OPTION)] = &[
@@ -54,10 +45,10 @@ const OPTS: &[(&str, DECODER_OPTION)] = &[
     ),
 ];
 
-/// `ecref`'s `int v = 0x5EED5EED;` — see the module docs.
+/// The "did not write" sentinel; see the module docs.
 const SENTINEL: i32 = 0x5EED_5EED;
 
-/// One `OPT <idx> <what> …` line, byte-for-byte as `ecref` prints it.
+/// One `OPT <idx> <what> …` transcript line.
 ///
 /// # Safety
 /// `dec` is a live decoder; every pointer handed to `GetOption` is a local `i32`.
@@ -71,7 +62,7 @@ unsafe fn options_line(dec: *mut ISVCDecoder, idx: usize, what: &str) -> String 
     out
 }
 
-/// Drives one asset exactly as `ecref --options` does, returning its transcript.
+/// Drives one asset, returning its option transcript.
 ///
 /// # Safety
 /// Uses the C ABI as a consumer does; every pointer is valid for its call.
@@ -182,8 +173,7 @@ fn get_option_matches_the_cxx_per_call() {
 /// The two struct-valued get arms and the error codes around them —
 /// `welsDecoderExt.cpp:639-651` and `:664-672`, plus the head clauses at `:586-592`.
 ///
-/// These are not in the per-call transcript because `ecref` prints scalars; they are
-/// pinned here against the reference's *codes*, which is what they are about.
+/// The per-call transcript carries only scalars, so these are pinned here by code.
 #[test]
 fn option_error_codes_match_the_reference() {
     unsafe {
@@ -192,8 +182,8 @@ fn option_error_codes_match_the_reference() {
 
         // ---- before Initialize -------------------------------------------
         // `:586-589`: `NUM_OF_THREADS` is answered from the object and succeeds;
-        // everything else is `cmInitExpected` — *including* when `pOption` is null,
-        // because the reference tests the context first.
+        // everything else is `cmInitExpected`, including when `pOption` is null, the
+        // context being tested first.
         let mut v = 0i32;
         let p: *mut std::ffi::c_void = std::ptr::addr_of_mut!(v).cast();
         assert_eq!(
@@ -201,7 +191,7 @@ fn option_error_codes_match_the_reference() {
             CM_RESULT_SUCCESS as i64,
             "NUM_OF_THREADS is the object's field and works before Initialize"
         );
-        assert_eq!(v, 0, "this port is single-threaded (D3)");
+        assert_eq!(v, 0, "this port is single-threaded");
         assert_eq!(
             ISVCDecoder::GetOption(dec, DECODER_OPTION::DECODER_OPTION_VCL_NAL, p),
             CM_INIT_EXPECTED as i64,
@@ -302,11 +292,9 @@ fn option_error_codes_match_the_reference() {
         );
         assert_eq!((sar.uiSarWidth, sar.uiSarHeight), (0, 0));
 
-        // `:696` and `:583` — **an id with no arm is an error, not a silent
-        // success.** It is reachable with real ids rather than an out-of-range
-        // discriminant: the two switches are not the same set. The three trace ids
-        // are settable and not gettable; the ten feedback ids are gettable and not
-        // settable.
+        // `:696` and `:583` — an id with no arm is an error, not a silent success. The
+        // two switches are not the same set: the three trace ids are settable and not
+        // gettable, the ten feedback ids gettable and not settable.
         for id in [
             DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
             DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK,

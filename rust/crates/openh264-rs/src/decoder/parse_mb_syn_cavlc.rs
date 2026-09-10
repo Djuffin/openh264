@@ -28,7 +28,7 @@
 
 //! # Macroblock Syntax Parsing & CAVLC Entropy Decoding
 //!
-//! Translated from `codec/decoder/core/src/parse_mb_syn_cavlc.cpp` and
+//! C++: `codec/decoder/core/src/parse_mb_syn_cavlc.cpp`,
 //! `codec/decoder/core/inc/parse_mb_syn_cavlc.h`.
 //!
 //! Implements macroblock-level syntax parsing, context-adaptive variable-length
@@ -297,13 +297,11 @@ pub struct SI4PredInfo {
     pub iLeftTopAvail: i8,
 }
 
-/// VLC lookup table pointers.
-/// Matches `SVlcTable` in `codec/decoder/core/inc/vlc_decoder.h`:
-/// `const uint8_t (*kpCoeffTokenVlcTable[4][8])[2];` etc. Each pointer refers
-/// to a table of `[value, bit-count]` pairs of varying length.
+/// VLC lookup table pointers — `SVlcTable`, `codec/decoder/core/inc/vlc_decoder.h`.
 ///
-/// `'static`, because every entry is a `static` table in `vlc_tables.rs` and this
-/// struct is built once per decoder by [`InitVlcTable`].
+/// Each pointer refers to a table of `[value, bit-count]` pairs of varying length.
+/// `'static` because every entry is a `static` table in `vlc_tables.rs`, built once
+/// per decoder by [`InitVlcTable`].
 #[derive(Clone, Copy)]
 pub struct SVlcTable {
     pub kpCoeffTokenVlcTable: [[&'static [[u8; 2]]; 8]; 4],
@@ -312,7 +310,7 @@ pub struct SVlcTable {
     pub kpTotalZerosTable: [[&'static [[u8; 2]]; 15]; 2],
 }
 
-/// Matches `InitVlcTable` in `codec/decoder/core/inc/vlc_decoder.h`.
+/// C++: `InitVlcTable`, `codec/decoder/core/inc/vlc_decoder.h`.
 pub fn InitVlcTable(pVlcTable: &mut SVlcTable) {
     use crate::decoder::vlc_tables::*;
     pVlcTable.kpChromaCoeffTokenVlcTable = &g_kuiVlcChromaTable;
@@ -370,7 +368,7 @@ pub fn InitVlcTable(pVlcTable: &mut SVlcTable) {
     pVlcTable.kpTotalZerosTable[1][2] = &g_kuiTotalZerosChromaTable2;
 }
 
-// Forward definitions matching OpenH264 decoder C ABI structs
+// Forward definitions of the decoder ABI structs
 use crate::decoder::decoder_context::{PicRefs, SliceCtx};
 pub use crate::decoder::picture::SPicture;
 
@@ -405,8 +403,8 @@ pub fn POP_BUFFER(pBitsCache: &mut SReadBitsCache<'_>, iCount: u32) {
 #[inline(always)]
 pub fn SHIFT_BUFFER(pBitsCache: &mut SReadBitsCache<'_>) {
     {
-        // Matches the C++ macro: pBuf is advanced FIRST, so the two bytes
-        // shifted in are the original pBuf[4] and pBuf[5].
+        // pBuf is advanced FIRST, so the two bytes shifted in are the
+        // original pBuf[4] and pBuf[5].
         pBitsCache.pBuf = &pBitsCache.pBuf[2..];
         let pBuf = pBitsCache.pBuf;
         let b2 = pBuf[2] as u32;
@@ -1050,8 +1048,8 @@ pub fn WelsFillCacheInterCabac(
     }
 }
 
-/// Matches `WelsFillCacheInter` in `parse_mb_syn_cavlc.cpp` (CAVLC variant,
-/// same as the CABAC variant but without the mvd cache).
+/// C++: `WelsFillCacheInter`, `parse_mb_syn_cavlc.cpp` — the CAVLC variant, which
+/// is the CABAC one without the mvd cache.
 pub fn WelsFillCacheInter(
     pNeighAvail: &SWelsNeighAvail,
     pNonZeroCount: &mut [u8; 48],
@@ -1190,7 +1188,7 @@ pub fn WelsFillCacheInter(
     }
 }
 
-/// Matches `ParseInterInfo` in `parse_mb_syn_cavlc.cpp`.
+/// C++: `ParseInterInfo`, `parse_mb_syn_cavlc.cpp`.
 pub fn ParseInterInfo(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -1587,10 +1585,10 @@ pub fn ParseInterInfo(
     ERR_NONE
 }
 
-/// Matches `ParseInterBInfo` in `parse_mb_syn_cavlc.cpp`.
+/// C++: `ParseInterBInfo`, `parse_mb_syn_cavlc.cpp`.
 ///
-/// `WELS_CHECK_SE_BOTH_WARNING` on the vertical mv is warning-only in C (see
-/// `dec_golomb.h`), so it has no port here — same as `ParseInterInfo` above.
+/// `WELS_CHECK_SE_BOTH_WARNING` on the vertical mv is warning-only
+/// (`dec_golomb.h`), so there is no range check here.
 pub fn ParseInterBInfo(
     pCtx: &mut SliceCtx<'_>,
     pCurDqLayer: &mut DqLayerState,
@@ -1726,7 +1724,7 @@ pub fn ParseInterBInfo(
                     if ret != 0 {
                         return ret;
                     }
-                    // C truncates into `int8_t ref_idx_list[LIST_A][4]` here.
+                    // Narrows into `ref_idx_list`'s `i8` element.
                     ref_idx_list[listIdx][0] = uiCode as i8;
                     check_ref_idx!(listIdx, ref_idx_list[listIdx][0]);
                 } else {
@@ -1943,7 +1941,7 @@ pub fn ParseInterBInfo(
             pSubPartCount[i] = g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iPartCount;
             pPartW[i] = g_ksInterBSubMbTypeInfo[uiSubMbType as usize].iPartWidth;
 
-            // Need modification when B picture add in, reference to 7.3.5
+            // Refer to 7.3.5.
             if pSubPartCount[i] > 1 {
                 *pCurDqLayer
                     .grid
@@ -2025,7 +2023,7 @@ pub fn ParseInterBInfo(
                         &pMvDirect,
                         &iRef,
                         Some(iMvArray),
-                        // CAVLC has no mvd cache — the C++ passes NULL here too.
+                        // CAVLC has no mvd cache.
                         None,
                     );
                 } else {
@@ -2060,16 +2058,14 @@ pub fn ParseInterBInfo(
                         &iRef,
                         colocList,
                         Some(iMvArray),
-                        // CAVLC has no mvd cache — the C++ passes NULL here too.
+                        // CAVLC has no mvd cache.
                         None,
                     );
-                    // Fix relative to 2.6.0, mirroring `parse_mb_syn_cavlc.cpp:1631`:
-                    // `ref_idx_list` is initialised to -1 above and was only filled for spatial
-                    // direct sub-macroblocks, yet the mv loop below copies it into the
-                    // MV-prediction cache for every sub-macroblock. A temporal direct
-                    // sub-macroblock therefore advertised REF_NOT_IN_LIST to its neighbours
-                    // instead of the reference index 8.4.1.2.3 derived for it, and the partitions
-                    // predicted after it mis-predicted their motion vectors.
+                    // `ref_idx_list` is initialised to -1 above, and the mv loop below copies
+                    // it into the MV-prediction cache for every sub-macroblock, so a temporal
+                    // direct sub-macroblock must record the reference index 8.4.1.2.3 derives
+                    // for it; otherwise it advertises REF_NOT_IN_LIST to its neighbours and the
+                    // partitions predicted after it mis-predict their motion vectors.
                     ref_idx_list[LIST_0][i] = iRef[LIST_0];
                     ref_idx_list[LIST_1][i] = iRef[LIST_1];
                 }
@@ -2566,7 +2562,7 @@ pub fn WelsLumaDcDequantIdct(pBlock: &mut [i16], uiQp: u8, pCtx: &mut SliceCtx<'
     }
 }
 
-// // ============================================================================
+// ============================================================================
 // CAVLC Residual Parsing & Decoding Implementation
 // ============================================================================
 
@@ -2976,7 +2972,7 @@ pub fn WelsResidualBlockCavlc(
     ERR_NONE
 }
 
-/// Matches `WelsResidualBlockCavlc8x8` in `parse_mb_syn_cavlc.cpp`.
+/// C++: `WelsResidualBlockCavlc8x8`, `parse_mb_syn_cavlc.cpp`.
 pub fn WelsResidualBlockCavlc8x8(
     pVlcTable: &SVlcTable,
     pNonZeroCountCache: &mut [u8; 48],

@@ -10,27 +10,26 @@
 //! the asm loads `H + 2` rows and reads them twice, at offsets 0 and 2 — and once
 //! each for the left and right probes.
 //!
-//! Upstream has no 8x4 or 4x8 kernel; the port fills those slots with the same row
-//! loop at those heights, as the x86_64 set does. Nor is there a second, wider tier
-//! on aarch64: `has_avx2()` is false on every aarch64 build, so the `_avx2` slots
-//! are never installed and forward to the baseline kernel to keep the alias total.
+//! There is no upstream 8x4 or 4x8 kernel; those slots run the same row loop at those
+//! heights. Nor is there a second, wider tier on aarch64: `has_avx2()` is false on
+//! every aarch64 build, so the `_avx2` slots are never installed and forward to the
+//! baseline kernel.
 //!
-//! # Where this departs from the asm
+//! # Accumulators
 //!
-//! The asm runs one accumulator per block. On an out-of-order core that makes a
-//! sixteen-row block a chain of thirty-two dependent `uabal`s, and it measured at
-//! half the speed of the scalar loop LLVM vectorises for itself. The loops here keep
-//! two rows in flight — four accumulators for the sixteen-wide shapes, two for the
-//! narrower ones — and add them once at the end; the lane bound is the same 8160.
+//! One accumulator per block makes a sixteen-row block a chain of thirty-two dependent
+//! `uabal`s on an out-of-order core, half the speed of the scalar loop LLVM vectorises
+//! for itself. The loops here keep two rows in flight — four accumulators for the
+//! sixteen-wide shapes, two for the narrower ones — and add them once at the end; the
+//! lane bound is the same 8160.
 //!
 //! # How the rows are addressed
 //!
 //! Each operand is cut once into a `RefSamples::span` — a slice the compiler knows to
-//! be `(H - 1) * stride + W` long — and the rows are indexed inside it. That leaves
-//! **one cut per operand per call**, two compare-and-branch pairs and both before the
-//! loop, where a `row_n` walk left two per row: the 16x16 SAD emitted 64 such pairs
-//! around its 32 `uabal`s and now emits none at all inside the loop. The rows are in
-//! range by construction and LLVM proves it from the span's length.
+//! be `(H - 1) * stride + W` long — and the rows are indexed inside it. That leaves one
+//! cut per operand per call, two compare-and-branch pairs and both before the loop
+//! rather than two per row. The rows are in range by construction and LLVM proves it
+//! from the span's length.
 //!
 //! The four-point kernels cut `sample2` `W + 2` wide and `H + 2` tall — the reach of
 //! all four probes — and read the probes at span columns 0, 1 and 2, which is where
@@ -124,18 +123,17 @@ fn sad_4x<S: RefSamples, const H: usize>(sample1: &S, sample2: &S, dx: isize, dy
 ///
 /// # `G`: how many rows one cut covers
 ///
-/// Only a **constant** row offset inside a span folds; a symbolic `y * stride` is
-/// something LLVM cannot place inside the span, and the per-row checks would stay.
-/// So a cut covers `G` rows, the rows inside are read at constant offsets, and their
-/// checks all fold into that one cut. `G` has to be small enough that the `G`-row
-/// walk unrolls — that is what makes those offsets constant — so it is `H` for the
-/// shapes that unroll whole and a divisor of `H` for the ones that do not.
+/// Only a constant row offset inside a span folds; LLVM cannot place a symbolic
+/// `y * stride` inside the span, and the per-row checks would stay. So a cut covers
+/// `G` rows, the rows inside are read at constant offsets, and their checks all fold
+/// into that one cut. `G` has to be small enough that the `G`-row walk unrolls — that
+/// is what makes those offsets constant — so it is `H` for the shapes that unroll
+/// whole and a divisor of `H` for the ones that do not.
 ///
-/// The two block spans are cut **once**, outside the loop, and the groups are
+/// The two block spans are cut once, outside the loop, and the groups are
 /// [`BlockRows::window`]s of them: cutting from the cursor per group would put the
-/// stride validation inside the loop, which measured 1.5x slower on the 16x16 shape.
-/// `HW` is `H + 2` and is a separate parameter only because stable Rust cannot
-/// compute `H + 2` in a const-argument position.
+/// stride validation inside the loop. `HW` is `H + 2`, a separate parameter only
+/// because stable Rust cannot compute `H + 2` in a const-argument position.
 #[inline]
 #[target_feature(enable = "neon")]
 fn sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
@@ -182,7 +180,7 @@ fn sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     }
 }
 
-/// See [`sad_four_16x`] for the probe span and for what `G` and `GW` select.
+/// See [`sad_four_16x`] for the probe span and for what `G` and `HW` select.
 ///
 /// The two accumulators are the row parity here, not the byte halves, so the inner
 /// pair walk is written out: the accumulator index has to be a constant for the
@@ -237,7 +235,7 @@ fn sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     }
 }
 
-/// See [`sad_four_16x`] for the probe span and for what `G` and `GW` select.
+/// See [`sad_four_16x`] for the probe span and for what `G` and `HW` select.
 ///
 /// The two accumulators are the row parity here, not the byte halves, so the inner
 /// pair walk is written out: the accumulator index has to be a constant for the
@@ -304,10 +302,8 @@ pub fn sample_sad_16x16<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 }
 
 /// The AVX2 slot's kernel — never installed on aarch64; see the module header.
-// Only the kernel set `simd::kernels` currently aliases has a caller for this
-// (`encoder/sample.rs`'s AVX2 slot); every set carries the pair because every
-// set has to satisfy that dispatch, and the sets that are compiled but not
-// aliased — which `--features wide` / `--features scalar` decide — go dead.
+// Every kernel set carries the pair to satisfy `encoder/sample.rs`'s AVX2 slot; a set
+// that is compiled but not aliased goes dead.
 #[allow(dead_code)]
 #[inline]
 pub(crate) fn sample_sad_16x16_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
@@ -321,10 +317,7 @@ pub fn sample_sad_16x8<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 }
 
 /// See [`sample_sad_16x16_avx2`].
-// Only the kernel set `simd::kernels` currently aliases has a caller for this
-// (`encoder/sample.rs`'s AVX2 slot); every set carries the pair because every
-// set has to satisfy that dispatch, and the sets that are compiled but not
-// aliased — which `--features wide` / `--features scalar` decide — go dead.
+// Dead in a set that is compiled but not aliased, as above.
 #[allow(dead_code)]
 #[inline]
 pub(crate) fn sample_sad_16x8_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {

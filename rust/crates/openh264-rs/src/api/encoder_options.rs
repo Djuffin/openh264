@@ -1,17 +1,7 @@
 //! `CWelsH264SVCEncoder::SetOption` / `GetOption` — the encoder's untyped
-//! `void* pOption` boundary.
-//!
-//! `pOption` is `codec_api.h`'s untyped blob, its real type is named by `eOptionId`
-//! and by nothing else the compiler can see, and each arm's cast **is** that enum's
-//! contract with the application.
-//!
-//! The two methods are inherent methods of [`CWelsH264SVCEncoder`], so
-//! `codec_api.rs`'s vtable thunks call `self.SetOption(..)`.
+//! `void* pOption` boundary. `pOption`'s real type is named by `eOptionId`.
 
-// The C++ names come across verbatim.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
-// The module denies, and every item that needs it carries its own tagged
-// `#[allow(unsafe_code)]`.
 #![deny(unsafe_code)]
 
 use std::ffi::c_void;
@@ -39,16 +29,11 @@ use crate::encoder::wels_encoder_ext::{
 
 impl CWelsH264SVCEncoder {
     #[allow(unsafe_code)]
-    /// `pOption` is **C-ABI** and stays a `c_void`: its type is a function
-    /// of `eOptionId` and of nothing else, over thirty-two ids, and no Rust type
-    /// states that. `Encoder::set_option_raw` is the safe surface's `unsafe`
-    /// spelling of the same obligation.
-    ///
     /// # Safety
     ///
     /// `pOption` must point at a readable, aligned object of the type `eOptionId`
-    /// names, live for the call. The three trace ids also *install*: what is read
-    /// out of the blob is kept and entered on every later message, under
+    /// names, live for the call. The three trace ids retain what they read: the
+    /// callback and context are used by every later message, under
     /// [`crate::api::codec_api::Encoder::set_trace_callback`]'s contract.
     ///
     /// ```compile_fail,E0133
@@ -75,8 +60,7 @@ impl CWelsH264SVCEncoder {
         unsafe {
             match eOptionId {
                 EncoderOption::ENCODER_OPTION_INTER_SPATIAL_PRED => {
-                    // "this feature not supported at present" — C++ logs and
-                    // returns success without touching anything.
+                    // Unsupported feature: accepted, no effect.
                 }
                 EncoderOption::ENCODER_OPTION_DATAFORMAT => {
                     let iValue = *(pOption as *const i32);
@@ -117,25 +101,19 @@ impl CWelsH264SVCEncoder {
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
                         return cmInitParaError;
                     }
-                    // `WelsEncoderParamAdjust` may replace the context
-                    // (`encoder_ext.cpp`'s uninit/init pair), so any earlier handle no
-                    // longer names this encoder's context. The timestamp is copied out
-                    // so the borrow ends before the `&mut self` logging calls below.
+                    // `WelsEncoderParamAdjust` may replace the context, so the
+                    // timestamp is copied out before the `&mut self` logging calls.
                     let ts = match self.m_pEncContext.as_deref() {
                         Some(ctx) => ctx.iLastStatisticsLogTs,
                         None => return cmInitExpected,
                     };
-                    // LogStatistics
                     self.LogStatistics(ts, 0);
                 }
                 EncoderOption::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT => {
                     let sEncodingParam = *(pOption as *const SEncParamExt);
-                    // `welsEncoderExt.cpp:796` logs the incoming block
-                    // here, immediately after the copy and *before* the spatial-layer
-                    // check below, so a caller whose parameters are about to be
-                    // rejected still gets them echoed.
+                    // Traced before the spatial-layer check, so rejected parameters
+                    // are still echoed.
                     self.TraceParamInfo(&sEncodingParam);
-                    // verify number of spatial layer
                     if sEncodingParam.iSpatialLayerNum < 1
                         || sEncodingParam.iSpatialLayerNum > MAX_SPATIAL_LAYER_NUM as i32
                     {
@@ -158,22 +136,15 @@ impl CWelsH264SVCEncoder {
                         self.m_iMaxPicWidth = iTargetWidth;
                         self.m_iMaxPicHeight = iTargetHeight;
                     }
-                    /* Check every field whether there is new request for memory block changed or else */
                     if WelsEncoderParamAdjust(&mut self.m_pEncContext, &mut sConfig) != 0 {
                         return cmInitParaError;
                     }
-                    // `WelsEncoderParamAdjust` may replace the context
-                    // (`encoder_ext.cpp`'s uninit/init pair), so any earlier handle no
-                    // longer names this encoder's context. The timestamp is copied out
-                    // so the borrow ends before the `&mut self` logging calls below.
+                    // `WelsEncoderParamAdjust` may replace the context, so the
+                    // timestamp is copied out before the `&mut self` logging calls.
                     let ts = match self.m_pEncContext.as_deref() {
                         Some(ctx) => ctx.iLastStatisticsLogTs,
                         None => return cmInitExpected,
                     };
-                    // LogStatistics
-                    //
-                    // `welsEncoderExt.cpp:845` logs this immediately before the
-                    // statistics block.
                     WelsLog(
                         self.log_ctx(),
                         WELS_LOG_INFO,
@@ -248,8 +219,8 @@ impl CWelsH264SVCEncoder {
                     // 0:quality mode;1:bit-rate mode;2:bitrate limited mode
                     let iValue = *(pOption as *const i32);
                     ctx.param_mut().iRCMode = rc_mode_from_raw(iValue);
-                    // Re-point the dispatch table. Setting the field alone leaves
-                    // the encoder running the previous mode's callbacks.
+                    // Re-point the dispatch table; the field alone leaves the
+                    // encoder running the previous mode's callbacks.
                     let iRCMode = ctx.param().iRCMode;
                     WelsRcInitFuncPointers(&mut ctx.func_list_mut().pfRc, iRCMode);
                 }
@@ -262,7 +233,7 @@ impl CWelsH264SVCEncoder {
                     if ctx.param().iRCMode != RC_OFF_MODE {
                         ctx.param_mut().bEnableFrameSkip = bValue;
                     }
-                    // rc off: the setting is accepted and ignored, as in C++.
+                    // rc off: the setting is accepted and ignored.
                 }
                 EncoderOption::ENCODER_PADDING_PADDING => {
                     let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
@@ -277,8 +248,7 @@ impl CWelsH264SVCEncoder {
                         return cmInitExpected;
                     };
                     let pLTR_Recover_Request = &mut *(pOption as *mut SLTRRecoverRequest);
-                    // The second argument points into the **C caller's** memory, not
-                    // the context.
+                    // The second argument points into the caller's memory, not the context.
                     FilterLTRRecoveryRequest(ctx, pLTR_Recover_Request);
                 }
                 EncoderOption::ENCODER_LTR_MARKING_FEEDBACK => {
@@ -329,8 +299,7 @@ impl CWelsH264SVCEncoder {
                         0x02 => eNewStrategy = SPS_LISTING,
                         0x03 => eNewStrategy = SPS_LISTING_AND_PPS_INCREASING,
                         0x06 => eNewStrategy = SPS_PPS_LISTING,
-                        // out of range: unchanged, and *not* an error in C++ —
-                        // eNewStrategy stays CONSTANT_ID and the code below runs.
+                        // Out of range: eNewStrategy stays CONSTANT_ID, not an error.
                         _ => {}
                     }
 
@@ -351,15 +320,10 @@ impl CWelsH264SVCEncoder {
                     }
                 }
                 EncoderOption::ENCODER_OPTION_CURRENT_PATH => {
-                    // `welsEncoderExt.cpp:1076` stores `pOption` into
-                    // `pSvcParam->pCurPath`, and nothing in either tree ever read the
-                    // field. The option id keeps returning success and does nothing.
-                    // Same shape as `ENCODER_OPTION_DUMP_FILE` below.
+                    // Accepted and ignored: the path is never read.
                 }
                 EncoderOption::ENCODER_OPTION_DUMP_FILE => {
-                    // The whole body is `#ifdef ENABLE_FRAME_DUMP` in C++, and
-                    // ENABLE_FRAME_DUMP is not defined in the build this port
-                    // tracks, so the case compiles to an empty success.
+                    // Frame dumping is not compiled in: accepted, no effect.
                 }
                 EncoderOption::ENCODER_OPTION_PROFILE => {
                     let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
@@ -424,7 +388,7 @@ impl CWelsH264SVCEncoder {
                     };
                 }
                 EncoderOption::ENCODER_OPTION_GET_STATISTICS => {
-                    // "this option is get-only!" — C++ warns and returns success.
+                    // Get-only: accepted, no effect.
                 }
                 EncoderOption::ENCODER_OPTION_STATISTICS_LOG_INTERVAL => {
                     let Some(ctx) = self.m_pEncContext.as_deref_mut() else {
@@ -461,30 +425,22 @@ impl CWelsH264SVCEncoder {
                     self.sync_log_ctx();
                 }
                 EncoderOption::ENCODER_OPTION_TRACE_CALLBACK_CONTEXT => {
-                    // **C-ABI**: the caller's opaque trace context, kept until it
-                    // is replaced and handed back to the callback untouched. Never
-                    // dereferenced by this crate.
+                    // The caller's opaque trace context: kept until replaced, handed
+                    // back to the callback untouched, never dereferenced here.
                     let ctx = pOption.cast::<*mut c_void>().read();
                     self.m_pWelsTrace
                         .SetTraceCallbackContext(TraceUserCtx::from_abi(ctx));
                     self.sync_log_ctx();
-                } // C++ ends with `default: return cmInitParaError`. There is no
-                  // wildcard arm here on purpose: `SetOption` takes a typed
-                  // `ENCODER_OPTION`, so every id the reference can be handed is
-                  // one of the 32 variants above, and leaving the match exhaustive
-                  // turns "a new option was added and not handled" into a compile
-                  // error.
+                } // Exhaustive: a new option id must be handled here.
             }
         }
         0
     }
 
     #[allow(unsafe_code)]
-    /// `pOption` is **C-ABI**, as in [`Self::SetOption`], with the blob written.
-    ///
     /// # Safety
     ///
-    /// As [`Self::SetOption`], with `pOption` **written**.
+    /// As [`Self::SetOption`], with `pOption` written rather than read.
     pub unsafe fn GetOption(&mut self, eOptionId: EncoderOption, pOption: *mut c_void) -> i32 {
         if pOption.is_null() {
             return cmInitParaError;
@@ -499,8 +455,7 @@ impl CWelsH264SVCEncoder {
         unsafe {
             match eOptionId {
                 EncoderOption::ENCODER_OPTION_INTER_SPATIAL_PRED => {
-                    // "this feature not supported at present" — log-only in C++,
-                    // and still a success return.
+                    // Unsupported feature: accepted, no effect.
                 }
                 EncoderOption::ENCODER_OPTION_DATAFORMAT => {
                     *(pOption as *mut i32) = self.m_iCspInternal;
@@ -574,8 +529,7 @@ impl CWelsH264SVCEncoder {
                 EncoderOption::ENCODER_OPTION_COMPLEXITY => {
                     *(pOption as *mut i32) = pCtx.param().iComplexityMode as i32;
                 }
-                // NOTE: C++'s GetOption has **no** ENCODER_OPTION_TRACE_LEVEL case —
-                // it is set-only, and a get falls to `default: return cmInitParaError`.
+                // Trace level is set-only; a get falls to the error arm below.
                 _ => return cmInitParaError,
             }
         }

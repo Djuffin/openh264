@@ -1,11 +1,9 @@
 #![forbid(unsafe_code)]
-//! Port of `codec/encoder/core/src/au_set.cpp` — access-unit / parameter-set
-//! construction, the parameter-set writers, and the reference-frame limitation
-//! checks.
+//! `codec/encoder/core/src/au_set.cpp` — access-unit / parameter-set construction,
+//! the parameter-set writers, and the reference-frame limitation checks.
 //!
-//! `WelsWriteSpsSyntax` returns an error for `uiPocType == 1` where C++ has
-//! `assert(0)` behind a `// TODO: implement`. The encoder only ever sets POC type 2
-//! (`WelsInitSps`), so the branch is unreachable in practice.
+//! `WelsWriteSpsSyntax` returns an error for `uiPocType == 1`. The encoder only ever
+//! sets POC type 2 (`WelsInitSps`), so the branch is unreachable in practice.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![deny(unsafe_code)]
 
@@ -43,9 +41,9 @@ pub const CpbBrNalFactor: i32 = 1200;
 /// Returns 1 if `kpLevelLimit` can carry the picture described by `kpSps` at
 /// `fFrameRate` and `iTargetBitRate`, 0 otherwise.
 ///
-/// The arithmetic is `uint32_t` throughout, as in C++: `iMbWidth`/`iMbHeight` are
-/// `int16_t` widened to `uint32_t` before multiplying, and the products are allowed to
-/// wrap. `uiPicInMBs * fFrameRate` promotes to `float` and truncates back.
+/// The arithmetic is 32-bit unsigned throughout: `iMbWidth`/`iMbHeight` widen from
+/// `i16` before multiplying and the products are allowed to wrap.
+/// `uiPicInMBs * fFrameRate` promotes to `f32` and truncates back.
 pub fn WelsCheckLevelLimitation(
     kpSps: &SWelsSPS,
     kpLevelLimit: &SLevelLimits,
@@ -78,7 +76,6 @@ pub fn WelsCheckLevelLimitation(
         // RC enabled, considering bitrate constraint
         return 0;
     }
-    // add more checks here if needed in future
 
     1
 }
@@ -95,7 +92,7 @@ pub fn WelsGetLevelIdc(kpSps: &SWelsSPS, fFrameRate: f32, iTargetBitRate: i32) -
             return level_idc_from_raw(g_ksLevelLimits[iOrder].uiLevelIdc);
         }
     }
-    ELevelIdc::LEVEL_5_1 // final decision: select the biggest level
+    ELevelIdc::LEVEL_5_1
 }
 
 /// `WelsAdjustLevel` — au_set.cpp:76.
@@ -112,7 +109,7 @@ pub fn WelsAdjustLevel(pSpatialLayer: &mut SSpatialLayerConfig, iCurLevelIdx: us
             return 0;
         }
         idx += 1;
-        // C++ walks a pointer and stops once it has stepped past LEVEL_5_2
+        // Stop once the walk has stepped past LEVEL_5_2.
         if idx >= LEVEL_NUMBER
             || level_idc_from_raw(g_ksLevelLimits[idx].uiLevelIdc) == ELevelIdc::LEVEL_5_2
         {
@@ -148,9 +145,6 @@ fn level_idc_from_raw(uiLevelIdc: u8) -> ELevelIdc {
 }
 
 /// `WelsBitRateVerification` — codec/encoder/core/src/encoder_ext.cpp:74.
-///
-/// Declared in au_set.h, defined in encoder_ext.cpp; kept here with the rest of
-/// the parameter-set helpers.
 pub fn WelsBitRateVerification(
     pLogCtx: SLogContext,
     pLayerParam: &mut SSpatialLayerConfig,
@@ -194,8 +188,7 @@ pub fn WelsBitRateVerification(
                 ),
             );
         } else if pLayerParam.iMaxSpatialBitrate > iLevelMaxBitrate {
-            // The reference reads the level id into `iCurLevel` *before* the adjust
-            // and prints both; `WelsAdjustLevel` is what moves it.
+            // `iCurLevel` is captured before the adjust, which is what moves it.
             let iCurLevel = pLayerParam.uiLevelIdc;
             WelsAdjustLevel(&mut *pLayerParam, iCurLevelIdx);
             WelsLog(
@@ -278,9 +271,6 @@ pub fn WelsCheckNumRefSetting(
         pParam.iLTRRefNum = 0;
     }
 
-    // NB: the C++ carries a TODO saying the reasonable value is
-    // WELS_MAX(1, WELS_LOG2(uiGopSize)) unconditionally, but changing it needs
-    // reference-list updating changed too. Kept as-is.
     let iCurrentStrNum =
         if pParam.iUsageType == SCREEN_CONTENT_REAL_TIME && pParam.bEnableLongTermReference {
             WELS_MAX(1, WELS_LOG2(pParam.uiGopSize))
@@ -307,8 +297,7 @@ pub fn WelsCheckNumRefSetting(
     if pParam.iNumRefFrame == AUTO_REF_PIC_COUNT {
         pParam.iNumRefFrame = iNeededRefNum;
     } else if pParam.iNumRefFrame < iNeededRefNum {
-        // Logged before the strict-check return, as in the reference: a caller that
-        // gets ENC_RETURN_UNSUPPORTED_PARA out of this still learns why.
+        // Logged before the strict-check return, so the caller learns why.
         WelsLog(
             pLogCtx,
             WELS_LOG_WARNING,
@@ -397,8 +386,6 @@ pub fn WelsWriteVUI(buf: &mut [u8], pSps: &SWelsSPS, pBsWriter: &mut BsWriter) -
     }
     BsWriteOneBit(buf, pBsWriter, 0); // overscan_info_present_flag
 
-    // See codec_app_def.h and parameter_sets.h for more info about members
-    // bVideoSignalTypePresent through uiColorMatrix.
     BsWriteOneBit(buf, pBsWriter, pSps.bVideoSignalTypePresent as u32); // video_signal_type_present_flag
     if pSps.bVideoSignalTypePresent {
         // write video signal type info to header
@@ -437,9 +424,7 @@ pub fn WelsWriteVUI(buf: &mut [u8], pSps: &SWelsSPS, pBsWriter: &mut BsWriter) -
 ///
 /// Writes the SPS RBSP body — no trailing bits; see [`WelsWriteSpsNal`].
 ///
-/// **Deviation.** C++ has `assert (0)` under `uiPocType == 1` behind a
-/// `// TODO: implement`. Here that returns 1 instead of aborting; `WelsInitSps` only
-/// ever sets POC type 2, so the branch is unreachable.
+/// Returns 1 for `uiPocType == 1`, which `WelsInitSps` never sets.
 pub fn WelsWriteSpsSyntax(
     buf: &mut [u8],
     pSps: &SWelsSPS,
@@ -495,7 +480,6 @@ pub fn WelsWriteSpsSyntax(
     if pSps.uiPocType == 0 {
         BsWriteUE(buf, pBsWriter, (pSps.iLog2MaxPocLsb - 4) as u32); // log2_max_pic_order_cnt_lsb_minus4
     } else if pSps.uiPocType == 1 {
-        // C++: `assert (0)` under a "TODO: implement".
         return 1;
     } else {
         // no-op for uiPocType 2.
@@ -505,7 +489,7 @@ pub fn WelsWriteSpsSyntax(
     BsWriteOneBit(buf, pBsWriter, pSps.bGapsInFrameNumValueAllowedFlag as u32); // gaps_in_frame_num_value_allowed_flag
     BsWriteUE(buf, pBsWriter, (pSps.iMbWidth as i32 - 1) as u32); // pic_width_in_mbs_minus1
     BsWriteUE(buf, pBsWriter, (pSps.iMbHeight as i32 - 1) as u32); // pic_height_in_map_units_minus1
-    BsWriteOneBit(buf, pBsWriter, 1); // bFrameMbsOnlyFlag, hardcoded true in C++
+    BsWriteOneBit(buf, pBsWriter, 1); // bFrameMbsOnlyFlag, always 1
 
     let d8x8: u8 = if pSps.iLevelIdc >= 30 { 1 } else { 0 };
     BsWriteOneBit(buf, pBsWriter, d8x8 as u32); // direct_8x8_inference_flag
@@ -602,9 +586,8 @@ pub fn WelsWriteSubsetSpsSyntax(
 
 /// `WelsWritePpsSyntax` — au_set.cpp:406.
 ///
-/// `DISABLE_FMO_FEATURE` is defined unconditionally at `as264_common.h:53`, so the
-/// slice-group branch at au_set.cpp:418-454 is not compiled and
-/// `num_slice_groups_minus1` is the literal 0 at au_set.cpp:417.
+/// `DISABLE_FMO_FEATURE` is defined unconditionally (`as264_common.h:53`), so the
+/// slice-group branch is not compiled and `num_slice_groups_minus1` is a literal 0.
 pub fn WelsWritePpsSyntax(
     buf: &mut [u8],
     pPps: &SWelsPPS,
@@ -657,8 +640,8 @@ pub fn WelsWritePpsSyntax(
 /// `WelsGetPaddingOffset` — au_set.cpp:476 (file-static inline).
 ///
 /// Returns true when the coded size exceeds the actual size, i.e. when the SPS needs
-/// `frame_cropping_flag`. Note that C++ makes the *actual* size even in place before
-/// computing both the offsets and the return value.
+/// `frame_cropping_flag`. The actual size is made even in place first, before both the
+/// offsets and the return value.
 pub fn WelsGetPaddingOffset(
     mut iActualWidth: i32,
     mut iActualHeight: i32,
@@ -684,7 +667,7 @@ pub fn WelsGetPaddingOffset(
 
 /// `WelsInitSps` — au_set.cpp:492.
 ///
-/// `kuiIntraPeriod` and `bEnableRc` are accepted and unused, exactly as in C++.
+/// `kuiIntraPeriod` and `bEnableRc` are accepted and unused.
 pub fn WelsInitSps(
     pSps: &mut SWelsSPS,
     pLayerParam: &mut SSpatialLayerConfig,
@@ -697,9 +680,8 @@ pub fn WelsInitSps(
     kiDlayerCount: i32,
     bSVCBaselayer: bool,
 ) -> i32 {
-    // C++ `memset (pSps, 0, sizeof (SWelsSPS))`. Deliberately not `SWelsSPS::default()`,
-    // which seeds uiProfileIdc = PRO_BASELINE and the VUI *_UNDEF values rather than 0
-    // — `SWelsSPS::ZERO` is that memset as a value.
+    // `SWelsSPS::ZERO`, not `default()`: the latter seeds uiProfileIdc = PRO_BASELINE
+    // and the VUI *_UNDEF values rather than 0.
     *pSps = SWelsSPS::ZERO;
     pSps.uiSpsId = kuiSpsId;
     pSps.iMbWidth = ((pLayerParam.iVideoWidth + 15) >> 4) as i16;
@@ -707,7 +689,7 @@ pub fn WelsInitSps(
 
     // max value of both iFrameNum and POC are 2^16-1; in this encoder iPOC = 2*iFrameNum,
     // so max of iFrameNum should be 2^15-1.
-    pSps.uiLog2MaxFrameNum = 15; // 16;
+    pSps.uiLog2MaxFrameNum = 15;
     pSps.uiPocType = 2;
     pSps.iLog2MaxPocLsb = 1 + pSps.uiLog2MaxFrameNum as i32;
 
@@ -744,7 +726,6 @@ pub fn WelsInitSps(
         pLayerParamInternal.fOutputFrameRate,
         pLayerParam.iSpatialBitrate,
     );
-    // update level
     // For Scalable Baseline/High/High Intra, level_idc 9 means level 1b.
     // For Baseline/Constrained Baseline/Main/Extended, level_idc 11 with
     // constraint_set3_flag 1 means level 1b.
@@ -774,8 +755,6 @@ pub fn WelsInitSps(
     pSps.sAspectRatioExtWidth = pLayerParam.sAspectRatioExtWidth;
     pSps.sAspectRatioExtHeight = pLayerParam.sAspectRatioExtHeight;
 
-    // See codec_app_def.h and parameter_sets.h for more info about members
-    // bVideoSignalTypePresent through uiColorMatrix.
     pSps.bVideoSignalTypePresent = pLayerParam.bVideoSignalTypePresent;
     pSps.uiVideoFormat = pLayerParam.uiVideoFormat;
     pSps.bFullRange = pLayerParam.bFullRange;
@@ -815,7 +794,7 @@ pub fn WelsInitSubsetSps(
         false,
     );
 
-    // Note: unlike WelsInitSps this takes uiProfileIdc verbatim, with no PRO_BASELINE
+    // Unlike `WelsInitSps`, `uiProfileIdc` is taken verbatim, with no PRO_BASELINE
     // fallback for 0.
     pSubsetSps.pSps.uiProfileIdc = pLayerParam.uiProfileIdc as u8;
 
@@ -829,8 +808,8 @@ pub fn WelsInitSubsetSps(
 
 /// `WelsInitPps` — au_set.cpp:588.
 ///
-/// The `#if !defined(DISABLE_FMO_FEATURE)` slice-group block at au_set.cpp:614-636 is
-/// not compiled — see `as264_common.h:53`.
+/// The `#if !defined(DISABLE_FMO_FEATURE)` slice-group block is not compiled
+/// (`as264_common.h:53`).
 pub fn WelsInitPps(
     pPps: &mut SWelsPPS,
     pSps: Option<&SWelsSPS>,
@@ -867,7 +846,7 @@ pub fn WelsInitPps(
 mod tests {
     use super::*;
 
-    /// The 160x96 / 6fps / baseline case the differential harness drives.
+    /// The 160x96 / 6fps / baseline layer configuration.
     fn gate_layer() -> (SSpatialLayerConfig, SSpatialLayerInternal) {
         let mut lp = SSpatialLayerConfig::default();
         lp.iVideoWidth = 160;
@@ -883,13 +862,7 @@ mod tests {
         (lp, li)
     }
 
-    /// Field-for-field against the C++ `WelsInitSps` linked from `libopenh264.a` for
-    /// the same input:
-    ///
-    /// ```text
-    /// mbW=10 mbH=6 log2mfn=15 poc=2 log2poc=16 nref=1 prof=66 level=13
-    /// gaps=0 crop=0 cs0=1 cs1=1 cs2=0 cs3=0
-    /// ```
+    /// The SPS fields `WelsInitSps` derives from the 160x96 baseline configuration.
     #[test]
     fn init_sps_matches_cxx_for_the_gate_configuration() {
         let (mut lp, li) = gate_layer();
@@ -942,7 +915,7 @@ mod tests {
         );
     }
 
-    /// Against the C++ `WelsInitPps`: `ppsid=0 spsid=0 qp=26 qs=26 cqpo=0 ecm=0 dfcp=1`.
+    /// The PPS fields `WelsInitPps` derives from that SPS.
     #[test]
     fn init_pps_matches_cxx() {
         let (mut lp, li) = gate_layer();
@@ -962,9 +935,8 @@ mod tests {
         assert!(pps.bDeblockingFilterControlPresentFlag);
     }
 
-    /// Byte-exact against the C++ `WelsWritePpsSyntax` driven with a real
-    /// `CWelsParametersetIdConstant`, which is what makes this a test of the id
-    /// offsets too rather than only of the fixed syntax elements.
+    /// Byte-exact against the C++ `WelsWritePpsSyntax`, driven through a real
+    /// `CWelsParametersetIdConstant` so the id offsets are covered too.
     #[test]
     fn write_pps_syntax_is_byte_exact_with_cxx() {
         use crate::api::codec_api::EParameterSetStrategy;
@@ -991,7 +963,7 @@ mod tests {
         );
     }
 
-    /// `WelsInitPps` rejects the combination C++ rejects: no SPS of either kind.
+    /// `WelsInitPps` rejects a call with no SPS of either kind.
     #[test]
     fn init_pps_rejects_missing_sps() {
         let mut pps = SWelsPPS::default();

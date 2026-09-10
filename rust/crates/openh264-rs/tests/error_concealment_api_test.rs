@@ -1,5 +1,4 @@
-//! Integration test for decoder error concealment modes.
-//! Ported from `test/api/decoder_ec_test.cpp`.
+//! Decoder error-concealment modes — `test/api/decoder_ec_test.cpp`.
 
 use openh264_rs::api::codec_api::*;
 
@@ -47,10 +46,8 @@ fn test_decoder_error_concealment_modes() {
 }
 
 /// Decodes `data` and returns the OR of every `DecodeFrame2` state, optionally
-/// switching the concealment mode through `SetOption` after `Initialize`.
-///
-/// The switch is the whole point: it is the one write the public API makes into
-/// the parameter block *after* the decoder is configured.
+/// switching the concealment mode through `SetOption` after `Initialize` — the one
+/// write the public API makes into the parameter block after configuration.
 unsafe fn decode_states(
     data: &[u8],
     init_ec: ERROR_CON_IDC,
@@ -97,24 +94,16 @@ unsafe fn decode_states(
     }
 }
 
-/// **The block the api writes and the block the decoder reads are one block, and it
-/// is the context's.**
+/// The block the api writes and the block the decoder reads are one block: the
+/// context's `SDecodingParam`, which `SetOption(DECODER_OPTION_ERROR_CON_IDC)` writes
+/// at `welsDecoderExt.cpp:535`.
 ///
-/// The C++ context owns its `SDecodingParam`: `InitDecoderCtx` allocates it
-/// (`welsDecoderExt.cpp:426`), `DecoderConfigParam` copies the caller's values in,
-/// and `SetOption(DECODER_OPTION_ERROR_CON_IDC)` writes
-/// `pDecContext->pParam->eEcActiveIdc` (`:535`).
+/// Concealment is switched off after `Initialize` on a stream that conceals:
 ///
-/// It *switches concealment off after `Initialize`* on a stream that conceals,
-/// and asserts the decoder noticed:
-///
-/// * initialised with `ERROR_CON_SLICE_COPY`, `BA_MW_D_IDR_LOST.264` comes back
-///   with `dsDataErrorConcealed` set — concealment ran;
-/// * initialised the same way and then switched to `ERROR_CON_DISABLE`, it does
-///   not, and reports `dsBitstreamError` instead.
-///
-/// A `SetOption` writing anything but the block the decoder reads leaves the first
-/// state on the second run, and the assertion fires.
+/// * initialised with `ERROR_CON_SLICE_COPY`, `BA_MW_D_IDR_LOST.264` comes back with
+///   `dsDataErrorConcealed` set;
+/// * switched to `ERROR_CON_DISABLE` after the same init, it does not, and reports
+///   `dsBitstreamError` instead.
 #[test]
 fn test_error_con_idc_set_after_initialize_reaches_the_decoder() {
     let mut repo_root = std::path::PathBuf::from("../../../");
@@ -132,7 +121,7 @@ fn test_error_con_idc_set_after_initialize_reaches_the_decoder() {
         assert_ne!(
             concealing & CONCEALED,
             0,
-            "the asset did not conceal at all — this test no longer covers F41"
+            "the asset did not conceal at all — this test no longer covers the behaviour it checks"
         );
 
         let switched = decode_states(
@@ -144,7 +133,7 @@ fn test_error_con_idc_set_after_initialize_reaches_the_decoder() {
             switched & CONCEALED,
             0,
             "concealment still ran after SetOption(ERROR_CON_IDC = DISABLE): the api wrote one \
-             parameter block and the decoder read another — F41"
+             parameter block and the decoder read another"
         );
     }
 }

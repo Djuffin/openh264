@@ -2,7 +2,7 @@
 
 //! CAVLC Macroblock Syntax Elements Serialization and Residual Bitstream Encoding.
 //!
-//! Translated from `codec/encoder/core/src/svc_set_mb_syn_cavlc.cpp` and
+//! `codec/encoder/core/src/svc_set_mb_syn_cavlc.cpp`,
 //! `codec/encoder/core/inc/svc_set_mb_syn.h`.
 
 #![forbid(unsafe_code)]
@@ -33,8 +33,7 @@ pub const MB_TYPE_8x16: u32 = 0x00000020;
 pub const MB_TYPE_8x8: u32 = 0x00000040;
 pub const MB_TYPE_8x8_REF0: u32 = 0x00000080;
 pub const MB_TYPE_SKIP: u32 = 0x00000100;
-/// `wels_common_defs.h:286` says **0x00000800**, not 0x200 (0x200 is
-/// `MB_TYPE_INTRA_PCM`).
+/// `wels_common_defs.h:286` — 0x00000800, not 0x200 (0x200 is `MB_TYPE_INTRA_PCM`).
 pub use crate::encoder::deblocking::MB_TYPE_DIRECT;
 
 pub const SUB_MB_TYPE_8x8: u32 = 0x00000001;
@@ -132,8 +131,7 @@ pub use crate::encoder::vlc_encoder::g_kuiEncNcMapTable;
 // Bitstream Writers
 // ============================================================================
 
-// One writer family, `vlc_encoder.rs`'s, which is the transliteration of the C++
-// `codec/common/inc/golomb_common.h`.
+// One writer family, `vlc_encoder.rs`'s — `codec/common/inc/golomb_common.h`.
 use crate::encoder::md::MB_BLOCK4x4_NUM;
 use crate::encoder::svc_encode_slice::{SDynamicSlicingStack, current_layer_expect, layer_pps_ref};
 use crate::encoder::vlc_encoder::{
@@ -171,10 +169,9 @@ impl Default for TagMVComponentUnit {
 
 /// Calculates non-zero count, level, run, and total zero statistics for CAVLC transform blocks.
 ///
-/// `iLastIndex` is clamped to the block on entry rather than asserted: the C++
-/// passes a compile-time constant (15 or 3) that always matches the block it
-/// passes beside it, so a mismatch is unreachable from the port's own call
-/// sites, and clamping keeps a future caller from reading past the slice.
+/// `iLastIndex` is clamped to the block on entry rather than asserted: every call site
+/// passes 15 or 3, matching the block passed beside it, and clamping keeps a future
+/// caller from reading past the slice.
 pub fn CavlcParamCal_c(
     pCoffLevel: &[i16],
     pRun: &mut [u8; 16],
@@ -531,28 +528,26 @@ pub fn WelsSpatialWriteSubMbPred(
         bSubRef0 = true;
     }
 
-    // Step 1: sub_mb_type
+    // sub_mb_type
     for i in 0..4 {
         match pCurMb.uiSubMbType[i] as u32 {
             SUB_MB_TYPE_8x8 => {
                 BsWriteUE(buf, &mut *pBs, 0);
             }
-            // Every writer of `uiSubMbType` in this encoder sets
-            // `SUB_MB_TYPE_8x8` (`svc_base_layer_md.rs:1164`/`:1249`/`:1262`,
-            // `svc_mode_decision.rs:2495`), and upstream's only other writers are
-            // inside `#if 0 //Disable for sub8x8 modes for now`
-            // (`svc_mode_decision.cpp:634-661`). Loud rather than silent: emitting
-            // nothing for an unexpected partition would desynchronise the whole
-            // slice, which is a far worse failure than a panic.
+            // Every writer of `uiSubMbType` in this encoder sets `SUB_MB_TYPE_8x8`
+            // (`svc_base_layer_md.rs:1164`/`:1249`/`:1262`, `svc_mode_decision.rs:2495`),
+            // and upstream's only other writers are inside `#if 0` at
+            // `svc_mode_decision.cpp:634-661`. Loud rather than silent: emitting nothing
+            // for an unexpected partition would desynchronise the whole slice.
             _ => unreachable!(
                 "sub_mb_type {:#x} — the sub-8x8 search is #if 0 upstream and \
-                 unwritten here (D-dead-2/F122)",
+                 unwritten here",
                 pCurMb.uiSubMbType[i]
             ),
         }
     }
 
-    // Step 2: get and write uiRefIndex and sMvd
+    // Get and write uiRefIndex and sMvd
     if iNumRefIdxl0ActiveMinus1 > 0 && bSubRef0 {
         BsWriteTE(
             buf,
@@ -602,7 +597,7 @@ pub fn WelsSpatialWriteSubMbPred(
             // See the `sub_mb_type` match above for the reachability argument.
             unreachable!(
                 "sub_mb_type {:#x} — the sub-8x8 search is #if 0 upstream and \
-                 unwritten here (D-dead-2/F122)",
+                 unwritten here",
                 uiSubMbType
             );
         }
@@ -614,16 +609,15 @@ pub fn WelsSpatialWriteSubMbPred(
 ///
 /// Matches `int32_t CheckBitstreamBuffer (const uint32_t kuiSliceIdx, sWelsEncCtx* pEncCtx, SBitStringAux* pBs)`
 ///
-/// The C++ computes `iLeftLength = pEndBuf - pCurBuf - 1` as a signed pointer
-/// difference and compares it twice. Both comparisons are kept in **comparison
-/// form** against `pos`/`len` rather than restored as a subtraction: `len - pos - 1`
-/// on `usize` wraps to a huge number exactly where the signed original goes
-/// negative, which turns an overflow report into a silent pass.
+/// The C++ computes `iLeftLength = pEndBuf - pCurBuf - 1` as a signed pointer difference
+/// and compares it twice. Both comparisons stay in comparison form against `pos`/`len`
+/// rather than as a subtraction: `len - pos - 1` on `usize` wraps to a huge number
+/// exactly where the signed original goes negative, which turns an overflow report into
+/// a silent pass.
 ///
 ///   `iLeftLength > 0`  <=>  `pos + 1 < len`
-///   `iLeftLength < K`  <=>  `len < pos + 1 + K`   (true when `pos >= len`, which
-///                                                  is where the signed form is
-///                                                  negative — same verdict)
+///   `iLeftLength < K`  <=>  `len < pos + 1 + K`   (true when `pos >= len`, where the
+///                                                  signed form is negative)
 pub fn CheckBitstreamBuffer(
     _kuiSliceIdx: u32,
     _pEncCtx: &sWelsEncCtx,
@@ -674,7 +668,7 @@ pub fn WelsSpatialWriteMbSyn(
             pSlice.iMbSkipRun = 0;
         }
 
-        // Step 1: write mb type and pred
+        // Write mb type and pred
         if IS_Inter_8x8(mbs.cur().uiMbType) {
             WelsSpatialWriteSubMbPred(
                 pEncCtx,
@@ -695,7 +689,7 @@ pub fn WelsSpatialWriteMbSyn(
         let pBs =
             crate::encoder::svc_encode_slice::slice_bs_writer(&mut pSlice.sSliceBs, pCtxOutBs);
 
-        // Step 2: write coded block pattern
+        // Write coded block pattern
         if IS_INTRA4x4(mbs.cur().uiMbType) {
             let buf = &mut *pSliceBsBuf;
             BsWriteUE(
@@ -708,7 +702,7 @@ pub fn WelsSpatialWriteMbSyn(
             BsWriteUE(buf, &mut *pBs, g_kuiInterCbpMap[mbs.cur().uiCbp as usize]);
         }
 
-        // Step 3: write QP and residual
+        // Write QP and residual
         if mbs.cur().uiCbp > 0 || IS_INTRA16x16(mbs.cur().uiMbType) {
             let kiDeltaQp = (mbs.cur().uiLumaQp as i32) - (pSlice.uiLastMbQp as i32);
             pSlice.uiLastMbQp = mbs.cur().uiLumaQp;
@@ -728,15 +722,13 @@ pub fn WelsSpatialWriteMbSyn(
             }
         } else {
             mbs.cur_mut().uiLumaQp = pSlice.uiLastMbQp;
-            // `kuiChromaQpIndexOffset`, bound at this function's head from the same
-            // expression. The C++ re-reads `pCurLayer->sLayerInfo.pPpsP->…` here
-            // (`svc_set_mb_syn_cavlc.cpp`); nothing between the two can change the
-            // layer's PPS.
+            // `kuiChromaQpIndexOffset` is bound at this function's head from the same
+            // expression; nothing between the two can change the layer's PPS.
             let idx = CLIP3_QP_0_51((mbs.cur().uiLumaQp as i32) + (kuiChromaQpIndexOffset as i32));
             mbs.cur_mut().uiChromaQp = g_kuiChromaQpTable[idx as usize];
         }
 
-        // Step 4: Check the left buffer
+        // Check the left buffer
         CheckBitstreamBuffer(pSlice.iSliceIdx as u32, pEncCtx, &*pSliceBsBuf, &*pBs)
     }
 }
@@ -999,13 +991,11 @@ pub fn StashPopMBStatusCavlc(pBs: &mut BsWriter, pDss: &mut SDynamicSlicingStack
     pDss.iMbSkipRunStack
 }
 
-/// `StashMBStatusCabac` — set_mb_syn_cavlc.cpp:250. (The three CABAC entry
-/// points live in *cavlc*.cpp in the reference, next to their CAVLC twins.)
+/// `StashMBStatusCabac` — set_mb_syn_cavlc.cpp:250.
 ///
-/// Saves the whole arithmetic-coder state, and — unlike the CAVLC twin, which
-/// only has to remember three bitstream cursor fields — copies out the bytes
-/// already emitted, because CABAC renormalisation can rewrite them via
-/// `PropagateCarry`.
+/// Saves the whole arithmetic-coder state and copies out the bytes already emitted,
+/// because CABAC renormalisation can rewrite them via `PropagateCarry`; the CAVLC twin
+/// only has to remember three bitstream cursor fields.
 pub fn StashMBStatusCabac(
     buf: &mut [u8],
     pDss: &mut SDynamicSlicingStack<'_>,
@@ -1014,18 +1004,16 @@ pub fn StashMBStatusCabac(
     iMbSkipRun: i32,
 ) {
     let pCtx = pCabacCtx;
-    // `SCabacCtx` is `Copy` and holds no pointers — so the whole snapshot is this
-    // one assignment. CABAC's `PropagateCarry` rewrites bytes it already emitted,
-    // so restoring the cursor is not enough to restore the output.
+    // `SCabacCtx` is `Copy` and holds no pointers, so the whole snapshot is one
+    // assignment.
     pDss.sStoredCabac = *pCtx;
     if let Some(pRestore) = pDss.pRestoreBuffer.as_deref_mut() {
         let iPosBitOffset = GetBsPosCabac(pCtx) - pDss.iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
         let start = pCtx.m_iBufStart;
-        // Sliced, not offset: `buf[start..start + iLen]` bounds the read against
-        // the output buffer, which the C++ never did — the scratch is a slice, so
-        // a stash longer than the partition's buffer panics naming the length
-        // instead of writing past the allocation.
+        // Sliced, not offset: `buf[start..start + iLen]` bounds the read against the
+        // output buffer, so a stash longer than the partition's buffer panics naming the
+        // length instead of reading past the allocation.
         let src = &buf[start..start + iLen as usize];
         pRestore[..iLen as usize].copy_from_slice(src);
     }
@@ -1049,10 +1037,8 @@ pub fn StashPopMBStatusCabac(
         let iPosBitOffset = GetBsPosCabac(pCtx) - pDss.iStartPos;
         let iLen = (iPosBitOffset >> 3) + if (iPosBitOffset & 0x07) != 0 { 1 } else { 0 };
         let start = pCtx.m_iBufStart;
-        // Same bound as the stash side, on the write this time — this is the one
-        // write in the whole engine that is not at the cursor, and
-        // `buf[start..start + iLen]` is what says how far it may reach; the scratch
-        // read is bounded by its own slice.
+        // Same bound as the stash side, on the write this time: `buf[start..start + iLen]`
+        // says how far it may reach.
         let dst = &mut buf[start..start + iLen as usize];
         dst.copy_from_slice(&pRestore[..iLen as usize]);
     }

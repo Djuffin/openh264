@@ -2,15 +2,13 @@
 
 //! Macroblock addressing.
 //!
-//! Neighbour *availability* is deliberately absent. `left()` here answers "is there a
-//! macroblock to the left of this one **in the grid**", nothing more; the decoder's
-//! real predicate also compares `pSliceIdc` values (`mv_pred.rs:485-510`), and that
-//! is slice logic layered on top, not geometry.
+//! Neighbour availability is not here: `left()` answers only "is there a macroblock to
+//! the left of this one in the grid". The decoder's real predicate also compares
+//! `pSliceIdc` values (`mv_pred.rs:485-510`) — slice logic layered on top of geometry.
 //!
-//! The grid carries the **allocation's** dimensions, not the current slice's:
-//! it is sized once, at `InitialDqLayersContext`, from the negotiated
-//! maximum, and a stream decoding below that maximum leaves `iMbWidth`/`iMbHeight`
-//! smaller than [`MbGrid::dims`].
+//! The grid carries the allocation's dimensions, not the current slice's: it is sized
+//! once, at `InitialDqLayersContext`, from the negotiated maximum, so a stream decoding
+//! below that maximum leaves `iMbWidth`/`iMbHeight` smaller than [`MbGrid::dims`].
 
 /// The macroblock grid's dimensions, and all index arithmetic over it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,11 +28,8 @@ impl MbDims {
         }
     }
 
-    /// The dimensions of a grid covering **no** macroblocks.
-    ///
-    /// It is deliberately *not* reachable through [`new`](Self::new), whose panic
-    /// says there is no such picture — because for a grid that anything indexes,
-    /// there is not.
+    /// The dimensions of a grid covering no macroblocks. Not reachable through
+    /// [`new`](Self::new), which panics on a zero dimension.
     pub const fn none() -> Self {
         Self {
             mb_width: 0,
@@ -167,13 +162,11 @@ impl<T> MbArray<T> {
 
     /// The array's root as a raw pointer.
     ///
-    /// Encoder callers take `*mut SMB` and walk *backwards* out of the
-    /// macroblock they are handed (`pCurMb.offset(-1)` for the left
-    /// neighbour, `.offset(-iMbStride)` for the one above), so the pointer they get
-    /// must carry the whole array's provenance. This returns the `Vec`'s own stored
-    /// pointer, which does exactly that; a pointer taken through
-    /// `as_mut_slice()[xy..]` would have the right address and provenance for the
-    /// tail alone.
+    /// Encoder callers take `*mut SMB` and walk backwards out of the macroblock they are
+    /// handed (`pCurMb.offset(-1)` for the left neighbour, `.offset(-iMbStride)` for the
+    /// one above), so the pointer must carry the whole array's provenance. This is the
+    /// `Vec`'s own stored pointer; one taken through `as_mut_slice()[xy..]` would carry
+    /// the tail's provenance alone.
     ///
     /// Repeated calls are safe to interleave: `Vec::as_mut_ptr` reads the pointer the
     /// allocation already holds rather than reborrowing the buffer, so a second call
@@ -184,13 +177,13 @@ impl<T> MbArray<T> {
 
     /// The same root, reached through `&self`.
     ///
-    /// `as_mut_ptr` above is sound for one thread and unsound for two: `&mut self`
-    /// is a `Unique` retag over the array's own three words, and every encoder
-    /// worker asks the same layer for the same macroblock array, so two of them
-    /// retagging it at once is a data race even though neither writes *it*. This
-    /// reads the buffer pointer out instead. The pointer is identical and carries
-    /// the buffer's own provenance, so the macroblocks behind it stay writable —
-    /// only the access to the array struct narrows, from exclusive to shared.
+    /// `as_mut_ptr` above is sound for one thread and unsound for two: `&mut self` is a
+    /// `Unique` retag over the array's own three words, and every encoder worker asks the
+    /// same layer for the same macroblock array, so two of them retagging it at once is a
+    /// data race even though neither writes it. This reads the buffer pointer out
+    /// instead. The pointer is identical and carries the buffer's own provenance, so the
+    /// macroblocks behind it stay writable; only the access to the array struct narrows,
+    /// from exclusive to shared.
     pub fn root_ptr(&self) -> *mut T {
         self.data.as_ptr() as *mut T
     }
@@ -228,9 +221,8 @@ impl<T> MbArray<T> {
         &mut self.data
     }
 
-    /// `#[track_caller]` moves the location to the reader, and the message carries
-    /// both grid dimensions, which is what turns "off by one" into "this grid is
-    /// 22x18 and the caller thinks it is bigger".
+    /// Bounds check whose message names the index, the length and both grid dimensions;
+    /// `#[track_caller]` puts the reported location at the reader.
     #[inline]
     #[track_caller]
     fn check(&self, mb_xy: usize) {
@@ -300,22 +292,16 @@ impl<T> MbArray<T> {
 /// It is generic so this module keeps depending on nothing; the encoder
 /// instantiates it at its `SMB`.
 ///
-/// Under the multi-threaded fork each worker's record accesses are confined to
-/// the records it owns — its slice's range (fixed slicing, and the mode-decision
-/// and entropy paths generally, whose neighbour reads are guarded by the
-/// slice-scoped `uiNeighborAvail` flags) or its partition's (dynamic slicing);
-/// deblocking's in-fork guards ask the atomic `pOverallMbMap` the same-slice
-/// question. A window is minted per call over exactly the owned
-/// range, so disjointness is enforced mechanically: an access that would leave
-/// the window — a cross-slice record read under the fork — **panics with
-/// coordinates instead of racing**. Single-threaded callers mint the whole grid
-/// and the same accessors cross slice boundaries freely (the frame deblocking
-/// walk under filter idc 0).
+/// Under the multi-threaded fork a window is minted over exactly the records one worker
+/// owns — its slice's range under fixed slicing, its partition's under dynamic slicing —
+/// so disjointness is enforced mechanically: an access that would leave the window, a
+/// cross-slice record read, panics with coordinates instead of racing. Single-threaded
+/// callers mint the whole grid, and the same accessors then cross slice boundaries freely
+/// (the frame deblocking walk under filter idc 0).
 ///
-/// Every accessor is `#[track_caller]` and its message names the question, the
-/// current index, the window and the stride, so a wrong availability flag or a
-/// wrong window range says *which* neighbour question failed and where — not
-/// "index out of bounds" three frames down.
+/// Every accessor is `#[track_caller]` and its message names the question, the current
+/// index, the window and the stride, so a wrong availability flag or window range says
+/// which neighbour question failed and where.
 pub struct MbWindow<'a, T> {
     /// Records `[base .. base + mbs.len())` of one grid, in raster order.
     mbs: &'a mut [T],
@@ -414,8 +400,7 @@ impl<'a, T> MbWindow<'a, T> {
         &mut self.mbs[self.cur - self.base]
     }
 
-    /// The record at raster address `xy` — for the list walkers; neighbour
-    /// questions read better through the named accessors below.
+    /// The record at raster address `xy`, for the list walkers.
     #[inline]
     #[track_caller]
     pub fn at(&self, xy: usize) -> &T {
@@ -431,9 +416,8 @@ impl<'a, T> MbWindow<'a, T> {
         &mut self.mbs[i]
     }
 
-    /// The left neighbour's record. The caller has already checked its
-    /// availability flag — a panic here means the flag and the geometry
-    /// disagree, which is exactly what it should say.
+    /// The left neighbour's record. The caller has already checked its availability
+    /// flag, so a panic here means the flag and the geometry disagree.
     ///
     /// # Panics
     /// At the left grid edge, or if `cur - 1` is outside the window.
@@ -495,11 +479,10 @@ impl<'a, T> MbWindow<'a, T> {
         &self.mbs[i]
     }
 
-    /// The record before the current one in **coding order** — the CABAC
-    /// delta-QP question ("the previously coded macroblock"), which is raster
-    /// order within a slice and *not* a geometric neighbour: at a row start it
-    /// names the previous row's last record, where [`left`](Self::left) would
-    /// rightly panic.
+    /// The record before the current one in coding order — the CABAC delta-QP question
+    /// ("the previously coded macroblock"), which is raster order within a slice and not
+    /// a geometric neighbour: at a row start it names the previous row's last record,
+    /// where [`left`](Self::left) panics.
     ///
     /// # Panics
     /// If `cur - 1` is outside the window (the caller has already checked
@@ -519,24 +502,19 @@ impl<'a, T> MbWindow<'a, T> {
     /// `cur - stride - 1`, `cur - stride + 1`), which is what lets one split hand
     /// out the current record mutably beside them.
     ///
-    /// A neighbour is absent (`None` behind the accessor) at a grid edge or where
-    /// its record lies outside this window. Calling the accessor anyway panics — a
-    /// validated edge whose record the window cannot name is a bug that should say
-    /// so, not an index error three frames down.
+    /// A neighbour is absent (`None` behind the accessor) at a grid edge or where its
+    /// record lies outside this window; calling the accessor anyway panics.
     ///
-    /// **The column is taken once.** Each of the four guards asks where the cursor
-    /// sits in its row, and `cur % stride` is a division by a value only known at
-    /// run time; the per-call form in [`left`](Self::left) and its siblings paid for
-    /// one at every read.
+    /// The column is taken once here: all four guards ask where the cursor sits in its
+    /// row, and `cur % stride` divides by a value only known at run time.
     #[inline]
     #[track_caller]
     pub fn split_cur(&mut self) -> MbSplit<'_, T> {
         let local = self.cur - self.base;
         let (stride, cur) = (self.stride, self.cur);
-        // Two questions per neighbour, and they are different: whether the grid has
-        // that record at all (`cur`, against the whole picture) and whether *this*
-        // window holds it (`local`, against the split's `done` half). The named
-        // accessors ask them in that order too — an `assert!` then `rel`.
+        // Two questions per neighbour: whether the grid has that record at all (`cur`,
+        // against the whole picture) and whether this window holds it (`local`, against
+        // the split's `done` half).
         let col = cur % stride;
         let has_row_above = cur >= stride;
         let (done, rest) = self.mbs.split_at_mut(local);
@@ -556,9 +534,8 @@ impl<'a, T> MbWindow<'a, T> {
 /// One record held exclusively beside shared references to its raster
 /// predecessors — what [`MbWindow::split_cur`] answers.
 ///
-/// The fields are private so the split can only be built by a window that
-/// actually contains the records; the accessors mirror [`MbWindow`]'s so the
-/// per-macroblock bodies read identically through either.
+/// The fields are private so the split can only be built by a window that contains the
+/// records; the accessors mirror [`MbWindow`]'s.
 pub struct MbSplit<'a, T> {
     cur: &'a mut T,
     left: Option<&'a T>,
@@ -581,14 +558,13 @@ impl<'a, T> MbSplit<'a, T> {
         self.cur
     }
 
-    /// The left neighbour's record. The caller has already checked its
-    /// availability flag — a panic here means the flag and the window's
-    /// geometry disagree, which is exactly what it should say.
+    /// The left neighbour's record. The caller has already checked its availability
+    /// flag, so a panic here means the flag and the window's geometry disagree.
     #[inline]
     #[track_caller]
     pub fn left(&self) -> &T {
         self.left
-            .expect("left neighbour read with no record in the window — the availability flag and the geometry disagree (F77)")
+            .expect("left neighbour read with no record in the window — the availability flag and the geometry disagree")
     }
 
     /// The record above. See [`left`](Self::left) for the contract.
@@ -596,7 +572,7 @@ impl<'a, T> MbSplit<'a, T> {
     #[track_caller]
     pub fn top(&self) -> &T {
         self.top
-            .expect("top neighbour read with no record in the window — the availability flag and the geometry disagree (F77)")
+            .expect("top neighbour read with no record in the window — the availability flag and the geometry disagree")
     }
 
     /// The record above-left. See [`left`](Self::left) for the contract.
@@ -604,7 +580,7 @@ impl<'a, T> MbSplit<'a, T> {
     #[track_caller]
     pub fn top_left(&self) -> &T {
         self.top_left
-            .expect("top-left neighbour read with no record in the window — the availability flag and the geometry disagree (F77)")
+            .expect("top-left neighbour read with no record in the window — the availability flag and the geometry disagree")
     }
 
     /// The record above-right. See [`left`](Self::left) for the contract.
@@ -612,7 +588,7 @@ impl<'a, T> MbSplit<'a, T> {
     #[track_caller]
     pub fn top_right(&self) -> &T {
         self.top_right
-            .expect("top-right neighbour read with no record in the window — the availability flag and the geometry disagree (F77)")
+            .expect("top-right neighbour read with no record in the window — the availability flag and the geometry disagree")
     }
 
     /// Records per grid row — the window's own stride, which the neighbour-cache
@@ -625,79 +601,68 @@ impl<'a, T> MbSplit<'a, T> {
 
 /// Reference lists per macroblock — the decoder's `LIST_A`.
 ///
-/// Declared here rather than imported so this module keeps depending on nothing.
-/// `decoder_core.rs`'s `mb_grid_list_count_matches_list_a` is where the identity
-/// against `decoder_context::LIST_A` is actually checked, because that is the one
-/// place both names are in scope.
+/// Declared here rather than imported so this module keeps depending on nothing;
+/// `decoder_core.rs`'s `mb_grid_list_count_matches_list_a` checks it against
+/// `decoder_context::LIST_A`.
 pub const LIST_COUNT: usize = 2;
 
 /// Every per-macroblock array the decoder's DQ layer owns, over one grid.
 ///
-/// One owner, one set of dimensions, and indexing that panics instead of running
-/// off the end.
-///
-/// # Field order
-///
-/// The order below is `InitialDqLayersContext`'s allocation order, not
-/// `DqLayerState`'s declaration order.
+/// One owner, one set of dimensions, and indexing that panics instead of running off the
+/// end. Fields are in `InitialDqLayersContext`'s allocation order, not `DqLayerState`'s
+/// declaration order.
 #[derive(Clone, Debug)]
 pub struct MbGrid {
     dims: MbDims,
-    /// `pMbType` — `numMb * sizeof(u32)`.
+    /// `pMbType`.
     pub mb_type: MbArray<u32>,
-    /// `pMv[LIST_A]` — `numMb * 16 * 2 * sizeof(i16)`, one 4x4-block motion vector
-    /// field per list.
+    /// `pMv[LIST_A]` — one 4x4-block motion vector field per list.
     pub mv: [MbArray<[[i16; 2]; 16]>; LIST_COUNT],
-    /// `pRefIndex[LIST_A]` — `numMb * 16 * sizeof(i8)`.
+    /// `pRefIndex[LIST_A]`.
     pub ref_index: [MbArray<[i8; 16]>; LIST_COUNT],
-    /// `pDirect` — `numMb * 16 * sizeof(i8)`.
+    /// `pDirect`.
     pub direct: MbArray<[i8; 16]>,
-    /// `pNoSubMbPartSizeLessThan8x8Flag` — `numMb * sizeof(bool)`.
+    /// `pNoSubMbPartSizeLessThan8x8Flag`.
     pub no_sub_mb_part_size_less_than8x8_flag: MbArray<bool>,
-    /// `pTransformSize8x8Flag` — `numMb * sizeof(bool)`.
+    /// `pTransformSize8x8Flag`.
     pub transform_size8x8_flag: MbArray<bool>,
-    /// `pLumaQp` — `numMb * sizeof(i8)`.
+    /// `pLumaQp`.
     pub luma_qp: MbArray<i8>,
-    /// `pChromaQp` — `numMb * 2 * sizeof(i8)`, Cb then Cr.
+    /// `pChromaQp` — Cb then Cr.
     pub chroma_qp: MbArray<[i8; 2]>,
-    /// `pMvd[LIST_A]` — `numMb * 16 * 2 * sizeof(i16)`.
+    /// `pMvd[LIST_A]`.
     pub mvd: [MbArray<[[i16; 2]; 16]>; LIST_COUNT],
-    /// `pCbfDc` — `numMb * sizeof(u16)`.
+    /// `pCbfDc`.
     pub cbf_dc: MbArray<u16>,
-    /// `pNzc` — `numMb * 24 * sizeof(i8)`: 16 luma 4x4 blocks then 8 chroma.
+    /// `pNzc` — 16 luma 4x4 blocks then 8 chroma.
     pub nzc: MbArray<[i8; 24]>,
-    /// `pScaledTCoeff` — `numMb * MB_COEFF_LIST_SIZE * sizeof(i16)`, 384 = 256 luma
-    /// + 2 x 64 chroma.
+    /// `pScaledTCoeff` — `MB_COEFF_LIST_SIZE` = 384 = 256 luma + 2 x 64 chroma.
     pub scaled_tcoeff: MbArray<[i16; 384]>,
-    /// `pIntraPredMode` — `numMb * sizeof([i8; 8])`. `dec_frame.h:85`:
-    /// `0~3 top4x4; 4~6 left 4x4; 7 intra16x16`.
+    /// `pIntraPredMode`. `dec_frame.h:85`: `0~3 top4x4; 4~6 left 4x4; 7 intra16x16`.
     pub intra_pred_mode: MbArray<[i8; 8]>,
-    /// `pIntra4x4FinalMode` — `numMb * sizeof([i8; 16])`, indexed in scan order.
+    /// `pIntra4x4FinalMode`, indexed in scan order.
     pub intra4x4_final_mode: MbArray<[i8; 16]>,
-    /// `pIntraNxNAvailFlag` — `numMb * sizeof(u8)`.
+    /// `pIntraNxNAvailFlag`.
     pub intra_nxn_avail_flag: MbArray<u8>,
-    /// `pChromaPredMode` — `numMb * sizeof(i8)`.
+    /// `pChromaPredMode`.
     pub chroma_pred_mode: MbArray<i8>,
-    /// `pCbp` — `numMb * sizeof(i8)`.
+    /// `pCbp`.
     pub cbp: MbArray<i8>,
-    /// `pSubMbType` — `numMb * MB_PARTITION_SIZE * sizeof(u32)`.
+    /// `pSubMbType` — one entry per `MB_PARTITION_SIZE` partition.
     pub sub_mb_type: MbArray<[u32; 4]>,
-    /// `pSliceIdc` — `numMb * sizeof(i32)`. The slice a macroblock belongs to;
-    /// `0xff`-memset at slice start, which is why it is `i32` and not an index.
+    /// `pSliceIdc` — the slice a macroblock belongs to; `0xff`-memset at slice start,
+    /// which is why it is `i32` and not an index.
     pub slice_idc: MbArray<i32>,
-    /// `pResidualPredFlag` — `numMb * sizeof(i8)`.
+    /// `pResidualPredFlag`.
     pub residual_pred_flag: MbArray<i8>,
-    /// `pMbCorrectlyDecodedFlag` — `numMb * sizeof(bool)`.
+    /// `pMbCorrectlyDecodedFlag`.
     pub mb_correctly_decoded_flag: MbArray<bool>,
-    /// `pMbRefConcealedFlag` — `numMb * sizeof(bool)`.
+    /// `pMbRefConcealedFlag`.
     pub mb_ref_concealed_flag: MbArray<bool>,
 }
 
 impl MbGrid {
-    /// A grid over `dims` with every array zero-filled.
-    ///
-    /// Zero-filled because `WelsMallocz` is what allocated all 25 of these blocks
-    /// and it zeroes.
+    /// A grid over `dims` with every array zero-filled, as `WelsMallocz` leaves them.
     pub fn new(dims: MbDims) -> Self {
         Self {
             dims,
@@ -732,16 +697,15 @@ impl MbGrid {
         }
     }
 
-    /// The dimensions every array in this grid is addressed by — the **allocation's**,
-    /// fixed at construction.
+    /// The dimensions every array in this grid is addressed by — the allocation's, fixed
+    /// at construction.
     #[inline]
     pub fn dims(&self) -> MbDims {
         self.dims
     }
 }
 
-/// The message names the index, the length **and** both
-/// grid dimensions, so a stale-allocation read says which grid it was reading.
+/// Panic messages name the index, the length and both grid dimensions.
 #[cfg(test)]
 mod f77_instrument_tests {
     use super::*;
@@ -794,8 +758,8 @@ mod mb_window_tests {
         assert_eq!(*w.cur(), 9);
     }
 
-    /// The split hands out the current record exclusively and its two
-    /// raster predecessors shared, from one borrow — deblocking's footprint.
+    /// The split hands out the current record exclusively and its raster predecessors
+    /// shared, from one borrow — deblocking's footprint.
     #[test]
     fn split_cur_pairs_the_exclusive_record_with_its_shared_predecessors() {
         let mut a = grid();
@@ -862,9 +826,8 @@ mod mb_window_tests {
         let _ = MbWindow::whole(&mut a, 2).top();
     }
 
-    /// The fork-safety tooth: a same-slice-guarded walker that steps outside
-    /// its own window aborts with the window's coordinates, instead of reading
-    /// another worker's record.
+    /// A walker that steps outside its own window panics with the window's coordinates
+    /// instead of reading another worker's record.
     #[test]
     #[should_panic(expected = "top of mb 6 is mb 2, outside window [5..9) (stride 4)")]
     fn an_out_of_window_neighbour_read_names_window_and_question() {
@@ -1083,8 +1046,8 @@ mod tests {
         }
     }
 
-    /// `WelsMallocz` zeroes, so a fresh grid is what a fresh sequence has always
-    /// started from. Checked on the widest element and the narrowest.
+    /// A fresh grid is zero everywhere, as `WelsMallocz` leaves it — checked on the
+    /// widest element and the narrowest.
     #[test]
     fn a_fresh_grid_is_zero_everywhere() {
         let g = MbGrid::new(MbDims::new(3, 2));

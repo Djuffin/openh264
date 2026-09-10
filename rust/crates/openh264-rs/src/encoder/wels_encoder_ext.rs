@@ -2,7 +2,8 @@
 
 //! C++ SVC Encoder Facade and Lifecycle Controller (`CWelsH264SVCEncoder`).
 //!
-//! Translated from `codec/encoder/plus/inc/welsEncoderExt.h` and `codec/encoder/plus/src/welsEncoderExt.cpp`.
+//! C++: `codec/encoder/plus/inc/welsEncoderExt.h`,
+//! `codec/encoder/plus/src/welsEncoderExt.cpp`.
 
 #![deny(unsafe_code)]
 #![forbid(unsafe_code)]
@@ -33,7 +34,7 @@ use crate::{
     SEncParamExt, SFrameBSInfo, SSourcePicture, VideoFormat,
 };
 // g_ksLevelLimits/LEVEL_NUMBER come from codec/common/inc/wels_common_defs.h and are
-// shared by both codecs; reuse the decoder's copy rather than declaring a second one.
+// shared by both codecs; the decoder's copy is reused.
 use crate::decoder::nalu::g_ksLevelLimits;
 /// codec/common/inc/wels_common_defs.h:47
 pub const LEVEL_NUMBER: usize = 17;
@@ -152,8 +153,8 @@ pub fn WELS_MAX<T: PartialOrd + Copy>(a: T, b: T) -> T {
     if a > b { a } else { b }
 }
 
-/// `WELS_MIN` — `macros.h`. A macro in C++; this module hosts the rest of that
-/// header's set (`WELS_MAX`, `WELS_CLIP3`, `WELS_ABS`, `WELS_LOG2`).
+/// `WELS_MIN` — `macros.h`, whose set this module hosts (`WELS_MAX`, `WELS_CLIP3`,
+/// `WELS_ABS`, `WELS_LOG2`).
 #[inline(always)]
 pub fn WELS_MIN<T: PartialOrd + Copy>(a: T, b: T) -> T {
     if a < b { a } else { b }
@@ -161,13 +162,8 @@ pub fn WELS_MIN<T: PartialOrd + Copy>(a: T, b: T) -> T {
 
 /// `(RC_MODES) iValue` — `welsEncoderExt.cpp:957`.
 ///
-/// **Deviation from the C++.** C++ casts the
-/// caller's `int32_t` straight into the enum, so an out-of-range value is stored
-/// verbatim; `WelsRcInitFuncPointers`'s switch has no `default`, so the dispatch
-/// table is then left pointing at the previous mode's callbacks. A Rust enum
-/// cannot hold a value outside its variants, so an unrecognised mode is left as
-/// `RC_QUALITY_MODE` (`RC_MODES`' `#[default]`, and C++'s value 0). Every value
-/// the reference actually accepts round-trips exactly.
+/// An unrecognised mode maps to `RC_QUALITY_MODE` (`RC_MODES`' `#[default]`, value 0),
+/// since the enum cannot hold a value outside its variants.
 #[inline]
 pub(crate) fn rc_mode_from_raw(iValue: i32) -> RCMode {
     match iValue {
@@ -226,16 +222,16 @@ pub struct SLevelInfo {
 /// `TagDeliveryStatus` — `codec_app_def.h:708`, the payload of
 /// `ENCODER_OPTION_DELIVERY_STATUS`.
 ///
-/// Both are marked "reserved" upstream and neither is read by
-/// `welsEncoderExt.cpp:1150-1155`, which takes `bDeliveryFlag` and logs it. They are
-/// declared here for the layout, not for a reader.
+/// The two `iDropFrame*` fields are reserved and read by nothing;
+/// `welsEncoderExt.cpp:1150-1155` takes `bDeliveryFlag` and logs it. They are declared
+/// for the layout.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SDeliveryStatus {
     pub bDeliveryFlag: bool,
-    /// `iDropFrameType` — the frame type that is dropped; reserved upstream.
+    /// `iDropFrameType` — the frame type that is dropped; reserved.
     pub iDropFrameType: i32,
-    /// `iDropFrameSize` — the frame size that is dropped; reserved upstream.
+    /// `iDropFrameSize` — the frame size that is dropped; reserved.
     pub iDropFrameSize: i32,
 }
 
@@ -307,9 +303,8 @@ pub use crate::encoder::ref_list_mgr_svc::SLTRRecoverRequest;
 
 // Core encoder functions implementations
 //
-// The parameter-set writers themselves live in `au_set.rs`, next to the rest of the
-// au_set.cpp port; what remains here are the encoder_ext.cpp functions that wrap them
-// in NAL units.
+// The parameter-set writers themselves live in `au_set.rs`; what remains here are the
+// encoder_ext.cpp functions that wrap them in NAL units.
 
 /// `WelsWriteOneSPS` — encoder_ext.cpp:2831.
 pub fn WelsWriteOneSPS(pCtx: &mut sWelsEncCtx, kiSpsIdx: i32, iNalSize: &mut i32) -> i32 {
@@ -406,8 +401,8 @@ pub fn WelsWriteOnePPS(pCtx: &mut sWelsEncCtx, kiPpsIdx: i32, iNalSize: &mut i32
 /// `WelsWriteParameterSets` — encoder_ext.cpp:2874. Writes every SPS, subset SPS and
 /// PPS the context holds.
 ///
-/// Note the loops are bounded by `iSpsNum`/`iSubsetSpsNum`/`iPpsNum`, so an
-/// unpopulated context writes **nothing**.
+/// The loops are bounded by `iSpsNum`/`iSubsetSpsNum`/`iPpsNum`, so an unpopulated
+/// context writes nothing.
 pub fn WelsWriteParameterSets(
     pCtx: &mut sWelsEncCtx,
     pNumNal: &mut i32,
@@ -562,10 +557,8 @@ pub fn WelsEncoderEncodeParameterSetsRust(
 
 /// `ForceCodingIDR` — `encoder_ext.cpp:3046`.
 ///
-/// The reference's two arms differ only in *which* dependency layers they reset:
-/// all of them unless simulcast-AVC is on and the caller named a valid one. Both
-/// reset the same five fields and bump the same counter, so the loop below is
-/// written once over the layer range each arm selects.
+/// Resets the same five fields and bumps the same counter over a range of dependency
+/// layers: all of them, unless simulcast-AVC is on and the caller named a valid one.
 pub fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
     let Some((bSimulcastAVC, iSpatialLayerNum)) = pCtx
         .param_opt()
@@ -590,9 +583,8 @@ pub fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
             pParamInternal.iPOC = 0;
             pParamInternal.bEncCurFrmAsIdrFlag = true;
         }
-        // The reference counts the request against layer **0** in the all-layers arm
-        // and against `iLayerId` in the other — `sEncoderStatistics[0]` inside the
-        // loop, not `sEncoderStatistics[iDid]`.
+        // The request counts against layer 0 in the all-layers arm and against
+        // `iLayerId` in the other — never against `iDid`.
         let stat_idx = if all_layers { 0 } else { iLayerId as usize };
         pCtx.sEncoderStatistics[stat_idx].uiIDRReqNum = pCtx.sEncoderStatistics[stat_idx]
             .uiIDRReqNum
@@ -604,10 +596,9 @@ pub fn ForceCodingIDR(pCtx: &mut sWelsEncCtx, iLayerId: i32) -> i32 {
 
 /// `WelsEncoderParamAdjust` — codec/encoder/core/src/encoder_ext.cpp:4182.
 ///
-/// Decides whether the new configuration can be folded into the running encoder
-/// or needs a full uninit/init cycle, and does whichever it decides. `pNewParam`
-/// is `SWelsSvcCodingParam*` (non-const) in C++ and really is written back — the
-/// clip block in the no-reset arm mutates the caller's copy.
+/// Decides whether the new configuration can be folded into the running encoder or
+/// needs a full uninit/init cycle, and does whichever it decides. `pNewParam` is
+/// written back: the clip block in the no-reset arm mutates the caller's copy.
 pub fn WelsEncoderParamAdjust(
     ppCtx: &mut Option<Box<sWelsEncCtx>>,
     pNewParam: &mut SWelsSvcCodingParam,
@@ -794,7 +785,6 @@ pub fn WelsEncoderParamAdjust(
             Some(pEncContext) => pEncContext,
             None => return 1,
         };
-        // if WelsInitEncoderExt succeed
         // for LTR or SPS,PPS ID update
         iIndexD = 0;
         while iIndexD < pNewParam.iSpatialLayerNum {
@@ -881,7 +871,6 @@ pub fn WelsEncoderParamAdjust(
         /* Layer definition */
         pOldParam.bPrefixNalAddingCtrl = pNewParam.bPrefixNalAddingCtrl;
 
-        // d
         iIndexD = 0;
         loop {
             let d = iIndexD as usize;
@@ -918,9 +907,8 @@ pub fn WelsEncoderParamAdjust(
 /// `WelsEncoderApplyFrameRate` — codec/encoder/core/src/encoder_ext.cpp:672.
 ///
 /// Pushes `fMaxFrameRate` down into every dependency layer, keeping each layer's
-/// output/input ratio. The clip to [`MIN_FRAME_RATE`, `MAX_FRAME_RATE`] is the
-/// *caller's* job in C++ (`SetOption` does it before calling); this function does
-/// not clip.
+/// output/input ratio. Clipping to [`MIN_FRAME_RATE`, `MAX_FRAME_RATE`] is the caller's
+/// job — `SetOption` does it before calling; this function does not clip.
 pub fn WelsEncoderApplyFrameRate(pParam: &mut SWelsSvcCodingParam) {
     const kfEpsn: f32 = 0.000001;
     let kiNumLayer = pParam.iSpatialLayerNum;
@@ -1195,9 +1183,6 @@ pub fn ParamValidation(pLogCtx: SLogContext, pCfg: &mut SWelsSvcCodingParam) -> 
 /// dispatch to `SliceArgumentValidationFixedSliceMode` /
 /// `CheckRowMbMultiSliceSetting` / `CheckRasterMultiSliceSetting` in
 /// `svc_enc_slice_segment.rs`.
-///
-/// The `WelsLog` calls that accompany each rejection in C++ have no counterpart
-/// here — only the control flow and the returned code are reproduced.
 pub fn ParamValidationExt(pLogCtx: SLogContext, pCodingParam: &mut SWelsSvcCodingParam) -> i32 {
     if pCodingParam.iUsageType != CAMERA_VIDEO_REAL_TIME
         && pCodingParam.iUsageType != SCREEN_CONTENT_REAL_TIME
@@ -1233,10 +1218,8 @@ pub fn ParamValidationExt(pLogCtx: SLogContext, pCodingParam: &mut SWelsSvcCodin
 
     // eSpsPpsIdStrategy checkings — `encoder_ext.cpp:466-491`.
     //
-    // The messages are the reference's, argument for argument — including the third
-    // one's, which prints `eSpsPpsIdStrategy` where it says `bSimulcastAVC` and vice
-    // versa (`encoder_ext.cpp:487-489`); reproduced rather than repaired, because a
-    // consumer grepping its logs matches on text.
+    // The third message prints `eSpsPpsIdStrategy` where it says `bSimulcastAVC` and
+    // vice versa (`encoder_ext.cpp:487-489`); the text is what consumers grep for.
     let sps_listing = SPS_LISTING as i32;
     if pCodingParam.iSpatialLayerNum > 1
         && !pCodingParam.bSimulcastAVC
@@ -1380,8 +1363,8 @@ pub fn ParamValidationExt(pLogCtx: SLogContext, pCodingParam: &mut SWelsSvcCodin
                         // SM_RASTER_SLICE with one slice is just SM_SINGLE_SLICE
                         pSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
                     } else {
-                        // C++ logs "GOM based RC do not support SM_RASTER_SLICE" when
-                        // iRCMode != RC_OFF_MODE here, but does not fail.
+                        // "GOM based RC do not support SM_RASTER_SLICE" is logged when
+                        // iRCMode != RC_OFF_MODE here, but is not a failure.
                         //
                         // considering coding efficiency and performance, iCountMbNum is
                         // constrained by MIN_NUM_MB_PER_SLICE for multi-slice mode
@@ -1393,8 +1376,8 @@ pub fn ParamValidationExt(pLogCtx: SLogContext, pCodingParam: &mut SWelsSvcCodin
                 }
             }
             SM_SIZELIMITED_SLICE => {
-                // encoder_ext.cpp:614-644. iMbWidth/iMbHeight are computed but
-                // unused in this arm in the C++ too.
+                // encoder_ext.cpp:614-644. iMbWidth/iMbHeight are computed but unused
+                // in this arm.
                 let uiMaxNalSize = pCodingParam.uiMaxNalSize;
                 let pSliceArgument = &mut pCodingParam.sSpatialLayers[idx].sSliceArgument;
                 if pSliceArgument.uiSliceSizeConstraint <= MAX_MACROBLOCK_SIZE_IN_BYTE {
@@ -1534,8 +1517,8 @@ pub fn CheckReferenceNumSetting(
 /// `WelsEncoderApplyBitVaryRang` — codec/encoder/core/src/encoder_ext.cpp:726.
 ///
 /// Lowers each layer's `iMaxSpatialBitrate` to at most `iSpatialBitrate * (1 +
-/// iRang/100)`. It does **not** write `iBitsVaryPercentage`; `SetOption` does
-/// that (with the clip) before calling.
+/// iRang/100)`. It does not write `iBitsVaryPercentage`; `SetOption` does that, with
+/// the clip, before calling.
 pub fn WelsEncoderApplyBitVaryRang(
     pLogCtx: SLogContext,
     pParam: &mut SWelsSvcCodingParam,
@@ -1591,10 +1574,9 @@ impl CWelsH264SVCEncoder {
         self.m_pWelsTrace.m_sLogCtx
     }
 
-    /// `WelsInitEncoderExt` copies the log context into `sWelsEncCtx::sLogCtx`, and
-    /// in C++ that copy stays current because it holds a route to the trace object
-    /// rather than the settings. Here it holds the settings, so a `SetOption` that
-    /// changes them re-stamps the copy. One line per trace option arm.
+    /// Re-stamps the copy of the log context that `WelsInitEncoderExt` put in
+    /// `sWelsEncCtx::sLogCtx`. That copy holds the settings, so a `SetOption` which
+    /// changes them has to write it again. One line per trace option arm.
     pub(crate) fn sync_log_ctx(&mut self) {
         let CWelsH264SVCEncoder {
             m_pWelsTrace,
@@ -1620,9 +1602,8 @@ impl CWelsH264SVCEncoder {
     }
 
     pub fn InitEncoder(&mut self) {
-        // `welsEncoderExt.cpp:180` — `m_pWelsTrace->SetCodecInstance (this)`, which
-        // writes `m_sLogCtx.pCodecInstance`. It is the value `WelsLog` prints in the
-        // message tag and nothing else, so it travels as an address.
+        // `welsEncoderExt.cpp:180`. `m_sLogCtx.pCodecInstance` is only ever printed
+        // in `WelsLog`'s message tag, so it travels as an address.
         let instance = std::ptr::from_mut(self) as usize;
         self.m_pWelsTrace.SetCodecInstance(instance);
     }
@@ -1632,9 +1613,8 @@ impl CWelsH264SVCEncoder {
         cmResultSuccess
     }
 
-    /// `None` is the reference's `NULL argv`, which is a *reported* error
-    /// (`welsEncoderExt.cpp:192`) and not a caller contract, so it survives the
-    /// translation as an `Option` rather than being rejected at the thunk.
+    /// A null `argv` is a reported error (`welsEncoderExt.cpp:192`), not a caller
+    /// contract, so it arrives here as `None` rather than being rejected at the thunk.
     pub fn Initialize(&mut self, argv: Option<&SEncParamBase>) -> i32 {
         // `welsEncoderExt.cpp:188`.
         WelsLog(
@@ -1876,23 +1856,20 @@ impl CWelsH264SVCEncoder {
         0
     }
 
-    /// `CWelsH264SVCEncoder::TraceParamInfo` — **`welsEncoderExt.cpp:505`**.
+    /// `CWelsH264SVCEncoder::TraceParamInfo` — `welsEncoderExt.cpp:505`.
     ///
-    /// One `WELS_LOG_INFO` line carrying the whole parameter block, then one more
-    /// per spatial layer.
+    /// One `WELS_LOG_INFO` line carrying the whole parameter block, then one more per
+    /// spatial layer.
     ///
-    /// **Every unsigned field printed through `%d` is cast to `i32` here, and that
-    /// is not a lint — it is the reference's output.** C's `%d` on a `uint32_t`
-    /// reinterprets the bits as signed, so upstream prints `uiIntraPeriod= -1`
-    /// where the stored value is `0xFFFFFFFF`; Rust's `{}` on a `u32` prints
-    /// `4294967295`.
+    /// Every unsigned field printed through `%d` is cast to `i32`: C's `%d` on a
+    /// `uint32_t` reinterprets the bits as signed, so `uiIntraPeriod= -1` is what a
+    /// stored `0xFFFFFFFF` prints as, not `4294967295`.
     ///
-    /// **Format fidelity is the whole contract**, so the odd spellings below are
-    /// deliberate transcriptions and not typos: `fFrameRate= %.6ff` really does
-    /// print a trailing `f` after six decimals, the block prints `iComplexityMode`
-    /// **twice** (once mid-line and once inside the parenthesised tail), and the
-    /// parenthesis opened at `iLoopFilterDisableIdc (offset(alpha/beta):` is never
-    /// closed until the tail's own `)`. Every `bool` reaches C's `%d` as 0 or 1.
+    /// The odd spellings below are deliberate: `fFrameRate= %.6ff` prints a trailing
+    /// `f` after six decimals, `iComplexityMode` is printed twice (once mid-line and
+    /// once inside the parenthesised tail), and the parenthesis opened at
+    /// `iLoopFilterDisableIdc (offset(alpha/beta):` is not closed until the tail's own
+    /// `)`. Every `bool` reaches `%d` as 0 or 1.
     pub fn TraceParamInfo(&mut self, pParam: &SEncParamExt) {
         let b = |v: bool| if v { 1 } else { 0 };
         WelsLog(
@@ -1938,8 +1915,7 @@ iComplexityMode = {};iNumRefFrame = {};iEntropyCodingModeFlag = {};uiMaxNalSize 
                 pParam.iMinQp
             ),
         );
-        // `while (i < iSpatialLayers)` with the same clamp the reference applies —
-        // a caller may name more layers than the array holds.
+        // Clamped: a caller may name more layers than the array holds.
         let iSpatialLayers = if (pParam.iSpatialLayerNum as usize) < MAX_SPATIAL_LAYER_NUM {
             pParam.iSpatialLayerNum as usize
         } else {
@@ -1975,8 +1951,8 @@ uiProfileIdc = {};uiLevelIdc = {};iDLayerQp = {}",
     /// One `WELS_LOG_INFO` line per dependency id in `[0, iMaxDid]`, read straight
     /// out of `sEncoderStatistics[iDid]`.
     ///
-    /// `uLTRSentNum=NA` is a literal in the reference: the field exists
-    /// (`uiLTRSentNum`) and the line does not print it.
+    /// `uLTRSentNum=NA` is a literal: `uiLTRSentNum` exists, and the line does not
+    /// print it.
     pub fn LogStatistics(&mut self, kiCurrentFrameTs: i64, iMaxDid: i32) {
         for iDid in 0..=iMaxDid {
             // Copied out (`SEncoderStatistics` is `Copy`) so the context borrow ends
@@ -2033,10 +2009,9 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
         for iDid in 0..=iMaxDid {
             let mut eFrameType = EVideoFrameType::videoFrameTypeSkip;
             let mut kiCurrentFrameSize = 0;
-            // Each layer's `pNalLengthInByte` is the previous one's advanced by
-            // the previous one's `iNalCount` — so the running sum below *is* the
-            // pointer chain, in the units the storage is made of, and this walk
-            // visits the layers in the order that chain was built.
+            // Each layer's `pNalLengthInByte` is the previous one's advanced by that
+            // layer's `iNalCount`, so the running sum below is that pointer chain and
+            // visits the layers in the order it was built.
             let kpNalLen: &[std::sync::atomic::AtomicI32] = match self.m_pEncContext.as_deref() {
                 Some(ctx) => match ctx.pOut.as_deref() {
                     Some(pOut) => &pOut.sNalLen,
@@ -2142,10 +2117,9 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                         pStatistics.iLastStatisticsBytes = pStatistics.iTotalEncodedBytes;
                         pStatistics.iLastStatisticsFrameCount = pStatistics.uiInputFrameCount;
                         ctx.iLastStatisticsLogTs = kiCurrentFrameTs;
-                        // `LogStatistics` takes `&mut self` and the reset writes
-                        // back into the statistics this scope is holding, so both
-                        // move below the borrow. The C++ order — log, *then* reset
-                        // `iTotalEncodedBytes` — is preserved exactly.
+                        // `LogStatistics` takes `&mut self` and the reset writes back
+                        // into the statistics this scope holds, so both move below the
+                        // borrow. The order is log, then reset `iTotalEncodedBytes`.
                         bLogStatisticsNow = true;
                     }
                 }
@@ -2163,8 +2137,8 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
 
 impl Drop for CWelsH264SVCEncoder {
     fn drop(&mut self) {
-        // `welsEncoderExt.cpp:136` — the destructor announces itself first, then
-        // uninitializes, so the two lines land in the reference's order.
+        // `welsEncoderExt.cpp:136` — the destructor announces itself before it
+        // uninitializes.
         WelsLog(
             self.m_pWelsTrace.m_sLogCtx,
             WELS_LOG_INFO,

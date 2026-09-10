@@ -28,8 +28,6 @@
 
 //! # Motion Vector Prediction and Motion Info Caching (`mv_pred.h` / `mv_pred.cpp`)
 //!
-//! Translated from `codec/decoder/core/inc/mv_pred.h` and `codec/decoder/core/src/mv_pred.cpp`.
-//!
 //! Implements motion vector prediction (MVP), directional match selection, component-wise
 //! median calculation, P-skip and B-direct mode derivations (Spatial Direct and Temporal Direct),
 //! collocated macroblock synchronization, POC reference remapping, and macroblock motion
@@ -59,7 +57,7 @@ pub const ERR_NONE: i32 = 0;
 pub const ERR_LEVEL_SLICE_DATA: i32 = 6;
 pub const ERR_LEVEL_MB_DATA: i32 = 7;
 pub const ERR_INFO_SYNTAX_BASE: i32 = 1001;
-pub const ERR_INFO_REFERENCE_PIC_LOST: i32 = ERR_INFO_SYNTAX_BASE + 74; // 1075 or 175 depending on enum
+pub const ERR_INFO_REFERENCE_PIC_LOST: i32 = ERR_INFO_SYNTAX_BASE + 74;
 pub const ERR_INFO_INVALID_REF_INDEX: i32 = ERR_INFO_SYNTAX_BASE + 39;
 
 pub const dsRefLost: i32 = 0x02;
@@ -162,7 +160,7 @@ pub fn IS_SUB_4x4(sub_mb_type: u32) -> bool {
 // ============================================================================
 
 // ============================================================================
-// Data Structures matching C++ Dec Core
+// Data Structures
 // ============================================================================
 
 pub use crate::decoder::picture::SPicture;
@@ -183,14 +181,13 @@ pub use crate::decoder::parameter_sets::SSps;
 // ============================================================================
 
 /// Fills the 2x2 4x4-block square whose top-left is `origin` with one reference index,
-/// **including the C's sign-extension quirk**.
+/// including the sign extension of the broadcast.
 ///
 /// `SetRectBlock`'s 1-byte path broadcasts through `val * 0x0101` in `uint32_t` and
 /// truncates to 16 bits, and every caller here passes a sign-extended `int8_t`: for
 /// `val = -1` the product is `0xFFFFFEFF`, so the pair written is `{-1, -2}`, not
-/// `{-1, -1}`. The arithmetic is kept exactly — repairing it here would disagree
-/// with the reference decoder. The two `(uint8_t)REF_NOT_IN_LIST` sites are *not*
-/// this: C casts to unsigned itself there, so those are plain fills.
+/// `{-1, -1}`. The two `(uint8_t)REF_NOT_IN_LIST` sites are not this — the cast is to
+/// unsigned there — so those are plain fills.
 #[inline(always)]
 pub fn set_rect_ref(block: &mut [i8; 16], origin: usize, val: i8) {
     let broadcast = (val as i32 as u32).wrapping_mul(0x0101);
@@ -243,8 +240,8 @@ pub fn WELS_MIN_POSITIVE(a: i8, b: i8) -> i8 {
 // Macroblock Type Accessor
 // ============================================================================
 
-/// The macroblock-type array this layer reads, **whole** — the picture's when there
-/// is a picture, the layer's grid otherwise.
+/// The macroblock-type array this layer reads: the picture's when there is a picture,
+/// the layer's grid otherwise.
 #[inline(always)]
 pub fn GetMbType<'a>(
     pCurDqLayer: &'a DqLayerState,
@@ -608,12 +605,11 @@ pub fn GetColocatedMb(
         false
     };
 
-    // Fix relative to 2.6.0, mirroring `mv_pred.cpp:344`: `IS_Inter_8x8` only tests MB_TYPE_8x8,
-    // but a co-located P_8x8ref0 is stored as MB_TYPE_8x8_REF0 (`g_ksInterPMbTypeInfo[4]`) and is
-    // 8x8-partitioned just the same. With direct_8x8_inference_flag = 0 it fell to the 8x8-corner
-    // branch below, so the direct sub-blocks took one corner's motion for the whole 8x8 instead of
-    // the per-4x4 derivation 8.4.1.2.2 / 8.4.1.2.3 prescribe. `IS_Inter_8x8` itself is left alone;
-    // its other call sites mean MB_TYPE_8x8 by it.
+    // A co-located P_8x8ref0 is stored as MB_TYPE_8x8_REF0 (`g_ksInterPMbTypeInfo[4]`) and is
+    // 8x8-partitioned just like MB_TYPE_8x8, so with direct_8x8_inference_flag = 0 it takes the
+    // per-4x4 derivation of 8.4.1.2.2 / 8.4.1.2.3 rather than the 8x8-corner branch below.
+    // `IS_Inter_8x8` tests only MB_TYPE_8x8 and is not used here; its other call sites mean
+    // MB_TYPE_8x8 by it.
     if (coloc_mbType & (MB_TYPE_8x8 | MB_TYPE_8x8_REF0)) != 0 && !bDirect8x8InferenceFlag {
         *subMbType = SUB_MB_TYPE_4x4 | MB_TYPE_P0L0 | MB_TYPE_P0L1 | MB_TYPE_DIRECT;
         *mbType |= MB_TYPE_8x8 | MB_TYPE_L0 | MB_TYPE_L1;
@@ -653,7 +649,7 @@ pub fn GetColocatedMb(
                 pCurDqLayer.iColocMv[LIST_1] = *colocPic.pMv[LIST_1].get(iMbXy);
                 pCurDqLayer.iColocRefIndex[LIST_1] = *colocPic.pRefIndex[LIST_1].get(iMbXy);
             } else {
-                // The C casts to `uint8_t` here, so this fill is the plain value.
+                // The cast is to `uint8_t` here, so this fill is the plain value.
                 pCurDqLayer.iColocRefIndex[LIST_1].fill(REF_NOT_IN_LIST);
             }
         } else {
@@ -670,12 +666,8 @@ pub fn GetColocatedMb(
                 set_rect_mv(&mut pCurDqLayer.iColocMv[listIdx], 8, colocMvPtr[12]);
                 set_rect_mv(&mut pCurDqLayer.iColocMv[listIdx], 10, colocMvPtr[15]);
 
-                // C passes the raw `int8_t` into SetRectBlock's `uint32_t val`, so a
-                // negative ref index sign-extends (-1 -> 0xFFFFFFFF) and the `val *
-                // 0x0101` fill then writes {-1, -2} rather than {-1, -1}. Zero-extending
-                // here would silently disagree with the reference decoder, so keep the
-                // sign extension. (Contrast the two `(uint8_t)REF_NOT_IN_LIST` sites,
-                // where C casts to unsigned itself.)
+                // Sign-extending fill: a negative ref index writes {-1, -2}, not
+                // {-1, -1}. See [`set_rect_ref`].
                 let colocRefPtr = *colocPic.pRefIndex[listIdx].get(iMbXy);
                 set_rect_ref(&mut pCurDqLayer.iColocRefIndex[listIdx], 0, colocRefPtr[0]);
                 set_rect_ref(&mut pCurDqLayer.iColocRefIndex[listIdx], 2, colocRefPtr[3]);
@@ -874,21 +866,20 @@ pub fn PredMvBDirectSpatial(
         }
     }
 
-    // Fix relative to 2.6.0 (mv_pred.cpp:562-587): the macroblock-level flags were cleared
-    // unconditionally. For B_Skip and B_Direct_16x16 every sub-block is direct, so the macroblock
-    // word is the direct result and clearing it is right. This function also runs for a B_8x8 with
-    // at least one B_Direct_8x8 sub-block (bSkipOrDirect is false then), and there it derives those
-    // sub-blocks only, while the macroblock word (g_ksInterBMbTypeInfo[22]: MB_TYPE_8x8 | P0L0 |
-    // P0L1 | P1L0 | P1L1) is the union over all four - an explicit B_L1_8x8 beside an L0-only
-    // direct sub-block still uses list 1. GetColocatedMb() above trusts that word when this picture
-    // is later some other picture's co-located picture (8.4.1.2.1), and dropped the explicit
-    // sub-blocks' list-1 motion, which the colZero test of 8.4.1.2.2 and the fallback of 8.4.1.2.3
-    // then read as "no motion in either list". Visible with B-pyramid streams, where a B picture is
-    // a reference. The per-4x4 reference indices still decide per block: the parsers write
-    // REF_NOT_IN_LIST into the unused list of every explicit sub-block. bSkipOrDirect, not
-    // IS_Inter_8x8(mbType), is the discriminator - GetColocatedMb() ORs the direct shape into
-    // mbType, so a B_Direct_16x16 over an 8x8-partitioned co-located macroblock carries MB_TYPE_8x8
-    // here too. The subMbType clears stay: that word is what the direct sub-blocks themselves get.
+    // The macroblock-level flags are cleared only under bSkipOrDirect. For B_Skip and
+    // B_Direct_16x16 every sub-block is direct, so the macroblock word is the direct result.
+    // This function also runs for a B_8x8 with at least one B_Direct_8x8 sub-block, where it
+    // derives those sub-blocks only and the macroblock word (g_ksInterBMbTypeInfo[22]:
+    // MB_TYPE_8x8 | P0L0 | P0L1 | P1L0 | P1L1) is the union over all four - an explicit
+    // B_L1_8x8 beside an L0-only direct sub-block still uses list 1 - and GetColocatedMb()
+    // trusts that word when this picture is later some other picture's co-located picture
+    // (8.4.1.2.1), where the colZero test of 8.4.1.2.2 and the fallback of 8.4.1.2.3 read it.
+    // The per-4x4 reference indices still decide per block: the parsers write REF_NOT_IN_LIST
+    // into the unused list of every explicit sub-block. IS_Inter_8x8(mbType) cannot serve as
+    // the discriminator, because GetColocatedMb() ORs the direct shape into mbType, so a
+    // B_Direct_16x16 over an 8x8-partitioned co-located macroblock carries MB_TYPE_8x8 here
+    // too. The subMbType clears are unconditional: that word is what the direct sub-blocks
+    // themselves get.
     if ref_idx[LIST_0] <= REF_NOT_IN_LIST && ref_idx[LIST_1] <= REF_NOT_IN_LIST {
         ref_idx[LIST_0] = 0;
         ref_idx[LIST_1] = 0;
@@ -1167,8 +1158,7 @@ pub fn MapColToList0(
     let pic1 = pRefs.resolve(pCtx.ref_id(LIST_1, 0), pDec);
     if let Some(pic1) = pic1.filter(|_| (colocRefIndexL0 as usize) < 17) {
         // The one resolution in the decode path whose handle comes out of another
-        // *picture* rather than out of the context: the colocated picture's own
-        // list-0 entry.
+        // picture rather than out of the context: the colocated picture's own list-0 entry.
         let ref_pic = pRefs.resolve(pic1.pRefPic[LIST_0][colocRefIndexL0 as usize], pDec);
         if let Some(ref_pic) = ref_pic {
             let iFramePoc = ref_pic.iFramePoc;
@@ -1424,7 +1414,6 @@ pub fn Update8x8RefIdx(
 ) {
     let iMbXy = pCurDqLayer.iMbXyIndex as usize;
     let iScan4Idx = g_kuiScan4[iPartIdx as usize] as usize;
-    // No `pDec` guard: `mv_pred.cpp:1175` dereferences unconditionally.
     let pDecRef = pDec.pRefIndex[listIdx].get_mut(iMbXy);
     pDecRef[iScan4Idx] = iRef;
     pDecRef[iScan4Idx + 1] = iRef;

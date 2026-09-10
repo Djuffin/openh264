@@ -5,18 +5,9 @@
 //! cargo rustc --release --features wide --example simd_probe -- --emit asm
 //! ```
 //!
-//! then read `target/release/examples/simd_probe-*.s`. Not a program worth running;
-//! `main` calls each probe once so nothing is dead.
-//!
-//! Each half is present only where its module is: the `isa` probes are the SSE2
-//! kernels on x86_64 and the NEON kernels on aarch64, and nothing elsewhere; the
-//! `wide` probes need the feature. On aarch64 with `--features wide` this emits both
-//! halves, which is how you read the hand-written NEON next to what `wide`'s lanes
-//! lowered to.
+//! `main` calls each probe once so nothing is dead. The `isa` probes are the SSE2 kernels on
+//! x86_64 and the NEON kernels on aarch64; the `wide` probes need the `wide` feature.
 
-// A build with neither probe set — off x86_64 and aarch64, without `--features wide`
-// — emits no probes at all, so main's fixtures go unread. That is the honest outcome
-// for a codegen instrument on a target with no kernels to read the codegen of.
 #![allow(non_snake_case)]
 
 use openh264_rs::encoder::rec_view::RecCursor;
@@ -56,12 +47,8 @@ pub fn probe_isa_sad_four_16x16(a: &PlaneCursor<'_>, b: &PlaneCursor<'_>, s: &mu
     isa::sad::sample_sad_four_16x16(a, b, s)
 }
 
-/// The zero-motion-vector copy — `mc_luma`/`mc_chroma` with `(0, 0)`, which is
-/// `common::mc::mc_copy` and nothing else. Both operand storages are probed because
-/// both occur: a plane cursor over the reference picture where the encoder is
-/// single-threaded, and the shared cell view under the reconstruction seam. What the
-/// assembly should show is `HEIGHT` load/store pairs and **no per-row bounds
-/// branch**; the checks belong to the two spans, once each.
+/// The zero-motion-vector copy — `mc_luma`/`mc_chroma` with `(0, 0)`. The assembly should
+/// show `HEIGHT` load/store pairs and no per-row bounds branch.
 #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
@@ -83,10 +70,8 @@ pub fn probe_isa_mc_chroma_zero_8x8_cells(src: &RecCursor<'_>, dst: &mut PlaneCu
     isa::mc::mc_chroma(src, dst, 0, 0, 8, 8)
 }
 
-/// The same kernels over the **shared cell view**, which is the operand type every
-/// motion-search and mode-decision call actually hands them (`encoder/md.rs`'s slot
-/// signature is `fn(&RecCursor, &RecCursor) -> i32`); the `PlaneCursor` probes above
-/// are the processing library's and the bench's path. Both have to be checkless.
+/// The same kernels over the shared cell view, the operand type motion search and mode
+/// decision hand them. Both operand storages have to be checkless.
 #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
@@ -168,12 +153,10 @@ pub fn probe_isa_hor_ver02_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut
     isa::mc::mc_hor_ver02(src, dst, 16, 16)
 }
 
-/// The four motion-compensation kernels over **both** operand storages: the plain
-/// plane cursor the decoder hands them and the shared cell view the encoder does.
-/// What the assembly should show is the tap loads, the filter and the stores with
-/// **no per-row bounds branch** — one span per operand per block, and the row
-/// offsets inside it constant. The horizontal probe is at width 17 because that is
-/// `MeRefineFracPixel`'s `kiW + 1`, the shape with the overlapping last chunk.
+/// The motion-compensation kernels over both operand storages. The assembly should show
+/// the tap loads, the filter and the stores with no per-row bounds branch. The horizontal
+/// probe is at width 17 — `MeRefineFracPixel`'s `kiW + 1`, the shape with the overlapping
+/// last chunk.
 #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
@@ -234,12 +217,9 @@ pub fn probe_isa_mc_chroma_frac_8x8_cells(src: &RecCursor<'_>, dst: &mut PlaneCu
     isa::mc::mc_chroma(src, dst, 3, 5, 8, 8)
 }
 
-/// The deblocking edge filters over the **shared cell view**, which is the operand
-/// type every encoder call hands them, one probe per branch: `step_y == 1` is the
-/// horizontal edge (taps step by the stride) and `step_x == 1` the vertical one (taps
-/// step by one byte, sixteen lines gathered and transposed). What the assembly should
-/// show is the tap loads and stores with **no per-row bounds branch** — the read side
-/// is one span per call and the write side one `write_row` per line.
+/// The deblocking edge filters over the shared cell view, one probe per branch:
+/// `step_y == 1` is the horizontal edge (taps step by the stride), `step_x == 1` the
+/// vertical one (taps step by one byte, sixteen lines gathered and transposed).
 #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(miri))))]
 #[unsafe(no_mangle)]
 #[inline(never)]
@@ -268,8 +248,8 @@ pub fn probe_isa_deblock_luma_eq4_v_cells(pix: &mut RecCursor<'_>) {
     isa::deblock::deblock_luma_eq4(pix, 1, 64, 40, 20)
 }
 
-/// One row into the shared view: the store [`RecCursor::write_row`] promises. The
-/// assembly should be a bounds check and a single `stur q0`.
+/// One row into the shared view. The assembly should be a bounds check and a single
+/// `stur q0`.
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub fn probe_write_row_16(dst: &RecCursor<'_>, v: &[u8; 16]) {
@@ -277,7 +257,7 @@ pub fn probe_write_row_16(dst: &RecCursor<'_>, v: &[u8; 16]) {
 }
 
 /// The skip reconstruction's luma copy: sixteen rows out of a contiguous prediction
-/// buffer into the shared view. One vector store per row is the whole of it.
+/// buffer into the shared view, one vector store per row.
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub fn probe_copy_block_to_view_16(src: &[u8], dst: &RecCursor<'_>) {

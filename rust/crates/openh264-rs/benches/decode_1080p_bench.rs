@@ -1,16 +1,13 @@
 //! 1080p decode throughput: native C++ OpenH264 (`libopenh264.dylib`) vs. the
-//! Rust port, both fed the byte-identical Annex-B streams that ffmpeg produced.
+//! Rust port, both fed byte-identical Annex-B streams produced by ffmpeg.
 //!
 //! Each stream is decoded twice per implementation: a verification pass that
-//! SHA-1s every output plane and counts frames, then a timed pass that runs the
-//! decode calls on their own. Timings are only reported as a comparison once
-//! both sides agree on the frame count and the hash -- a decode error drops
-//! frames from the output silently, and fewer frames decoded reads as a
-//! speedup if nobody is checking.
+//! SHA-1s every output plane and counts frames, then a timed pass. A comparison
+//! is reported only once both sides agree on the frame count and the hash, since
+//! a decode error drops frames silently and would read as a speedup.
 //!
-//! Both sides are driven through the same loop over the same NAL units, one
-//! unit per `DecodeFrame2` call, matching how `decoder_conformance_test.rs`
-//! feeds the decoder.
+//! Both sides run the same loop over the same NAL units, one unit per
+//! `DecodeFrame2` call.
 //!
 //! Environment knobs: `FFMPEG` (path to the binary), `BENCH_FRAMES` (default
 //! 60), `BENCH_ITERS` (timed passes per stream, default 3), `BENCH_PATTERN`
@@ -99,8 +96,7 @@ fn stream_cache_dir() -> PathBuf {
 
 /// Encodes the stream with ffmpeg unless a matching file is already cached.
 /// Everything that changes the bitstream is in the filename, so bumping
-/// `BENCH_FRAMES` or `BENCH_PATTERN` regenerates rather than reusing a stale
-/// file.
+/// `BENCH_FRAMES` or `BENCH_PATTERN` regenerates rather than reusing a stale file.
 fn ensure_stream(
     ffmpeg: Option<&PathBuf>,
     spec: &StreamSpec,
@@ -162,9 +158,7 @@ fn ensure_stream(
 // The decoder under test
 // ---------------------------------------------------------------------------
 
-/// The slice of `ISVCDecoder` the benchmark drives. Both implementations go
-/// through this so the decode loop itself is shared code, not two copies that
-/// could drift apart.
+/// The slice of `ISVCDecoder` the benchmark drives, shared by both implementations.
 trait Decoder {
     unsafe fn decode(
         &mut self,
@@ -262,7 +256,7 @@ type CppCpuFeatureDetectFn = unsafe extern "C" fn(pNumberOfLogicProcessors: *mut
 
 /// `WELS_CPU_NEON` from `codec/common/inc/cpu_core.h`.
 const WELS_CPU_NEON: u32 = 0x000004;
-/// `WELS_CPU_SSE2` from the same header, for the x86 side of the story.
+/// `WELS_CPU_SSE2` from the same header.
 const WELS_CPU_SSE2: u32 = 0x000080;
 type CppInitializeFn = unsafe extern "C" fn(*mut c_void, *const SDecodingParam) -> c_long;
 type CppUninitializeFn = unsafe extern "C" fn(*mut c_void) -> c_long;
@@ -286,10 +280,8 @@ struct CppLibrary {
     path: PathBuf,
     create_fn: CppCreateDecoderFn,
     destroy_fn: CppDestroyDecoderFn,
-    /// What `WelsCPUFeatureDetect` reports for this build. A library whose
-    /// hand-written SIMD kernels are linked in but never dispatched decodes
-    /// entirely in scalar C, which is a very different thing to benchmark
-    /// against -- so the run prints this rather than leaving it to be assumed.
+    /// What `WelsCPUFeatureDetect` reports for this build; printed so a library
+    /// decoding entirely in scalar C is visible in the output.
     cpu_flags: Option<u32>,
 }
 
@@ -299,8 +291,8 @@ impl CppLibrary {
         if !root.join("res").exists() {
             root = PathBuf::from("../../");
         }
-        // The names the Windows builds produce: MSVC drops the prefix
-        // (`build/msvc-common.mk:42`), MinGW and Cygwin keep it (`Makefile:12`).
+        // The names the Windows builds produce: MSVC drops the `lib` prefix, MinGW
+        // and Cygwin keep it.
         let candidates = [
             root.join("libopenh264.dylib"),
             root.join("libopenh264.so"),
@@ -477,10 +469,8 @@ struct PassResult {
     elapsed: Duration,
 }
 
-/// Decodes every NAL unit and then drains the decoder, the way the conformance
-/// harness does. Hashing is off during timed passes: walking 3 MB of planes per
-/// frame costs more than decoding some of them, and would bury the difference
-/// the benchmark exists to measure.
+/// Decodes every NAL unit and then drains the decoder. Hashing is off during timed
+/// passes: walking 3 MB of planes per frame costs more than decoding some of them.
 fn run_pass<D: Decoder>(dec: &mut D, units: &[&[u8]], verify: bool) -> PassResult {
     let mut hasher = Sha1Hasher::new();
     let mut frames = 0usize;
@@ -552,14 +542,9 @@ impl Measurement {
     }
 }
 
-/// Verifies each implementation once (which also warms the caches), then runs
-/// the timed passes *interleaved*, on a fresh decoder every time.
-///
-/// Interleaving is the point: running all of one implementation's passes before
-/// the other lets CPU frequency drift over the run show up as a difference
-/// between the two, and on a laptop that drift is the same order as the effect
-/// being measured. Each pass reports its best time, since the slow passes are
-/// the ones that picked up scheduler noise.
+/// Verifies each implementation once (which also warms the caches), then runs the
+/// timed passes *interleaved*, on a fresh decoder every time, so CPU frequency drift
+/// does not read as a difference between the two. Each side reports its best time.
 fn measure_pair(
     units: &[&[u8]],
     iters: usize,

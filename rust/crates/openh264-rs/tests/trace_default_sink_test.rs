@@ -1,23 +1,20 @@
-//! The default trace sink is upstream's, and a consumer who installs nothing still
-//! hears the library speak.
-//!
+//! A consumer that installs no trace callback still gets output:
 //! `welsCodecTrace::welsCodecTrace()` installs `welsStderrTrace` at
-//! `WELS_LOG_DEFAULT`, and so does this port.
+//! `WELS_LOG_DEFAULT`.
 //!
-//! **The two constructors do not agree.**
-//! `welsCodecTrace()` sets `WELS_LOG_WARNING`; `CWelsDecoder::CWelsDecoder()` then
-//! calls `SetTraceLevel (WELS_LOG_ERROR)` (`welsDecoderExt.cpp:164`) and
+//! The two constructors disagree on the level. `welsCodecTrace()` sets
+//! `WELS_LOG_WARNING`; `CWelsDecoder::CWelsDecoder()` then calls
+//! `SetTraceLevel (WELS_LOG_ERROR)` (`welsDecoderExt.cpp:164`) and
 //! `CWelsH264SVCEncoder` does not (`welsEncoderExt.cpp:166`). So the decoder's default
 //! is ERROR and the encoder's is WARNING.
 //!
 //! # Capturing stderr
 //!
-//! `welsStderrTrace` writes to fd 2, exactly as `fprintf (stderr, ...)` does, so
-//! libtest's output capture does not see it and neither would an in-process reader
-//! without `dup2` surgery — which would race every other test in the binary. Instead
-//! each case **re-executes this test binary** as a child with an environment variable
-//! selecting the case, and reads the child's stderr. One process per case, no fd
-//! games, no ordering assumptions.
+//! `welsStderrTrace` writes to fd 2, so libtest's output capture does not see it and
+//! an in-process reader would need `dup2` surgery that races every other test in the
+//! binary. Each case instead re-executes this test binary as a child, with an
+//! environment variable selecting the case, and reads the child's stderr: one process
+//! per case, no fd games, no ordering assumptions.
 
 use openh264_rs::api::codec_api::*;
 use std::process::Command;
@@ -67,8 +64,7 @@ fn the_child_case() {
                 assert_eq!(rc, CM_INIT_PARA_ERROR);
                 WelsDestroySVCEncoder(e);
             }
-            // What a consumer that wants silence does, and what this tree's
-            // high-volume harnesses do: install a callback that drops the line.
+            // A consumer that wants silence installs a callback that drops the line.
             "decoder_quiet" => {
                 let mut d: *mut ISVCDecoder = std::ptr::null_mut();
                 WelsCreateDecoder(&mut d);
@@ -96,11 +92,10 @@ fn the_child_case() {
             // The decoder's default level is `WELS_LOG_ERROR`, so a WARNING-level
             // message must not appear. `BA_MW_D_IDR_LOST.264` drives
             // `UpdateAccessUnit()`'s "Key frame lost" warning and
-            // `WelsInitRefList`'s "referencing pictures lost due frame gaps exist";
-            // the reference prints **nothing** for this stream at its default
-            // (measured: `rust/tools/ecref/ecref res/BA_MW_D_IDR_LOST.264 999999`
-            // writes zero bytes to stderr). Then a null `Initialize`, so the same
-            // run proves the sink is live rather than merely silent.
+            // `WelsInitRefList`'s "referencing pictures lost due frame gaps exist",
+            // and the reference prints nothing for this stream at its default. Then a
+            // null `Initialize`, so the same run proves the sink is live rather than
+            // merely silent.
             "decoder_level" => {
                 let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("../../..")
@@ -138,7 +133,7 @@ fn the_child_case() {
     }
 }
 
-/// A sink that writes nowhere — a C consumer's "be quiet, please".
+/// A sink that writes nowhere.
 ///
 /// # Safety
 /// Matches `WelsTraceCallback`; reads nothing.
@@ -183,10 +178,10 @@ fn an_installed_callback_replaces_the_default_sink_on_both_codecs() {
 /// The decoder's default level is `WELS_LOG_ERROR`, not the trace object's
 /// `WELS_LOG_WARNING` — `welsDecoderExt.cpp:164`.
 ///
-/// It cannot be read back: neither codec's `GetOption` handles `*_TRACE_LEVEL`
-/// upstream (only `SetOption` does, `welsDecoderExt.cpp:541` /
-/// `welsEncoderExt.cpp:1090`), so the level is asserted where it is observable — in
-/// what does and does not reach stderr.
+/// The level cannot be read back — neither codec's `GetOption` handles
+/// `*_TRACE_LEVEL`, only `SetOption` does (`welsDecoderExt.cpp:541` /
+/// `welsEncoderExt.cpp:1090`) — so it is asserted through what does and does not
+/// reach stderr.
 #[test]
 fn the_decoder_defaults_to_error_level_so_its_warnings_are_silent() {
     let err = stderr_of("decoder_level");
