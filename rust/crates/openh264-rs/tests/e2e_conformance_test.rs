@@ -8,10 +8,10 @@
 //!   against ffmpeg's own decode of the same bitstream. These are skipped when
 //!   ffmpeg is not on `PATH`.
 //!
-//! Two tests here are `#[ignore]`d because upstream openh264 itself does not
-//! decode them bit-exactly. They are kept (run them with
-//! `cargo test -- --ignored`) because they document real conformance gaps, and
-//! each one's reason names the defect rather than the family.
+//! One test here is `#[ignore]`d because upstream openh264 itself does not
+//! decode it bit-exactly. It is kept (run it with
+//! `cargo test -- --ignored`) because it documents a real conformance gap, and
+//! its reason names the defect rather than the family.
 //!
 //! **Picture output order is no longer one of them.** The display layer used to
 //! hold a picture back until a B slice had been seen and then emit from a
@@ -24,11 +24,20 @@
 //! tests that were ignored here before: `test_CVBS3_Sony_C`,
 //! `test_CACQP3_Sony_D`, `test_CVWP3_TOSHIBA_E` and `test_CVWP2_TOSHIBA_E`.
 //!
-//! What is left is one defect apiece. `test_CABAST3_Sony_E` is the cross-slice bS
+//! **Neither is the slice-boundary residual.** `test_ffmpeg_multi_slice_variable_size`
+//! was ignored here as one unattributed 8x8 sub-partition of one macroblock; it is
+//! attributed now, and it was never about the slice boundary. `mv_pred.cpp`'s
+//! `PredMvBDirectSpatial` cleared a macroblock's list flags as if every sub-block
+//! were direct, so a B_8x8 with an explicit B_L1_8x8 beside an L0-only direct
+//! sub-block lost `MB_TYPE_L1` — and `GetColocatedMb` reads that word, so when the
+//! picture was later some other B picture's co-located picture (x264 writes
+//! `b-pyramid=normal` by default, which makes B pictures references) those explicit
+//! sub-blocks' list-1 motion never reached the direct derivation. Guarding the two
+//! macroblock-level clears with `bSkipOrDirect` activated this test.
+//!
+//! What is left is one defect. `test_CABAST3_Sony_E` is the cross-slice bS
 //! derivation — `DeblockingBSliceBsMarginalMBAvcbase` resolves a neighbour's
-//! ref_idx through the current slice's lists — and its output order is now right;
-//! `test_ffmpeg_multi_slice_variable_size` is one 8x8 sub-partition of one
-//! macroblock at a slice boundary, and is not attributed.
+//! ref_idx through the current slice's lists — and its output order is now right.
 //!
 //! Things that used to be on that list are not any more, and the difference is
 //! worth keeping straight. High-profile 8x8 coding is conformant on its own:
@@ -41,7 +50,8 @@
 //! MV-prediction cache, a co-located P_8x8ref0 in `GetColocatedMb`, and the
 //! reference-list modification bound) activated three more —
 //! `test_CABA3_SVA_B`, `test_CAWP5_TOSHIBA_E`, `test_ffmpeg_main` — and turned
-//! the MV-prediction and reference-list families off this list entirely.
+//! the MV-prediction and reference-list families off this list entirely. The
+//! multi-slice family is off it too: every `test_ffmpeg_*multi_slice*` here runs.
 
 #![allow(non_snake_case)]
 
@@ -878,7 +888,6 @@ fn test_ffmpeg_high_multi_slice() -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "residual this pass did not attribute: one B macroblock in one frame (21 of 30) differs, and only its bottom-right 8x8 sub-partition, by up to 17 levels. The macroblock's top neighbour lies in the previous slice (slice-max-mbs=120 starts a slice mid-row), so the prediction of that one sub-partition depends on the slice boundary; the rest of the stream, and the same content with uniform slices, is bit-exact against ffmpeg for both decoders"]
 fn test_ffmpeg_multi_slice_variable_size() -> Result<(), String> {
     // Variable slice size via `slice-max-mbs`. Tests next_mb_addr tracking when
     // slices have non-uniform MB counts within a picture.

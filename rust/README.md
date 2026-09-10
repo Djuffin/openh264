@@ -25,6 +25,11 @@ this tree is not, and the port matches the patched tree:
 * `rec_mb.cpp`'s `GetInterBPred` advanced the destination before applying explicit
   weights, so only the second half of a uni-predicted 8x4 or 4x8 B sub-partition was
   weighted, where 8.4.2.3 weights every partition.
+* `mv_pred.cpp`'s `PredMvBDirectSpatial` cleared a macroblock's list-usage flags as
+  if every sub-block were direct, so a B_8x8 whose direct sub-blocks derived one list
+  lost the other one although an explicit sub-block beside them still used it. When
+  such a picture was later the co-located picture, `GetColocatedMb` read the flags and
+  dropped those sub-blocks' motion (8.4.1.2.1).
 * `welsDecoderExt.cpp` put pictures out by a heuristic — buffer nothing until a B
   slice has been seen, then emit whatever is within two of the last written POC —
   instead of the bumping process of Annex C, so a conforming stream's pictures could
