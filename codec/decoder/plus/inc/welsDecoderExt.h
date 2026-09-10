@@ -127,12 +127,11 @@ class CWelsDecoder : public ISVCDecoder {
   int32_t                 m_DecCtxActiveCount;
   PWelsDecoderThreadCTX   m_pDecThrCtx;
   PWelsDecoderThreadCTX   m_pLastDecThrCtx;
-  int32_t                 m_iLastBufferedIdx;
   WELS_MUTEX              m_csDecoder;
   SWelsDecEvent           m_sBufferingEvent;
   SWelsDecEvent           m_sReleaseBufferEvent;
   SWelsDecSemphore        m_sIsBusy;
-  SPictInfo               m_sPictInfoList[16];
+  SPictInfo               m_sPictInfoList[PICT_INFO_LIST_SIZE];
   SPictReoderingStatus    m_sReoderingStatus;
   PWelsDecoderThreadCTX   m_pDecThrCtxActive[WELS_DEC_MAX_NUM_CPU];
   SVlcTable               m_sVlcTable;
@@ -154,7 +153,10 @@ class CWelsDecoder : public ISVCDecoder {
                                  SBufferInfo* pDstInfo);
   void BufferingReadyPicture (PWelsDecoderContext pCtx, unsigned char** ppDst, SBufferInfo* pDstInfo);
   void ReleaseBufferedReadyPictureReorder (PWelsDecoderContext pCtx, unsigned char** ppDst, SBufferInfo* pDstInfo, bool isFlush = false);
-  void ReleaseBufferedReadyPictureNoReorder (PWelsDecoderContext pCtx, unsigned char** ppDst, SBufferInfo* pDstInfo);
+  void UpdateReorderingParameters (PWelsDecoderContext pCtx);
+  void StoreReadyPicture (PWelsDecoderContext pCtx, SBufferInfo* pDstInfo);
+  void EmitOnFullPictInfoList (PWelsDecoderContext pCtx, unsigned char** ppDst, SBufferInfo* pDstInfo);
+  int32_t GetDpbFullness (PWelsDecoderContext pCtx, PPicBuff pPicBuff);
 
   void OpenDecoderThreads();
   void CloseDecoderThreads();

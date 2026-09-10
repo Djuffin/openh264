@@ -592,12 +592,12 @@ TEST (DecoderFmoSecurityTest, RejectsOversizedRunLengthBeforeIndexWrap) {
 
 TEST (DecoderReorderingBufferTest, PartialResetInitializesPicBuffIdx) {
   SPictReoderingStatus sStatus;
-  SPictInfo sPictInfo[16];
+  SPictInfo sPictInfo[PICT_INFO_LIST_SIZE];
 
   memset (&sStatus, 0, sizeof (sStatus));
   memset (&sPictInfo, 0, sizeof (sPictInfo));
 
-  for (int32_t i = 0; i < 16; ++i) {
+  for (int32_t i = 0; i < PICT_INFO_LIST_SIZE; ++i) {
     sPictInfo[i].iPOC = i + 100;
     sPictInfo[i].iPicBuffIdx = i + 200;
   }
@@ -615,19 +615,20 @@ TEST (DecoderReorderingBufferTest, PartialResetInitializesPicBuffIdx) {
   EXPECT_EQ (104, sPictInfo[4].iPOC);
   EXPECT_EQ (204, sPictInfo[4].iPicBuffIdx);
   EXPECT_EQ (0, sPictInfo[0].sBufferInfo.iBufferStatus);
-  EXPECT_FALSE (sStatus.bHasBSlice);
+  EXPECT_EQ (0, sStatus.iOutputSeqNum);
+  EXPECT_EQ (IMinInt32, sStatus.iPrevCoreSeqNum);
   EXPECT_EQ (0, sStatus.iNumOfPicts);
   EXPECT_EQ (0, sStatus.iLargestBufferedPicIndex);
 }
 
 TEST (DecoderReorderingBufferTest, FullResetInitializesPicBuffIdx) {
   SPictReoderingStatus sStatus;
-  SPictInfo sPictInfo[16];
+  SPictInfo sPictInfo[PICT_INFO_LIST_SIZE];
 
   memset (&sStatus, 0, sizeof (sStatus));
   memset (&sPictInfo, 0, sizeof (sPictInfo));
 
-  for (int32_t i = 0; i < 16; ++i) {
+  for (int32_t i = 0; i < PICT_INFO_LIST_SIZE; ++i) {
     sPictInfo[i].iPOC = i + 300;
     sPictInfo[i].iPicBuffIdx = i + 400;
   }
@@ -635,11 +636,12 @@ TEST (DecoderReorderingBufferTest, FullResetInitializesPicBuffIdx) {
 
   ResetReorderingPictureBuffers (&sStatus, sPictInfo, true);
 
-  for (int32_t i = 0; i < 16; ++i) {
+  for (int32_t i = 0; i < PICT_INFO_LIST_SIZE; ++i) {
     EXPECT_EQ (IMinInt32, sPictInfo[i].iPOC);
     EXPECT_EQ (-1, sPictInfo[i].iPicBuffIdx);
   }
-  EXPECT_FALSE (sStatus.bHasBSlice);
+  EXPECT_EQ (0, sStatus.iOutputSeqNum);
+  EXPECT_EQ (IMinInt32, sStatus.iPrevCoreSeqNum);
   EXPECT_EQ (0, sStatus.iLargestBufferedPicIndex);
 }
 
