@@ -24,9 +24,11 @@ use core::arch::x86_64::*;
 /// so `y * stride` stays symbolic and every per-row bounds check with it. One window
 /// per group of four restores the constant offsets. See
 /// [`PlaneSpanMut::window_mut`](crate::safe::plane::PlaneSpanMut::window_mut).
+#[allow(dead_code)]
 const ROW_GROUP: usize = 4;
 
 /// Sixteen bytes of a span row as a vector.
+#[allow(dead_code)]
 #[target_feature(enable = "sse2")]
 fn ld16(r: &[u8; 16]) -> __m128i {
     // SAFETY: `&[u8; 16]` is sixteen readable bytes; the load is unaligned.
@@ -48,10 +50,11 @@ fn ld8(r: &[u8; 8]) -> __m128i {
 /// Four bytes of a span row in the low quarter of a vector; see [`ld8`].
 #[target_feature(enable = "sse2")]
 fn ld4(r: &[u8; 4]) -> __m128i {
-    _mm_cvtsi32_si128(i32::from_le_bytes(*r))
+    _mm_cvtsi32_si128(i32::from_ne_bytes(*r))
 }
 
 /// Sixteen bytes of `v` to the start of `out`.
+#[allow(dead_code)]
 #[target_feature(enable = "sse2")]
 fn st16(out: &mut [u8], v: __m128i) {
     // SAFETY: the slicing panics unless `out` holds sixteen writable bytes.
@@ -91,48 +94,40 @@ fn w4<R: BlockRows>(r: &R, y: usize, x: usize) -> __m128i {
 /// The width is a const parameter so the chunk chain below has a constant trip count
 /// — a row loop whose body still contains a loop is one the unroller declines, and
 /// with it every per-row bounds check stays. See [`ROW_GROUP`].
-#[target_feature(enable = "sse2")]
+/// Rounded pixel average of two rows: `((a + b + 1) >> 1) as u8`, `pavgb`.
+#[inline(always)]
 fn avg_row<const W: usize>(out: &mut [u8; W], a: &[u8; W], b: &[u8; W]) {
-    let mut x = 0;
-    while x + 16 <= W {
-        st16(
-            &mut out[x..],
-            _mm_avg_epu8(
-                ld16(a[x..][..16].try_into().unwrap()),
-                ld16(b[x..][..16].try_into().unwrap()),
-            ),
-        );
-        x += 16;
-    }
-    if x + 8 <= W {
-        st8(
-            &mut out[x..],
-            _mm_avg_epu8(
-                ld8(a[x..][..8].try_into().unwrap()),
-                ld8(b[x..][..8].try_into().unwrap()),
-            ),
-        );
-        x += 8;
-    }
-    if x + 4 <= W {
-        st4(
-            &mut out[x..],
-            _mm_avg_epu8(
-                ld4(a[x..][..4].try_into().unwrap()),
-                ld4(b[x..][..4].try_into().unwrap()),
-            ),
-        );
-        x += 4;
-    }
-    while x < W {
-        out[x] = (((a[x] as u32) + (b[x] as u32) + 1) >> 1) as u8;
-        x += 1;
+    if W == 16 {
+        // SAFETY: W == 16 guarantees slices are 16 bytes.
+        unsafe {
+            let va = _mm_loadu_si128(a.as_ptr() as *const __m128i);
+            let vb = _mm_loadu_si128(b.as_ptr() as *const __m128i);
+            _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, _mm_avg_epu8(va, vb));
+        }
+    } else if W == 8 {
+        // SAFETY: W == 8 guarantees slices are 8 bytes.
+        unsafe {
+            let va = _mm_loadl_epi64(a.as_ptr() as *const __m128i);
+            let vb = _mm_loadl_epi64(b.as_ptr() as *const __m128i);
+            _mm_storel_epi64(out.as_mut_ptr() as *mut __m128i, _mm_avg_epu8(va, vb));
+        }
+    } else if W == 4 {
+        // SAFETY: W == 4 guarantees slices are 4 bytes.
+        unsafe {
+            let va = _mm_cvtsi32_si128(i32::from_ne_bytes(*(a.as_ptr() as *const [u8; 4])));
+            let vb = _mm_cvtsi32_si128(i32::from_ne_bytes(*(b.as_ptr() as *const [u8; 4])));
+            let v = _mm_avg_epu8(va, vb);
+            *(out.as_mut_ptr() as *mut [u8; 4]) = _mm_cvtsi128_si32(v).to_ne_bytes();
+        }
+    } else {
+        for j in 0..W {
+            out[j] = (((a[j] as u32) + (b[j] as u32) + 1) >> 1) as u8;
+        }
     }
 }
 
-/// `PixelAvg` over one const-shape block: one span per operand, walked a
-/// [`ROW_GROUP`] at a time.
-#[target_feature(enable = "sse2")]
+/// `PixelAvg` over one const-shape block: one span per operand, walked row by row.
+#[inline(always)]
 fn avg_block<A: RefSamples, B: RefSamples, const W: usize, const H: usize>(
     dst: &mut PlaneCursorMut<'_>,
     a: &A,
@@ -141,22 +136,11 @@ fn avg_block<A: RefSamples, B: RefSamples, const W: usize, const H: usize>(
     let sa = a.span::<W, H>(0, 0);
     let sb = b.span::<W, H>(0, 0);
     let mut d = dst.span_mut::<W, H>(0, 0);
-    let mut y = 0;
-    while y + ROW_GROUP <= H {
-        let (ga, gb) = (sa.window::<W>(y, ROW_GROUP), sb.window::<W>(y, ROW_GROUP));
-        let mut gd = d.window_mut::<W>(y, ROW_GROUP);
-        for k in 0..ROW_GROUP {
-            avg_row::<W>(
-                gd.row_mut::<W>(k, 0),
-                &ga.row::<W>(k, 0),
-                &gb.row::<W>(k, 0),
-            );
-        }
-        y += ROW_GROUP;
-    }
-    while y < H {
-        avg_row::<W>(d.row_mut::<W>(y, 0), &sa.row::<W>(y, 0), &sb.row::<W>(y, 0));
-        y += 1;
+    for y in 0..H {
+        let ra = sa.row::<W>(y, 0);
+        let rb = sb.row::<W>(y, 0);
+        let out = d.row_mut::<W>(y, 0);
+        avg_row::<W>(out, &ra, &rb);
     }
 }
 
@@ -193,6 +177,7 @@ pub fn pixel_avg<A: RefSamples, B: RefSamples>(
 
 /// One output row of the bilinear filter at width 8 or 4, over the two one-row
 /// windows `r0` and `r1`.
+#[allow(dead_code)]
 #[target_feature(enable = "sse2")]
 fn chroma_row<R: BlockRows, const W: usize>(
     out: &mut [u8; W],
@@ -223,8 +208,8 @@ fn chroma_row<R: BlockRows, const W: usize>(
 
 /// The bilinear chroma filter over one const-shape block. Widths 8 and 4 take the
 /// lane path; width 2 is the scalar, as upstream has it.
-#[target_feature(enable = "sse2")]
-fn chroma_block<
+#[target_feature(enable = "sse4.1")]
+unsafe fn chroma_block<
     S: RefSamples + Copy,
     const W: usize,
     const SW: usize,
@@ -235,21 +220,57 @@ fn chroma_block<
     dst: &mut PlaneCursorMut<'_>,
     w: &[u8; 4],
 ) {
-    let (iA, iB, iC, iD) = (w[0] as i32, w[1] as i32, w[2] as i32, w[3] as i32);
     let s = src.span::<SW, SH>(0, 0);
     let mut d = dst.span_mut::<W, H>(0, 0);
-    if W == 8 || W == 4 {
-        let (vA, vB, vC, vD) = (
-            _mm_set1_epi16(iA as i16),
-            _mm_set1_epi16(iB as i16),
-            _mm_set1_epi16(iC as i16),
-            _mm_set1_epi16(iD as i16),
-        );
+    if W == 8 {
+        let (iA, iB, iC, iD) = (w[0] as i32, w[1] as i32, w[2] as i32, w[3] as i32);
         for y in 0..H {
-            let (r0, r1) = (s.window::<SW>(y, 1), s.window::<SW>(y + 1, 1));
-            chroma_row::<_, W>(d.row_mut::<W>(y, 0), &r0, &r1, vA, vB, vC, vD);
+            let (r0, r1) = (s.row::<SW>(y, 0), s.row::<SW>(y + 1, 0));
+            let out = d.row_mut::<W>(y, 0);
+            for j in 0..W {
+                out[j] = ((iA * (r0[j] as i32)
+                    + iB * (r0[j + 1] as i32)
+                    + iC * (r1[j] as i32)
+                    + iD * (r1[j + 1] as i32)
+                    + 32)
+                    >> 6) as u8;
+            }
+        }
+    } else if W == 4 {
+        let coeff_ab = _mm_set1_epi16(((w[1] as i16) << 8) | (w[0] as i16));
+        let coeff_cd = _mm_set1_epi16(((w[3] as i16) << 8) | (w[2] as i16));
+        let round_32 = _mm_set1_epi16(32);
+
+        let load_interleaved_4 = |y: usize| -> __m128i {
+            let r = s.row::<SW>(y, 0);
+            unsafe {
+                let r_lo = _mm_cvtsi32_si128(i32::from_ne_bytes(*(r.as_ptr() as *const [u8; 4])));
+                let r_hi =
+                    _mm_cvtsi32_si128(i32::from_ne_bytes(*(r.as_ptr().add(1) as *const [u8; 4])));
+                _mm_unpacklo_epi8(r_lo, r_hi)
+            }
+        };
+
+        let mut curr_interleaved = load_interleaved_4(0);
+
+        for y in 0..H {
+            let next_interleaved = load_interleaved_4(y + 1);
+
+            let term0 = _mm_maddubs_epi16(curr_interleaved, coeff_ab);
+            let term1 = _mm_maddubs_epi16(next_interleaved, coeff_cd);
+            let sum = _mm_add_epi16(term0, term1);
+            let shifted = _mm_srli_epi16(_mm_add_epi16(sum, round_32), 6);
+            let packed = _mm_packus_epi16(shifted, shifted);
+
+            let out = d.row_mut::<W>(y, 0);
+            unsafe {
+                *(out.as_mut_ptr() as *mut [u8; 4]) = _mm_cvtsi128_si32(packed).to_ne_bytes();
+            }
+
+            curr_interleaved = next_interleaved;
         }
     } else {
+        let (iA, iB, iC, iD) = (w[0] as i32, w[1] as i32, w[2] as i32, w[3] as i32);
         for y in 0..H {
             let (r0, r1) = (s.row::<SW>(y, 0), s.row::<SW>(y + 1, 0));
             let out = d.row_mut::<W>(y, 0);
@@ -313,7 +334,7 @@ pub fn mc_chroma<S: RefSamples + Copy>(
 /// them as constants, and the copy paid two jump tables it should not have. Split,
 /// the entry point is a test and a copy — small enough to inline — and this is one
 /// call on the path that does real work.
-#[inline(never)]
+#[inline]
 fn mc_chroma_frac<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -340,6 +361,7 @@ fn mc_chroma_frac<S: RefSamples + Copy>(
 /// Implemented using the identity:
 /// `x = 4 * (p2 + p3) - (p1 + p4)`
 /// `val = (p0 + p5) + x + (x << 2)`
+#[allow(dead_code)]
 #[target_feature(enable = "sse2")]
 fn filter_6tap_8_samples(
     p0: __m128i,
@@ -361,6 +383,7 @@ fn filter_6tap_8_samples(
 
 /// Computes the unclipped 16-bit intermediate for 2D filter:
 /// `val = (p0 + p5) - 5 * (p1 + p4) + 20 * (p2 + p3)`
+#[allow(dead_code)]
 #[target_feature(enable = "sse2")]
 fn filter_6tap_intermediate_8_samples(
     p0: __m128i,
@@ -389,56 +412,98 @@ fn filter_6tap_intermediate_8_samples(
 /// reason `simd::aarch64::mc`'s twin is one: the row index has to stay a constant at
 /// the point the bounds checks are decided, and a `#[target_feature]` function
 /// cannot be `#[inline(always)]`.
-macro_rules! hor_row {
-    ($out:expr, $r:expr, $y:expr, $avg:expr) => {{
-        let out: &mut [u8; W] = $out;
+/// Vectorized 6-tap Wiener filter on 8 samples using SSSE3 pmaddubsw and pshufb.
+#[target_feature(enable = "sse4.1")]
+#[inline]
+unsafe fn filter_6tap_8px(raw: __m128i) -> __m128i {
+    let mask_01 = _mm_setr_epi8(0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8);
+    let mask_23 = _mm_setr_epi8(2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10);
+    let mask_45 = _mm_setr_epi8(4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12);
+
+    let coeff_01 = _mm_setr_epi8(1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5);
+    let coeff_23 = _mm_set1_epi8(20);
+    let coeff_45 = _mm_setr_epi8(-5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1);
+
+    let p01 = _mm_shuffle_epi8(raw, mask_01);
+    let p23 = _mm_shuffle_epi8(raw, mask_23);
+    let p45 = _mm_shuffle_epi8(raw, mask_45);
+
+    let m01 = _mm_maddubs_epi16(p01, coeff_01);
+    let m23 = _mm_maddubs_epi16(p23, coeff_23);
+    let m45 = _mm_maddubs_epi16(p45, coeff_45);
+
+    _mm_add_epi16(_mm_add_epi16(m01, m45), m23)
+}
+
+#[target_feature(enable = "sse4.1")]
+#[inline]
+unsafe fn hor_row_fast<const W: usize, const SW: usize, const AVG: usize>(
+    out: &mut [u8; W],
+    src_row: &[u8; SW],
+) {
+    let mut buf = [0u8; 32];
+    buf[..SW].copy_from_slice(src_row);
+
+    unsafe {
+        let r0 = _mm_loadu_si128(buf.as_ptr() as *const __m128i);
+        let r1 = _mm_loadu_si128(buf.as_ptr().add(16) as *const __m128i);
+
         let mut col = 0;
-        while col + 8 <= W {
-            let mut v = filter_6tap_8_samples(
-                w8($r, $y, col),
-                w8($r, $y, col + 1),
-                w8($r, $y, col + 2),
-                w8($r, $y, col + 3),
-                w8($r, $y, col + 4),
-                w8($r, $y, col + 5),
-            );
-            if $avg != 0 {
-                v = _mm_avg_epu8(v, ld8(&$r.row::<8>($y, col + $avg)));
+        while col + 16 <= W {
+            let r_lo = r0;
+            let r_hi = _mm_alignr_epi8(r1, r0, 8);
+            let sum_lo = filter_6tap_8px(r_lo);
+            let sum_hi = filter_6tap_8px(r_hi);
+            let shifted_lo = _mm_srai_epi16(_mm_add_epi16(sum_lo, _mm_set1_epi16(16)), 5);
+            let shifted_hi = _mm_srai_epi16(_mm_add_epi16(sum_hi, _mm_set1_epi16(16)), 5);
+            let mut res16 = _mm_packus_epi16(shifted_lo, shifted_hi);
+            if AVG != 0 {
+                let tap16 = _mm_loadu_si128(buf.as_ptr().add(col + AVG) as *const __m128i);
+                res16 = _mm_avg_epu8(res16, tap16);
             }
-            st8(&mut out[col..], v);
+            _mm_storeu_si128(out[col..][..16].as_mut_ptr() as *mut __m128i, res16);
+            col += 16;
+        }
+        if col + 8 <= W {
+            let sum = filter_6tap_8px(r0);
+            let shifted = _mm_srai_epi16(_mm_add_epi16(sum, _mm_set1_epi16(16)), 5);
+            let mut res8 = _mm_packus_epi16(shifted, shifted);
+            if AVG != 0 {
+                let tap8 = _mm_loadl_epi64(buf.as_ptr().add(col + AVG) as *const __m128i);
+                res8 = _mm_avg_epu8(res8, tap8);
+            }
+            _mm_storel_epi64(out[col..][..8].as_mut_ptr() as *mut __m128i, res8);
             col += 8;
         }
         if col + 4 <= W {
-            let mut v = filter_6tap_8_samples(
-                w4($r, $y, col),
-                w4($r, $y, col + 1),
-                w4($r, $y, col + 2),
-                w4($r, $y, col + 3),
-                w4($r, $y, col + 4),
-                w4($r, $y, col + 5),
-            );
-            if $avg != 0 {
-                v = _mm_avg_epu8(v, ld4(&$r.row::<4>($y, col + $avg)));
+            let sum = filter_6tap_8px(r0);
+            let shifted = _mm_srai_epi16(_mm_add_epi16(sum, _mm_set1_epi16(16)), 5);
+            let mut res4 = _mm_packus_epi16(shifted, shifted);
+            if AVG != 0 {
+                let tap4 = _mm_cvtsi32_si128(i32::from_ne_bytes(
+                    *(buf.as_ptr().add(col + AVG) as *const [u8; 4]),
+                ));
+                res4 = _mm_avg_epu8(res4, tap4);
             }
-            st4(&mut out[col..], v);
+            *(out[col..][..4].as_mut_ptr() as *mut [u8; 4]) = _mm_cvtsi128_si32(res4).to_ne_bytes();
             col += 4;
         }
         while col < W {
-            let t = $r.row::<6>($y, col);
+            let t: [u8; 6] = buf[col..col + 6].try_into().unwrap();
             let mut v = WelsClip1((filter_input_8bit(&t) + 16) >> 5);
-            if $avg != 0 {
-                v = ((v as u32 + t[$avg] as u32 + 1) >> 1) as u8;
+            if AVG != 0 {
+                v = ((v as u32 + buf[col + AVG] as u32 + 1) >> 1) as u8;
             }
             out[col] = v;
             col += 1;
         }
-    }};
+    }
 }
 
 /// `McHorVer20` over one const-shape block: one span for the source, one for the
-/// destination, and a window per [`ROW_GROUP`] rows.
-#[target_feature(enable = "sse2")]
-fn hor_block<
+/// destination, walked row by row.
+#[target_feature(enable = "sse4.1")]
+unsafe fn hor_block<
     S: RefSamples + Copy,
     const W: usize,
     const SW: usize,
@@ -450,19 +515,10 @@ fn hor_block<
 ) {
     let s = src.span::<SW, H>(0, -2);
     let mut d = dst.span_mut::<W, H>(0, 0);
-    let mut y = 0;
-    while y + ROW_GROUP <= H {
-        let g = s.window::<SW>(y, ROW_GROUP);
-        let mut gd = d.window_mut::<W>(y, ROW_GROUP);
-        for k in 0..ROW_GROUP {
-            hor_row!(gd.row_mut::<W>(k, 0), &g, k, AVG);
-        }
-        y += ROW_GROUP;
-    }
-    while y < H {
-        let g = s.window::<SW>(y, 1);
-        hor_row!(d.row_mut::<W>(y, 0), &g, 0, AVG);
-        y += 1;
+    for y in 0..H {
+        let r = s.row::<SW>(y, 0);
+        let out = d.row_mut::<W>(y, 0);
+        unsafe { hor_row_fast::<W, SW, AVG>(out, &r) };
     }
 }
 
@@ -500,10 +556,29 @@ pub fn mc_hor_ver20<S: RefSamples + Copy>(
 // Vertical 6-Tap Filter: McHorVer02 (SSE2)
 // ============================================================================
 
+#[target_feature(enable = "sse4.1")]
+#[inline]
+unsafe fn filter_6tap_vertical_words(
+    p0: __m128i,
+    p1: __m128i,
+    p2: __m128i,
+    p3: __m128i,
+    p4: __m128i,
+    p5: __m128i,
+) -> __m128i {
+    let p14 = _mm_add_epi16(p1, p4);
+    let p23 = _mm_add_epi16(p2, p3);
+    let x = _mm_sub_epi16(_mm_slli_epi16(p23, 2), p14);
+    let p05 = _mm_add_epi16(p0, p5);
+    let sum = _mm_add_epi16(p05, _mm_add_epi16(x, _mm_slli_epi16(x, 2)));
+    let rounded = _mm_add_epi16(sum, _mm_set1_epi16(16));
+    _mm_srai_epi16(rounded, 5)
+}
+
 /// The vertical filter at width 16, 8 or 4: the five-row window carried in widened
 /// registers and one new row read per output row.
-#[target_feature(enable = "sse2")]
-fn ver_lanes<
+#[target_feature(enable = "sse4.1")]
+unsafe fn ver_lanes<
     S: RefSamples + Copy,
     const W: usize,
     const H: usize,
@@ -515,42 +590,67 @@ fn ver_lanes<
 ) {
     let s = src.span::<W, SH>(-2, 0);
     let mut d = dst.span_mut::<W, H>(0, 0);
-    // `[lo, hi]` per row; the high half is idle below width 16.
-    let row = |y: usize| -> [__m128i; 2] {
-        if W == 16 {
-            [w8(&s, y, 0), w8(&s, y, 8)]
-        } else if W == 8 {
-            [w8(&s, y, 0), _mm_setzero_si128()]
-        } else {
-            [w4(&s, y, 0), _mm_setzero_si128()]
+    let zero = _mm_setzero_si128();
+
+    let load_row = |y: usize| -> [__m128i; 2] {
+        unsafe {
+            if W == 16 {
+                let r = s.row::<16>(y, 0);
+                let raw = _mm_loadu_si128(r.as_ptr() as *const __m128i);
+                [_mm_unpacklo_epi8(raw, zero), _mm_unpackhi_epi8(raw, zero)]
+            } else if W == 8 {
+                let r = s.row::<8>(y, 0);
+                let raw = _mm_loadl_epi64(r.as_ptr() as *const __m128i);
+                [_mm_unpacklo_epi8(raw, zero), zero]
+            } else {
+                let r = s.row::<4>(y, 0);
+                let raw = _mm_cvtsi32_si128(i32::from_ne_bytes(r));
+                [_mm_unpacklo_epi8(raw, zero), zero]
+            }
         }
     };
-    let (mut r0, mut r1, mut r2, mut r3, mut r4) = (row(0), row(1), row(2), row(3), row(4));
+
+    let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
+        load_row(0),
+        load_row(1),
+        load_row(2),
+        load_row(3),
+        load_row(4),
+    );
+
     for y in 0..H {
-        let r5 = row(y + 5);
-        let mut v = filter_6tap_8_samples(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
+        let r5 = load_row(y + 5);
         let out = d.row_mut::<W>(y, 0);
-        if W == 16 {
-            let hi = filter_6tap_8_samples(r0[1], r1[1], r2[1], r3[1], r4[1], r5[1]);
-            if AVG != 0 {
-                let tap = ld16(&s.row::<16>(y + AVG, 0));
-                let both = _mm_avg_epu8(_mm_unpacklo_epi64(v, hi), tap);
-                st16(out, both);
+
+        unsafe {
+            if W == 16 {
+                let w_lo = filter_6tap_vertical_words(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
+                let w_hi = filter_6tap_vertical_words(r0[1], r1[1], r2[1], r3[1], r4[1], r5[1]);
+                let mut both = _mm_packus_epi16(w_lo, w_hi);
+                if AVG != 0 {
+                    let tap = _mm_loadu_si128(s.row::<16>(y + AVG, 0).as_ptr() as *const __m128i);
+                    both = _mm_avg_epu8(both, tap);
+                }
+                _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, both);
+            } else if W == 8 {
+                let w_lo = filter_6tap_vertical_words(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
+                let mut res = _mm_packus_epi16(w_lo, w_lo);
+                if AVG != 0 {
+                    let tap = _mm_loadl_epi64(s.row::<8>(y + AVG, 0).as_ptr() as *const __m128i);
+                    res = _mm_avg_epu8(res, tap);
+                }
+                _mm_storel_epi64(out.as_mut_ptr() as *mut __m128i, res);
             } else {
-                st8(&mut out[..], v);
-                st8(&mut out[8..], hi);
+                let w_lo = filter_6tap_vertical_words(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
+                let mut res = _mm_packus_epi16(w_lo, w_lo);
+                if AVG != 0 {
+                    let tap = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y + AVG, 0)));
+                    res = _mm_avg_epu8(res, tap);
+                }
+                *(out.as_mut_ptr() as *mut [u8; 4]) = _mm_cvtsi128_si32(res).to_ne_bytes();
             }
-        } else if W == 8 {
-            if AVG != 0 {
-                v = _mm_avg_epu8(v, ld8(&s.row::<8>(y + AVG, 0)));
-            }
-            st8(out, v);
-        } else {
-            if AVG != 0 {
-                v = _mm_avg_epu8(v, ld4(&s.row::<4>(y + AVG, 0)));
-            }
-            st4(out, v);
         }
+
         (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
     }
 }
@@ -584,8 +684,8 @@ fn ver_odd<
 
 /// `McHorVer02` over one const-shape block: the width picks the path, and the
 /// `match` folds because `W` is a constant.
-#[target_feature(enable = "sse2")]
-fn ver_block<
+#[target_feature(enable = "sse4.1")]
+unsafe fn ver_block<
     S: RefSamples + Copy,
     const W: usize,
     const H: usize,
@@ -596,7 +696,7 @@ fn ver_block<
     dst: &mut PlaneCursorMut<'_>,
 ) {
     match W {
-        16 | 8 | 4 => ver_lanes::<S, W, H, SH, AVG>(src, dst),
+        16 | 8 | 4 => unsafe { ver_lanes::<S, W, H, SH, AVG>(src, dst) },
         _ => ver_odd::<S, W, H, SH, AVG>(src, dst),
     }
 }
@@ -643,8 +743,48 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
 /// vertical pass below stores through a raw pointer, so a wider `SW` would run off
 /// the stack frame rather than panic. [`cen_shaped`] only instantiates the shapes
 /// the codec calls; [`cen_any`] states the bound for everything else.
-#[target_feature(enable = "sse2")]
-fn cen_block<
+#[target_feature(enable = "sse4.1")]
+#[inline]
+unsafe fn hor_filter_4px_16bit(v0: __m128i, v1: __m128i) -> __m128i {
+    let mask_01 = _mm_setr_epi8(0, 1, 2, 3, 2, 3, 4, 5, 4, 5, 6, 7, 6, 7, 8, 9);
+    let mask_23 = _mm_setr_epi8(4, 5, 6, 7, 6, 7, 8, 9, 8, 9, 10, 11, 10, 11, 12, 13);
+
+    let coeff_01 = _mm_setr_epi16(1, -5, 1, -5, 1, -5, 1, -5);
+    let coeff_23 = _mm_set1_epi16(20);
+    let coeff_45 = _mm_setr_epi16(-5, 1, -5, 1, -5, 1, -5, 1);
+
+    let p01 = _mm_shuffle_epi8(v0, mask_01);
+    let p23 = _mm_shuffle_epi8(v0, mask_23);
+    let v_align4 = _mm_alignr_epi8(v1, v0, 8);
+    let p45 = _mm_shuffle_epi8(v_align4, mask_01);
+
+    let m01 = _mm_madd_epi16(p01, coeff_01);
+    let m23 = _mm_madd_epi16(p23, coeff_23);
+    let m45 = _mm_madd_epi16(p45, coeff_45);
+
+    let sum = _mm_add_epi32(_mm_add_epi32(m01, m45), m23);
+    let rounded = _mm_add_epi32(sum, _mm_set1_epi32(512));
+    _mm_srai_epi32(rounded, 10)
+}
+
+#[target_feature(enable = "sse4.1")]
+#[inline]
+unsafe fn hor_filter_8px_16bit(itmp_ptr: *const i16) -> __m128i {
+    let v0 = unsafe { _mm_loadu_si128(itmp_ptr as *const __m128i) };
+    let v1 = unsafe { _mm_loadu_si128(itmp_ptr.add(8) as *const __m128i) };
+    let s0 = unsafe { hor_filter_4px_16bit(v0, v1) };
+
+    let v0_hi = unsafe { _mm_loadu_si128(itmp_ptr.add(4) as *const __m128i) };
+    let v1_hi = unsafe { _mm_loadu_si128(itmp_ptr.add(12) as *const __m128i) };
+    let s1 = unsafe { hor_filter_4px_16bit(v0_hi, v1_hi) };
+
+    _mm_packs_epi32(s0, s1)
+}
+
+/// `McHorVer22` over one const-shape block: the vertical 6-tap into `iTmp` over a
+/// sliding 6-row window, then the vectorized horizontal pass over those.
+#[target_feature(enable = "sse4.1")]
+unsafe fn cen_block<
     S: RefSamples + Copy,
     const W: usize,
     const SW: usize,
@@ -654,61 +794,68 @@ fn cen_block<
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
 ) {
-    unsafe {
-        const {
-            assert!(
-                SW <= 17 + 5,
-                "mc_hor_ver22 width exceeds the 17 iTmp is sized for"
-            )
-        };
-        let s = src.span::<SW, SH>(-2, -2);
-        let mut d = dst.span_mut::<W, H>(0, 0);
-        let mut iTmp = [0i16; 17 + 5];
-        for y in 0..H {
-            // The six tap rows as one window: two checks, after which every row and
-            // column offset inside it is a constant and folds.
-            let g = s.window::<SW>(y, 6);
+    const {
+        assert!(
+            SW <= 17 + 5,
+            "mc_hor_ver22 width exceeds the 17 iTmp is sized for"
+        )
+    };
+    let s = src.span::<SW, SH>(-2, -2);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    let mut iTmp = [0i16; 32];
 
-            // Step 1: Vertical 6-tap filter into iTmp
-            let mut j = 0;
-            while j + 8 <= SW {
-                let res = filter_6tap_intermediate_8_samples(
-                    w8(&g, 0, j),
-                    w8(&g, 1, j),
-                    w8(&g, 2, j),
-                    w8(&g, 3, j),
-                    w8(&g, 4, j),
-                    w8(&g, 5, j),
-                );
-                _mm_storeu_si128(iTmp[j..][..8].as_mut_ptr() as *mut __m128i, res);
-                j += 8;
-            }
-            if j + 4 <= SW {
-                let res = filter_6tap_intermediate_8_samples(
-                    w4(&g, 0, j),
-                    w4(&g, 1, j),
-                    w4(&g, 2, j),
-                    w4(&g, 3, j),
-                    w4(&g, 4, j),
-                    w4(&g, 5, j),
-                );
-                _mm_storel_epi64(iTmp[j..][..4].as_mut_ptr() as *mut __m128i, res);
-                j += 4;
-            }
-            while j < SW {
-                let t: [u8; 6] = std::array::from_fn(|k| g.row::<1>(k, j)[0]);
-                iTmp[j] = filter_input_8bit(&t) as i16;
-                j += 1;
-            }
+    let (mut r0, mut r1, mut r2, mut r3, mut r4) = (
+        s.row::<SW>(0, 0),
+        s.row::<SW>(1, 0),
+        s.row::<SW>(2, 0),
+        s.row::<SW>(3, 0),
+        s.row::<SW>(4, 0),
+    );
 
-            // Step 2: Horizontal 6-tap filter over 16-bit intermediate iTmp
-            let out = d.row_mut::<W>(y, 0);
-            for (o, t) in out.iter_mut().zip(iTmp[..SW].windows(6)) {
-                *o = WelsClip1(
-                    (hor_filter_input_16bit(t.try_into().expect("six taps")) + 512) >> 10,
-                );
-            }
+    for y in 0..H {
+        let r5 = s.row::<SW>(y + 5, 0);
+
+        for j in 0..SW {
+            let p05 = r0[j] as i16 + r5[j] as i16;
+            let p14 = r1[j] as i16 + r4[j] as i16;
+            let p23 = r2[j] as i16 + r3[j] as i16;
+            iTmp[j] = p05 - 5 * p14 + 20 * p23;
         }
+
+        let out = d.row_mut::<W>(y, 0);
+        let mut col = 0;
+        while col + 16 <= W {
+            let w_lo = unsafe { hor_filter_8px_16bit(iTmp.as_ptr().add(col)) };
+            let w_hi = unsafe { hor_filter_8px_16bit(iTmp.as_ptr().add(col + 8)) };
+            let res16 = _mm_packus_epi16(w_lo, w_hi);
+            unsafe { _mm_storeu_si128(out[col..][..16].as_mut_ptr() as *mut __m128i, res16) };
+            col += 16;
+        }
+        if col + 8 <= W {
+            let w_lo = unsafe { hor_filter_8px_16bit(iTmp.as_ptr().add(col)) };
+            let res8 = _mm_packus_epi16(w_lo, w_lo);
+            unsafe { _mm_storel_epi64(out[col..][..8].as_mut_ptr() as *mut __m128i, res8) };
+            col += 8;
+        }
+        if col + 4 <= W {
+            let v0 = unsafe { _mm_loadu_si128(iTmp.as_ptr().add(col) as *const __m128i) };
+            let v1 = unsafe { _mm_loadu_si128(iTmp.as_ptr().add(col + 8) as *const __m128i) };
+            let s0 = unsafe { hor_filter_4px_16bit(v0, v1) };
+            let w4 = _mm_packs_epi32(s0, s0);
+            let res4 = _mm_packus_epi16(w4, w4);
+            unsafe {
+                *(out[col..][..4].as_mut_ptr() as *mut [u8; 4]) =
+                    _mm_cvtsi128_si32(res4).to_ne_bytes();
+            }
+            col += 4;
+        }
+        while col < W {
+            let t: &[i16; 6] = iTmp[col..col + 6].try_into().unwrap();
+            out[col] = WelsClip1((hor_filter_input_16bit(t) + 512) >> 10);
+            col += 1;
+        }
+
+        (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
     }
 }
 
@@ -760,6 +907,7 @@ pub fn mc_hor_ver22<S: RefSamples + Copy>(
 pub struct Sse2Leaves;
 
 impl McLeaves for Sse2Leaves {
+    const FUSED_QPEL: bool = true;
     #[inline(always)]
     fn hor<
         S: RefSamples + Copy,
@@ -835,8 +983,7 @@ impl McLeaves for Sse2Leaves {
         a: &A,
         b: &B,
     ) {
-        // SAFETY: SSE2 is baseline on x86_64.
-        unsafe { avg_block::<A, B, W, H>(dst, a, b) }
+        avg_block::<A, B, W, H>(dst, a, b);
     }
     #[inline(always)]
     fn avg_any<A: RefSamples, B: RefSamples>(
