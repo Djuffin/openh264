@@ -27,6 +27,7 @@ use crate::encoder::rec_view::RecCursor;
 ///
 /// Overlapping operands keep the scalar's behaviour: a row is read whole before any
 /// of it is written back.
+#[inline]
 #[target_feature(enable = "neon")]
 unsafe fn copy_rows16(
     dst: &[Cell<u8>],
@@ -50,6 +51,7 @@ unsafe fn copy_rows16(
 }
 
 /// The 8-wide form of [`copy_rows16`]; same contract with `8` for `16`.
+#[inline]
 #[target_feature(enable = "neon")]
 unsafe fn copy_rows8(
     dst: &[Cell<u8>],
