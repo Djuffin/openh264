@@ -164,3 +164,71 @@ pub fn enc_i4x4_luma_pred_vl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
 pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     WelsI4x4LumaPredHU_c(pred, rec)
 }
+
+#[inline(always)]
+pub fn intra_16x16_combined3_sad(
+    pred: &mut [u8; 256],
+    rec: &RecCursor<'_>,
+    enc: &RecCursor<'_>,
+    lambda: i32,
+) -> (u8, i32) {
+    let top = rec.row_n::<16>(-1, 0);
+    let mut sum_top: i32 = 0;
+    for &x in &top {
+        sum_top += x as i32;
+    }
+    let mut left = [0u8; 16];
+    let mut sum_left: i32 = 0;
+    for y in 0..16 {
+        let val = rec.at(-1, y as isize);
+        left[y] = val;
+        sum_left += val as i32;
+    }
+
+    let dc_val = ((16 + sum_top + sum_left) >> 5) as u8;
+
+    let mut sad_v: i32 = 0;
+    let mut sad_h: i32 = 0;
+    let mut sad_dc: i32 = 0;
+
+    for y in 0..16 {
+        let enc_row = enc.row_n::<16>(y as isize, 0);
+        let h_val = left[y];
+        for x in 0..16 {
+            let p = enc_row[x] as i32;
+            sad_v += (p - top[x] as i32).abs();
+            sad_h += (p - h_val as i32).abs();
+            sad_dc += (p - dc_val as i32).abs();
+        }
+    }
+
+    let cost_v = sad_v + lambda * 1;
+    let cost_h = sad_h + lambda * 3;
+    let cost_dc = sad_dc + lambda * 3;
+
+    let (best_mode, best_cost) = if cost_dc < cost_h && cost_dc < cost_v {
+        (2u8, cost_dc)
+    } else if cost_h < cost_v {
+        (1u8, cost_h)
+    } else {
+        (0u8, cost_v)
+    };
+
+    match best_mode {
+        0 => {
+            for y in 0..16 {
+                pred[y * 16..(y + 1) * 16].copy_from_slice(&top);
+            }
+        }
+        1 => {
+            for y in 0..16 {
+                pred[y * 16..(y + 1) * 16].fill(left[y]);
+            }
+        }
+        _ => {
+            pred.fill(dc_val);
+        }
+    }
+
+    (best_mode, best_cost)
+}

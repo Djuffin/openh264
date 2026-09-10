@@ -609,6 +609,96 @@ pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     }
 }
 
+/// Combined 3-mode (Vertical, Horizontal, DC) 16x16 Intra Prediction and SAD evaluation.
+///
+/// Evaluates modes 0 (V), 1 (H), and 2 (DC) simultaneously in a single streaming pass
+/// over the source and reference macroblock lines, avoiding intermediate prediction buffers
+/// and multiple passes over the input samples.
+///
+/// C++: `WelsIntra16x16Combined3Sad_ssse3`, `codec/common/x86/satd_sad.asm:1074`.
+#[inline(always)]
+pub fn intra_16x16_combined3_sad(
+    pred: &mut [u8; 256],
+    rec: &RecCursor<'_>,
+    enc: &RecCursor<'_>,
+    lambda: i32,
+) -> (u8, i32) {
+    unsafe {
+        let top = rec.row_n::<16>(-1, 0);
+        let v_vec = _mm_loadu_si128(top.as_ptr() as *const __m128i);
+        let sad_top = _mm_sad_epu8(v_vec, _mm_setzero_si128());
+        let sum_top = _mm_cvtsi128_si32(sad_top) + _mm_extract_epi16(sad_top, 4);
+
+        let mut left = [0u8; 16];
+        let mut sum_left: i32 = 0;
+        for y in 0..16 {
+            let val = rec.at(-1, y as isize);
+            left[y] = val;
+            sum_left += val as i32;
+        }
+
+        let dc_val = ((16 + sum_top + sum_left) >> 5) as u8;
+        let dc_vec = _mm_set1_epi8(dc_val as i8);
+
+        let mut acc_v = _mm_setzero_si128();
+        let mut acc_h = _mm_setzero_si128();
+        let mut acc_dc = _mm_setzero_si128();
+
+        for y in 0..16 {
+            let enc_row = enc.row_n::<16>(y as isize, 0);
+            let enc_vec = _mm_loadu_si128(enc_row.as_ptr() as *const __m128i);
+
+            let h_vec = _mm_set1_epi8(left[y] as i8);
+
+            acc_v = _mm_add_epi64(acc_v, _mm_sad_epu8(enc_vec, v_vec));
+            acc_h = _mm_add_epi64(acc_h, _mm_sad_epu8(enc_vec, h_vec));
+            acc_dc = _mm_add_epi64(acc_dc, _mm_sad_epu8(enc_vec, dc_vec));
+        }
+
+        let hi_v = _mm_srli_si128(acc_v, 8);
+        let sum_v = _mm_add_epi32(acc_v, hi_v);
+        let sad_v = _mm_cvtsi128_si32(sum_v);
+
+        let hi_h = _mm_srli_si128(acc_h, 8);
+        let sum_h = _mm_add_epi32(acc_h, hi_h);
+        let sad_h = _mm_cvtsi128_si32(sum_h);
+
+        let hi_dc = _mm_srli_si128(acc_dc, 8);
+        let sum_dc = _mm_add_epi32(acc_dc, hi_dc);
+        let sad_dc = _mm_cvtsi128_si32(sum_dc);
+
+        let cost_v = sad_v + lambda * 1;
+        let cost_h = sad_h + lambda * 3;
+        let cost_dc = sad_dc + lambda * 3;
+
+        let (best_mode, best_cost) = if cost_dc < cost_h && cost_dc < cost_v {
+            (2u8, cost_dc)
+        } else if cost_h < cost_v {
+            (1u8, cost_h)
+        } else {
+            (0u8, cost_v)
+        };
+
+        match best_mode {
+            0 => {
+                for y in 0..16 {
+                    pred[y * 16..(y + 1) * 16].copy_from_slice(&top);
+                }
+            }
+            1 => {
+                for y in 0..16 {
+                    pred[y * 16..(y + 1) * 16].fill(left[y]);
+                }
+            }
+            _ => {
+                pred.fill(dc_val);
+            }
+        }
+
+        (best_mode, best_cost)
+    }
+}
+
 // ============================================================================
 // Unit Tests (Parity against scalar implementations)
 // ============================================================================
@@ -619,6 +709,90 @@ mod tests {
     use crate::encoder::get_intra_predictor::*;
     use crate::encoder::rec_view::shared_plane_for_test;
     use crate::safe::plane::PaddedPlane;
+    fn reference_combined3_sad(
+        pred: &mut [u8; 256],
+        rec: &RecCursor<'_>,
+        enc: &RecCursor<'_>,
+        lambda: i32,
+    ) -> (u8, i32) {
+        let mut pred_v = [0u8; 256];
+        let mut pred_h = [0u8; 256];
+        let mut pred_dc = [0u8; 256];
+        WelsI16x16LumaPredV_c(&mut pred_v, rec);
+        WelsI16x16LumaPredH_c(&mut pred_h, rec);
+        WelsI16x16LumaPredDc_c(&mut pred_dc, rec);
+
+        let sad_v = crate::common::sad_common::sample_sad::<16, 16, _>(
+            &RecCursor::over_owned(&mut pred_v, 0, 16),
+            enc,
+        );
+        let sad_h = crate::common::sad_common::sample_sad::<16, 16, _>(
+            &RecCursor::over_owned(&mut pred_h, 0, 16),
+            enc,
+        );
+        let sad_dc = crate::common::sad_common::sample_sad::<16, 16, _>(
+            &RecCursor::over_owned(&mut pred_dc, 0, 16),
+            enc,
+        );
+
+        let cost_v = sad_v + lambda * 1;
+        let cost_h = sad_h + lambda * 3;
+        let cost_dc = sad_dc + lambda * 3;
+
+        let (best_mode, best_cost) = if cost_dc < cost_h && cost_dc < cost_v {
+            (2u8, cost_dc)
+        } else if cost_h < cost_v {
+            (1u8, cost_h)
+        } else {
+            (0u8, cost_v)
+        };
+
+        match best_mode {
+            0 => *pred = pred_v,
+            1 => *pred = pred_h,
+            _ => *pred = pred_dc,
+        }
+
+        (best_mode, best_cost)
+    }
+
+    #[test]
+    fn test_intra_16x16_combined3_sad_parity() {
+        for seed in [13u8, 42, 107, 233] {
+            let mut p_rec = test_plane(32, 32, 16, 64);
+            let mut p_enc = test_plane(32, 32, 16, 64);
+            // vary pixels with seed
+            p_enc.set(0, 0, seed);
+
+            let v_rec = shared_plane_for_test(&mut p_rec);
+            let v_enc = shared_plane_for_test(&mut p_enc);
+            let rec = v_rec.cursor(0, 0);
+            let enc = v_enc.cursor(0, 0);
+
+            for lambda in [0, 5, 10, 50, 100] {
+                let mut pred_simd = [0u8; 256];
+                let mut pred_scalar = [0u8; 256];
+
+                let (mode_simd, cost_simd) =
+                    intra_16x16_combined3_sad(&mut pred_simd, &rec, &enc, lambda);
+                let (mode_scalar, cost_scalar) =
+                    reference_combined3_sad(&mut pred_scalar, &rec, &enc, lambda);
+
+                assert_eq!(
+                    mode_simd, mode_scalar,
+                    "mode mismatch for seed={seed}, lambda={lambda}"
+                );
+                assert_eq!(
+                    cost_simd, cost_scalar,
+                    "cost mismatch for seed={seed}, lambda={lambda}"
+                );
+                assert_eq!(
+                    pred_simd, pred_scalar,
+                    "pred buffer mismatch for seed={seed}, lambda={lambda}"
+                );
+            }
+        }
+    }
 
     fn test_plane(w: usize, h: usize, pad: usize, stride: usize) -> PaddedPlane {
         let mut p = PaddedPlane::new(w, h, pad, stride);

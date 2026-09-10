@@ -671,9 +671,82 @@ pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     *pred = unsafe { i4x4_hu(rec) };
 }
 
-// ============================================================================
-// Unit Tests (Parity against scalar implementations)
-// ============================================================================
+#[inline(always)]
+pub fn intra_16x16_combined3_sad(
+    pred: &mut [u8; 256],
+    rec: &RecCursor<'_>,
+    enc: &RecCursor<'_>,
+    lambda: i32,
+) -> (u8, i32) {
+    unsafe {
+        let top = rec.row_n::<16>(-1, 0);
+        let v_vec = vld1q_u8(top.as_ptr());
+        let sum_top = vaddlvq_u8(v_vec) as i32;
+
+        let mut left = [0u8; 16];
+        let mut sum_left: i32 = 0;
+        for y in 0..16 {
+            let val = rec.at(-1, y as isize);
+            left[y] = val;
+            sum_left += val as i32;
+        }
+
+        let dc_val = ((16 + sum_top + sum_left) >> 5) as u8;
+        let dc_vec = vdupq_n_u8(dc_val);
+
+        let mut acc_v = vdupq_n_u32(0);
+        let mut acc_h = vdupq_n_u32(0);
+        let mut acc_dc = vdupq_n_u32(0);
+
+        for y in 0..16 {
+            let enc_row = enc.row_n::<16>(y as isize, 0);
+            let enc_vec = vld1q_u8(enc_row.as_ptr());
+            let h_vec = vdupq_n_u8(left[y]);
+
+            let diff_v = vabdq_u8(enc_vec, v_vec);
+            let diff_h = vabdq_u8(enc_vec, h_vec);
+            let diff_dc = vabdq_u8(enc_vec, dc_vec);
+
+            acc_v = vpadalq_u16(acc_v, vpaddlq_u8(diff_v));
+            acc_h = vpadalq_u16(acc_h, vpaddlq_u8(diff_h));
+            acc_dc = vpadalq_u16(acc_dc, vpaddlq_u8(diff_dc));
+        }
+
+        let sad_v = vaddvq_u32(acc_v) as i32;
+        let sad_h = vaddvq_u32(acc_h) as i32;
+        let sad_dc = vaddvq_u32(acc_dc) as i32;
+
+        let cost_v = sad_v + lambda * 1;
+        let cost_h = sad_h + lambda * 3;
+        let cost_dc = sad_dc + lambda * 3;
+
+        let (best_mode, best_cost) = if cost_dc < cost_h && cost_dc < cost_v {
+            (2u8, cost_dc)
+        } else if cost_h < cost_v {
+            (1u8, cost_h)
+        } else {
+            (0u8, cost_v)
+        };
+
+        match best_mode {
+            0 => {
+                for y in 0..16 {
+                    pred[y * 16..(y + 1) * 16].copy_from_slice(&top);
+                }
+            }
+            1 => {
+                for y in 0..16 {
+                    pred[y * 16..(y + 1) * 16].fill(left[y]);
+                }
+            }
+            _ => {
+                pred.fill(dc_val);
+            }
+        }
+
+        (best_mode, best_cost)
+    }
+}
 
 #[cfg(test)]
 mod tests {

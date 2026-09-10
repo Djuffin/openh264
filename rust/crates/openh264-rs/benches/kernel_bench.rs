@@ -1306,10 +1306,91 @@ fn copy_rows(rows: &mut Vec<Row>) {
 
 fn intra_rows(rows: &mut Vec<Row>) {
     let mut plane = noise(STRIDE * ROWS, 31);
+    let mut plane_enc = noise(STRIDE * ROWS, 42);
     let rec = RecCursor::over_owned(&mut plane, ANCHOR, STRIDE);
+    let enc = RecCursor::over_owned(&mut plane_enc, ANCHOR, STRIDE);
     let s256 = |p: &[u8; 256], c: bool| if c { fnv(p) } else { p[0] as u64 };
     let s64 = |p: &[u8; 64], c: bool| if c { fnv(p) } else { p[0] as u64 };
     let s16 = |p: &[u8; 16], c: bool| if c { fnv(p) } else { p[0] as u64 };
+
+    let scalar_combined3_sad = |pred: &mut [u8; 256],
+                                rec: &RecCursor<'_>,
+                                enc: &RecCursor<'_>,
+                                lambda: i32|
+     -> (u8, i32) {
+        let mut pred_v = [0u8; 256];
+        let mut pred_h = [0u8; 256];
+        let mut pred_dc = [0u8; 256];
+        ipred::WelsI16x16LumaPredV_c(&mut pred_v, rec);
+        ipred::WelsI16x16LumaPredH_c(&mut pred_h, rec);
+        ipred::WelsI16x16LumaPredDc_c(&mut pred_dc, rec);
+
+        let sad_v = sample_sad::<16, 16, _>(&RecCursor::over_owned(&mut pred_v, 0, 16), enc);
+        let sad_h = sample_sad::<16, 16, _>(&RecCursor::over_owned(&mut pred_h, 0, 16), enc);
+        let sad_dc = sample_sad::<16, 16, _>(&RecCursor::over_owned(&mut pred_dc, 0, 16), enc);
+
+        let cost_v = sad_v + lambda * 1;
+        let cost_h = sad_h + lambda * 3;
+        let cost_dc = sad_dc + lambda * 3;
+
+        let (best_mode, best_cost) = if cost_dc < cost_h && cost_dc < cost_v {
+            (2u8, cost_dc)
+        } else if cost_h < cost_v {
+            (1u8, cost_h)
+        } else {
+            (0u8, cost_v)
+        };
+
+        match best_mode {
+            0 => *pred = pred_v,
+            1 => *pred = pred_h,
+            _ => *pred = pred_dc,
+        }
+
+        (best_mode, best_cost)
+    };
+
+    row!(
+        *rows,
+        "intra 16x16 combined3 sad",
+        |c| {
+            let mut p = [0u8; 256];
+            let (mode, cost) = scalar_combined3_sad(&mut p, black_box(&rec), black_box(&enc), 10);
+            if c {
+                fnv(&p) ^ (mode as u64) ^ ((cost as u64) << 16)
+            } else {
+                cost as u64
+            }
+        },
+        |c| {
+            let mut p = [0u8; 256];
+            let (mode, cost) = isa::intra_pred::intra_16x16_combined3_sad(
+                &mut p,
+                black_box(&rec),
+                black_box(&enc),
+                10,
+            );
+            if c {
+                fnv(&p) ^ (mode as u64) ^ ((cost as u64) << 16)
+            } else {
+                cost as u64
+            }
+        },
+        |c| {
+            let mut p = [0u8; 256];
+            let (mode, cost) = wd::intra_pred::intra_16x16_combined3_sad(
+                &mut p,
+                black_box(&rec),
+                black_box(&enc),
+                10,
+            );
+            if c {
+                fnv(&p) ^ (mode as u64) ^ ((cost as u64) << 16)
+            } else {
+                cost as u64
+            }
+        }
+    );
     row!(
         *rows,
         "intra 16x16 plane",

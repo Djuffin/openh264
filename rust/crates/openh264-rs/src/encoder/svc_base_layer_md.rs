@@ -1719,6 +1719,7 @@ pub fn WelsMdFirstIntraMode(
         &cEncLuma,
         pMbCache,
         pWelsMd.iLambda,
+        pWelsMd.bMdUsingSad,
     );
 
     //compare cost_p16x16 with cost_i16x16
