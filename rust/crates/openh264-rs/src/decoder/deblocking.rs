@@ -810,8 +810,19 @@ pub fn DeblockingBSliceBSInsideMBNormal(
 // Marginal Boundary Strength Calculation Routines
 // ============================================================================
 
+/// The 8x8 block a 4x4 block belongs to, from its 4x4 raster index (0..15) — `MB_BLOCK8x8_IDX`
+/// in `deblocking.cpp:184`. Row is `r / 4` and column `r % 4`, so the 8x8 is
+/// `(row / 2) * 2 + column / 2`. Indexes [`SPicture::pRefPicture`].
+#[inline]
+fn MB_BLOCK8x8_IDX(r: usize) -> usize {
+    ((r >> 3) << 1) + ((r & 3) >> 1)
+}
+
+/// Fix relative to 2.6.0, mirroring `deblocking.cpp:455`: `pFilter` is gone from both marginal
+/// routines' parameter lists. They compared reference indices resolved through the filter's snapshot
+/// of *this* slice's lists; they now compare the pictures the picture itself records, and the filter
+/// has nothing left to say about a bS at a macroblock edge.
 pub fn DeblockingBsMarginalMBAvcbase(
-    pFilter: &mut SDeblockingFilter,
     pCurDqLayer: &mut DqLayerState,
     pDec: &SPicture,
     iEdge: i32,
@@ -825,7 +836,14 @@ pub fn DeblockingBsMarginalMBAvcbase(
     let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
     let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
 
-    let pRefIdxArr = &pDec.pRefIndex[LIST_0];
+    // Fix relative to 2.6.0, mirroring `deblocking.cpp:470`: this edge can separate two slices, and
+    // 8.7.2.1 compares the reference *pictures* the two blocks use — "based only on which pictures
+    // are referenced, without regard to whether a prediction is formed using an index into list 0 or
+    // list 1, and without regard to the index position within a list". Resolving the neighbour's
+    // index through *this* slice's list 0, as `pFilter.ref_ids` did, names a different picture
+    // whenever the two slices carry different lists. Both sides now come from the record
+    // `WelsRecordRefPicturesSlice` wrote for each slice.
+    let pRefPicture = &pDec.pRefPicture[LIST_0];
 
     let is_8x8_curr = *pCurDqLayer.grid.transform_size8x8_flag.get(iMbXy as usize);
     let is_8x8_neigh = *pCurDqLayer
@@ -853,19 +871,8 @@ pub fn DeblockingBsMarginalMBAvcbase(
             } else {
                 let idx_curr = pB8x8Idx[i * 4] as usize;
                 let idx_neigh = pBn8x8Idx[i * 4] as usize;
-                let ref_idx0 = pRefIdxArr.get(iMbXy as usize)[idx_curr];
-                let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[idx_neigh];
-
-                let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_0][ref_idx0 as usize]
-                } else {
-                    None
-                };
-                let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_0][ref_idx1 as usize]
-                } else {
-                    None
-                };
+                let ref0 = pRefPicture.get(iMbXy as usize)[MB_BLOCK8x8_IDX(idx_curr)];
+                let ref1 = pRefPicture.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(idx_neigh)];
 
                 let val = MB_BS_MV(
                     ref0,
@@ -893,19 +900,8 @@ pub fn DeblockingBsMarginalMBAvcbase(
                     pBS[j + (i << 1)] = 2;
                 } else {
                     let b_idx = pB8x8Idx[i * 4] as usize;
-                    let ref_idx0 = pRefIdxArr.get(iMbXy as usize)[b_idx];
-                    let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[bn_idx];
-
-                    let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_0][ref_idx0 as usize]
-                    } else {
-                        None
-                    };
-                    let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_0][ref_idx1 as usize]
-                    } else {
-                        None
-                    };
+                    let ref0 = pRefPicture.get(iMbXy as usize)[MB_BLOCK8x8_IDX(b_idx)];
+                    let ref1 = pRefPicture.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(bn_idx)];
 
                     pBS[j + (i << 1)] = MB_BS_MV(
                         ref0,
@@ -933,19 +929,8 @@ pub fn DeblockingBsMarginalMBAvcbase(
                     pBS[j + (i << 1)] = 2;
                 } else {
                     let bn_idx = pBn8x8Idx[i * 4] as usize;
-                    let ref_idx0 = pRefIdxArr.get(iMbXy as usize)[b_idx];
-                    let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[bn_idx];
-
-                    let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_0][ref_idx0 as usize]
-                    } else {
-                        None
-                    };
-                    let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_0][ref_idx1 as usize]
-                    } else {
-                        None
-                    };
+                    let ref0 = pRefPicture.get(iMbXy as usize)[MB_BLOCK8x8_IDX(b_idx)];
+                    let ref1 = pRefPicture.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(bn_idx)];
 
                     pBS[j + (i << 1)] = MB_BS_MV(
                         ref0,
@@ -968,19 +953,8 @@ pub fn DeblockingBsMarginalMBAvcbase(
             if ((pNzcCurr[b_idx] as u8) | (pNzcNeigh[bn_idx] as u8)) != 0 {
                 pBS[i] = 2;
             } else {
-                let ref_idx0 = pRefIdxArr.get(iMbXy as usize)[b_idx];
-                let ref_idx1 = pRefIdxArr.get(iNeighMb as usize)[bn_idx];
-
-                let ref0 = if ref_idx0 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_0][ref_idx0 as usize]
-                } else {
-                    None
-                };
-                let ref1 = if ref_idx1 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_0][ref_idx1 as usize]
-                } else {
-                    None
-                };
+                let ref0 = pRefPicture.get(iMbXy as usize)[MB_BLOCK8x8_IDX(b_idx)];
+                let ref1 = pRefPicture.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(bn_idx)];
 
                 pBS[i] = MB_BS_MV(
                     ref0,
@@ -999,7 +973,6 @@ pub fn DeblockingBsMarginalMBAvcbase(
 }
 
 pub fn DeblockingBSliceBsMarginalMBAvcbase(
-    pFilter: &mut SDeblockingFilter,
     pCurDqLayer: &mut DqLayerState,
     pDec: &SPicture,
     iEdge: i32,
@@ -1013,8 +986,14 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
     let pB8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][0..8];
     let pBn8x8Idx = &g_kuiTableB8x8Idx[iEdge as usize][8..16];
 
-    let iRefIdx0 = &pDec.pRefIndex[LIST_0];
-    let iRefIdx1 = &pDec.pRefIndex[LIST_1];
+    // Fix relative to 2.6.0, mirroring `deblocking.cpp:567`: as in `DeblockingBsMarginalMBAvcbase`
+    // above, both macroblocks' reference pictures come from the per-slice record rather than from
+    // resolving both macroblocks' indices through the current slice's two lists (8.7.2.1). Two things
+    // went wrong across a slice boundary: the neighbour's list-0 index named whatever this slice's
+    // list 0 held at that position, and a P-slice neighbour's list-1 indices — which its parse never
+    // writes — resolved through this slice's list 1 into a phantom second reference.
+    let pRefPicture0 = &pDec.pRefPicture[LIST_0];
+    let pRefPicture1 = &pDec.pRefPicture[LIST_1];
 
     let pNzcCurr = GetPNzc(pCurDqLayer, iMbXy);
     let pNzcNeigh = GetPNzc(pCurDqLayer, iNeighMb);
@@ -1044,31 +1023,10 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
                 let b_idx = pB8x8Idx[i * 4] as usize;
                 let bn_idx = pBn8x8Idx[i * 4] as usize;
 
-                let ref0_idx0 = iRefIdx0.get(iMbXy as usize)[b_idx];
-                let ref0_idx1 = iRefIdx0.get(iNeighMb as usize)[bn_idx];
-                let ref1_idx0 = iRefIdx1.get(iMbXy as usize)[b_idx];
-                let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
-
-                let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_0][ref0_idx0 as usize]
-                } else {
-                    None
-                };
-                let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_0][ref0_idx1 as usize]
-                } else {
-                    None
-                };
-                let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_1][ref1_idx0 as usize]
-                } else {
-                    None
-                };
-                let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_1][ref1_idx1 as usize]
-                } else {
-                    None
-                };
+                let ref_p0 = pRefPicture0.get(iMbXy as usize)[MB_BLOCK8x8_IDX(b_idx)];
+                let ref_q0 = pRefPicture0.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(bn_idx)];
+                let ref_p1 = pRefPicture1.get(iMbXy as usize)[MB_BLOCK8x8_IDX(b_idx)];
+                let ref_q1 = pRefPicture1.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(bn_idx)];
 
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                     || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
@@ -1107,31 +1065,10 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
                     pBS[j + (i << 1)] = 1;
                     let b_idx = pB8x8Idx[i * 4] as usize;
 
-                    let ref0_idx0 = iRefIdx0.get(iMbXy as usize)[b_idx];
-                    let ref0_idx1 = iRefIdx0.get(iNeighMb as usize)[bn_idx];
-                    let ref1_idx0 = iRefIdx1.get(iMbXy as usize)[b_idx];
-                    let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
-
-                    let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_0][ref0_idx0 as usize]
-                    } else {
-                        None
-                    };
-                    let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_0][ref0_idx1 as usize]
-                    } else {
-                        None
-                    };
-                    let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_1][ref1_idx0 as usize]
-                    } else {
-                        None
-                    };
-                    let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_1][ref1_idx1 as usize]
-                    } else {
-                        None
-                    };
+                    let ref_p0 = pRefPicture0.get(iMbXy as usize)[MB_BLOCK8x8_IDX(b_idx)];
+                    let ref_q0 = pRefPicture0.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(bn_idx)];
+                    let ref_p1 = pRefPicture1.get(iMbXy as usize)[MB_BLOCK8x8_IDX(b_idx)];
+                    let ref_q1 = pRefPicture1.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(bn_idx)];
 
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                         || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
@@ -1170,31 +1107,10 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
                     pBS[j + (i << 1)] = 1;
                     let bn_idx = pBn8x8Idx[i * 4] as usize;
 
-                    let ref0_idx0 = iRefIdx0.get(iMbXy as usize)[b_idx];
-                    let ref0_idx1 = iRefIdx0.get(iNeighMb as usize)[bn_idx];
-                    let ref1_idx0 = iRefIdx1.get(iMbXy as usize)[b_idx];
-                    let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
-
-                    let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_0][ref0_idx0 as usize]
-                    } else {
-                        None
-                    };
-                    let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_0][ref0_idx1 as usize]
-                    } else {
-                        None
-                    };
-                    let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_1][ref1_idx0 as usize]
-                    } else {
-                        None
-                    };
-                    let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                        pFilter.ref_ids[LIST_1][ref1_idx1 as usize]
-                    } else {
-                        None
-                    };
+                    let ref_p0 = pRefPicture0.get(iMbXy as usize)[MB_BLOCK8x8_IDX(b_idx)];
+                    let ref_q0 = pRefPicture0.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(bn_idx)];
+                    let ref_p1 = pRefPicture1.get(iMbXy as usize)[MB_BLOCK8x8_IDX(b_idx)];
+                    let ref_q1 = pRefPicture1.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(bn_idx)];
 
                     if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                         || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
@@ -1228,31 +1144,10 @@ pub fn DeblockingBSliceBsMarginalMBAvcbase(
             } else {
                 pBS[i] = 1;
 
-                let ref0_idx0 = iRefIdx0.get(iMbXy as usize)[b_idx];
-                let ref0_idx1 = iRefIdx0.get(iNeighMb as usize)[bn_idx];
-                let ref1_idx0 = iRefIdx1.get(iMbXy as usize)[b_idx];
-                let ref1_idx1 = iRefIdx1.get(iNeighMb as usize)[bn_idx];
-
-                let ref_p0 = if ref0_idx0 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_0][ref0_idx0 as usize]
-                } else {
-                    None
-                };
-                let ref_q0 = if ref0_idx1 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_0][ref0_idx1 as usize]
-                } else {
-                    None
-                };
-                let ref_p1 = if ref1_idx0 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_1][ref1_idx0 as usize]
-                } else {
-                    None
-                };
-                let ref_q1 = if ref1_idx1 > REF_NOT_IN_LIST {
-                    pFilter.ref_ids[LIST_1][ref1_idx1 as usize]
-                } else {
-                    None
-                };
+                let ref_p0 = pRefPicture0.get(iMbXy as usize)[MB_BLOCK8x8_IDX(b_idx)];
+                let ref_q0 = pRefPicture0.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(bn_idx)];
+                let ref_p1 = pRefPicture1.get(iMbXy as usize)[MB_BLOCK8x8_IDX(b_idx)];
+                let ref_q1 = pRefPicture1.get(iNeighMb as usize)[MB_BLOCK8x8_IDX(bn_idx)];
 
                 if ((ref_p0 == ref_q0) && (ref_p1 == ref_q1))
                     || ((ref_p0 == ref_q1) && (ref_p1 == ref_q0))
@@ -2070,6 +1965,18 @@ fn DeblockingIntraMb(
 // Macroblock-Level Top-Level Deblocking Dispatcher
 // ============================================================================
 
+/// Fix relative to 2.6.0, mirroring `MbUsesList1` at `deblocking.cpp:1142`: true when any 8x8 block
+/// of `iMbXy` predicts from list 1, read from the per-slice record so the answer is the neighbouring
+/// slice's, not the filtering slice's. A macroblock of an I or P slice always answers false; only a B
+/// macroblock that really uses list 1 answers true.
+#[inline]
+fn MbUsesList1(pDec: &SPicture, iMbXy: i32) -> bool {
+    pDec.pRefPicture[LIST_1]
+        .get(iMbXy as usize)
+        .iter()
+        .any(|r| r.is_some())
+}
+
 pub fn WelsDeblockingMb(
     pCurDqLayer: &mut DqLayerState,
     pDec: &mut SPicture,
@@ -2097,19 +2004,19 @@ pub fn WelsDeblockingMb(
                 let iMbNb = iMbXyIndex - 1;
                 let uiMbType = *pDec.pMbType.get(iMbNb as usize);
 
+                // Fix relative to 2.6.0, mirroring `deblocking.cpp:1181`: the left neighbour can
+                // belong to another slice, and the two-list derivation is the one 8.7.2.1 describes
+                // whenever *either* macroblock uses two lists. A B neighbour of a P macroblock
+                // therefore goes through the B routine too; a B neighbour that predicts from list 0
+                // alone stays on the one-list routine, which compares the same pictures. (No stream
+                // here codes a B slice above or left of a P slice, so this direction is covered only
+                // by every other asset staying byte-identical.)
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
-                } else if bBSlice {
-                    DeblockingBSliceBsMarginalMBAvcbase(
-                        pFilter,
-                        pCurDqLayer,
-                        pDec,
-                        0,
-                        iMbNb,
-                        iMbXyIndex,
-                    )
+                } else if bBSlice || MbUsesList1(pDec, iMbNb) {
+                    DeblockingBSliceBsMarginalMBAvcbase(pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
                 } else {
-                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
+                    DeblockingBsMarginalMBAvcbase(pCurDqLayer, pDec, 0, iMbNb, iMbXyIndex)
                 };
                 nBS[0][0] = val.to_ne_bytes();
             } else {
@@ -2120,26 +2027,20 @@ pub fn WelsDeblockingMb(
                 let iMbNb = iMbXyIndex - pCurDqLayer.iMbWidth;
                 let uiMbType = *pDec.pMbType.get(iMbNb as usize);
 
+                // Fix relative to 2.6.0, mirroring `deblocking.cpp:1196`: as for the left edge above.
                 let val = if IS_INTRA(uiMbType) {
                     0x04040404u32
-                } else if bBSlice {
-                    DeblockingBSliceBsMarginalMBAvcbase(
-                        pFilter,
-                        pCurDqLayer,
-                        pDec,
-                        1,
-                        iMbNb,
-                        iMbXyIndex,
-                    )
+                } else if bBSlice || MbUsesList1(pDec, iMbNb) {
+                    DeblockingBSliceBsMarginalMBAvcbase(pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
                 } else {
-                    DeblockingBsMarginalMBAvcbase(pFilter, pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
+                    DeblockingBsMarginalMBAvcbase(pCurDqLayer, pDec, 1, iMbNb, iMbXyIndex)
                 };
                 nBS[1][0] = val.to_ne_bytes();
             } else {
                 nBS[1][0] = [0u8; 4];
             }
 
-            // Fix relative to 2.6.0, mirroring `deblocking.cpp:1183`: the skip short-cut (all
+            // Fix relative to 2.6.0, mirroring `deblocking.cpp:1213`: the skip short-cut (all
             // internal edges bS = 0) holds for P_Skip, one 16x16 partition with one motion
             // vector, but not for B_Skip, whose four 8x8 quadrants inherit direct motion that
             // differs per 8x8 or per 4x4; 8.7.2.1 derives bS from that per-4x4 motion. A B_Skip
@@ -2194,6 +2095,95 @@ pub fn WelsDeblockingMb(
 #[inline]
 fn snapshot_ref_ids(refs: &SRefPic) -> [[Option<PicId>; MAX_DPB_COUNT]; LIST_A] {
     refs.pRefList
+}
+
+/// Fix relative to 2.6.0, mirroring `WelsRecordRefPicturesMb` at `deblocking.cpp:1250`: record, for
+/// one macroblock, the reference picture each of its four 8x8 blocks predicts from, resolved through
+/// the reference lists of the slice being decoded.
+///
+/// 8.7.2.1 makes an edge's boundary strength depend on which *pictures* the two blocks reference, and
+/// a reference index only names a picture together with the lists of the slice that coded it.
+/// Deblocking runs per slice and filters across slice boundaries, so the index of a neighbour in
+/// another slice has to be resolved before that slice's lists are gone. A list the slice type does
+/// not use records `None`: 8.4.2.1 gives a P macroblock no list-1 prediction at all, and its
+/// `pRefIndex[LIST_1]` is never written.
+pub fn WelsRecordRefPicturesMb(
+    pCtx: &SliceCtx<'_>,
+    pCurDqLayer: &DqLayerState,
+    pDec: &mut SPicture,
+    iMbXy: i32,
+) {
+    /// 4x4 raster index of each of the four 8x8 blocks — `kuiBlock8x8Scan4Idx` in `deblocking.cpp`.
+    const BLOCK8x8_SCAN4_IDX: [usize; 4] = [0, 2, 8, 10];
+
+    let iMbXy = iMbXy as usize;
+    // An intra macroblock references no picture at all — 8.7.2.1 gives its edges bS 3 or 4 without
+    // looking — and its `pRefIndex` is never written, so it records "no reference" without reading
+    // one.
+    let bIntra = IS_INTRA(*pDec.pMbType.get(iMbXy));
+    let eSliceType = pCurDqLayer.sLayerInfo.sSliceInLayer.eSliceType;
+    for listIdx in LIST_0..LIST_A {
+        let bListUsed = !bIntra
+            && ((eSliceType == EWelsSliceType::B_SLICE as u8)
+                || (eSliceType == EWelsSliceType::P_SLICE as u8 && listIdx == LIST_0));
+        let mut recorded = [None; 4];
+        for (i, &scan4) in BLOCK8x8_SCAN4_IDX.iter().enumerate() {
+            let iRefIdx = pDec.pRefIndex[listIdx].get(iMbXy)[scan4];
+            if bListUsed && iRefIdx > REF_NOT_IN_LIST {
+                recorded[i] = pCtx.sRefPic.pRefList[listIdx][iRefIdx as usize];
+            }
+        }
+        *pDec.pRefPicture[listIdx].get_mut(iMbXy) = recorded;
+    }
+}
+
+/// Fix relative to 2.6.0, mirroring `WelsRecordRefPicturesSlice` at `deblocking.cpp:1284`:
+/// [`WelsRecordRefPicturesMb`] over every macroblock of the slice just decoded, walking it exactly as
+/// [`WelsDeblockingFilterSlice`] below does.
+///
+/// Called before deblocking and *before* the `uiDisableDeblockingFilterIdc` test, so a slice that
+/// does not filter its own edges still leaves behind what a neighbouring slice reads across the
+/// boundary.
+pub fn WelsRecordRefPicturesSlice(
+    pCtx: &SliceCtx<'_>,
+    pCurDqLayer: &DqLayerState,
+    pDec: &mut SPicture,
+) {
+    let pSliceHeaderExt = &pCurDqLayer.sLayerInfo.sSliceInLayer.sSliceHeaderExt;
+    let iTotalMbCount = pCtx
+        .sps_of(pSliceHeaderExt.sSliceHeader.sps_ref)
+        .map_or(0, |sps| sps.uiTotalMbCount as i32);
+    let fmo_id = pCtx.fmo_id;
+    let iTotalNumMb = pCurDqLayer.sLayerInfo.sSliceInLayer.iTotalMbInCurSlice;
+    let mut iCountNumMb = 0i32;
+    let mut iNextMbXyIndex = pSliceHeaderExt.sSliceHeader.iFirstMbInSlice;
+    let pps_id = pSliceHeaderExt.sSliceHeader.pps_id;
+
+    if iTotalNumMb <= 0 || iNextMbXyIndex < 0 || iNextMbXyIndex >= iTotalMbCount {
+        return;
+    }
+
+    loop {
+        WelsRecordRefPicturesMb(pCtx, pCurDqLayer, pDec, iNextMbXyIndex);
+
+        iCountNumMb += 1;
+        if iCountNumMb >= iTotalNumMb {
+            break;
+        }
+
+        if pCtx
+            .pps_of(pps_id)
+            .is_some_and(|pps| pps.uiNumSliceGroups > 1)
+        {
+            // Flexible Macroblock Ordering slice group transition
+            iNextMbXyIndex = FmoNextMb(active_fmo(pCtx.sFmoList, fmo_id), iNextMbXyIndex);
+        } else {
+            iNextMbXyIndex += 1;
+        }
+        if iNextMbXyIndex == -1 || iNextMbXyIndex >= iTotalMbCount {
+            break;
+        }
+    }
 }
 
 pub fn WelsDeblockingFilterSlice(

@@ -4027,6 +4027,16 @@ pub fn DecodeCurrentAccessUnit(
                 if let Some(pDec) = dec_pic(&mut pCtx.pPicBuff, pCtx.pDec) {
                     pDec.pRefPic[LIST_0] = [None; MAX_DPB_COUNT];
                     pDec.pRefPic[LIST_1] = [None; MAX_DPB_COUNT];
+                    // Fix relative to 2.6.0, mirroring `decoder_core.cpp:2663-2671`: the per-8x8
+                    // reference pictures are written by `WelsRecordRefPicturesSlice` for the
+                    // macroblocks a slice actually covers, and pictures come out of a pool, so start
+                    // the picture with "no reference" everywhere rather than with the previous
+                    // tenant's handles. The C bounds its memset by the SPS's macroblock count; this
+                    // clears the picture's own array, which is that count or more — the surplus
+                    // beyond `uiTotalMbCount` is never read.
+                    for listIdx in LIST_0..LIST_A {
+                        pDec.pRefPicture[listIdx].as_mut_slice().fill([None; 4]);
+                    }
                     pDec.iMbEcedNum = 0;
                     pDec.iMbEcedPropNum = 0;
                 }
