@@ -948,7 +948,15 @@ pub fn WelsMdI16x16FromLayer(
         .sSampleDealingFuncs
         .md_cost(BLOCK_16x16)
         .expect("pfMdCost selects an installed 16x16 slot");
-    WelsMdI16x16(pfMdCost16x16, &cRecLuma, &cEncLuma, pMbCache, iLambda)
+    let bMdUsingSad = pFunc.sSampleDealingFuncs.pfMdCost == crate::encoder::md::CostFamily::Sad;
+    WelsMdI16x16(
+        pfMdCost16x16,
+        &cRecLuma,
+        &cEncLuma,
+        pMbCache,
+        iLambda,
+        bMdUsingSad,
+    )
 }
 
 /// The 16x16 luma predictor for `mode`, reached without `pfGetLumaI16x16Pred`.
@@ -977,7 +985,51 @@ pub fn WelsMdI16x16(
     cEncLuma: &RecCursor<'_>,
     pMbCache: &mut SMbCache,
     iLambda: i32,
+    bMdUsingSad: bool,
 ) -> i32 {
+    let iOffset = (pMbCache.uiNeighborIntra & 0x07) as usize;
+    let iAvailCount = g_kiIntra16AvaliMode[iOffset][4] as usize;
+    let kpAvailMode = &g_kiIntra16AvaliMode[iOffset];
+
+    if bMdUsingSad && iAvailCount >= 3 {
+        let (mut iBestMode, mut iBestCost) = kernels::intra_pred::intra_16x16_combined3_sad(
+            (&mut pMbCache.sMemPredMb[0..256])
+                .try_into()
+                .expect("a packed 16x16 prediction block is 256 bytes"),
+            cRecLuma,
+            cEncLuma,
+            iLambda,
+        );
+        let mut iIdx = 0usize;
+
+        if iAvailCount > 3 {
+            let iCurMode = kpAvailMode[3] as i32;
+            let kiDstOff = 256;
+            I16x16LumaPred(
+                iCurMode,
+                (&mut pMbCache.sMemPredMb[kiDstOff..kiDstOff + 256])
+                    .try_into()
+                    .expect("a packed 16x16 prediction block is 256 bytes"),
+                cRecLuma,
+            );
+            let mut iCurCost = pfMdCost16x16(
+                &RecCursor::over_owned(&mut pMbCache.sMemPredMb[kiDstOff..][..256], 0, 16),
+                cEncLuma,
+            );
+            let mode_val = g_kiMapModeI16x16[iCurMode as usize] as u32;
+            iCurCost += iLambda * (BsSizeUE(mode_val) as i32);
+            if iCurCost < iBestCost {
+                iBestMode = iCurMode as u8;
+                iBestCost = iCurCost;
+                iIdx = 1;
+            }
+        }
+
+        pMbCache.uiMemPredLumaHalf = iIdx as u8;
+        pMbCache.uiLumaI16x16Mode = iBestMode;
+        return iBestCost;
+    }
+
     // `svc_base_layer_md.cpp:369` reads pMemPredMb, not pMemPredLuma. The two are
     // equal on entry only because WelsMdIntraInit re-points pMemPredLuma at
     // pMemPredMb; this function then moves pMemPredLuma to the losing ping-pong half
@@ -986,10 +1038,6 @@ pub fn WelsMdI16x16(
     let mut iBestMode;
     let mut iBestCost = i32::MAX;
     let mut iIdx = 0usize;
-
-    let iOffset = (pMbCache.uiNeighborIntra & 0x07) as usize;
-    let iAvailCount = g_kiIntra16AvaliMode[iOffset][4] as usize;
-    let kpAvailMode = &g_kiIntra16AvaliMode[iOffset];
 
     // `svc_base_layer_md.cpp:402` costs with pfMdCost, which SetFastCodingFunc points
     // at pfSampleSad and SetNormalCodingFunc at pfSampleSatd. The selection is per
@@ -1376,6 +1424,7 @@ pub fn WelsMdSpatialelInterMbIlfmdNoilp<'a>(
             &cEncLuma,
             &mut *pMbCache,
             pWelsMd.iLambda,
+            pWelsMd.bMdUsingSad,
         );
         if bSkip && (pWelsMd.iCostLuma <= kiCostI16x16) {
             WelsMdInterDecidedPskip(pWelsMd, pSlice, mbs.cur_mut());

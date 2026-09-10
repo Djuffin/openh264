@@ -502,6 +502,85 @@ pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     ];
 }
 
+#[inline(always)]
+fn abs_diff(a: u8x16, b: u8x16) -> u8x16 {
+    a.max(b) - a.min(b)
+}
+
+#[inline(always)]
+pub fn intra_16x16_combined3_sad(
+    pred: &mut [u8; 256],
+    rec: &RecCursor<'_>,
+    enc: &RecCursor<'_>,
+    lambda: i32,
+) -> (u8, i32) {
+    let top_raw = rec.row_n::<16>(-1, 0);
+    let v_vec = load16(&top_raw);
+    let sum_top = hsum_i16(widen_lo(v_vec) + widen_hi(v_vec));
+
+    let mut left = [0u8; 16];
+    let mut sum_left: i32 = 0;
+    for y in 0..16 {
+        let val = rec.at(-1, y as isize);
+        left[y] = val;
+        sum_left += val as i32;
+    }
+
+    let dc_val = ((16 + sum_top + sum_left) >> 5) as u8;
+    let dc_vec = u8x16::splat(dc_val);
+
+    let mut acc_v = i16x8::ZERO;
+    let mut acc_h = i16x8::ZERO;
+    let mut acc_dc = i16x8::ZERO;
+
+    for y in 0..16 {
+        let enc_row = load16(&enc.row_n::<16>(y as isize, 0));
+        let h_vec = u8x16::splat(left[y]);
+
+        let diff_v = abs_diff(enc_row, v_vec);
+        let diff_h = abs_diff(enc_row, h_vec);
+        let diff_dc = abs_diff(enc_row, dc_vec);
+
+        acc_v = acc_v + widen_lo(diff_v) + widen_hi(diff_v);
+        acc_h = acc_h + widen_lo(diff_h) + widen_hi(diff_h);
+        acc_dc = acc_dc + widen_lo(diff_dc) + widen_hi(diff_dc);
+    }
+
+    let sad_v = hsum_i16(acc_v);
+    let sad_h = hsum_i16(acc_h);
+    let sad_dc = hsum_i16(acc_dc);
+
+    let cost_v = sad_v + lambda * 1;
+    let cost_h = sad_h + lambda * 3;
+    let cost_dc = sad_dc + lambda * 3;
+
+    let (best_mode, best_cost) = if cost_dc < cost_h && cost_dc < cost_v {
+        (2u8, cost_dc)
+    } else if cost_h < cost_v {
+        (1u8, cost_h)
+    } else {
+        (0u8, cost_v)
+    };
+
+    match best_mode {
+        0 => {
+            for y in 0..16 {
+                pred[y * 16..(y + 1) * 16].copy_from_slice(&top_raw);
+            }
+        }
+        1 => {
+            for y in 0..16 {
+                pred[y * 16..(y + 1) * 16].fill(left[y]);
+            }
+        }
+        _ => {
+            pred.fill(dc_val);
+        }
+    }
+
+    (best_mode, best_cost)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
