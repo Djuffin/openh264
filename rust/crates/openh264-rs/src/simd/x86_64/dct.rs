@@ -9,139 +9,254 @@ use core::arch::x86_64::*;
 // Forward 4x4 Integer DCT
 // ============================================================================
 
-/// Forward 1D DCT on 4 horizontal samples in low 64 bits of `__m128i`.
-#[target_feature(enable = "sse2")]
-fn dct_row(d: __m128i) -> __m128i {
-    let d_rev = _mm_shufflelo_epi16(d, 0b00_01_10_11); // [d3, d2, d1, d0]
-    let sum = _mm_add_epi16(d, d_rev); // [s0, s1, s1, s0]
-    let diff = _mm_sub_epi16(d, d_rev); // [s3, s2, -s2, -s3]
+/// Butterfly stage for 4-point 1D integer DCT on 16-bit lanes.
+///
+/// Computes:
+///   y0 = s0 + s1
+///   y1 = (s3 << 1) + s2
+///   y2 = s0 - s1
+///   y3 = s3 - (s2 << 1)
+/// where:
+///   s0 = d0 + d3, s3 = d0 - d3
+///   s1 = d1 + d2, s2 = d1 - d2
+///
+/// Operates in parallel across all lanes of `__m128i`.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn dct_pass(
+    d0: __m128i,
+    d1: __m128i,
+    d2: __m128i,
+    d3: __m128i,
+) -> (__m128i, __m128i, __m128i, __m128i) {
+    let s0 = _mm_add_epi16(d0, d3);
+    let s3 = _mm_sub_epi16(d0, d3);
+    let s1 = _mm_add_epi16(d1, d2);
+    let s2 = _mm_sub_epi16(d1, d2);
 
-    let s0 = _mm_cvtsi128_si32(sum) as i16 as i32;
-    let s1 = (_mm_cvtsi128_si32(sum) >> 16) as i16 as i32;
-    let s3 = _mm_cvtsi128_si32(diff) as i16 as i32;
-    let s2 = (_mm_cvtsi128_si32(diff) >> 16) as i16 as i32;
+    let y0 = _mm_add_epi16(s0, s1);
+    let y1 = _mm_add_epi16(_mm_slli_epi16(s3, 1), s2);
+    let y2 = _mm_sub_epi16(s0, s1);
+    let y3 = _mm_sub_epi16(s3, _mm_slli_epi16(s2, 1));
 
-    let y0 = (s0 + s1) as i16;
-    let y1 = ((s3 << 1) + s2) as i16;
-    let y2 = (s0 - s1) as i16;
-    let y3 = (s3 - (s2 << 1)) as i16;
-
-    _mm_set_epi16(0, 0, 0, 0, y3, y2, y1, y0)
+    (y0, y1, y2, y3)
 }
 
-/// 4x4 Forward Integer DCT of the pixel difference `(pix1 - pix2)` using SSE2.
+/// In-register transpose of a 4x4 matrix of 16-bit integers stored in the lower 64 bits of 4 registers.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn transpose4(
+    v0: __m128i,
+    v1: __m128i,
+    v2: __m128i,
+    v3: __m128i,
+) -> (__m128i, __m128i, __m128i, __m128i) {
+    let t0 = _mm_unpacklo_epi16(v0, v1);
+    let t1 = _mm_unpacklo_epi16(v2, v3);
+    let u0 = _mm_unpacklo_epi32(t0, t1);
+    let u1 = _mm_unpackhi_epi32(t0, t1);
+
+    let c0 = u0;
+    let c1 = _mm_srli_si128(u0, 8);
+    let c2 = u1;
+    let c3 = _mm_srli_si128(u1, 8);
+
+    (c0, c1, c2, c3)
+}
+
+/// 4x4 Forward Integer DCT of the pixel difference `(pix1 - pix2)` using SSE4.1.
 ///
 /// C++: `WelsDctT4_sse2`, `codec/common/x86/dct.asm`.
-#[target_feature(enable = "sse2")]
-fn dct_4x4_sse2_impl<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 16], pix1: &A, pix2: &B) {
+#[target_feature(enable = "sse4.1")]
+unsafe fn dct_4x4_sse41_impl<A: SampleCursor, B: SampleCursor>(
+    dct: &mut [i16; 16],
+    pix1: &A,
+    pix2: &B,
+) {
     unsafe {
-        let zero = _mm_setzero_si128();
-
-        // Load 4 rows of 4 bytes difference
+        // 1. Load 4 rows of 4 difference pixels
         let r1_0 = pix1.row_n::<4>(0, 0);
         let r2_0 = pix2.row_n::<4>(0, 0);
         let diff0 = _mm_sub_epi16(
-            _mm_unpacklo_epi8(
-                _mm_cvtsi32_si128((r1_0.as_ptr() as *const i32).read_unaligned()),
-                zero,
-            ),
-            _mm_unpacklo_epi8(
-                _mm_cvtsi32_si128((r2_0.as_ptr() as *const i32).read_unaligned()),
-                zero,
-            ),
+            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_0))),
+            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_0))),
         );
 
         let r1_1 = pix1.row_n::<4>(1, 0);
         let r2_1 = pix2.row_n::<4>(1, 0);
         let diff1 = _mm_sub_epi16(
-            _mm_unpacklo_epi8(
-                _mm_cvtsi32_si128((r1_1.as_ptr() as *const i32).read_unaligned()),
-                zero,
-            ),
-            _mm_unpacklo_epi8(
-                _mm_cvtsi32_si128((r2_1.as_ptr() as *const i32).read_unaligned()),
-                zero,
-            ),
+            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_1))),
+            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_1))),
         );
 
         let r1_2 = pix1.row_n::<4>(2, 0);
         let r2_2 = pix2.row_n::<4>(2, 0);
         let diff2 = _mm_sub_epi16(
-            _mm_unpacklo_epi8(
-                _mm_cvtsi32_si128((r1_2.as_ptr() as *const i32).read_unaligned()),
-                zero,
-            ),
-            _mm_unpacklo_epi8(
-                _mm_cvtsi32_si128((r2_2.as_ptr() as *const i32).read_unaligned()),
-                zero,
-            ),
+            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_2))),
+            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_2))),
         );
 
         let r1_3 = pix1.row_n::<4>(3, 0);
         let r2_3 = pix2.row_n::<4>(3, 0);
         let diff3 = _mm_sub_epi16(
-            _mm_unpacklo_epi8(
-                _mm_cvtsi32_si128((r1_3.as_ptr() as *const i32).read_unaligned()),
-                zero,
-            ),
-            _mm_unpacklo_epi8(
-                _mm_cvtsi32_si128((r2_3.as_ptr() as *const i32).read_unaligned()),
-                zero,
-            ),
+            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_3))),
+            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_3))),
         );
 
-        // Horizontal 1D DCT on each row
-        let y0 = dct_row(diff0);
-        let y1 = dct_row(diff1);
-        let y2 = dct_row(diff2);
-        let y3 = dct_row(diff3);
+        // 2. Vertical 1D DCT across all 4 columns simultaneously
+        let (v0, v1, v2, v3) = dct_pass(diff0, diff1, diff2, diff3);
 
-        // Vertical 1D DCT across all 4 columns simultaneously
-        let s0 = _mm_add_epi16(y0, y3);
-        let s3 = _mm_sub_epi16(y0, y3);
-        let s1 = _mm_add_epi16(y1, y2);
-        let s2 = _mm_sub_epi16(y1, y2);
+        // 3. In-register transpose to columns
+        let (c0, c1, c2, c3) = transpose4(v0, v1, v2, v3);
 
-        let out0 = _mm_add_epi16(s0, s1);
-        let out1 = _mm_add_epi16(_mm_slli_epi16(s3, 1), s2);
-        let out2 = _mm_sub_epi16(s0, s1);
-        let out3 = _mm_sub_epi16(s3, _mm_slli_epi16(s2, 1));
+        // 4. Horizontal 1D DCT across all 4 rows simultaneously
+        let (w0, w1, w2, w3) = dct_pass(c0, c1, c2, c3);
 
-        let out01 = _mm_unpacklo_epi64(out0, out1);
-        let out23 = _mm_unpacklo_epi64(out2, out3);
+        // 5. Pack transposed columns back into row order and store
+        let r01 = _mm_unpacklo_epi16(w0, w1);
+        let r23 = _mm_unpacklo_epi16(w2, w3);
+        let out01 = _mm_unpacklo_epi32(r01, r23);
+        let out23 = _mm_unpackhi_epi32(r01, r23);
 
         _mm_storeu_si128(dct.as_mut_ptr() as *mut __m128i, out01);
         _mm_storeu_si128(dct.as_mut_ptr().add(8) as *mut __m128i, out23);
     }
 }
 
-/// 4x4 Forward Integer DCT of the pixel difference `(pix1 - pix2)` using SSE2.
+/// 4x4 Forward Integer DCT of the pixel difference `(pix1 - pix2)` using SSE4.1.
 ///
 /// C++: `WelsDctT4_sse2`, `codec/common/x86/dct.asm`.
 #[inline]
 pub fn dct_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 16], pix1: &A, pix2: &B) {
-    unsafe { dct_4x4_sse2_impl(dct, pix1, pix2) }
+    unsafe { dct_4x4_sse41_impl(dct, pix1, pix2) }
 }
 
-#[target_feature(enable = "sse2")]
-fn dct_four_4x4_sse2_impl<A: SampleCursor, B: SampleCursor>(
+/// In-register transpose of two 4x4 blocks stored side-by-side in four 8-word registers.
+///
+/// Input:
+///   v0 = [a00, a01, a02, a03 | A00, A01, A02, A03]
+///   v1 = [a10, a11, a12, a13 | A10, A11, A12, A13]
+///   v2 = [a20, a21, a22, a23 | A20, A21, A22, A23]
+///   v3 = [a30, a31, a32, a33 | A30, A31, A32, A33]
+///
+/// Output:
+///   c0 = [a00, a10, a20, a30 | A00, A10, A20, A30]
+///   c1 = [a01, a11, a21, a31 | A01, A11, A21, A31]
+///   c2 = [a02, a12, a22, a32 | A02, A12, A22, A32]
+///   c3 = [a03, a13, a23, a33 | A03, A13, A23, A33]
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn transpose8(
+    v0: __m128i,
+    v1: __m128i,
+    v2: __m128i,
+    v3: __m128i,
+) -> (__m128i, __m128i, __m128i, __m128i) {
+    let t0 = _mm_unpacklo_epi16(v0, v1);
+    let t1 = _mm_unpackhi_epi16(v0, v1);
+    let t2 = _mm_unpacklo_epi16(v2, v3);
+    let t3 = _mm_unpackhi_epi16(v2, v3);
+
+    let u0 = _mm_unpacklo_epi32(t0, t2);
+    let u1 = _mm_unpackhi_epi32(t0, t2);
+    let u2 = _mm_unpacklo_epi32(t1, t3);
+    let u3 = _mm_unpackhi_epi32(t1, t3);
+
+    let c0 = _mm_unpacklo_epi64(u0, u2);
+    let c1 = _mm_unpackhi_epi64(u0, u2);
+    let c2 = _mm_unpacklo_epi64(u1, u3);
+    let c3 = _mm_unpackhi_epi64(u1, u3);
+
+    (c0, c1, c2, c3)
+}
+
+/// Transforms two horizontally adjacent 4x4 blocks side-by-side using 8-wide SSE SIMD.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+unsafe fn dct_two_4x4_sse41<A: SampleCursor, B: SampleCursor>(
+    out_left: *mut i16,
+    out_right: *mut i16,
+    pix1: &A,
+    pix2: &B,
+    y_offset: isize,
+) {
+    unsafe {
+        let r1_0 = pix1.row_n::<8>(y_offset + 0, 0);
+        let r2_0 = pix2.row_n::<8>(y_offset + 0, 0);
+        let diff0 = _mm_sub_epi16(
+            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_0))),
+            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_0))),
+        );
+
+        let r1_1 = pix1.row_n::<8>(y_offset + 1, 0);
+        let r2_1 = pix2.row_n::<8>(y_offset + 1, 0);
+        let diff1 = _mm_sub_epi16(
+            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_1))),
+            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_1))),
+        );
+
+        let r1_2 = pix1.row_n::<8>(y_offset + 2, 0);
+        let r2_2 = pix2.row_n::<8>(y_offset + 2, 0);
+        let diff2 = _mm_sub_epi16(
+            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_2))),
+            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_2))),
+        );
+
+        let r1_3 = pix1.row_n::<8>(y_offset + 3, 0);
+        let r2_3 = pix2.row_n::<8>(y_offset + 3, 0);
+        let diff3 = _mm_sub_epi16(
+            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_3))),
+            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_3))),
+        );
+
+        // Vertical pass on both blocks
+        let (v0, v1, v2, v3) = dct_pass(diff0, diff1, diff2, diff3);
+
+        // Transpose both blocks
+        let (c0, c1, c2, c3) = transpose8(v0, v1, v2, v3);
+
+        // Horizontal pass on both blocks
+        let (w0, w1, w2, w3) = dct_pass(c0, c1, c2, c3);
+
+        // Pack into rows for left block and right block
+        let t0 = _mm_unpacklo_epi16(w0, w1);
+        let t1 = _mm_unpacklo_epi16(w2, w3);
+        let left_r01 = _mm_unpacklo_epi32(t0, t1);
+        let left_r23 = _mm_unpackhi_epi32(t0, t1);
+
+        let t2 = _mm_unpackhi_epi16(w0, w1);
+        let t3 = _mm_unpackhi_epi16(w2, w3);
+        let right_r01 = _mm_unpacklo_epi32(t2, t3);
+        let right_r23 = _mm_unpackhi_epi32(t2, t3);
+
+        _mm_storeu_si128(out_left as *mut __m128i, left_r01);
+        _mm_storeu_si128(out_left.add(8) as *mut __m128i, left_r23);
+        _mm_storeu_si128(out_right as *mut __m128i, right_r01);
+        _mm_storeu_si128(out_right.add(8) as *mut __m128i, right_r23);
+    }
+}
+
+#[target_feature(enable = "sse4.1")]
+unsafe fn dct_four_4x4_sse41_impl<A: SampleCursor, B: SampleCursor>(
     dct: &mut [i16; 64],
     pix1: &A,
     pix2: &B,
 ) {
-    const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
-    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
-        let sub: &mut [i16; 16] = (&mut dct[k << 4..][..16]).try_into().unwrap();
-        dct_4x4_sse2_impl(sub, &pix1.advance(dx, dy), &pix2.advance(dx, dy));
+    unsafe {
+        let p = dct.as_mut_ptr();
+        // Top two blocks: Block 0 (offset 0) and Block 1 (offset 16)
+        dct_two_4x4_sse41(p, p.add(16), pix1, pix2, 0);
+        // Bottom two blocks: Block 2 (offset 32) and Block 3 (offset 48)
+        dct_two_4x4_sse41(p.add(32), p.add(48), pix1, pix2, 4);
     }
 }
 
-/// Performs 4x4 FDCT on four adjacent 4x4 blocks forming an 8x8 quadrant using SSE2.
+/// Performs 4x4 FDCT on four adjacent 4x4 blocks forming an 8x8 quadrant using SSE4.1.
 ///
 /// C++: `WelsDctFourT4_sse2`, `codec/common/x86/dct.asm`.
 #[inline]
 pub fn dct_four_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 64], pix1: &A, pix2: &B) {
-    unsafe { dct_four_4x4_sse2_impl(dct, pix1, pix2) }
+    unsafe { dct_four_4x4_sse41_impl(dct, pix1, pix2) }
 }
 
 // ============================================================================
@@ -512,7 +627,7 @@ pub fn idct_rec_i16x16_dc_to_view(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encoder::encode_mb_aux::{dct_4x4, dct_four_4x4};
+    use crate::encoder::encode_mb_aux::{dct_4x4 as dct_4x4_c, dct_four_4x4 as dct_four_4x4_c};
     // These MUST be the `_c` scalar kernels, not the same-named dispatchers:
     // the dispatchers route to the very kernels under test, which would
     // make every assertion below a tautology.
@@ -561,7 +676,7 @@ mod tests {
             let mut dct_c = [0i16; 16];
             let mut dct_simd = [0i16; 16];
 
-            dct_4x4(&mut dct_c, &p1.cursor(0, 0), &p2.cursor(0, 0));
+            dct_4x4_c(&mut dct_c, &p1.cursor(0, 0), &p2.cursor(0, 0));
             dct_4x4(&mut dct_simd, &p1.cursor(0, 0), &p2.cursor(0, 0));
 
             assert_eq!(dct_simd, dct_c);
@@ -586,7 +701,7 @@ mod tests {
             let mut dct_c = [0i16; 64];
             let mut dct_simd = [0i16; 64];
 
-            dct_four_4x4(&mut dct_c, &p1.cursor(0, 0), &p2.cursor(0, 0));
+            dct_four_4x4_c(&mut dct_c, &p1.cursor(0, 0), &p2.cursor(0, 0));
             dct_four_4x4(&mut dct_simd, &p1.cursor(0, 0), &p2.cursor(0, 0));
 
             assert_eq!(dct_simd, dct_c);
