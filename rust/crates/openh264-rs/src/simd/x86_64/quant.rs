@@ -11,140 +11,103 @@ use core::arch::x86_64::*;
 /// In-place dead-zone quantization of 8 consecutive 16-bit coefficients.
 ///
 /// C++: `SSE2_Quant8`, `codec/encoder/core/x86/quant.asm`.
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 fn quant_8(v: __m128i, ff: __m128i, mf: __m128i) -> __m128i {
-    let zero = _mm_setzero_si128();
-    let sign = _mm_cmpgt_epi16(zero, v); // 0xFFFF where v < 0, 0 where v >= 0
-    let abs = _mm_sub_epi16(_mm_xor_si128(v, sign), sign);
-    let abs_ff = _mm_adds_epu16(abs, ff);
-    let q = _mm_mulhi_epu16(abs_ff, mf);
-    _mm_sub_epi16(_mm_xor_si128(q, sign), sign)
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let sign = _mm_cmpgt_epi16(zero, v); // 0xFFFF where v < 0, 0 where v >= 0
+        let abs = _mm_sub_epi16(_mm_xor_si128(v, sign), sign);
+        let abs_ff = _mm_adds_epu16(abs, ff);
+        let q = _mm_mulhi_epu16(abs_ff, mf);
+        _mm_sub_epi16(_mm_xor_si128(q, sign), sign)
+    }
 }
 
 /// In-place dead-zone quantization of 8 consecutive 16-bit coefficients,
 /// returning both the signed quantized values and the un-signed magnitudes.
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 fn quant_8_with_mag(v: __m128i, ff: __m128i, mf: __m128i) -> (__m128i, __m128i) {
-    let zero = _mm_setzero_si128();
-    let sign = _mm_cmpgt_epi16(zero, v);
-    let abs = _mm_sub_epi16(_mm_xor_si128(v, sign), sign);
-    let abs_ff = _mm_adds_epu16(abs, ff);
-    let q_mag = _mm_mulhi_epu16(abs_ff, mf);
-    let q_signed = _mm_sub_epi16(_mm_xor_si128(q_mag, sign), sign);
-    (q_signed, q_mag)
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let sign = _mm_cmpgt_epi16(zero, v);
+        let abs = _mm_sub_epi16(_mm_xor_si128(v, sign), sign);
+        let abs_ff = _mm_adds_epu16(abs, ff);
+        let q_mag = _mm_mulhi_epu16(abs_ff, mf);
+        let q_signed = _mm_sub_epi16(_mm_xor_si128(q_mag, sign), sign);
+        (q_signed, q_mag)
+    }
 }
 
 /// Horizontal maximum of 8 unsigned 16-bit values in an XMM register.
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 fn hmax_u16(m: __m128i) -> i16 {
-    let m1 = _mm_shuffle_epi32(m, 0b01_00_11_10);
-    let m2 = _mm_max_epi16(m, m1);
-    let m3 = _mm_shufflelo_epi16(m2, 0b01_00_11_10);
-    let m4 = _mm_max_epi16(m2, m3);
-    let m5 = _mm_srli_epi32(m4, 16);
-    let m6 = _mm_max_epi16(m4, m5);
-    _mm_cvtsi128_si32(m6) as i16
-}
-
-/// In-place dead-zone forward quantization of a 4x4 block using SSE2.
-///
-/// C++: `WelsQuant4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
-#[target_feature(enable = "sse2")]
-fn quant_4x4_sse2_impl(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
     unsafe {
-        let vff = _mm_loadu_si128(ff.as_ptr() as *const __m128i);
-        let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
-
-        let v0 = _mm_loadu_si128(dct.as_ptr() as *const __m128i);
-        let v1 = _mm_loadu_si128(dct.as_ptr().add(8) as *const __m128i);
-
-        let q0 = quant_8(v0, vff, vmf);
-        let q1 = quant_8(v1, vff, vmf);
-
-        _mm_storeu_si128(dct.as_mut_ptr() as *mut __m128i, q0);
-        _mm_storeu_si128(dct.as_mut_ptr().add(8) as *mut __m128i, q1);
+        let m1 = _mm_shuffle_epi32(m, 0b01_00_11_10);
+        let m2 = _mm_max_epi16(m, m1);
+        let m3 = _mm_shufflelo_epi16(m2, 0b01_00_11_10);
+        let m4 = _mm_max_epi16(m2, m3);
+        let m5 = _mm_srli_epi32(m4, 16);
+        let m6 = _mm_max_epi16(m4, m5);
+        _mm_cvtsi128_si32(m6) as i16
     }
 }
 
 /// In-place dead-zone forward quantization of a 4x4 block using SSE2.
 ///
 /// C++: `WelsQuant4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
-#[inline]
+#[inline(always)]
 pub fn quant_4x4(dct: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
-    unsafe { quant_4x4_sse2_impl(dct, ff, mf) }
-}
-
-#[target_feature(enable = "sse2")]
-fn quant_4x4_dc_sse2_impl(dct: &mut [i16; 16], ff: i16, mf: i16) {
     unsafe {
-        let vff = _mm_set1_epi16(ff);
-        let vmf = _mm_set1_epi16(mf);
+        let vff = _mm_loadu_si128(ff.as_ptr() as *const __m128i);
+        let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
 
-        let v0 = _mm_loadu_si128(dct.as_ptr() as *const __m128i);
-        let v1 = _mm_loadu_si128(dct.as_ptr().add(8) as *const __m128i);
+        let ptr = dct.as_mut_ptr() as *mut __m128i;
+        let v0 = _mm_loadu_si128(ptr);
+        let v1 = _mm_loadu_si128(ptr.add(1));
 
         let q0 = quant_8(v0, vff, vmf);
         let q1 = quant_8(v1, vff, vmf);
 
-        _mm_storeu_si128(dct.as_mut_ptr() as *mut __m128i, q0);
-        _mm_storeu_si128(dct.as_mut_ptr().add(8) as *mut __m128i, q1);
+        _mm_storeu_si128(ptr, q0);
+        _mm_storeu_si128(ptr.add(1), q1);
     }
 }
 
 /// In-place quantization of 16 Hadamard-transformed luma DC coefficients using SSE2.
 ///
 /// C++: `WelsQuant4x4Dc_sse2`, `codec/encoder/core/x86/quant.asm`.
-#[inline]
+#[inline(always)]
 pub fn quant_4x4_dc(dct: &mut [i16; 16], ff: i16, mf: i16) {
-    unsafe { quant_4x4_dc_sse2_impl(dct, ff, mf) }
-}
-
-#[target_feature(enable = "sse2")]
-fn quant_four_4x4_sse2_impl(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
     unsafe {
-        let vff = _mm_loadu_si128(ff.as_ptr() as *const __m128i);
-        let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
+        let vff = _mm_set1_epi16(ff);
+        let vmf = _mm_set1_epi16(mf);
 
-        for i in (0..64).step_by(8) {
-            let v = _mm_loadu_si128(dct.as_ptr().add(i) as *const __m128i);
-            let q = quant_8(v, vff, vmf);
-            _mm_storeu_si128(dct.as_mut_ptr().add(i) as *mut __m128i, q);
-        }
+        let ptr = dct.as_mut_ptr() as *mut __m128i;
+        let v0 = _mm_loadu_si128(ptr);
+        let v1 = _mm_loadu_si128(ptr.add(1));
+
+        let q0 = quant_8(v0, vff, vmf);
+        let q1 = quant_8(v1, vff, vmf);
+
+        _mm_storeu_si128(ptr, q0);
+        _mm_storeu_si128(ptr.add(1), q1);
     }
 }
 
 /// In-place dead-zone quantization of four consecutive 4x4 blocks using SSE2.
 ///
 /// C++: `WelsQuantFour4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
-#[inline]
+#[inline(always)]
 pub fn quant_four_4x4(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8]) {
-    unsafe { quant_four_4x4_sse2_impl(dct, ff, mf) }
-}
-
-#[target_feature(enable = "sse2")]
-fn quant_four_4x4_max_sse2_impl(
-    dct: &mut [i16; 64],
-    ff: &[i16; 8],
-    mf: &[i16; 8],
-    max: &mut [i16; 4],
-) {
     unsafe {
         let vff = _mm_loadu_si128(ff.as_ptr() as *const __m128i);
         let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
+        let ptr = dct.as_mut_ptr() as *mut __m128i;
 
-        for k in 0..4usize {
-            let off = k << 4;
-            let v0 = _mm_loadu_si128(dct.as_ptr().add(off) as *const __m128i);
-            let v1 = _mm_loadu_si128(dct.as_ptr().add(off + 8) as *const __m128i);
-
-            let (q0, mag0) = quant_8_with_mag(v0, vff, vmf);
-            let (q1, mag1) = quant_8_with_mag(v1, vff, vmf);
-
-            _mm_storeu_si128(dct.as_mut_ptr().add(off) as *mut __m128i, q0);
-            _mm_storeu_si128(dct.as_mut_ptr().add(off + 8) as *mut __m128i, q1);
-
-            let m = _mm_max_epi16(mag0, mag1);
-            max[k] = hmax_u16(m);
+        for i in 0..8 {
+            let v = _mm_loadu_si128(ptr.add(i));
+            let q = quant_8(v, vff, vmf);
+            _mm_storeu_si128(ptr.add(i), q);
         }
     }
 }
@@ -152,66 +115,98 @@ fn quant_four_4x4_max_sse2_impl(
 /// In-place dead-zone quantization of four 4x4 blocks with early-termination max levels using SSE2.
 ///
 /// C++: `WelsQuantFour4x4Max_sse2`, `codec/encoder/core/x86/quant.asm`.
-#[inline]
+#[inline(always)]
 pub fn quant_four_4x4_max(dct: &mut [i16; 64], ff: &[i16; 8], mf: &[i16; 8], max: &mut [i16; 4]) {
-    unsafe { quant_four_4x4_max_sse2_impl(dct, ff, mf, max) }
+    unsafe {
+        let vff = _mm_loadu_si128(ff.as_ptr() as *const __m128i);
+        let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
+        let ptr = dct.as_mut_ptr() as *mut __m128i;
+
+        for k in 0..4usize {
+            let off = k << 1;
+            let v0 = _mm_loadu_si128(ptr.add(off));
+            let v1 = _mm_loadu_si128(ptr.add(off + 1));
+
+            let (q0, mag0) = quant_8_with_mag(v0, vff, vmf);
+            let (q1, mag1) = quant_8_with_mag(v1, vff, vmf);
+
+            _mm_storeu_si128(ptr.add(off), q0);
+            _mm_storeu_si128(ptr.add(off + 1), q1);
+
+            let m = _mm_max_epi16(mag0, mag1);
+            max[k] = hmax_u16(m);
+        }
+    }
 }
 
 // ============================================================================
 // Dequantization
 // ============================================================================
 
-#[target_feature(enable = "sse2")]
-fn dequant_4x4_sse2_impl(res: &mut [i16; 16], mf: &[u16; 8]) {
-    unsafe {
-        let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
-        let v0 = _mm_loadu_si128(res.as_ptr() as *const __m128i);
-        let v1 = _mm_loadu_si128(res.as_ptr().add(8) as *const __m128i);
-
-        _mm_storeu_si128(res.as_mut_ptr() as *mut __m128i, _mm_mullo_epi16(v0, vmf));
-        _mm_storeu_si128(
-            res.as_mut_ptr().add(8) as *mut __m128i,
-            _mm_mullo_epi16(v1, vmf),
-        );
-    }
-}
-
 /// In-place dequantization of one 4x4 coefficient block using SSE2.
 ///
 /// C++: `WelsDequant4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
-#[inline]
+#[inline(always)]
 pub fn dequant_4x4(res: &mut [i16; 16], mf: &[u16; 8]) {
-    unsafe { dequant_4x4_sse2_impl(res, mf) }
-}
-
-#[target_feature(enable = "sse2")]
-fn dequant_four_4x4_sse2_impl(res: &mut [i16; 64], mf: &[u16; 8]) {
     unsafe {
         let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
-        for k in 0..8usize {
-            let v = _mm_loadu_si128(res.as_ptr().add(k << 3) as *const __m128i);
-            _mm_storeu_si128(
-                res.as_mut_ptr().add(k << 3) as *mut __m128i,
-                _mm_mullo_epi16(v, vmf),
-            );
-        }
+        let ptr = res.as_mut_ptr() as *mut __m128i;
+        let v0 = _mm_loadu_si128(ptr);
+        let v1 = _mm_loadu_si128(ptr.add(1));
+
+        _mm_storeu_si128(ptr, _mm_mullo_epi16(v0, vmf));
+        _mm_storeu_si128(ptr.add(1), _mm_mullo_epi16(v1, vmf));
     }
 }
 
 /// In-place dequantization of four consecutive 4x4 coefficient blocks using SSE2.
 ///
 /// C++: `WelsDequantFour4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
-#[inline]
+#[inline(always)]
 pub fn dequant_four_4x4(res: &mut [i16; 64], mf: &[u16; 8]) {
-    unsafe { dequant_four_4x4_sse2_impl(res, mf) }
+    unsafe {
+        let vmf = _mm_loadu_si128(mf.as_ptr() as *const __m128i);
+        let ptr = res.as_mut_ptr() as *mut __m128i;
+
+        let v0 = _mm_loadu_si128(ptr);
+        let v1 = _mm_loadu_si128(ptr.add(1));
+        let m0 = _mm_mullo_epi16(v0, vmf);
+        let m1 = _mm_mullo_epi16(v1, vmf);
+        _mm_storeu_si128(ptr, m0);
+        _mm_storeu_si128(ptr.add(1), m1);
+
+        let v2 = _mm_loadu_si128(ptr.add(2));
+        let v3 = _mm_loadu_si128(ptr.add(3));
+        let m2 = _mm_mullo_epi16(v2, vmf);
+        let m3 = _mm_mullo_epi16(v3, vmf);
+        _mm_storeu_si128(ptr.add(2), m2);
+        _mm_storeu_si128(ptr.add(3), m3);
+
+        let v4 = _mm_loadu_si128(ptr.add(4));
+        let v5 = _mm_loadu_si128(ptr.add(5));
+        let m4 = _mm_mullo_epi16(v4, vmf);
+        let m5 = _mm_mullo_epi16(v5, vmf);
+        _mm_storeu_si128(ptr.add(4), m4);
+        _mm_storeu_si128(ptr.add(5), m5);
+
+        let v6 = _mm_loadu_si128(ptr.add(6));
+        let v7 = _mm_loadu_si128(ptr.add(7));
+        let m6 = _mm_mullo_epi16(v6, vmf);
+        let m7 = _mm_mullo_epi16(v7, vmf);
+        _mm_storeu_si128(ptr.add(6), m6);
+        _mm_storeu_si128(ptr.add(7), m7);
+    }
 }
 
 // ============================================================================
 // Non-Zero Count
 // ============================================================================
 
-#[target_feature(enable = "sse2")]
-fn get_none_zero_count_sse2_impl(level: &[i16; 16]) -> i32 {
+/// Count of non-zero coefficients in a 16-element level array using SSE2.
+///
+/// C++: `WelsGetNoneZeroCount_sse2`, `codec/encoder/core/x86/score.asm`.
+#[inline(always)]
+pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
     unsafe {
         let zero = _mm_setzero_si128();
         let v0 = _mm_loadu_si128(level.as_ptr() as *const __m128i);
@@ -220,20 +215,13 @@ fn get_none_zero_count_sse2_impl(level: &[i16; 16]) -> i32 {
         let eq0 = _mm_cmpeq_epi16(v0, zero);
         let eq1 = _mm_cmpeq_epi16(v1, zero);
 
-        let mask0 = _mm_movemask_epi8(eq0);
-        let mask1 = _mm_movemask_epi8(eq1);
-
-        let zero_words = ((mask0.count_ones() + mask1.count_ones()) >> 1) as i32;
-        16 - zero_words
+        // packs saturates signed 16-bit to signed 8-bit.
+        // 0xFFFF (-1) saturates to 0xFF (-1), 0x0000 (0) saturates to 0x00 (0).
+        // Each zero coefficient produces one 0xFF byte; each non-zero produces 0x00.
+        let eq = _mm_packs_epi16(eq0, eq1);
+        let mask = _mm_movemask_epi8(eq) as u32;
+        16 - mask.count_ones() as i32
     }
-}
-
-/// Count of non-zero coefficients in a 16-element level array using SSE2.
-///
-/// C++: `WelsGetNoneZeroCount_sse2`, `codec/encoder/core/x86/score.asm`.
-#[inline]
-pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
-    unsafe { get_none_zero_count_sse2_impl(level) }
 }
 
 // ============================================================================
@@ -242,62 +230,51 @@ pub fn get_none_zero_count(level: &[i16; 16]) -> i32 {
 
 /// Transposes four vectors of four `i32` lanes: lane `j` of result `k` becomes lane
 /// `k` of input `j`.
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 fn transpose4_epi32(
     v0: __m128i,
     v1: __m128i,
     v2: __m128i,
     v3: __m128i,
 ) -> (__m128i, __m128i, __m128i, __m128i) {
-    let a = _mm_unpacklo_epi32(v0, v1);
-    let b = _mm_unpackhi_epi32(v0, v1);
-    let c = _mm_unpacklo_epi32(v2, v3);
-    let d = _mm_unpackhi_epi32(v2, v3);
-    (
-        _mm_unpacklo_epi64(a, c),
-        _mm_unpackhi_epi64(a, c),
-        _mm_unpacklo_epi64(b, d),
-        _mm_unpackhi_epi64(b, d),
-    )
+    unsafe {
+        let a = _mm_unpacklo_epi32(v0, v1);
+        let b = _mm_unpackhi_epi32(v0, v1);
+        let c = _mm_unpacklo_epi32(v2, v3);
+        let d = _mm_unpackhi_epi32(v2, v3);
+        (
+            _mm_unpacklo_epi64(a, c),
+            _mm_unpackhi_epi64(a, c),
+            _mm_unpacklo_epi64(b, d),
+            _mm_unpackhi_epi64(b, d),
+        )
+    }
 }
 
 /// Transposes four vectors whose **low four `i16` lanes** hold a row. The upper four
 /// lanes of each result are the next row's data and are never read: the butterflies
 /// are lane-wise and the stores are `_mm_storel_epi64`.
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 fn transpose4_epi16_lo(
     v0: __m128i,
     v1: __m128i,
     v2: __m128i,
     v3: __m128i,
 ) -> (__m128i, __m128i, __m128i, __m128i) {
-    let a = _mm_unpacklo_epi16(v0, v1);
-    let b = _mm_unpacklo_epi16(v2, v3);
-    let lo = _mm_unpacklo_epi32(a, b);
-    let hi = _mm_unpackhi_epi32(a, b);
-    (lo, _mm_srli_si128(lo, 8), hi, _mm_srli_si128(hi, 8))
+    unsafe {
+        let a = _mm_unpacklo_epi16(v0, v1);
+        let b = _mm_unpacklo_epi16(v2, v3);
+        let lo = _mm_unpacklo_epi32(a, b);
+        let hi = _mm_unpackhi_epi32(a, b);
+        (lo, _mm_srli_si128(lo, 8), hi, _mm_srli_si128(hi, 8))
+    }
 }
 
-/// 4x4 forward Hadamard transform of the sixteen luma DC coefficients.
+/// 4x4 forward Hadamard transform of 16 luma DC coefficients using SSE2.
 ///
-/// C++: `WelsHadamardT4Dc_sse2`, `codec/encoder/core/x86/dct.asm:78`.
-///
-/// # Layout
-///
-/// The DC coefficients are the `(0, 0)` of each 4x4 block, so within the macroblock's
-/// 241-element span they sit 16 and 64 elements apart — sixteen scattered `i16` reads,
-/// hence the written-out gather below. The four vectors hold the four inputs of one row
-/// per lane: lane `k` is the row at `i = 4k`, whose `idx` is
-/// `((i & 8) << 4) + ((i & 4) << 3)`, i.e. 0, 32, 128, 160.
-///
-/// With the inputs laid out that way the row pass is lane-wise with no shuffle, one
-/// transpose puts `p[4k + j]` in lane `j` of vector `k`, and the column pass is lane-wise
-/// again. `packs` at the end saturates, i.e. `.clamp(-32768, 32767) as i16`.
-///
-/// Arithmetic is `i32` throughout: `|input| <= 32768` bounds the row pass at
-/// `|p| <= 131072` and the column pass at `|t0 ± t1| <= 524288`.
-#[target_feature(enable = "sse2")]
-fn hadamard_t4_dc_sse2_impl(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
+/// C++: `WelsHadamardT4Dc_sse2`, `codec/encoder/core/x86/dct.asm`.
+#[inline(always)]
+pub fn hadamard_t4_dc(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
     unsafe {
         // Lane k = scalar row k. Within a row: A = dct[idx], B = dct[idx + 16],
         // C = dct[idx + 64], D = dct[idx + 80] — the scalar's d0, d16, d64, d80.
@@ -349,78 +326,51 @@ fn hadamard_t4_dc_sse2_impl(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
         let o2 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t0, t1), one), 1);
         let o3 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t3, t2), one), 1);
 
-        _mm_storeu_si128(
-            luma_dc.as_mut_ptr() as *mut __m128i,
-            _mm_packs_epi32(o0, o1),
-        );
-        _mm_storeu_si128(
-            luma_dc.as_mut_ptr().add(8) as *mut __m128i,
-            _mm_packs_epi32(o2, o3),
-        );
+        let ptr = luma_dc.as_mut_ptr() as *mut __m128i;
+        _mm_storeu_si128(ptr, _mm_packs_epi32(o0, o1));
+        _mm_storeu_si128(ptr.add(1), _mm_packs_epi32(o2, o3));
     }
-}
-
-/// 4x4 forward Hadamard transform of 16 luma DC coefficients using SSE2.
-///
-/// C++: `WelsHadamardT4Dc_sse2`, `codec/encoder/core/x86/dct.asm`.
-#[inline]
-pub fn hadamard_t4_dc(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
-    unsafe { hadamard_t4_dc_sse2_impl(luma_dc, dct) }
 }
 
 /// The inverse-Hadamard butterfly, which is the same in both passes.
 ///
 /// `(a0, a1, a2, a3)` are the four taps of one line — a row in the first pass, a column
 /// in the second — with one line per lane.
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 fn ihadamard_butterfly(
     a0: __m128i,
     a1: __m128i,
     a2: __m128i,
     a3: __m128i,
 ) -> (__m128i, __m128i, __m128i, __m128i) {
-    let t0 = _mm_add_epi16(a0, a2);
-    let t1 = _mm_sub_epi16(a0, a2);
-    let t2 = _mm_sub_epi16(a1, a3);
-    let t3 = _mm_add_epi16(a1, a3);
-    (
-        _mm_add_epi16(t0, t3),
-        _mm_add_epi16(t1, t2),
-        _mm_sub_epi16(t1, t2),
-        _mm_sub_epi16(t0, t3),
-    )
+    unsafe {
+        let t0 = _mm_add_epi16(a0, a2);
+        let t1 = _mm_sub_epi16(a0, a2);
+        let t2 = _mm_sub_epi16(a1, a3);
+        let t3 = _mm_add_epi16(a1, a3);
+        (
+            _mm_add_epi16(t0, t3),
+            _mm_add_epi16(t1, t2),
+            _mm_sub_epi16(t1, t2),
+            _mm_sub_epi16(t0, t3),
+        )
+    }
 }
 
 /// In-place dequantization and inverse 4x4 Hadamard transform of the luma DC block.
 ///
 /// C++: `WelsDequantIHadamard4x4_sse2`, `codec/encoder/core/x86/quant.asm:332`.
-///
-/// # Layout
-///
-/// Each row is four contiguous `i16`, so a row is one 64-bit load. Transposing before
-/// the first pass makes both passes the *same* lane-wise butterfly — the row pass over
-/// `res[i..i+4]` and the column pass over `res[i], res[i+4], res[i+8], res[i+12]` have
-/// identical tap structure and differ only in operand layout — so the shape is
-/// transpose, butterfly, transpose, butterfly and [`ihadamard_butterfly`] is written
-/// once.
-///
-/// # Where the multiply goes
-///
-/// `mf` is applied on the way out of the second pass rather than before the transform.
-/// The two are equivalent: the transform is linear and every operation is wrapping
-/// `i16`, so `mf * (a ± b) ≡ mf * a ± mf * b (mod 2^16)`.
-///
-/// Every intrinsic here wraps rather than saturating (`_mm_add_epi16`, `_mm_sub_epi16`,
-/// `_mm_mullo_epi16`). The wrapping is load-bearing: the arithmetic is `i16` throughout
-/// and its overflow is observable in the output.
-#[target_feature(enable = "sse2")]
-fn dequant_ihadamard_4x4_sse2_impl(res: &mut [i16; 16], mf: u16) {
+#[inline(always)]
+pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
     unsafe {
-        let src = res.as_ptr();
-        let r0 = _mm_loadl_epi64(src as *const __m128i);
-        let r1 = _mm_loadl_epi64(src.add(4) as *const __m128i);
-        let r2 = _mm_loadl_epi64(src.add(8) as *const __m128i);
-        let r3 = _mm_loadl_epi64(src.add(12) as *const __m128i);
+        let ptr = res.as_ptr() as *const __m128i;
+        let r01 = _mm_loadu_si128(ptr);
+        let r23 = _mm_loadu_si128(ptr.add(1));
+
+        let r0 = r01;
+        let r1 = _mm_srli_si128(r01, 8);
+        let r2 = r23;
+        let r3 = _mm_srli_si128(r23, 8);
 
         // `cm` holds `res[4k + m]` in lane `k`, so the row pass is lane-wise.
         let (c0, c1, c2, c3) = transpose4_epi16_lo(r0, r1, r2, r3);
@@ -429,21 +379,14 @@ fn dequant_ihadamard_4x4_sse2_impl(res: &mut [i16; 16], mf: u16) {
         let (x0, x1, x2, x3) = transpose4_epi16_lo(w0, w1, w2, w3);
         let (y0, y1, y2, y3) = ihadamard_butterfly(x0, x1, x2, x3);
 
-        let mfv = _mm_set1_epi16(mf as i16);
-        let dst = res.as_mut_ptr();
-        _mm_storel_epi64(dst as *mut __m128i, _mm_mullo_epi16(y0, mfv));
-        _mm_storel_epi64(dst.add(4) as *mut __m128i, _mm_mullo_epi16(y1, mfv));
-        _mm_storel_epi64(dst.add(8) as *mut __m128i, _mm_mullo_epi16(y2, mfv));
-        _mm_storel_epi64(dst.add(12) as *mut __m128i, _mm_mullo_epi16(y3, mfv));
-    }
-}
+        let out01 = _mm_unpacklo_epi64(y0, y1);
+        let out23 = _mm_unpacklo_epi64(y2, y3);
 
-/// In-place dequantization and inverse 4x4 Hadamard transform of luma DC block using SSE2.
-///
-/// C++: `WelsDequantIHadamard4x4_sse2`, `codec/encoder/core/x86/quant.asm`.
-#[inline]
-pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
-    unsafe { dequant_ihadamard_4x4_sse2_impl(res, mf) }
+        let mfv = _mm_set1_epi16(mf as i16);
+        let out_ptr = res.as_mut_ptr() as *mut __m128i;
+        _mm_storeu_si128(out_ptr, _mm_mullo_epi16(out01, mfv));
+        _mm_storeu_si128(out_ptr.add(1), _mm_mullo_epi16(out23, mfv));
+    }
 }
 
 // ============================================================================
@@ -452,10 +395,16 @@ pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
 
 #[cfg(test)]
 mod tests {
-    use crate::encoder::decode_mb_aux::{dequant_4x4, dequant_four_4x4, dequant_ihadamard_4x4};
+    use super::*;
+    use crate::encoder::decode_mb_aux::{
+        dequant_4x4 as scalar_dequant_4x4, dequant_four_4x4 as scalar_dequant_four_4x4,
+        dequant_ihadamard_4x4 as scalar_dequant_ihadamard_4x4,
+    };
     use crate::encoder::encode_mb_aux::{
-        G_KI_QUANT_INTER_FF, g_kiQuantMF, get_none_zero_count, quant_4x4, quant_4x4_dc,
-        quant_four_4x4, quant_four_4x4_max,
+        G_KI_QUANT_INTER_FF, g_kiQuantMF, get_none_zero_count as scalar_get_none_zero_count,
+        hadamard_t4_dc as scalar_hadamard_t4_dc, quant_4x4 as scalar_quant_4x4,
+        quant_4x4_dc as scalar_quant_4x4_dc, quant_four_4x4 as scalar_quant_four_4x4,
+        quant_four_4x4_max as scalar_quant_four_4x4_max,
     };
 
     fn lcg(seed: &mut u64) -> i16 {
@@ -478,7 +427,7 @@ mod tests {
             }
             let mut block_simd = block_c;
 
-            quant_4x4(&mut block_c, &ff, &mf);
+            scalar_quant_4x4(&mut block_c, &ff, &mf);
             quant_4x4(&mut block_simd, &ff, &mf);
 
             assert_eq!(block_simd, block_c);
@@ -498,7 +447,7 @@ mod tests {
             }
             let mut block_simd = block_c;
 
-            quant_4x4_dc(&mut block_c, ff, mf);
+            scalar_quant_4x4_dc(&mut block_c, ff, mf);
             quant_4x4_dc(&mut block_simd, ff, mf);
 
             assert_eq!(block_simd, block_c);
@@ -518,7 +467,7 @@ mod tests {
             }
             let mut block_simd = block_c;
 
-            quant_four_4x4(&mut block_c, &ff, &mf);
+            scalar_quant_four_4x4(&mut block_c, &ff, &mf);
             quant_four_4x4(&mut block_simd, &ff, &mf);
 
             assert_eq!(block_simd, block_c);
@@ -541,7 +490,7 @@ mod tests {
             let mut max_c = [0i16; 4];
             let mut max_simd = [0i16; 4];
 
-            quant_four_4x4_max(&mut block_c, &ff, &mf, &mut max_c);
+            scalar_quant_four_4x4_max(&mut block_c, &ff, &mf, &mut max_c);
             quant_four_4x4_max(&mut block_simd, &ff, &mf, &mut max_simd);
 
             assert_eq!(block_simd, block_c);
@@ -561,7 +510,7 @@ mod tests {
             }
             let mut block_simd = block_c;
 
-            dequant_4x4(&mut block_c, &mf);
+            scalar_dequant_4x4(&mut block_c, &mf);
             dequant_4x4(&mut block_simd, &mf);
 
             assert_eq!(block_simd, block_c);
@@ -580,7 +529,7 @@ mod tests {
             }
             let mut block_simd = block_c;
 
-            dequant_four_4x4(&mut block_c, &mf);
+            scalar_dequant_four_4x4(&mut block_c, &mf);
             dequant_four_4x4(&mut block_simd, &mf);
 
             assert_eq!(block_simd, block_c);
@@ -596,7 +545,7 @@ mod tests {
                 let r = lcg(&mut seed);
                 *v = if r % 3 == 0 { 0 } else { r };
             }
-            let c_count = get_none_zero_count(&block);
+            let c_count = scalar_get_none_zero_count(&block);
             let simd_count = get_none_zero_count(&block);
             assert_eq!(simd_count, c_count);
         }
@@ -618,8 +567,6 @@ mod tests {
 
     #[test]
     fn hadamard_t4_dc_parity() {
-        use crate::encoder::encode_mb_aux::hadamard_t4_dc;
-
         let mut seed = 0x2545_F491_4F6C_DD1Du64;
         for _ in 0..2000 {
             let mut dct = [0i16; 241];
@@ -628,7 +575,7 @@ mod tests {
             }
             let mut want = [0i16; 16];
             let mut got = [0i16; 16];
-            hadamard_t4_dc(&mut want, &dct);
+            scalar_hadamard_t4_dc(&mut want, &dct);
             hadamard_t4_dc(&mut got, &dct);
             assert_eq!(got, want);
         }
@@ -638,8 +585,6 @@ mod tests {
     /// puts every output past the clamp in both directions.
     #[test]
     fn hadamard_t4_dc_saturates_like_the_scalar() {
-        use crate::encoder::encode_mb_aux::hadamard_t4_dc;
-
         const DC_IDX: [usize; 16] = [
             0, 16, 64, 80, 32, 48, 96, 112, 128, 144, 192, 208, 160, 176, 224, 240,
         ];
@@ -656,7 +601,7 @@ mod tests {
             }
             let mut want = [0i16; 16];
             let mut got = [0i16; 16];
-            hadamard_t4_dc(&mut want, &dct);
+            scalar_hadamard_t4_dc(&mut want, &dct);
             hadamard_t4_dc(&mut got, &dct);
             assert_eq!(got, want, "pattern {pattern:#018b}");
         }
@@ -667,7 +612,7 @@ mod tests {
             dct[idx] = i16::MAX;
         }
         let mut want = [0i16; 16];
-        hadamard_t4_dc(&mut want, &dct);
+        scalar_hadamard_t4_dc(&mut want, &dct);
         assert_eq!(
             want[0],
             i16::MAX,
@@ -692,7 +637,7 @@ mod tests {
                     *v = lcg_full_i16(&mut seed);
                 }
                 let mut got = want;
-                dequant_ihadamard_4x4(&mut want, mf);
+                scalar_dequant_ihadamard_4x4(&mut want, mf);
                 dequant_ihadamard_4x4(&mut got, mf);
                 assert_eq!(got, want, "mf = {mf}");
             }
@@ -707,7 +652,7 @@ mod tests {
             for &mf in &[1u16, 2, 0x8000, u16::MAX] {
                 let mut want = [v; 16];
                 let mut got = [v; 16];
-                dequant_ihadamard_4x4(&mut want, mf);
+                scalar_dequant_ihadamard_4x4(&mut want, mf);
                 dequant_ihadamard_4x4(&mut got, mf);
                 assert_eq!(got, want, "v = {v}, mf = {mf}");
             }
