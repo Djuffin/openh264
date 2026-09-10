@@ -124,6 +124,11 @@ PPicture AllocPicture (PWelsDecoderContext pCtx, const int32_t kiPicWidth, const
                               int8_t) * MB_BLOCK4x4_NUM, "pCtx->sMb.pRefIndex[]");
   pPic->pRefIndex[LIST_1] = (int8_t (*)[16])pMa->WelsMallocz (uiMbCount * sizeof (
                               int8_t) * MB_BLOCK4x4_NUM, "pCtx->sMb.pRefIndex[]");
+  //Fix relative to 2.6.0: one reference picture per 8x8 block per list, beside the indices above.
+  pPic->pRefPicture[LIST_0] = (PPicture (*)[4])pMa->WelsMallocz (uiMbCount * 4 * sizeof (PPicture),
+                              "pPic->pRefPicture[]");
+  pPic->pRefPicture[LIST_1] = (PPicture (*)[4])pMa->WelsMallocz (uiMbCount * 4 * sizeof (PPicture),
+                              "pPic->pRefPicture[]");
   if (pCtx->pThreadCtx != NULL) {
     pPic->pReadyEvent = (SWelsDecEvent*)pMa->WelsMallocz (uiMbHeight * sizeof (SWelsDecEvent), "pPic->pReadyEvent");
     for (uint32_t i = 0; i < uiMbHeight; ++i) {
@@ -167,6 +172,11 @@ void FreePicture (PPicture pPic, CMemoryAlign* pMa) {
       if (pPic->pRefIndex[listIdx]) {
         pMa->WelsFree (pPic->pRefIndex[listIdx], "pPic->pRefIndex[]");
         pPic->pRefIndex[listIdx] = NULL;
+      }
+
+      if (pPic->pRefPicture[listIdx]) {
+        pMa->WelsFree (pPic->pRefPicture[listIdx], "pPic->pRefPicture[]");
+        pPic->pRefPicture[listIdx] = NULL;
       }
     }
     if (pPic->pReadyEvent != NULL) {
