@@ -13,7 +13,7 @@ use crate::encoder::get_intra_predictor::{
     WelsIChromaPredV_c,
 };
 use crate::encoder::rec_view::RecCursor;
-use crate::safe::plane::PlaneCursorMut;
+use crate::safe::plane::{PlaneCursorMut, RefSamples};
 
 #[inline(always)]
 pub fn enc_i16x16_luma_pred_v(pred: &mut [u8; 256], rec: &RecCursor<'_>) {
