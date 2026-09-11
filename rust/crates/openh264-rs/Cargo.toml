@@ -12,25 +12,8 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 # The shipped library has no dependencies. `libc` is a dev-dependency only: its users
 # are the two benches, which `dlopen` the C++ dylib to compare against.
 [dependencies]
-# Off by default, so the shipped library stays dependency-free. `--features wide`
-# compiles `src/simd/wide/`, a set of SIMD kernels written against the `wide` crate's
-# portable lane types instead of `core::arch` intrinsics, and points `simd::kernels` at
-# it so every dispatch site takes the wide kernel — in place of the SSE2 set on x86_64
-# and the NEON set on aarch64. The host's intrinsic set is still compiled under the
-# feature, which is what lets `benches/kernel_bench.rs` time scalar, intrinsics and wide
-# in one binary.
-#
-# Pinned exactly, because the performance numbers in the README are a claim about a
-# particular version: on x86_64 they are `wide`'s SSE2 fallbacks, on aarch64 what LLVM
-# lowers its lanes to. The two primitives that would move aarch64 are still absent — no
-# absolute-difference/SAD primitive and no rounded byte average — so `sad.rs` pays seven
-# ops a row where `psadbw` pays two, and `mc.rs` spells `pavgb` by hand. A release that
-# adds either is the one worth re-measuring.
-wide = { version = "=1.7.0", optional = true }
 
 [features]
-wide = ["dep:wide"]
-
 # The scalar build. The reference has no runtime way to turn its SIMD off, so this is
 # that switch: it points `simd::kernels` at `src/simd/scalar/`, which forwards every
 # entry point to the scalar body, and clears the feature word so the `pfXxx` tables
@@ -44,7 +27,7 @@ libc = "0.2"
 name = "c_vs_rust_bench"
 harness = false
 
-# Per-kernel scalar / intrinsics / wide timing; the wide column needs `--features wide`.
+# Per-kernel scalar / intrinsics timing.
 [[bench]]
 name = "kernel_bench"
 harness = false

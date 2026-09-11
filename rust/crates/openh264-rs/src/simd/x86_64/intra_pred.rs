@@ -4,7 +4,7 @@
 //! candidate generator and the decoder in-place reconstructor.
 //!
 //! A kernel here is named for the operation, not for an instruction set — the same
-//! name its twin has in `simd::wide`, since the module path says which implementation
+//! name its twin has in `simd::aarch64`, since the module path says which implementation
 //! is in use. Fourteen of these predictors are not vectorized: the pure V, H, DC and
 //! DC-NA fills are word-wide rewrites of their scalar twins, which the init tables
 //! install deliberately. `every_kernel_here_reaches_an_intrinsic` lists those fourteen

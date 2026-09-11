@@ -100,8 +100,7 @@ use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 
 use crate::common::cpu_core::{WELS_CPU_AVX2, WELS_CPU_SSE2};
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
-/// default, `simd::wide` under `--features wide`, and `simd::scalar` on a target with
-/// neither.
+/// default, `simd::scalar` under `--features scalar` or on a target with neither.
 use crate::simd::kernels;
 
 /// `sample.cpp:336`. Installs the scalar SAD/SATD/4-SAD tables, then overrides entries

@@ -31,8 +31,8 @@ use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
 
 use crate::common::cpu_core::WELS_CPU_SSE2;
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
-/// default, `simd::wide` under `--features wide`. The `kernels::` qualifier separates
-/// them from the like-named scalars in this module.
+/// default, `simd::scalar` under `--features scalar` or on a target with neither. The
+/// `kernels::` qualifier separates them from the like-named scalars in this module.
 use crate::simd::kernels;
 
 /// Inverse 4x4 Hadamard of the luma DC block, then scale by the

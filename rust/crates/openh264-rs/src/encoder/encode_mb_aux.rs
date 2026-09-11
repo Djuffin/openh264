@@ -308,8 +308,9 @@ pub fn hadamard_dc_span(a: &[i16], off: usize) -> &[i16; 241] {
 use crate::safe::plane::SampleCursor;
 
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
-/// default, `simd::wide` under `--features wide`. These kernels share their names with
-/// the scalars in this module, so the module qualifier has to stay.
+/// default, `simd::scalar` under `--features scalar` or on a target with neither. These
+/// kernels share their names with the scalars in this module, so the module qualifier
+/// has to stay.
 use crate::simd::kernels;
 
 /// Residual of two 4x4 pixel blocks, then the 2-D forward integer DCT, into

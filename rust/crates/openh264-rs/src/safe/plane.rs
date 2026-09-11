@@ -468,8 +468,8 @@ pub trait RefSamples {
     ///
     /// [`row_blocks`](Self::row_blocks) covers the fixed-size block walks and
     /// [`span`](Self::span) the shaped ones; this is for a caller whose row length is a
-    /// run-time value and has neither — the two 4-sample prediction rows the `wide` and
-    /// SSE2 DCT kernels read. An associated type because a copy here is measurable:
+    /// run-time value and has neither — the 4-sample prediction rows the SSE2 IDCT kernel
+    /// reads. An associated type because a copy here is measurable:
     /// `Row<'a> = &'a [u8]` for the plane cursors, and only
     /// [`RecCursor`](crate::encoder::rec_view::RecCursor) pays for a copy.
     ///
