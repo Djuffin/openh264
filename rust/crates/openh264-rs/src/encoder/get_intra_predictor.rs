@@ -27,7 +27,7 @@ use crate::safe::plane::RefSamples;
 
 use crate::common::cpu_core::WELS_CPU_SSE2;
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
-/// default, `simd::wide` under `--features wide`.
+/// default, `simd::scalar` under `--features scalar` or on a target with neither.
 use crate::simd::kernels;
 
 #[inline(always)]

@@ -52,8 +52,8 @@ pub fn WelsClip1(iX: i32) -> u8 {
 use crate::safe::plane::PlaneSamples;
 
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
-/// default, `simd::wide` under `--features wide`. Stays module-qualified: the kernels
-/// share their names with the scalars here.
+/// default, `simd::scalar` under `--features scalar` or on a target with neither. Stays
+/// module-qualified: the kernels share their names with the scalars here.
 use crate::simd::kernels;
 
 /// C++: `DeblockLumaLt4_c` — the normal/weak (bS < 4) luma filter across 16 lines of

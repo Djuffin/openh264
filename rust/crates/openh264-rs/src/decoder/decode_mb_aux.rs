@@ -24,7 +24,7 @@ use crate::safe::plane::PlaneCursorMut;
 
 pub use crate::decoder::decode_slice::g_kuiScan8;
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
-/// default, `simd::wide` under `--features wide`.
+/// default, `simd::scalar` under `--features scalar` or on a target with neither.
 use crate::simd::kernels;
 
 /// 4x4 inverse integer DCT of `rs`, added to the prediction block at `pred` and

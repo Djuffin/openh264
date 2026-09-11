@@ -1,12 +1,12 @@
-//! Codegen probes for the SIMD kernel pairs: one `#[unsafe(no_mangle)]` wrapper per kernel per
-//! implementation, so the emitted assembly can be read function by function.
+//! Codegen probes for the SIMD kernels: one `#[unsafe(no_mangle)]` wrapper per kernel, so
+//! the emitted assembly can be read function by function.
 //!
 //! ```text
-//! cargo rustc --release --features wide --example simd_probe -- --emit asm
+//! cargo rustc --release --example simd_probe -- --emit asm
 //! ```
 //!
 //! `main` calls each probe once so nothing is dead. The `isa` probes are the SSE2 kernels on
-//! x86_64 and the NEON kernels on aarch64; the `wide` probes need the `wide` feature.
+//! x86_64 and the NEON kernels on aarch64.
 
 #![allow(non_snake_case)]
 
@@ -14,8 +14,6 @@ use openh264_rs::encoder::rec_view::RecCursor;
 use openh264_rs::safe::plane::{PlaneCursor, PlaneCursorMut};
 #[cfg(all(target_arch = "aarch64", not(miri)))]
 use openh264_rs::simd::aarch64 as isa;
-#[cfg(feature = "wide")]
-use openh264_rs::simd::wide as wd;
 #[cfg(target_arch = "x86_64")]
 use openh264_rs::simd::x86_64 as isa;
 
@@ -264,63 +262,6 @@ pub fn probe_copy_block_to_view_16(src: &[u8], dst: &RecCursor<'_>) {
     openh264_rs::encoder::rec_view::copy_block_to_view::<16, 16>(src, dst)
 }
 
-#[cfg(feature = "wide")]
-mod wide_probes {
-    use super::*;
-
-    #[unsafe(no_mangle)]
-    #[inline(never)]
-    pub fn probe_wide_sad_16x16(a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) -> i32 {
-        wd::sad::sample_sad_16x16(a, b)
-    }
-
-    #[unsafe(no_mangle)]
-    #[inline(never)]
-    pub fn probe_wide_satd_4x4(a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) -> i32 {
-        wd::satd::satd_4x4(a, b)
-    }
-
-    #[unsafe(no_mangle)]
-    #[inline(never)]
-    pub fn probe_wide_dequant_ihadamard(res: &mut [i16; 16], mf: u16) {
-        wd::quant::dequant_ihadamard_4x4(res, mf)
-    }
-
-    #[unsafe(no_mangle)]
-    #[inline(never)]
-    pub fn probe_wide_hadamard_t4_dc(out: &mut [i16; 16], dct: &[i16; 241]) {
-        wd::quant::hadamard_t4_dc(out, dct)
-    }
-
-    #[unsafe(no_mangle)]
-    #[inline(never)]
-    pub fn probe_wide_quant_4x4(d: &mut [i16; 16], ff: &[i16; 8], mf: &[i16; 8]) {
-        wd::quant::quant_4x4(d, ff, mf)
-    }
-
-    #[unsafe(no_mangle)]
-    #[inline(never)]
-    pub fn probe_wide_dct_4x4(d: &mut [i16; 16], a: &PlaneCursor<'_>, b: &PlaneCursor<'_>) {
-        wd::dct::dct_4x4(d, a, b)
-    }
-
-    #[unsafe(no_mangle)]
-    #[inline(never)]
-    pub fn probe_wide_pixel_avg_16x16(
-        dst: &mut PlaneCursorMut<'_>,
-        a: &PlaneCursor<'_>,
-        b: &PlaneCursor<'_>,
-    ) {
-        wd::mc::pixel_avg(dst, a, b, 16, 16)
-    }
-
-    #[unsafe(no_mangle)]
-    #[inline(never)]
-    pub fn probe_wide_hor_ver02_16x16(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>) {
-        wd::mc::mc_hor_ver02(src, dst, 16, 16)
-    }
-}
-
 fn main() {
     let a = vec![7u8; 64 * 64];
     let b = vec![9u8; 64 * 64];
@@ -412,17 +353,6 @@ fn main() {
         let ka = RecCursor::over_owned(&mut ra, 20 * 64 + 19, 64);
         probe_copy_block_to_view_16(&src, &ka);
         probe_write_row_16(&ka, &[3u8; 16]);
-    }
-    #[cfg(feature = "wide")]
-    {
-        use wide_probes::*;
-        total += probe_wide_sad_16x16(&ca, &cb) + probe_wide_satd_4x4(&ca, &cb);
-        probe_wide_dequant_ihadamard(&mut d, 3);
-        probe_wide_hadamard_t4_dc(&mut m, &big);
-        probe_wide_quant_4x4(&mut d, &ff, &mf);
-        probe_wide_dct_4x4(&mut d, &ca, &cb);
-        probe_wide_pixel_avg_16x16(&mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64), &ca, &cb);
-        probe_wide_hor_ver02_16x16(&ca, &mut PlaneCursorMut::new(&mut o, 20 * 64 + 19, 64));
     }
     println!("{total} {} {} {}", d[0], m[0], o[20 * 64 + 19]);
 }

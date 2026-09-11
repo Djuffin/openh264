@@ -169,7 +169,7 @@ can hold: a mutant `block_span` one row's width short is caught by a block sized
 to that gap.
 
 **The compiler keeps it that way.** `#![forbid(unsafe_code)]` sits at the top of
-every file that can carry it — 82 of 133 — so adding an `unsafe` block to one is a
+every file that can carry it — 71 of 122 — so adding an `unsafe` block to one is a
 build error, not a report someone has to read. The files that cannot are the
 C-ABI boundary, the intrinsics, the audited sites and the worker pool, and each
 `#[allow(unsafe_code)]` in them carries its category and its reason at the site. `tools/find_dup_types.sh`

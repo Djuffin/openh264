@@ -884,8 +884,9 @@ use crate::decoder::nalu::{
 use crate::decoder::parse_mb_syn_cavlc::InitVlcTable;
 use crate::decoder::pic_queue::{CreatePicBuff, DecreasePicBuff, IncreasePicBuff};
 /// The kernel set the dispatch sites below call: `simd::x86_64` or `simd::aarch64` by
-/// default, `simd::wide` under `--features wide`. The kernels share their names with
-/// the scalars in this module, so the module qualifier has to stay at each site.
+/// default, `simd::scalar` under `--features scalar` or on a target with neither. The
+/// kernels share their names with the scalars in this module, so the module qualifier
+/// has to stay at each site.
 use crate::simd::{detect_cpu_features, kernels};
 
 // Core Functions
