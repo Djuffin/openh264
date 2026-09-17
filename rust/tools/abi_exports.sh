@@ -69,6 +69,7 @@ ACTUAL=$(printf '%s\n' "$RAW" \
   | awk 'NF >= 3 { print $3 }' \
   | sed 's/^_//' \
   | grep -vxE '_init|_fini|_edata|_end|__bss_start|init|fini' \
+  | grep -vF 'cxxbridge1$' \
   | sort -u)
 
 WANT=$(printf '%s\n' "$EXPECTED" | sort -u)

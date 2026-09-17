@@ -12,6 +12,7 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 # The shipped library has no dependencies. `libc` is a dev-dependency only: its users
 # are the two benches, which `dlopen` the C++ dylib to compare against.
 [dependencies]
+cxx = "1.0"
 
 [features]
 # The scalar build. The reference has no runtime way to turn its SIMD off, so this is
