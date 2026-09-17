@@ -26,7 +26,6 @@ impl Default for Encoder {
     }
 }
 
-#[allow(unsafe_code)]
 impl Encoder {
     pub fn new() -> Self {
         Self(crate::encoder::wels_encoder_ext::CWelsH264SVCEncoder::new())
@@ -86,6 +85,7 @@ impl Encoder {
     /// let mut e = openh264_rs::api::codec_api::Encoder::new();
     /// e.set_trace_callback(Some(sink));
     /// ```
+    #[allow(unsafe_code)]
     pub unsafe fn set_trace_callback(&mut self, callback: WelsTraceCallback) {
         self.0.m_pWelsTrace.SetTraceCallback(callback);
         self.0.sync_log_ctx();
@@ -96,6 +96,7 @@ impl Encoder {
     /// `ctx` is handed back to the trace callback on every message until it is
     /// replaced or this encoder is dropped, so it must stay valid for that long.
     /// It is the caller's, and this crate never dereferences it.
+    #[allow(unsafe_code)]
     pub unsafe fn set_trace_callback_context(&mut self, ctx: *mut c_void) {
         self.0
             .m_pWelsTrace
@@ -109,6 +110,7 @@ impl Encoder {
     ///
     /// `option` must point at a readable, aligned object of the type `id` names,
     /// for the duration of the call — see [`crate::api::c_api::encoder_set_opt_c`]'s contract.
+    #[allow(unsafe_code)]
     pub unsafe fn set_option_raw(&mut self, id: ENCODER_OPTION, option: *mut c_void) -> i32 {
         unsafe { self.0.SetOption(id, option) }
     }
@@ -116,6 +118,7 @@ impl Encoder {
     /// # Safety
     ///
     /// As [`Self::set_option_raw`], with `option` written.
+    #[allow(unsafe_code)]
     pub unsafe fn get_option_raw(&mut self, id: ENCODER_OPTION, option: *mut c_void) -> i32 {
         unsafe { self.0.GetOption(id, option) }
     }

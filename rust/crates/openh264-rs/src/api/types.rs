@@ -592,35 +592,24 @@ pub struct SSysMEMBuffer {
     pub iStride: [i32; 2],
 }
 
-/// Decoded frame destination buffer information union payload.
+/// Decoded frame destination buffer information payload.
 #[repr(C)]
-#[derive(Copy, Clone)]
-pub union SBufferInfoUsrData {
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SBufferInfoUsrData {
     pub sSystemBuffer: SSysMEMBuffer,
 }
 
 impl SBufferInfoUsrData {
-    /// The union's one arm, as a value.
-    #[allow(unsafe_code)]
+    /// Returns a reference to the system buffer metadata.
     #[inline]
     pub fn sys(&self) -> &SSysMEMBuffer {
-        // SAFETY: `SBufferInfoUsrData` declares exactly one variant.
-        unsafe { &self.sSystemBuffer }
+        &self.sSystemBuffer
     }
 
-    /// [`sys`](Self::sys)'s mutable form.
-    #[allow(unsafe_code)]
+    /// Returns a mutable reference to the system buffer metadata.
     #[inline]
     pub fn sys_mut(&mut self) -> &mut SSysMEMBuffer {
-        // SAFETY: `SBufferInfoUsrData` declares exactly one variant.
-        unsafe { &mut self.sSystemBuffer }
-    }
-}
-
-#[allow(unsafe_code)]
-impl std::fmt::Debug for SBufferInfoUsrData {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        unsafe { write!(f, "SBufferInfoUsrData({:?})", self.sSystemBuffer) }
+        &mut self.sSystemBuffer
     }
 }
 

@@ -454,13 +454,11 @@ fn hash_plane(
 }
 
 fn hash_frame(hasher: &mut Sha1Hasher, dst: [*mut u8; 3], info: &SBufferInfo) {
-    unsafe {
-        let buf = info.UsrData.sSystemBuffer;
-        let (w, h) = (buf.iWidth as usize, buf.iHeight as usize);
-        hash_plane(hasher, dst[0], w, h, buf.iStride[0] as usize);
-        hash_plane(hasher, dst[1], w / 2, h / 2, buf.iStride[1] as usize);
-        hash_plane(hasher, dst[2], w / 2, h / 2, buf.iStride[1] as usize);
-    }
+    let buf = info.UsrData.sSystemBuffer;
+    let (w, h) = (buf.iWidth as usize, buf.iHeight as usize);
+    hash_plane(hasher, dst[0], w, h, buf.iStride[0] as usize);
+    hash_plane(hasher, dst[1], w / 2, h / 2, buf.iStride[1] as usize);
+    hash_plane(hasher, dst[2], w / 2, h / 2, buf.iStride[1] as usize);
 }
 
 struct PassResult {

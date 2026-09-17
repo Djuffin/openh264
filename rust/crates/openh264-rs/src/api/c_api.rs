@@ -512,10 +512,9 @@ unsafe extern "C" fn encoder_init_c(this: *mut ISVCEncoder, pParam: *const SEncP
             if this.is_null() {
                 return CM_INIT_PARA_ERROR;
             }
-            unsafe {
-                let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-                (*impl_ptr).inner.0.Initialize(pParam.as_ref())
-            }
+            let enc = unsafe { &mut (*(this as *mut CWelsH264SVCEncoderImpl)).inner };
+            let param = unsafe { pParam.as_ref() };
+            enc.0.Initialize(param)
         }
     )
 }
@@ -538,10 +537,9 @@ unsafe extern "C" fn encoder_init_ext_c(
             if this.is_null() {
                 return CM_INIT_PARA_ERROR;
             }
-            unsafe {
-                let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-                (*impl_ptr).inner.0.InitializeExt(pParam.as_ref())
-            }
+            let enc = unsafe { &mut (*(this as *mut CWelsH264SVCEncoderImpl)).inner };
+            let param = unsafe { pParam.as_ref() };
+            enc.0.InitializeExt(param)
         }
     )
 }
@@ -567,13 +565,11 @@ unsafe extern "C" fn encoder_get_default_c(
             if this.is_null() {
                 return CM_INIT_PARA_ERROR;
             }
-            unsafe {
-                let Some(pParam) = pParam.as_mut() else {
-                    return CM_INIT_PARA_ERROR;
-                };
-                let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-                (*impl_ptr).inner.default_params(pParam)
-            }
+            let Some(pParam) = (unsafe { pParam.as_mut() }) else {
+                return CM_INIT_PARA_ERROR;
+            };
+            let enc = unsafe { &mut (*(this as *mut CWelsH264SVCEncoderImpl)).inner };
+            enc.default_params(pParam)
         }
     )
 }
@@ -593,10 +589,8 @@ unsafe extern "C" fn encoder_uninit_c(this: *mut ISVCEncoder) -> i32 {
             if this.is_null() {
                 return CM_INIT_PARA_ERROR;
             }
-            unsafe {
-                let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-                (*impl_ptr).inner.uninitialize()
-            }
+            let enc = unsafe { &mut (*(this as *mut CWelsH264SVCEncoderImpl)).inner };
+            enc.uninitialize()
         }
     )
 }
@@ -630,13 +624,13 @@ unsafe extern "C" fn encoder_encode_frame_c(
             if this.is_null() {
                 return CM_INIT_PARA_ERROR;
             }
-            unsafe {
-                let (Some(kpSrcPic), Some(pBsInfo)) = (kpSrcPic.as_ref(), pBsInfo.as_mut()) else {
-                    return CM_INIT_PARA_ERROR;
-                };
-                let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-                (*impl_ptr).inner.encode_frame(kpSrcPic, pBsInfo)
-            }
+            let (Some(kpSrcPic), Some(pBsInfo)) =
+                (unsafe { kpSrcPic.as_ref() }, unsafe { pBsInfo.as_mut() })
+            else {
+                return CM_INIT_PARA_ERROR;
+            };
+            let enc = unsafe { &mut (*(this as *mut CWelsH264SVCEncoderImpl)).inner };
+            enc.encode_frame(kpSrcPic, pBsInfo)
         }
     )
 }
@@ -661,13 +655,11 @@ unsafe extern "C" fn encoder_encode_param_c(
             if this.is_null() {
                 return CM_INIT_PARA_ERROR;
             }
-            unsafe {
-                let Some(pBsInfo) = pBsInfo.as_mut() else {
-                    return CM_INIT_PARA_ERROR;
-                };
-                let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-                (*impl_ptr).inner.encode_parameter_sets(pBsInfo)
-            }
+            let Some(pBsInfo) = (unsafe { pBsInfo.as_mut() }) else {
+                return CM_INIT_PARA_ERROR;
+            };
+            let enc = unsafe { &mut (*(this as *mut CWelsH264SVCEncoderImpl)).inner };
+            enc.encode_parameter_sets(pBsInfo)
         }
     )
 }
@@ -692,10 +684,8 @@ unsafe extern "C" fn encoder_force_intra_c(
             if this.is_null() {
                 return CM_INIT_PARA_ERROR;
             }
-            unsafe {
-                let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-                (*impl_ptr).inner.force_intra_frame(bIDR, iLayerId)
-            }
+            let enc = unsafe { &mut (*(this as *mut CWelsH264SVCEncoderImpl)).inner };
+            enc.force_intra_frame(bIDR, iLayerId)
         }
     )
 }
@@ -725,10 +715,8 @@ pub(crate) unsafe extern "C" fn encoder_set_opt_c(
             if this.is_null() {
                 return CM_INIT_PARA_ERROR;
             }
-            unsafe {
-                let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-                (*impl_ptr).inner.set_option_raw(eOptionId, pOption)
-            }
+            let enc = unsafe { &mut (*(this as *mut CWelsH264SVCEncoderImpl)).inner };
+            unsafe { enc.set_option_raw(eOptionId, pOption) }
         }
     )
 }
@@ -754,10 +742,8 @@ unsafe extern "C" fn encoder_get_opt_c(
             if this.is_null() {
                 return CM_INIT_PARA_ERROR;
             }
-            unsafe {
-                let impl_ptr = this as *mut CWelsH264SVCEncoderImpl;
-                (*impl_ptr).inner.get_option_raw(eOptionId, pOption)
-            }
+            let enc = unsafe { &mut (*(this as *mut CWelsH264SVCEncoderImpl)).inner };
+            unsafe { enc.get_option_raw(eOptionId, pOption) }
         }
     )
 }
@@ -794,43 +780,41 @@ unsafe extern "C" fn decoder_init_c(
             if this.is_null() {
                 return CM_INIT_PARA_ERROR as c_long;
             }
-            let dec_impl = this as *mut CWelsDecoderImpl;
+            let core = unsafe { &mut (*(this as *mut CWelsDecoderImpl)).core };
             // The null is reported by the impl, which has the trace object, rather
             // than short-circuited here.
             if pParam.is_null() {
-                return unsafe { (*dec_impl).core.report_init_null_param() };
+                return core.report_init_null_param();
             }
-            unsafe {
-                // The caller's block, read as a C caller may have written it.
-                //
-                // `SDecodingParam`'s two enum-typed fields, `eEcActiveIdc` and
-                // `sVideoProperty.eVideoBsType`, are plain `int`s on the C side and are
-                // sanitised after the copy: the first is clamped into
-                // `[ERROR_CON_DISABLE, …FREEZE_RES_CHANGE]` (`decoder.cpp:654`), the
-                // second normalised to `VIDEO_BITSTREAM_DEFAULT` (`:667`). Each has a
-                // closed set of variants in Rust, so `*pParam` would be undefined for
-                // exactly the inputs the sanitising exists to handle.
-                //
-                // So the block is copied as bytes, those two fields are read and written
-                // at their own offsets as the `i32`s they are on the wire, and only then
-                // does it become an `SDecodingParam`. Every other field is a pointer, an
-                // integer or a `bool`.
-                let param = {
-                    let mut buf = std::mem::MaybeUninit::<SDecodingParam>::uninit();
-                    ptr::copy_nonoverlapping(
-                        pParam.cast::<u8>(),
-                        buf.as_mut_ptr().cast::<u8>(),
-                        size_of::<SDecodingParam>(),
-                    );
-                    let ec = ptr::addr_of_mut!((*buf.as_mut_ptr()).eEcActiveIdc).cast::<i32>();
-                    ec.write(ec_idc_from_raw(ec.read()) as i32);
-                    let bs = ptr::addr_of_mut!((*buf.as_mut_ptr()).sVideoProperty.eVideoBsType)
-                        .cast::<i32>();
-                    bs.write(video_bs_type_from_raw(bs.read()) as i32);
-                    buf.assume_init()
-                };
-                (*dec_impl).core.initialize(&param)
-            }
+            // The caller's block, read as a C caller may have written it.
+            //
+            // `SDecodingParam`'s two enum-typed fields, `eEcActiveIdc` and
+            // `sVideoProperty.eVideoBsType`, are plain `int`s on the C side and are
+            // sanitised after the copy: the first is clamped into
+            // `[ERROR_CON_DISABLE, …FREEZE_RES_CHANGE]` (`decoder.cpp:654`), the
+            // second normalised to `VIDEO_BITSTREAM_DEFAULT` (`:667`). Each has a
+            // closed set of variants in Rust, so `*pParam` would be undefined for
+            // exactly the inputs the sanitising exists to handle.
+            //
+            // So the block is copied as bytes, those two fields are read and written
+            // at their own offsets as the `i32`s they are on the wire, and only then
+            // does it become an `SDecodingParam`. Every other field is a pointer, an
+            // integer or a `bool`.
+            let param = unsafe {
+                let mut buf = std::mem::MaybeUninit::<SDecodingParam>::uninit();
+                ptr::copy_nonoverlapping(
+                    pParam.cast::<u8>(),
+                    buf.as_mut_ptr().cast::<u8>(),
+                    size_of::<SDecodingParam>(),
+                );
+                let ec = ptr::addr_of_mut!((*buf.as_mut_ptr()).eEcActiveIdc).cast::<i32>();
+                ec.write(ec_idc_from_raw(ec.read()) as i32);
+                let bs = ptr::addr_of_mut!((*buf.as_mut_ptr()).sVideoProperty.eVideoBsType)
+                    .cast::<i32>();
+                bs.write(video_bs_type_from_raw(bs.read()) as i32);
+                buf.assume_init()
+            };
+            core.initialize(&param)
         }
     )
 }
@@ -852,7 +836,8 @@ unsafe extern "C" fn decoder_uninit_c(this: *mut ISVCDecoder) -> c_long {
             if this.is_null() {
                 return CM_INIT_PARA_ERROR as c_long;
             }
-            unsafe { (*(this as *mut CWelsDecoderImpl)).core.uninitialize() }
+            let core = unsafe { &mut (*(this as *mut CWelsDecoderImpl)).core };
+            core.uninitialize()
         }
     )
 }
@@ -881,34 +866,33 @@ unsafe extern "C" fn decoder_decode_frame_c(
     iWidth: *mut i32,
     iHeight: *mut i32,
 ) -> DECODING_STATE {
-    unsafe {
-        abi_guard!(
-            "ISVCDecoder::DecodeFrame",
-            decoder_log(this),
-            DECODING_STATE::dsBitstreamError,
-            {
-                let mut buf_info = SBufferInfo::default();
-                let state = decoder_decode_frame2_c(this, pSrc, iSrcLen, ppDst, &mut buf_info);
-                if buf_info.iBufferStatus != 1 {
-                    return state;
-                }
-                // Each of the three is optional and written only on the frame-emitted
-                // path; `pStride` is two `i32`s.
-                let sys = buf_info.UsrData.sys();
-                if let Some(pStride) = pStride.cast::<[i32; 2]>().as_mut() {
-                    pStride[0] = sys.iStride[0];
-                    pStride[1] = sys.iStride[1];
-                }
-                if let Some(iWidth) = iWidth.as_mut() {
-                    *iWidth = sys.iWidth;
-                }
-                if let Some(iHeight) = iHeight.as_mut() {
-                    *iHeight = sys.iHeight;
-                }
-                state
+    abi_guard!(
+        "ISVCDecoder::DecodeFrame",
+        unsafe { decoder_log(this) },
+        DECODING_STATE::dsBitstreamError,
+        {
+            let mut buf_info = SBufferInfo::default();
+            let state =
+                unsafe { decoder_decode_frame2_c(this, pSrc, iSrcLen, ppDst, &mut buf_info) };
+            if buf_info.iBufferStatus != 1 {
+                return state;
             }
-        )
-    }
+            // Each of the three is optional and written only on the frame-emitted
+            // path; `pStride` is two `i32`s.
+            let sys = &buf_info.UsrData.sSystemBuffer;
+            if let Some(pStride) = unsafe { pStride.cast::<[i32; 2]>().as_mut() } {
+                pStride[0] = sys.iStride[0];
+                pStride[1] = sys.iStride[1];
+            }
+            if let Some(iWidth) = unsafe { iWidth.as_mut() } {
+                *iWidth = sys.iWidth;
+            }
+            if let Some(iHeight) = unsafe { iHeight.as_mut() } {
+                *iHeight = sys.iHeight;
+            }
+            state
+        }
+    )
 }
 
 #[allow(unsafe_code)]
@@ -935,20 +919,20 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
     ppDst: *mut *mut u8,
     pDstInfo: *mut SBufferInfo,
 ) -> DECODING_STATE {
-    unsafe {
-        abi_guard!(
-            "ISVCDecoder::DecodeFrameNoDelay",
-            decoder_log(this),
-            DECODING_STATE::dsBitstreamError,
-            {
-                // `iRet |=` on `DECODING_STATE`, which is a bitset of `ds*` flags — the two
-                // calls' states are ORed, not replaced, so an error in either half survives.
-                let first = decoder_decode_frame2_c(this, kpSrc, kiSrcLen, ppDst, pDstInfo);
-                let second = decoder_decode_frame2_c(this, ptr::null(), 0, ppDst, pDstInfo);
-                DECODING_STATE(first.0 | second.0)
-            }
-        )
-    }
+    abi_guard!(
+        "ISVCDecoder::DecodeFrameNoDelay",
+        unsafe { decoder_log(this) },
+        DECODING_STATE::dsBitstreamError,
+        {
+            // `iRet |=` on `DECODING_STATE`, which is a bitset of `ds*` flags — the two
+            // calls' states are ORed, not replaced, so an error in either half survives.
+            let first =
+                unsafe { decoder_decode_frame2_c(this, kpSrc, kiSrcLen, ppDst, pDstInfo) };
+            let second =
+                unsafe { decoder_decode_frame2_c(this, ptr::null(), 0, ppDst, pDstInfo) };
+            DECODING_STATE(first.0 | second.0)
+        }
+    )
 }
 
 #[allow(unsafe_code)]
@@ -983,23 +967,21 @@ unsafe extern "C" fn decoder_decode_frame2_c(
             if this.is_null() {
                 return DECODING_STATE::dsInitialOptExpected;
             }
-            let dec_impl = this as *mut CWelsDecoderImpl;
-            unsafe {
-                // The caller's access unit, or `None` for the end-of-stream flush that
-                // `(NULL, 0)` means on this slot.
-                let src: Option<&[u8]> = if kpSrc.is_null() || kiSrcLen <= 0 {
-                    None
-                } else {
-                    Some(std::slice::from_raw_parts(kpSrc, kiSrcLen as usize))
-                };
-                let Some(ppDst) = (ppDst as *mut [*mut u8; 3]).as_mut() else {
-                    return DECODING_STATE::dsInitialOptExpected;
-                };
-                let Some(pDstInfo) = pDstInfo.as_mut() else {
-                    return DECODING_STATE::dsInitialOptExpected;
-                };
-                (*dec_impl).core.decode(src, ppDst, pDstInfo)
-            }
+            let core = unsafe { &mut (*(this as *mut CWelsDecoderImpl)).core };
+            // The caller's access unit, or `None` for the end-of-stream flush that
+            // `(NULL, 0)` means on this slot.
+            let src: Option<&[u8]> = if kpSrc.is_null() || kiSrcLen <= 0 {
+                None
+            } else {
+                Some(unsafe { std::slice::from_raw_parts(kpSrc, kiSrcLen as usize) })
+            };
+            let Some(ppDst) = (unsafe { (ppDst as *mut [*mut u8; 3]).as_mut() }) else {
+                return DECODING_STATE::dsInitialOptExpected;
+            };
+            let Some(pDstInfo) = (unsafe { pDstInfo.as_mut() }) else {
+                return DECODING_STATE::dsInitialOptExpected;
+            };
+            core.decode(src, ppDst, pDstInfo)
         }
     )
 }
@@ -1063,95 +1045,94 @@ unsafe extern "C" fn decoder_set_opt_c(
             }
             // The blob's type is the option id's: every arm reads it at that type and
             // hands the value to a safe method.
-            unsafe {
-                let core = &mut (*(this as *mut CWelsDecoderImpl)).core;
+            let core = unsafe { &mut (*(this as *mut CWelsDecoderImpl)).core };
 
-                // `welsDecoderExt.cpp:479-584`. Nine arms, and two head clauses:
-                //
-                //   1. `NUM_OF_THREADS` first, and it succeeds whether or not the decoder
-                //      has a context — it is the object's field;
-                //   2. then, for every other id except the three trace ones, a missing
-                //      context is `dsInitialOptExpected`.
-                if eOptionId == DECODER_OPTION::DECODER_OPTION_NUM_OF_THREADS {
-                    // `:481-501`. Single-threaded here, so the count clamps to 0.
-                    // Success on any input, including a null.
-                    return CM_RESULT_SUCCESS as c_long;
-                }
-                let ctx_needed = !matches!(
-                    eOptionId,
-                    DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL
-                        | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK
-                        | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK_CONTEXT
-                );
-                if ctx_needed && !core.has_ctx() {
-                    return DECODING_STATE::dsInitialOptExpected.0 as c_long;
-                }
-
-                match eOptionId {
-                    // `pOption` is tested per arm, and the arms disagree about what a
-                    // null means: `END_OF_STREAM` and `ERROR_CON_IDC` reject it, the
-                    // trace ones dereference it, `STATISTICS_LOG_INTERVAL` reaches the
-                    // trailing `cmInitParaError`.
-                    DECODER_OPTION::DECODER_OPTION_END_OF_STREAM => {
-                        if pOption.is_null() {
-                            return CM_INIT_PARA_ERROR as c_long;
-                        }
-                        core.set_end_of_stream(pOption.cast::<i32>().read() != 0);
-                        CM_RESULT_SUCCESS as c_long
-                    }
-                    DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC => {
-                        if pOption.is_null() {
-                            return CM_INIT_PARA_ERROR as c_long;
-                        }
-                        // The blob is an `int`, run through
-                        // `WELS_CLIP3 (iVal, ERROR_CON_DISABLE, …FREEZE_RES_CHANGE)`
-                        // before the store (`welsDecoderExt.cpp:528`). Reading it as
-                        // `*const ERROR_CON_IDC` would be undefined for anything outside
-                        // 0..=7, which is exactly the range the clamp enforces, so it
-                        // crosses as an `i32` and becomes an `ERROR_CON_IDC` only once
-                        // `Decoder::set_error_concealment` has clamped it — which is also
-                        // where the parse-only refusal (`:531-536`) lives.
-                        core.set_error_concealment(pOption.cast::<i32>().read())
-                    }
-                    // The three trace options — `welsDecoderExt.cpp:541-561`. These are
-                    // the three ids that work without a context.
-                    DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL
+            // `welsDecoderExt.cpp:479-584`. Nine arms, and two head clauses:
+            //
+            //   1. `NUM_OF_THREADS` first, and it succeeds whether or not the decoder
+            //      has a context — it is the object's field;
+            //   2. then, for every other id except the three trace ones, a missing
+            //      context is `dsInitialOptExpected`.
+            if eOptionId == DECODER_OPTION::DECODER_OPTION_NUM_OF_THREADS {
+                // `:481-501`. Single-threaded here, so the count clamps to 0.
+                // Success on any input, including a null.
+                return CM_RESULT_SUCCESS as c_long;
+            }
+            let ctx_needed = !matches!(
+                eOptionId,
+                DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL
                     | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK
-                    | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK_CONTEXT => {
-                        if pOption.is_null() {
-                            return CM_INIT_PARA_ERROR as c_long;
-                        }
-                        match eOptionId {
-                            DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL => {
-                                core.set_trace_level(pOption.cast::<u32>().read());
-                            }
-                            DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK => {
-                                core.set_trace_callback(pOption.cast::<WelsTraceCallback>().read());
-                            }
-                            // The one value whose window outlives the call — see the
-                            // contract.
-                            _ => core
-                                .set_trace_callback_context(pOption.cast::<*mut c_void>().read()),
-                        }
-                        CM_RESULT_SUCCESS as c_long
+                    | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK_CONTEXT
+            );
+            if ctx_needed && !core.has_ctx() {
+                return DECODING_STATE::dsInitialOptExpected.0 as c_long;
+            }
+
+            match eOptionId {
+                // `pOption` is tested per arm, and the arms disagree about what a
+                // null means: `END_OF_STREAM` and `ERROR_CON_IDC` reject it, the
+                // trace ones dereference it, `STATISTICS_LOG_INTERVAL` reaches the
+                // trailing `cmInitParaError`.
+                DECODER_OPTION::DECODER_OPTION_END_OF_STREAM => {
+                    if pOption.is_null() {
+                        return CM_INIT_PARA_ERROR as c_long;
                     }
-                    // `welsDecoderExt.cpp:562` and `:578` — get-only, and both say so.
-                    DECODER_OPTION::DECODER_OPTION_GET_STATISTICS
-                    | DECODER_OPTION::DECODER_OPTION_GET_SAR_INFO => CM_INIT_PARA_ERROR as c_long,
-                    // `:571-577`. A null `pOption` is `cmInitParaError`.
-                    DECODER_OPTION::DECODER_OPTION_STATISTICS_LOG_INTERVAL => {
-                        if pOption.is_null() {
-                            return CM_INIT_PARA_ERROR as c_long;
-                        }
-                        if core.set_statistics_log_interval(pOption.cast::<u32>().read()) {
-                            CM_RESULT_SUCCESS as c_long
-                        } else {
-                            DECODING_STATE::dsInitialOptExpected.0 as c_long
-                        }
-                    }
-                    // `:583` — an id with no arm is an error.
-                    _ => CM_INIT_PARA_ERROR as c_long,
+                    core.set_end_of_stream(unsafe { pOption.cast::<i32>().read() } != 0);
+                    CM_RESULT_SUCCESS as c_long
                 }
+                DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC => {
+                    if pOption.is_null() {
+                        return CM_INIT_PARA_ERROR as c_long;
+                    }
+                    // The blob is an `int`, run through
+                    // `WELS_CLIP3 (iVal, ERROR_CON_DISABLE, …FREEZE_RES_CHANGE)`
+                    // before the store (`welsDecoderExt.cpp:528`). Reading it as
+                    // `*const ERROR_CON_IDC` would be undefined for anything outside
+                    // 0..=7, which is exactly the range the clamp enforces, so it
+                    // crosses as an `i32` and becomes an `ERROR_CON_IDC` only once
+                    // `Decoder::set_error_concealment` has clamped it — which is also
+                    // where the parse-only refusal (`:531-536`) lives.
+                    core.set_error_concealment(unsafe { pOption.cast::<i32>().read() })
+                }
+                // The three trace options — `welsDecoderExt.cpp:541-561`. These are
+                // the three ids that work without a context.
+                DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL
+                | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK
+                | DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK_CONTEXT => {
+                    if pOption.is_null() {
+                        return CM_INIT_PARA_ERROR as c_long;
+                    }
+                    match eOptionId {
+                        DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL => {
+                            core.set_trace_level(unsafe { pOption.cast::<u32>().read() });
+                        }
+                        DECODER_OPTION::DECODER_OPTION_TRACE_CALLBACK => unsafe {
+                            core.set_trace_callback(pOption.cast::<WelsTraceCallback>().read());
+                        },
+                        // The one value whose window outlives the call — see the
+                        // contract.
+                        _ => unsafe {
+                            core.set_trace_callback_context(pOption.cast::<*mut c_void>().read());
+                        },
+                    }
+                    CM_RESULT_SUCCESS as c_long
+                }
+                // `welsDecoderExt.cpp:562` and `:578` — get-only, and both say so.
+                DECODER_OPTION::DECODER_OPTION_GET_STATISTICS
+                | DECODER_OPTION::DECODER_OPTION_GET_SAR_INFO => CM_INIT_PARA_ERROR as c_long,
+                // `:571-577`. A null `pOption` is `cmInitParaError`.
+                DECODER_OPTION::DECODER_OPTION_STATISTICS_LOG_INTERVAL => {
+                    if pOption.is_null() {
+                        return CM_INIT_PARA_ERROR as c_long;
+                    }
+                    if core.set_statistics_log_interval(unsafe { pOption.cast::<u32>().read() }) {
+                        CM_RESULT_SUCCESS as c_long
+                    } else {
+                        DECODING_STATE::dsInitialOptExpected.0 as c_long
+                    }
+                }
+                // `:583` — an id with no arm is an error.
+                _ => CM_INIT_PARA_ERROR as c_long,
             }
         }
     )
@@ -1181,121 +1162,119 @@ unsafe extern "C" fn decoder_get_opt_c(
             }
             // Translate-out: each arm asks the core for a value and writes it at the type
             // the option id names.
-            unsafe {
-                let core = &(*(this as *mut CWelsDecoderImpl)).core;
+            let core = unsafe { &(*(this as *mut CWelsDecoderImpl)).core };
 
-                // `welsDecoderExt.cpp:584-695`. Three head clauses, in this order:
-                //
-                //   1. `NUM_OF_THREADS` is answered before the context is looked at —
-                //      it is the object's field, not the context's, and it is the one id
-                //      that works on an uninitialized decoder;
-                //   2. then `pDecContext == NULL` -> `cmInitExpected`;
-                //   3. then `pOption == NULL` -> `cmInitParaError`.
-                //
-                // So a null `pOption` on an uninitialized decoder reports
-                // `cmInitExpected`, not `cmInitParaError`.
-                if eOptionId == DECODER_OPTION::DECODER_OPTION_NUM_OF_THREADS {
-                    if pOption.is_null() {
-                        return CM_INIT_PARA_ERROR as c_long;
-                    }
-                    // `m_iThreadCount`: single-threaded, and `SetOption`'s arm clamps
-                    // every request to it.
-                    pOption.cast::<i32>().write(0);
-                    return CM_RESULT_SUCCESS as c_long;
-                }
-                if !core.has_ctx() {
-                    return CM_INIT_EXPECTED as c_long;
-                }
+            // `welsDecoderExt.cpp:584-695`. Three head clauses, in this order:
+            //
+            //   1. `NUM_OF_THREADS` is answered before the context is looked at —
+            //      it is the object's field, not the context's, and it is the one id
+            //      that works on an uninitialized decoder;
+            //   2. then `pDecContext == NULL` -> `cmInitExpected`;
+            //   3. then `pOption == NULL` -> `cmInitParaError`.
+            //
+            // So a null `pOption` on an uninitialized decoder reports
+            // `cmInitExpected`, not `cmInitParaError`.
+            if eOptionId == DECODER_OPTION::DECODER_OPTION_NUM_OF_THREADS {
                 if pOption.is_null() {
                     return CM_INIT_PARA_ERROR as c_long;
                 }
+                // `m_iThreadCount`: single-threaded, and `SetOption`'s arm clamps
+                // every request to it.
+                unsafe { pOption.cast::<i32>().write(0) };
+                return CM_RESULT_SUCCESS as c_long;
+            }
+            if !core.has_ctx() {
+                return CM_INIT_EXPECTED as c_long;
+            }
+            if pOption.is_null() {
+                return CM_INIT_PARA_ERROR as c_long;
+            }
 
-                // Past the head clauses every arm below has a context, so each accessor's
-                // `Option` is `Some`.
-                macro_rules! write_i32 {
-                    ($v:expr) => {{
-                        let Some(v) = $v else {
-                            return CM_INIT_EXPECTED as c_long;
-                        };
-                        pOption.cast::<i32>().write(v);
-                        return CM_RESULT_SUCCESS as c_long;
-                    }};
-                }
+            // Past the head clauses every arm below has a context, so each accessor's
+            // `Option` is `Some`.
+            macro_rules! write_i32 {
+                ($v:expr) => {{
+                    let Some(v) = $v else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    unsafe { pOption.cast::<i32>().write(v) };
+                    return CM_RESULT_SUCCESS as c_long;
+                }};
+            }
 
-                match eOptionId {
-                    DECODER_OPTION::DECODER_OPTION_END_OF_STREAM => {
-                        write_i32!(Some(i32::from(core.end_of_stream())))
-                    }
-                    // `:603-619`, the four `LONG_TERM_REF` arms.
-                    DECODER_OPTION::DECODER_OPTION_IDR_PIC_ID => write_i32!(core.cur_idr_pic_id()),
-                    DECODER_OPTION::DECODER_OPTION_FRAME_NUM => write_i32!(core.frame_num()),
-                    DECODER_OPTION::DECODER_OPTION_LTR_MARKING_FLAG => {
-                        write_i32!(core.ltr_marking_flag())
-                    }
-                    DECODER_OPTION::DECODER_OPTION_LTR_MARKED_FRAME_NUM => {
-                        write_i32!(core.ltr_marked_frame_num())
-                    }
-                    DECODER_OPTION::DECODER_OPTION_VCL_NAL => write_i32!(core.feedback_vcl_nal()),
-                    DECODER_OPTION::DECODER_OPTION_TEMPORAL_ID => {
-                        write_i32!(core.feedback_temporal_id())
-                    }
-                    DECODER_OPTION::DECODER_OPTION_IS_REF_PIC => {
-                        write_i32!(core.feedback_is_ref_pic())
-                    }
-                    // `welsDecoderExt.cpp:634-637`. The mode the decoder actually runs
-                    // with is only visible through this option.
-                    DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC => {
-                        write_i32!(core.error_concealment().map(|idc| idc as i32))
-                    }
-                    // `welsDecoderExt.cpp:639-651`.
-                    DECODER_OPTION::DECODER_OPTION_GET_STATISTICS => {
-                        let Some(stats) = core.statistics() else {
-                            return CM_INIT_EXPECTED as c_long;
-                        };
-                        pOption.cast::<SDecoderStatistics>().write(stats);
-                        return CM_RESULT_SUCCESS as c_long;
-                    }
-                    // `:653-659`. An `unsigned int` on this id, in both directions.
-                    DECODER_OPTION::DECODER_OPTION_STATISTICS_LOG_INTERVAL => {
-                        let Some(v) = core.statistics_log_interval() else {
-                            return CM_INIT_EXPECTED as c_long;
-                        };
-                        pOption.cast::<u32>().write(v);
-                        return CM_RESULT_SUCCESS as c_long;
-                    }
-                    // `:664-672`. The caller's struct is zeroed before the SPS check, so
-                    // a refusal still leaves zeros rather than the caller's stack.
-                    DECODER_OPTION::DECODER_OPTION_GET_SAR_INFO => {
-                        pOption.cast::<SVuiSarInfo>().write(SVuiSarInfo::default());
-                        let Some(sar) = core.sar_info() else {
-                            return CM_INIT_EXPECTED as c_long;
-                        };
-                        let Some(sar) = sar else {
-                            return CM_INIT_EXPECTED as c_long;
-                        };
-                        pOption.cast::<SVuiSarInfo>().write(sar);
-                        return CM_RESULT_SUCCESS as c_long;
-                    }
-                    DECODER_OPTION::DECODER_OPTION_PROFILE => {
-                        let Some(v) = core.active_sps_profile() else {
-                            return CM_INIT_EXPECTED as c_long;
-                        };
-                        write_i32!(v)
-                    }
-                    DECODER_OPTION::DECODER_OPTION_LEVEL => {
-                        let Some(v) = core.active_sps_level() else {
-                            return CM_INIT_EXPECTED as c_long;
-                        };
-                        write_i32!(v)
-                    }
-                    DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER => {
-                        // `:688-694`. The count is the context's own.
-                        pOption.cast::<i32>().write(core.frames_remaining());
-                        return CM_RESULT_SUCCESS as c_long;
-                    }
-                    // `:696` — an id with no arm is an error, not a silent success.
-                    _ => return CM_INIT_PARA_ERROR as c_long,
+            match eOptionId {
+                DECODER_OPTION::DECODER_OPTION_END_OF_STREAM => {
+                    write_i32!(Some(i32::from(core.end_of_stream())))
                 }
+                // `:603-619`, the four `LONG_TERM_REF` arms.
+                DECODER_OPTION::DECODER_OPTION_IDR_PIC_ID => write_i32!(core.cur_idr_pic_id()),
+                DECODER_OPTION::DECODER_OPTION_FRAME_NUM => write_i32!(core.frame_num()),
+                DECODER_OPTION::DECODER_OPTION_LTR_MARKING_FLAG => {
+                    write_i32!(core.ltr_marking_flag())
+                }
+                DECODER_OPTION::DECODER_OPTION_LTR_MARKED_FRAME_NUM => {
+                    write_i32!(core.ltr_marked_frame_num())
+                }
+                DECODER_OPTION::DECODER_OPTION_VCL_NAL => write_i32!(core.feedback_vcl_nal()),
+                DECODER_OPTION::DECODER_OPTION_TEMPORAL_ID => {
+                    write_i32!(core.feedback_temporal_id())
+                }
+                DECODER_OPTION::DECODER_OPTION_IS_REF_PIC => {
+                    write_i32!(core.feedback_is_ref_pic())
+                }
+                // `welsDecoderExt.cpp:634-637`. The mode the decoder actually runs
+                // with is only visible through this option.
+                DECODER_OPTION::DECODER_OPTION_ERROR_CON_IDC => {
+                    write_i32!(core.error_concealment().map(|idc| idc as i32))
+                }
+                // `welsDecoderExt.cpp:639-651`.
+                DECODER_OPTION::DECODER_OPTION_GET_STATISTICS => {
+                    let Some(stats) = core.statistics() else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    unsafe { pOption.cast::<SDecoderStatistics>().write(stats) };
+                    return CM_RESULT_SUCCESS as c_long;
+                }
+                // `:653-659`. An `unsigned int` on this id, in both directions.
+                DECODER_OPTION::DECODER_OPTION_STATISTICS_LOG_INTERVAL => {
+                    let Some(v) = core.statistics_log_interval() else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    unsafe { pOption.cast::<u32>().write(v) };
+                    return CM_RESULT_SUCCESS as c_long;
+                }
+                // `:664-672`. The caller's struct is zeroed before the SPS check, so
+                // a refusal still leaves zeros rather than the caller's stack.
+                DECODER_OPTION::DECODER_OPTION_GET_SAR_INFO => {
+                    unsafe { pOption.cast::<SVuiSarInfo>().write(SVuiSarInfo::default()) };
+                    let Some(sar) = core.sar_info() else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    let Some(sar) = sar else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    unsafe { pOption.cast::<SVuiSarInfo>().write(sar) };
+                    return CM_RESULT_SUCCESS as c_long;
+                }
+                DECODER_OPTION::DECODER_OPTION_PROFILE => {
+                    let Some(v) = core.active_sps_profile() else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    write_i32!(v)
+                }
+                DECODER_OPTION::DECODER_OPTION_LEVEL => {
+                    let Some(v) = core.active_sps_level() else {
+                        return CM_INIT_EXPECTED as c_long;
+                    };
+                    write_i32!(v)
+                }
+                DECODER_OPTION::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER => {
+                    // `:688-694`. The count is the context's own.
+                    unsafe { pOption.cast::<i32>().write(core.frames_remaining()) };
+                    return CM_RESULT_SUCCESS as c_long;
+                }
+                // `:696` — an id with no arm is an error, not a silent success.
+                _ => return CM_INIT_PARA_ERROR as c_long,
             }
         }
     )
@@ -1321,18 +1300,16 @@ unsafe extern "C" fn decoder_flush_frame_c(
             if this.is_null() {
                 return DECODING_STATE::dsInitialOptExpected;
             }
-            unsafe {
-                // A caller that hands either out-parameter null gets the drain skipped
-                // rather than a write through null.
-                let (Some(ppDst), Some(pDstInfo)) =
-                    ((ppDst as *mut [*mut u8; 3]).as_mut(), pDstInfo.as_mut())
-                else {
-                    return DECODING_STATE::dsErrorFree;
-                };
-                (*(this as *mut CWelsDecoderImpl))
-                    .core
-                    .flush(ppDst, pDstInfo)
-            }
+            // A caller that hands either out-parameter null gets the drain skipped
+            // rather than a write through null.
+            let (Some(ppDst), Some(pDstInfo)) = (
+                unsafe { (ppDst as *mut [*mut u8; 3]).as_mut() },
+                unsafe { pDstInfo.as_mut() },
+            ) else {
+                return DECODING_STATE::dsErrorFree;
+            };
+            let core = unsafe { &mut (*(this as *mut CWelsDecoderImpl)).core };
+            core.flush(ppDst, pDstInfo)
         }
     )
 }
@@ -1364,19 +1341,17 @@ unsafe extern "C" fn decoder_decode_parser_c(
             if this.is_null() {
                 return DECODING_STATE::dsInitialOptExpected;
             }
-            let dec_impl = this as *mut CWelsDecoderImpl;
-            unsafe {
-                let src: Option<&[u8]> = if pSrc.is_null() || iSrcLen <= 0 {
-                    None
-                } else {
-                    Some(std::slice::from_raw_parts(pSrc, iSrcLen as usize))
-                };
-                // A null `pDstInfo` is refused rather than written through.
-                let Some(pDstInfo) = pDstInfo.as_mut() else {
-                    return DECODING_STATE::dsInitialOptExpected;
-                };
-                (*dec_impl).core.decode_parser(src, pDstInfo)
-            }
+            let core = unsafe { &mut (*(this as *mut CWelsDecoderImpl)).core };
+            let src: Option<&[u8]> = if pSrc.is_null() || iSrcLen <= 0 {
+                None
+            } else {
+                Some(unsafe { std::slice::from_raw_parts(pSrc, iSrcLen as usize) })
+            };
+            // A null `pDstInfo` is refused rather than written through.
+            let Some(pDstInfo) = (unsafe { pDstInfo.as_mut() }) else {
+                return DECODING_STATE::dsInitialOptExpected;
+            };
+            core.decode_parser(src, pDstInfo)
         }
     )
 }
@@ -1388,34 +1363,34 @@ unsafe extern "C" fn decoder_decode_parser_c(
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsCreateSVCEncoder(ppEncoder: *mut *mut ISVCEncoder) -> i32 {
-    unsafe {
-        abi_guard!("WelsCreateSVCEncoder", None, CM_MALLOC_MEM_ERROR, {
-            if ppEncoder.is_null() {
-                return CM_INIT_PARA_ERROR;
-            }
-            let vtbl = Box::new(ISVCEncoderVtbl {
-                Initialize: encoder_init_c,
-                InitializeExt: encoder_init_ext_c,
-                GetDefaultParams: encoder_get_default_c,
-                Uninitialize: encoder_uninit_c,
-                EncodeFrame: encoder_encode_frame_c,
-                EncodeParameterSets: encoder_encode_param_c,
-                ForceIntraFrame: encoder_force_intra_c,
-                SetOption: encoder_set_opt_c,
-                GetOption: encoder_get_opt_c,
-            });
-            let mut enc = Box::new(CWelsH264SVCEncoderImpl {
-                base: ISVCEncoder {
-                    lpVtbl: ptr::null(),
-                },
-                pVtbl: vtbl,
-                inner: Encoder::new(),
-            });
-            enc.base.lpVtbl = &*enc.pVtbl as *const ISVCEncoderVtbl;
+    abi_guard!("WelsCreateSVCEncoder", None, CM_MALLOC_MEM_ERROR, {
+        if ppEncoder.is_null() {
+            return CM_INIT_PARA_ERROR;
+        }
+        let vtbl = Box::new(ISVCEncoderVtbl {
+            Initialize: encoder_init_c,
+            InitializeExt: encoder_init_ext_c,
+            GetDefaultParams: encoder_get_default_c,
+            Uninitialize: encoder_uninit_c,
+            EncodeFrame: encoder_encode_frame_c,
+            EncodeParameterSets: encoder_encode_param_c,
+            ForceIntraFrame: encoder_force_intra_c,
+            SetOption: encoder_set_opt_c,
+            GetOption: encoder_get_opt_c,
+        });
+        let mut enc = Box::new(CWelsH264SVCEncoderImpl {
+            base: ISVCEncoder {
+                lpVtbl: ptr::null(),
+            },
+            pVtbl: vtbl,
+            inner: Encoder::new(),
+        });
+        enc.base.lpVtbl = &*enc.pVtbl as *const ISVCEncoderVtbl;
+        unsafe {
             *ppEncoder = Box::into_raw(enc) as *mut ISVCEncoder;
-            CM_RESULT_SUCCESS
-        })
-    }
+        }
+        CM_RESULT_SUCCESS
+    })
 }
 
 #[allow(unsafe_code)]
@@ -1427,9 +1402,7 @@ pub unsafe extern "C" fn WelsDestroySVCEncoder(pEncoder: *mut ISVCEncoder) {
         (),
         {
             if !pEncoder.is_null() {
-                unsafe {
-                    drop(Box::from_raw(pEncoder as *mut CWelsH264SVCEncoderImpl));
-                }
+                drop(unsafe { Box::from_raw(pEncoder as *mut CWelsH264SVCEncoderImpl) });
             }
         }
     )
@@ -1438,65 +1411,64 @@ pub unsafe extern "C" fn WelsDestroySVCEncoder(pEncoder: *mut ISVCEncoder) {
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsCreateDecoder(ppDecoder: *mut *mut ISVCDecoder) -> c_long {
-    unsafe {
-        abi_guard!("WelsCreateDecoder", None, CM_MALLOC_MEM_ERROR as c_long, {
-            if ppDecoder.is_null() {
-                return CM_INIT_PARA_ERROR as c_long;
-            }
-            let vtbl = Box::new(ISVCDecoderVtbl {
-                Initialize: decoder_init_c,
-                Uninitialize: decoder_uninit_c,
-                DecodeFrame: decoder_decode_frame_c,
-                DecodeFrameNoDelay: decoder_decode_frame_nodelay_c,
-                DecodeFrame2: decoder_decode_frame2_c,
-                FlushFrame: decoder_flush_frame_c,
-                DecodeParser: decoder_decode_parser_c,
-                DecodeFrameEx: decoder_decode_frame_ex_c,
-                SetOption: decoder_set_opt_c,
-                GetOption: decoder_get_opt_c,
-            });
-            let mut dec = Box::new(CWelsDecoderImpl {
-                base: ISVCDecoder {
-                    lpVtbl: ptr::null(),
-                },
-                pVtbl: vtbl,
-                core: Decoder::new(),
-            });
-            dec.base.lpVtbl = &*dec.pVtbl as *const ISVCDecoderVtbl;
-            let dec = Box::into_raw(dec);
-            // Taken after the object has its final address. It is the `this = 0x…` of
-            // every trace line and nothing else, which is why it travels as an address.
-            (*dec).core.trace.SetCodecInstance(dec as usize);
-            // The trace object's constructor sets `WELS_LOG_WARNING`, the encoder's
-            // default; the decoder's own default is `WELS_LOG_ERROR`.
-            (*dec)
-                .core
-                .trace
-                .SetTraceLevel(crate::common::wels_trace::WELS_LOG_ERROR as u32);
-            *ppDecoder = dec as *mut ISVCDecoder;
-            CM_RESULT_SUCCESS as c_long
-        })
-    }
+    abi_guard!("WelsCreateDecoder", None, CM_MALLOC_MEM_ERROR as c_long, {
+        if ppDecoder.is_null() {
+            return CM_INIT_PARA_ERROR as c_long;
+        }
+        let vtbl = Box::new(ISVCDecoderVtbl {
+            Initialize: decoder_init_c,
+            Uninitialize: decoder_uninit_c,
+            DecodeFrame: decoder_decode_frame_c,
+            DecodeFrameNoDelay: decoder_decode_frame_nodelay_c,
+            DecodeFrame2: decoder_decode_frame2_c,
+            FlushFrame: decoder_flush_frame_c,
+            DecodeParser: decoder_decode_parser_c,
+            DecodeFrameEx: decoder_decode_frame_ex_c,
+            SetOption: decoder_set_opt_c,
+            GetOption: decoder_get_opt_c,
+        });
+        let mut dec = Box::new(CWelsDecoderImpl {
+            base: ISVCDecoder {
+                lpVtbl: ptr::null(),
+            },
+            pVtbl: vtbl,
+            core: Decoder::new(),
+        });
+        dec.base.lpVtbl = &*dec.pVtbl as *const ISVCDecoderVtbl;
+        // Taken once the heap box has its stable address (`&*dec`). It is the `this = 0x…`
+        // of every trace line and nothing else, which is why it travels as an address.
+        let addr = (&*dec as *const CWelsDecoderImpl) as usize;
+        dec.core.trace.SetCodecInstance(addr);
+        // The trace object's constructor sets `WELS_LOG_WARNING`, the encoder's
+        // default; the decoder's own default is `WELS_LOG_ERROR`.
+        dec.core
+            .trace
+            .SetTraceLevel(crate::common::wels_trace::WELS_LOG_ERROR as u32);
+        unsafe {
+            *ppDecoder = Box::into_raw(dec) as *mut ISVCDecoder;
+        }
+        CM_RESULT_SUCCESS as c_long
+    })
 }
 
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn WelsGetDecoderCapability(pDecCapability: *mut SDecoderCapability) -> i32 {
     abi_guard!("WelsGetDecoderCapability", None, CM_INIT_PARA_ERROR, {
-        if pDecCapability.is_null() {
+        let Some(cap) = (unsafe { pDecCapability.as_mut() }) else {
             return CM_INIT_PARA_ERROR;
-        }
-        unsafe {
-            (*pDecCapability).iProfileIdc = 66;
-            (*pDecCapability).iProfileIop = 0xE0;
-            (*pDecCapability).iLevelIdc = 32;
-            (*pDecCapability).iMaxMbps = 216000;
-            (*pDecCapability).iMaxFs = 5120;
-            (*pDecCapability).iMaxCpb = 20000;
-            (*pDecCapability).iMaxDpb = 20480;
-            (*pDecCapability).iMaxBr = 20000;
-            (*pDecCapability).bRedPicCap = false;
-        }
+        };
+        *cap = SDecoderCapability {
+            iProfileIdc: 66,
+            iProfileIop: 0xE0,
+            iLevelIdc: 32,
+            iMaxMbps: 216000,
+            iMaxFs: 5120,
+            iMaxCpb: 20000,
+            iMaxDpb: 20480,
+            iMaxBr: 20000,
+            bRedPicCap: false,
+        };
         CM_RESULT_SUCCESS
     })
 }
@@ -1510,12 +1482,9 @@ pub unsafe extern "C" fn WelsDestroyDecoder(pDecoder: *mut ISVCDecoder) {
         (),
         {
             if !pDecoder.is_null() {
-                unsafe {
-                    let dec_impl = pDecoder as *mut CWelsDecoderImpl;
-                    // Order matters: the dynamic memory goes before the context does.
-                    (*dec_impl).core.uninitialize();
-                    drop(Box::from_raw(dec_impl));
-                }
+                let mut dec = unsafe { Box::from_raw(pDecoder as *mut CWelsDecoderImpl) };
+                // Order matters: the dynamic memory goes before the context does.
+                dec.core.uninitialize();
             }
         }
     )

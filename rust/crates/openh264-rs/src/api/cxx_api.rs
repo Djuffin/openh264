@@ -5,7 +5,7 @@
 //! `SSpatialLayerConfig`, `SSliceArgument`) used by both the Rust core/C ABI and the
 //! `cxx` C++ bridge without any duplicate definitions.
 
-#![allow(unsafe_code)]
+#![deny(unsafe_code)]
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -26,6 +26,7 @@ use std::ptr;
 macro_rules! impl_extern_enum {
     ($($ty:ident => $cxx_id:literal),* $(,)?) => {
         $(
+            #[allow(unsafe_code)]
             unsafe impl cxx::ExternType for $ty {
                 type Id = cxx::type_id!($cxx_id);
                 type Kind = cxx::kind::Trivial;
@@ -70,6 +71,7 @@ impl ISVCEncoder {
     ///
     /// `param` must be either null or a valid, aligned pointer to `ffi::SEncParamBase`
     /// readable for the duration of the call.
+    #[allow(unsafe_code)]
     pub unsafe fn initialize(&mut self, param: *const ffi::SEncParamBase) -> i32 {
         let log = self.log_ctx();
         abi_guard!("ISVCEncoder::Initialize", log, CM_INIT_PARA_ERROR, {
@@ -84,6 +86,7 @@ impl ISVCEncoder {
     ///
     /// `param` must be either null or a valid, aligned pointer to `ffi::SEncParamExt`
     /// readable for the duration of the call.
+    #[allow(unsafe_code)]
     pub unsafe fn initialize_ext(&mut self, param: *const ffi::SEncParamExt) -> i32 {
         let log = self.log_ctx();
         abi_guard!("ISVCEncoder::InitializeExt", log, CM_INIT_PARA_ERROR, {
@@ -97,6 +100,7 @@ impl ISVCEncoder {
     /// # Safety
     ///
     /// `param` must be either null or a valid, aligned, writable pointer to `ffi::SEncParamExt`.
+    #[allow(unsafe_code)]
     pub unsafe fn get_default_params(&mut self, param: *mut ffi::SEncParamExt) -> i32 {
         let log = self.log_ctx();
         abi_guard!("ISVCEncoder::GetDefaultParams", log, CM_UNKNOWN_REASON, {
@@ -122,6 +126,7 @@ impl ISVCEncoder {
     /// * `src_pic` must be either null or point to a valid `ffi::SSourcePicture` whose
     ///   `pData` planes are readable according to `iStride` and picture dimensions.
     /// * `bs_info` must be either null or point to a writable `ffi::SFrameBSInfo`.
+    #[allow(unsafe_code)]
     pub unsafe fn encode_frame(
         &mut self,
         src_pic: *const ffi::SSourcePicture,
@@ -142,6 +147,7 @@ impl ISVCEncoder {
     /// # Safety
     ///
     /// `bs_info` must be either null or point to a writable `ffi::SFrameBSInfo`.
+    #[allow(unsafe_code)]
     pub unsafe fn encode_parameter_sets(&mut self, bs_info: *mut ffi::SFrameBSInfo) -> i32 {
         let log = self.log_ctx();
         abi_guard!(
@@ -170,6 +176,7 @@ impl ISVCEncoder {
     /// # Safety
     ///
     /// `option` must point to a readable, aligned value matching the type expected by `option_id`.
+    #[allow(unsafe_code)]
     pub unsafe fn set_option(&mut self, option_id: ENCODER_OPTION, option: *mut c_void) -> i32 {
         let log = self.log_ctx();
         abi_guard!("ISVCEncoder::SetOption", log, CM_INIT_PARA_ERROR, {
@@ -185,6 +192,7 @@ impl ISVCEncoder {
     /// # Safety
     ///
     /// `option` must point to a writable, aligned buffer matching the type expected by `option_id`.
+    #[allow(unsafe_code)]
     pub unsafe fn get_option(&mut self, option_id: ENCODER_OPTION, option: *mut c_void) -> i32 {
         let log = self.log_ctx();
         abi_guard!("ISVCEncoder::GetOption", log, CM_INIT_PARA_ERROR, {
@@ -201,6 +209,7 @@ impl ISVCEncoder {
 /// # Safety
 ///
 /// `pp_encoder` must be a non-null, valid pointer to a `*mut ISVCEncoder` out-parameter.
+#[allow(unsafe_code)]
 pub unsafe fn wels_create_svc_encoder(pp_encoder: *mut *mut ISVCEncoder) -> i32 {
     abi_guard!("WelsCreateSVCEncoder", None, CM_MALLOC_MEM_ERROR, {
         if pp_encoder.is_null() {
@@ -222,21 +231,20 @@ pub unsafe fn wels_create_svc_encoder(pp_encoder: *mut *mut ISVCEncoder) -> i32 
 ///
 /// `p_encoder` must be either null or a pointer returned by `WelsCreateSVCEncoder`
 /// that has not yet been destroyed.
+#[allow(unsafe_code)]
 pub unsafe fn wels_destroy_svc_encoder(p_encoder: *mut ISVCEncoder) {
-    let log = if p_encoder.is_null() {
-        None
-    } else {
-        unsafe { (*p_encoder).log_ctx() }
+    let Some(enc_ref) = (unsafe { p_encoder.as_ref() }) else {
+        return;
     };
+    let log = enc_ref.log_ctx();
     abi_guard!("WelsDestroySVCEncoder", log, (), {
-        if !p_encoder.is_null() {
-            unsafe {
-                drop(Box::from_raw(p_encoder));
-            }
+        unsafe {
+            drop(Box::from_raw(p_encoder));
         }
     })
 }
 
+#[allow(unsafe_code)]
 #[cxx::bridge(namespace = "openh264rs")]
 pub mod ffi {
     unsafe extern "C++" {
@@ -575,6 +583,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(unsafe_code)]
     fn cxx_encoder_lifecycle_and_encode() {
         unsafe {
             let mut encoder: *mut ISVCEncoder = ptr::null_mut();

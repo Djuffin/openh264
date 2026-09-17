@@ -82,7 +82,6 @@ pub(crate) fn video_bs_type_from_raw(raw: i32) -> VIDEO_BITSTREAM_TYPE {
     }
 }
 
-#[allow(unsafe_code)]
 impl Decoder {
     /// `CWelsDecoder`'s constructor — `welsDecoderExt.cpp:155`.
     pub fn new() -> Self {
@@ -233,6 +232,7 @@ impl Decoder {
     /// # Safety
     ///
     /// As [`crate::api::encoder::Encoder::set_trace_callback`], for this decoder's lifetime.
+    #[allow(unsafe_code)]
     pub unsafe fn set_trace_callback(&mut self, callback: WelsTraceCallback) {
         self.trace.SetTraceCallback(callback);
         self.sync_log_ctx();
@@ -366,6 +366,7 @@ impl Decoder {
     /// `ctx` is handed back to the trace callback on every message until it is
     /// replaced or this decoder is dropped, so it must stay valid for that long.
     /// It is the caller's, and this crate never dereferences it.
+    #[allow(unsafe_code)]
     pub unsafe fn set_trace_callback_context(&mut self, ctx: *mut c_void) {
         self.trace
             .SetTraceCallbackContext(TraceUserCtx::from_abi(ctx));

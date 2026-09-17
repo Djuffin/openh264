@@ -23,16 +23,14 @@ fn update_hash_from_plane(
 
 fn update_hash_from_frame(hasher: &mut Sha1Hasher, data: [*mut u8; 3], buf_info: &SBufferInfo) {
     if buf_info.iBufferStatus == 1 {
-        unsafe {
-            let width = buf_info.UsrData.sSystemBuffer.iWidth as usize;
-            let height = buf_info.UsrData.sSystemBuffer.iHeight as usize;
-            let stride_y = buf_info.UsrData.sSystemBuffer.iStride[0] as usize;
-            let stride_uv = buf_info.UsrData.sSystemBuffer.iStride[1] as usize;
+        let width = buf_info.UsrData.sSystemBuffer.iWidth as usize;
+        let height = buf_info.UsrData.sSystemBuffer.iHeight as usize;
+        let stride_y = buf_info.UsrData.sSystemBuffer.iStride[0] as usize;
+        let stride_uv = buf_info.UsrData.sSystemBuffer.iStride[1] as usize;
 
-            update_hash_from_plane(hasher, data[0], width, height, stride_y);
-            update_hash_from_plane(hasher, data[1], width / 2, height / 2, stride_uv);
-            update_hash_from_plane(hasher, data[2], width / 2, height / 2, stride_uv);
-        }
+        update_hash_from_plane(hasher, data[0], width, height, stride_y);
+        update_hash_from_plane(hasher, data[1], width / 2, height / 2, stride_uv);
+        update_hash_from_plane(hasher, data[2], width / 2, height / 2, stride_uv);
     }
 }
 
