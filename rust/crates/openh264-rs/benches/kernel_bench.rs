@@ -28,6 +28,7 @@ use openh264_rs::common::deblocking_common as dbk;
 use openh264_rs::common::mc;
 use openh264_rs::common::sad_common::{sample_sad, sample_sad_four};
 use openh264_rs::decoder::decode_mb_aux::idct_res_add_pred_c;
+use openh264_rs::decoder::get_intra_predictor as dpred;
 use openh264_rs::encoder::decode_mb_aux as dec_aux;
 use openh264_rs::encoder::encode_mb_aux as enc_aux;
 use openh264_rs::encoder::get_intra_predictor as ipred;
@@ -565,6 +566,39 @@ fn mc_rows(rows: &mut Vec<Row>) {
                 black_box(5),
                 4,
                 4,
+            );
+            out_sum(&s1.out, c)
+        }
+    );
+    // The same 8x8 with the shape opaque to the optimiser, which is what the decoder
+    // hands these: `bwc`/`bhc` in `BaseMC` come from the partition size at run time,
+    // so neither the shape `match` nor the scalar loop's trip count is a constant
+    // there. The rows above, called with literal 8s, are the best case for the scalar
+    // column and the best case only.
+    row!(
+        *rows,
+        "mc chroma (3,5) 8x8, runtime shape",
+        |c| {
+            let a = cur(black_box(&s0.a));
+            mc::mc_chroma_with_frag_mv(
+                &a,
+                &mut cur_mut(&mut s0.out),
+                black_box(3),
+                black_box(5),
+                black_box(8),
+                black_box(8),
+            );
+            out_sum(&s0.out, c)
+        },
+        |c| {
+            let a = cur(black_box(&s1.a));
+            isa::mc::mc_chroma(
+                &a,
+                &mut cur_mut(&mut s1.out),
+                black_box(3),
+                black_box(5),
+                black_box(8),
+                black_box(8),
             );
             out_sum(&s1.out, c)
         }
@@ -1158,6 +1192,79 @@ fn intra_rows(rows: &mut Vec<Row>) {
     );
 }
 
+/// The decoder's intra predictors. They differ from the encoder's in where the
+/// prediction lands: the decoder writes it straight into the reconstruction plane,
+/// over the samples whose neighbours it just read, while the encoder fills a separate
+/// 16/64/256-byte buffer that the mode search then scores.
+///
+/// Each row is the scalar function the decoder's predictor table used to hold against
+/// the kernel it holds now.
+fn decoder_intra_rows(rows: &mut Vec<Row>) {
+    let sum = |v: &[u8], c: bool| if c { fnv(v) } else { v[ANCHOR] as u64 };
+
+    /// A predictor reads the row above and the column left of its block and writes
+    /// only the block itself, so repeating the call on one plane is idempotent and
+    /// the timing loop keeps measuring the same work.
+    macro_rules! pred_row {
+        ($name:expr, $scalar:path, $isa:path) => {{
+            let (mut v0, mut v1) = (noise(STRIDE * ROWS, 31), noise(STRIDE * ROWS, 31));
+            row!(
+                *rows,
+                $name,
+                |c| {
+                    $scalar(&mut cur_mut(black_box(&mut v0)));
+                    sum(&v0, c)
+                },
+                |c| {
+                    $isa(&mut cur_mut(black_box(&mut v1)));
+                    sum(&v1, c)
+                }
+            );
+        }};
+    }
+
+    pred_row!(
+        "dec intra 4x4 ddl",
+        dpred::i4x4_luma_pred_ddl,
+        isa::intra_pred::dec_i4x4_luma_pred_ddl
+    );
+    pred_row!(
+        "dec intra 4x4 ddr",
+        dpred::i4x4_luma_pred_ddr,
+        isa::intra_pred::dec_i4x4_luma_pred_ddr
+    );
+    pred_row!(
+        "dec intra 4x4 vr",
+        dpred::i4x4_luma_pred_vr,
+        isa::intra_pred::dec_i4x4_luma_pred_vr
+    );
+    pred_row!(
+        "dec intra 4x4 hd",
+        dpred::i4x4_luma_pred_hd,
+        isa::intra_pred::dec_i4x4_luma_pred_hd
+    );
+    pred_row!(
+        "dec intra 4x4 vl",
+        dpred::i4x4_luma_pred_vl,
+        isa::intra_pred::dec_i4x4_luma_pred_vl
+    );
+    pred_row!(
+        "dec intra 4x4 hu",
+        dpred::i4x4_luma_pred_hu,
+        isa::intra_pred::dec_i4x4_luma_pred_hu
+    );
+    pred_row!(
+        "dec intra 16x16 dc-left",
+        dpred::i16x16_luma_pred_dc_left,
+        isa::intra_pred::dec_i16x16_luma_pred_dc_left
+    );
+    pred_row!(
+        "dec intra chroma dc-top",
+        dpred::chroma_pred_dc_top,
+        isa::intra_pred::dec_chroma_pred_dc_top
+    );
+}
+
 fn deblock_rows(rows: &mut Vec<Row>) {
     fn plane(seed: u64) -> PaddedPlane {
         let mut p = PaddedPlane::new(32, 32, 16, STRIDE);
@@ -1276,6 +1383,72 @@ fn deblock_rows(rows: &mut Vec<Row>) {
                 sum(&b1, c) ^ sum(&r1, c)
             }
         );
+
+        // The single-plane variants: what the decoder calls when Cb and Cr carry
+        // different QPs and each plane has to be filtered on its own.
+        let (mut s0, mut s1) = (plane(47), plane(47));
+        let name: &'static str = if label == "horizontal edge" {
+            "deblock chroma lt42, horizontal edge"
+        } else {
+            "deblock chroma lt42, vertical edge"
+        };
+        row!(
+            *rows,
+            name,
+            |c| {
+                dbk::deblock_chroma_lt42_scalar(
+                    &mut s0.cursor_mut(4, 4),
+                    sx,
+                    sy,
+                    black_box(alpha),
+                    black_box(beta),
+                    black_box(&tc),
+                );
+                sum(&s0, c)
+            },
+            |c| {
+                isa::deblock::deblock_chroma_lt42(
+                    &mut s1.cursor_mut(4, 4),
+                    sx,
+                    sy,
+                    black_box(alpha),
+                    black_box(beta),
+                    black_box(&tc),
+                );
+                sum(&s1, c)
+            }
+        );
+
+        let (mut e0, mut e1) = (plane(49), plane(49));
+        let name: &'static str = if label == "horizontal edge" {
+            "deblock chroma eq42, horizontal edge"
+        } else {
+            "deblock chroma eq42, vertical edge"
+        };
+        row!(
+            *rows,
+            name,
+            |c| {
+                dbk::deblock_chroma_eq42_scalar(
+                    &mut e0.cursor_mut(4, 4),
+                    sx,
+                    sy,
+                    black_box(alpha),
+                    black_box(beta),
+                );
+                sum(&e0, c)
+            },
+            |c| {
+                isa::deblock::deblock_chroma_eq42(
+                    &mut e1.cursor_mut(4, 4),
+                    sx,
+                    sy,
+                    black_box(alpha),
+                    black_box(beta),
+                );
+                sum(&e1, c)
+            }
+        );
     }
 
     {
@@ -1374,6 +1547,7 @@ fn main() {
     quant_rows(&mut rows);
     copy_rows(&mut rows);
     intra_rows(&mut rows);
+    decoder_intra_rows(&mut rows);
     deblock_rows(&mut rows);
     eprintln!();
 

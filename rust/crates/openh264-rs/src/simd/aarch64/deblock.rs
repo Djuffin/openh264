@@ -751,6 +751,26 @@ fn dup_halves(row: &[u8; 8]) -> [u8; 16] {
     v
 }
 
+/// [`gather_chroma_lines`] for one plane: eight lines, one transpose. The taps land in
+/// the low half and repeat in the high half, which the filter core then filters
+/// redundantly — a lane-parallel no-op — rather than the two transposes and sixteen
+/// line loads that reading the same plane through the two-plane gather would cost.
+#[inline]
+#[target_feature(enable = "neon")]
+fn gather_chroma_lines1(cbcr: &impl RefSamples) -> [[u8; 16]; 4] {
+    let s = cbcr.span::<4, 8>(0, -2);
+    let mut a = [vdup_n_u8(0); 8];
+    for (i, lane) in a.iter_mut().enumerate() {
+        *lane = ld4(&s.row::<4>(i, 0));
+    }
+    let a = transpose8x8(a);
+    let mut t = [[0u8; 16]; 4];
+    for (x, tap) in t.iter_mut().enumerate() {
+        st16(tap, vcombine_u8(a[x], a[x]));
+    }
+    t
+}
+
 /// [`scatter_chroma_lines`] for one plane: `p0` and `q0` of the low half.
 #[inline]
 #[target_feature(enable = "neon")]
@@ -798,8 +818,8 @@ pub fn deblock_chroma_lt42(
         );
     } else if step_x == 1 {
         debug_assert_eq!(step_y, cbcr.stride() as isize);
-        // One plane read twice: the gather lands it in both halves.
-        let mut t = unsafe { gather_chroma_lines(&*cbcr, &*cbcr) };
+        // Eight lines into the low half, repeated into the high half.
+        let mut t = unsafe { gather_chroma_lines1(&*cbcr) };
         let [ref t0, ref mut t1, ref mut t2, ref t3] = t;
         unsafe { chroma_lt4_16(t0, t1, t2, t3, alpha, beta, tc) };
         unsafe { scatter_chroma_lines1(cbcr, &t) };
@@ -842,7 +862,7 @@ pub fn deblock_chroma_eq42(
         );
     } else if step_x == 1 {
         debug_assert_eq!(step_y, cbcr.stride() as isize);
-        let mut t = unsafe { gather_chroma_lines(&*cbcr, &*cbcr) };
+        let mut t = unsafe { gather_chroma_lines1(&*cbcr) };
         let [ref t0, ref mut t1, ref mut t2, ref t3] = t;
         unsafe { chroma_eq4_16(t0, t1, t2, t3, alpha, beta) };
         unsafe { scatter_chroma_lines1(cbcr, &t) };

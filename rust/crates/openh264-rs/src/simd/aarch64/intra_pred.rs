@@ -412,11 +412,16 @@ fn i4x4_hd<S: RefSamples>(src: &S) -> [u8; 16] {
 /// Diagonal down-right, in the idiom of `HD` and `VR` — see the header. On the line
 /// `l3 l2 l1 l0 lt t0 t1 t2 t3` the three-tap outputs `f[0..7]` are `ddr6 .. ddr4,
 /// ddr0 .. ddr3`, and row `r` is `f[3 - r ..]`.
+///
+/// The line is nine samples, one more than a `d` register holds, so it is read into a
+/// `q` register and the three taps are `ext`s of it. Reading the three taps as three
+/// overlapping eight-byte loads instead costs a store-forwarding stall apiece, enough
+/// to put the kernel level with the scalar loop.
 #[inline]
 #[target_feature(enable = "neon")]
 fn i4x4_ddr<S: RefSamples>(src: &S) -> [u8; 16] {
     let t = src.row_n::<4>(-1, 0);
-    let line = [
+    let line = ld16(&[
         src.at(-1, 3),
         src.at(-1, 2),
         src.at(-1, 1),
@@ -433,8 +438,12 @@ fn i4x4_ddr<S: RefSamples>(src: &S) -> [u8; 16] {
         0,
         0,
         0,
-    ];
-    let (l0, l1, l2) = (ld8(&line[0..]), ld8(&line[1..]), ld8(&line[2..]));
+    ]);
+    let (l0, l1, l2) = (
+        vget_low_u8(line),
+        vget_low_u8(vextq_u8::<1>(line, line)),
+        vget_low_u8(vextq_u8::<2>(line, line)),
+    );
     let sum = vaddq_u16(vaddl_u8(l0, l2), vshll_n_u8::<1>(l1));
     let f = vqrshrn_n_u16::<2>(sum);
     pack4(

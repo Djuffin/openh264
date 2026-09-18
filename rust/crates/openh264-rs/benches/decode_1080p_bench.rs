@@ -41,6 +41,8 @@ struct StreamSpec {
     slug: &'static str,
     label: &'static str,
     profile: &'static str,
+    /// Extra encoder arguments, appended after the profile.
+    extra: &'static [&'static str],
 }
 
 const STREAMS: &[StreamSpec] = &[
@@ -48,16 +50,29 @@ const STREAMS: &[StreamSpec] = &[
         slug: "baseline",
         label: "Constrained Baseline (CAVLC, no B-frames)",
         profile: "baseline",
+        extra: &[],
     },
     StreamSpec {
         slug: "main",
         label: "Main (CABAC, B-frames)",
         profile: "main",
+        extra: &[],
     },
     StreamSpec {
         slug: "high",
         label: "High (CABAC, B-frames, 8x8 transform)",
         profile: "high",
+        extra: &[],
+    },
+    // A one-keyframe-per-picture stream: every macroblock is intra-coded, so the
+    // intra predictors and the intra deblocking paths carry the decode instead of
+    // motion compensation. The three streams above spend under 2% of their
+    // macroblocks there, which puts any change to those kernels under the noise.
+    StreamSpec {
+        slug: "allintra",
+        label: "High, all-intra (keyint 1: every macroblock intra-coded)",
+        profile: "high",
+        extra: &["-g", "1"],
     },
 ];
 
@@ -132,6 +147,9 @@ fn ensure_stream(
             "libx264",
             "-profile:v",
             spec.profile,
+        ])
+        .args(spec.extra)
+        .args([
             "-pix_fmt",
             "yuv420p",
             "-b:v",
