@@ -1,7 +1,7 @@
 //! x86_64 SSE2 Deblocking Filter Kernels.
 //!
-//! Accelerated implementations for Luma (Lt4 / Eq4) and Chroma (Lt4 / Eq4)
-//! boundary filters for both horizontal and vertical edges.
+//! Accelerated implementations for Luma (Lt4 / Eq4) and Chroma (Lt4 / Eq4, on two
+//! planes or on one) boundary filters for both horizontal and vertical edges.
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
@@ -9,8 +9,8 @@
 use core::arch::x86_64::*;
 
 use crate::common::deblocking_common::{
-    deblock_chroma_eq4_scalar, deblock_chroma_lt4_scalar, deblock_luma_eq4_scalar,
-    deblock_luma_lt4_scalar,
+    deblock_chroma_eq4_scalar, deblock_chroma_eq42_scalar, deblock_chroma_lt4_scalar,
+    deblock_chroma_lt42_scalar, deblock_luma_eq4_scalar, deblock_luma_lt4_scalar,
 };
 use crate::encoder::encoder_context::SMVUnitXY;
 use crate::safe::plane::{BlockRows, PlaneSamples};
@@ -1242,6 +1242,185 @@ pub fn deblock_chroma_eq4(
 }
 
 // ============================================================================
+// Single-plane Chroma (the `*2` variants)
+// ============================================================================
+//
+// The decoder takes this pair, not the one above, when Cb and Cr carry different QPs:
+// each plane then has its own `alpha`, `beta` and `tc`, and is filtered on its own.
+// Upstream has no assembly for it — `DeblockChromaLt4V2_c` and friends are the only
+// implementations in `codec/common/src/deblocking_common.cpp` — but the two-plane
+// kernels are already two independent eight-lane halves, and `tc[i >> 1]` repeats over
+// each, so one plane's eight lines go through the same core with its rows duplicated
+// into both halves. Only the low half is written back; the high half is the same
+// arithmetic on the same samples, discarded.
+
+/// One plane's eight tap rows in both halves of a 16-lane vector.
+#[inline(always)]
+fn dup_halves(row: &[u8; 8]) -> [u8; 16] {
+    let mut v = [0u8; 16];
+    v[..8].copy_from_slice(row);
+    v[8..].copy_from_slice(row);
+    v
+}
+
+/// Accelerated single-plane Chroma Lt4 filter (bS < 4) — `DeblockChromaLt4V2_c` /
+/// `DeblockChromaLt4H2_c`.
+///
+/// # Preconditions
+///
+/// As [`deblock_chroma_lt4`]: the direction guard is only half the contract, and the
+/// other step must be the cursor's own stride.
+pub fn deblock_chroma_lt42(
+    cbcr: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+    tc: &[i8; 4],
+) {
+    if step_y == 1 {
+        debug_assert_eq!(step_x, cbcr.stride() as isize);
+        // Taps `-2 .. 1`: one 8-wide, 4-tall span.
+        let (p1, mut p0, mut q0, q1) = {
+            let s = cbcr.span::<8, 4>(-2, 0);
+            (
+                dup_halves(&s.row::<8>(0, 0)),
+                dup_halves(&s.row::<8>(1, 0)),
+                dup_halves(&s.row::<8>(2, 0)),
+                dup_halves(&s.row::<8>(3, 0)),
+            )
+        };
+
+        unsafe {
+            deblock_chroma_lt4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta, tc);
+        }
+
+        cbcr.set_block::<8, 2>(
+            -1,
+            0,
+            &[
+                p0[..8].try_into().expect("p0"),
+                q0[..8].try_into().expect("q0"),
+            ],
+        );
+    } else if step_x == 1 {
+        debug_assert_eq!(step_y, cbcr.stride() as isize);
+        // Eight lines of taps `-2 .. 2`, out of one span, each line duplicated into
+        // both dwords so the transpose lands it in both halves.
+        unsafe {
+            let mut lines = [_mm_setzero_si128(); 8];
+            {
+                let s = cbcr.span::<4, 8>(0, -2);
+                for (i, line) in lines.iter_mut().enumerate() {
+                    let v = u32::from_ne_bytes(s.row::<4>(i, 0)) as i32;
+                    *line = _mm_setr_epi32(v, v, 0, 0);
+                }
+            }
+
+            let (t0, t1, t2, t3) = transpose_chroma_4x8_u8(
+                lines[0], lines[1], lines[2], lines[3], lines[4], lines[5], lines[6], lines[7],
+            );
+
+            let mut arr_p1 = [0u8; 16];
+            let mut arr_p0 = [0u8; 16];
+            let mut arr_q0 = [0u8; 16];
+            let mut arr_q1 = [0u8; 16];
+            _mm_storeu_si128(arr_p1.as_mut_ptr() as *mut __m128i, t0);
+            _mm_storeu_si128(arr_p0.as_mut_ptr() as *mut __m128i, t1);
+            _mm_storeu_si128(arr_q0.as_mut_ptr() as *mut __m128i, t2);
+            _mm_storeu_si128(arr_q1.as_mut_ptr() as *mut __m128i, t3);
+
+            deblock_chroma_lt4_16(&arr_p1, &mut arr_p0, &mut arr_q0, &arr_q1, alpha, beta, tc);
+
+            let p0 = _mm_loadu_si128(arr_p0.as_ptr() as *const __m128i);
+            let q0 = _mm_loadu_si128(arr_q0.as_ptr() as *const __m128i);
+
+            let mut out = [[0u8; 2]; 8];
+            _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, _mm_unpacklo_epi8(p0, q0));
+
+            // `p0` and `q0` only: the span read above is wider for the outer taps, and
+            // at `iEdge == 0` those columns belong to the previous macroblock.
+            cbcr.set_block::<2, 8>(0, -1, &out);
+        }
+    } else {
+        deblock_chroma_lt42_scalar(cbcr, step_x, step_y, alpha, beta, tc);
+    }
+}
+
+/// Accelerated single-plane Chroma Eq4 filter (bS == 4) — `DeblockChromaEq4V2_c` /
+/// `DeblockChromaEq4H2_c`. Reach and preconditions as [`deblock_chroma_lt42`].
+pub fn deblock_chroma_eq42(
+    cbcr: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+) {
+    if step_y == 1 {
+        debug_assert_eq!(step_x, cbcr.stride() as isize);
+        let (p1, mut p0, mut q0, q1) = {
+            let s = cbcr.span::<8, 4>(-2, 0);
+            (
+                dup_halves(&s.row::<8>(0, 0)),
+                dup_halves(&s.row::<8>(1, 0)),
+                dup_halves(&s.row::<8>(2, 0)),
+                dup_halves(&s.row::<8>(3, 0)),
+            )
+        };
+
+        unsafe {
+            deblock_chroma_eq4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta);
+        }
+
+        cbcr.set_block::<8, 2>(
+            -1,
+            0,
+            &[
+                p0[..8].try_into().expect("p0"),
+                q0[..8].try_into().expect("q0"),
+            ],
+        );
+    } else if step_x == 1 {
+        debug_assert_eq!(step_y, cbcr.stride() as isize);
+        unsafe {
+            let mut lines = [_mm_setzero_si128(); 8];
+            {
+                let s = cbcr.span::<4, 8>(0, -2);
+                for (i, line) in lines.iter_mut().enumerate() {
+                    let v = u32::from_ne_bytes(s.row::<4>(i, 0)) as i32;
+                    *line = _mm_setr_epi32(v, v, 0, 0);
+                }
+            }
+
+            let (t0, t1, t2, t3) = transpose_chroma_4x8_u8(
+                lines[0], lines[1], lines[2], lines[3], lines[4], lines[5], lines[6], lines[7],
+            );
+
+            let mut arr_p1 = [0u8; 16];
+            let mut arr_p0 = [0u8; 16];
+            let mut arr_q0 = [0u8; 16];
+            let mut arr_q1 = [0u8; 16];
+            _mm_storeu_si128(arr_p1.as_mut_ptr() as *mut __m128i, t0);
+            _mm_storeu_si128(arr_p0.as_mut_ptr() as *mut __m128i, t1);
+            _mm_storeu_si128(arr_q0.as_mut_ptr() as *mut __m128i, t2);
+            _mm_storeu_si128(arr_q1.as_mut_ptr() as *mut __m128i, t3);
+
+            deblock_chroma_eq4_16(&arr_p1, &mut arr_p0, &mut arr_q0, &arr_q1, alpha, beta);
+
+            let p0 = _mm_loadu_si128(arr_p0.as_ptr() as *const __m128i);
+            let q0 = _mm_loadu_si128(arr_q0.as_ptr() as *const __m128i);
+
+            let mut out = [[0u8; 2]; 8];
+            _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, _mm_unpacklo_epi8(p0, q0));
+
+            cbcr.set_block::<2, 8>(0, -1, &out);
+        }
+    } else {
+        deblock_chroma_eq42_scalar(cbcr, step_x, step_y, alpha, beta);
+    }
+}
+
+// ============================================================================
 // Boundary Strength Calculation (bs_calc)
 // ============================================================================
 
@@ -1659,6 +1838,66 @@ mod tests {
                         cr_simd.cursor_mut(4, 4).at(x, y),
                         "cr mismatch at ({x}, {y}) horiz={is_horiz}"
                     );
+                }
+            }
+        }
+    }
+
+    /// The single-plane pair the decoder takes when Cb and Cr have different QPs, over
+    /// a small grid that includes the zero and negative `tc` gating whole lines off.
+    #[test]
+    fn test_deblock_chroma_42_parity() {
+        let stride = 32;
+        let tcs: [[i8; 4]; 4] = [[0, 0, 0, 0], [-1, 0, 1, 2], [1, 2, 0, 3], [25, 25, 25, 25]];
+        for is_horiz in [true, false] {
+            let (step_x, step_y) = if is_horiz {
+                (stride as isize, 1)
+            } else {
+                (1, stride as isize)
+            };
+            for &alpha in &[0i32, 18, 90, 255] {
+                for &beta in &[0i32, 10, 18] {
+                    for tc in &tcs {
+                        let mut a = make_test_plane(16, 16, 8, stride);
+                        let mut b = a.clone();
+                        deblock_chroma_lt42_scalar(
+                            &mut a.cursor_mut(4, 4),
+                            step_x,
+                            step_y,
+                            alpha,
+                            beta,
+                            tc,
+                        );
+                        deblock_chroma_lt42(
+                            &mut b.cursor_mut(4, 4),
+                            step_x,
+                            step_y,
+                            alpha,
+                            beta,
+                            tc,
+                        );
+                        assert_eq!(
+                            a.as_slice(),
+                            b.as_slice(),
+                            "chroma lt42 alpha={alpha} beta={beta} tc={tc:?} horiz={is_horiz}"
+                        );
+
+                        let mut a = make_test_plane(16, 16, 8, stride);
+                        let mut b = a.clone();
+                        deblock_chroma_eq42_scalar(
+                            &mut a.cursor_mut(4, 4),
+                            step_x,
+                            step_y,
+                            alpha,
+                            beta,
+                        );
+                        deblock_chroma_eq42(&mut b.cursor_mut(4, 4), step_x, step_y, alpha, beta);
+                        assert_eq!(
+                            a.as_slice(),
+                            b.as_slice(),
+                            "chroma eq42 alpha={alpha} beta={beta} horiz={is_horiz}"
+                        );
+                    }
                 }
             }
         }

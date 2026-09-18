@@ -306,9 +306,26 @@ pub fn deblock_chroma_eq4_scalar(
     }
 }
 
-/// C++: `DeblockChromaLt42_c` — the weak chroma filter on a single combined CbCr buffer
-/// (one plane, 8 lines). Reach and gating as [`deblock_chroma_lt4`].
+/// C++: `DeblockChromaLt42_c` — the weak chroma filter on a single plane (8 lines).
+/// Reach and gating as [`deblock_chroma_lt4`].
+///
+/// The decoder reaches this variant, not the two-plane one, whenever Cb and Cr carry
+/// different QPs: each plane then has its own `alpha`/`beta`/`tc` and is filtered on its
+/// own. Upstream leaves that path in C, but the two-plane kernels are already per-half —
+/// Cb in the low eight lanes, Cr in the high eight, `tc[i >> 1]` repeating over each
+/// half — so one plane's eight lines run through the same vector kernel.
 pub fn deblock_chroma_lt42(
+    cbcr: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+    tc: &[i8; 4],
+) {
+    kernels::deblock::deblock_chroma_lt42(cbcr, step_x, step_y, alpha, beta, tc)
+}
+
+pub fn deblock_chroma_lt42_scalar(
     cbcr: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,
@@ -325,9 +342,19 @@ pub fn deblock_chroma_lt42(
     }
 }
 
-/// C++: `DeblockChromaEq42_c` — the strong chroma filter on a single combined CbCr
-/// buffer (one plane, 8 lines).
+/// C++: `DeblockChromaEq42_c` — the strong chroma filter on a single plane (8 lines).
+/// Reached under the same split-QP condition as [`deblock_chroma_lt42`].
 pub fn deblock_chroma_eq42(
+    cbcr: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+) {
+    kernels::deblock::deblock_chroma_eq42(cbcr, step_x, step_y, alpha, beta)
+}
+
+pub fn deblock_chroma_eq42_scalar(
     cbcr: &mut impl PlaneSamples,
     step_x: isize,
     step_y: isize,

@@ -732,6 +732,128 @@ pub fn deblock_chroma_eq4(
 }
 
 // ============================================================================
+// Single-plane chroma (the `*2` variants)
+// ============================================================================
+//
+// The decoder takes this pair when Cb and Cr carry different QPs: each plane then has
+// its own `alpha`, `beta` and `tc`. Upstream has no assembly for it — the `*2_c` bodies
+// in `codec/common/src/deblocking_common.cpp` are the only implementations — but the
+// 16-line chroma core is two independent eight-lane halves and `tc_chroma` repeats the
+// same four values over each, so one plane's eight lines filter correctly with their
+// taps duplicated into both halves. Only the low half is written back.
+
+/// One plane's eight tap samples in both halves of a 16-lane row.
+#[inline(always)]
+fn dup_halves(row: &[u8; 8]) -> [u8; 16] {
+    let mut v = [0u8; 16];
+    v[..8].copy_from_slice(row);
+    v[8..].copy_from_slice(row);
+    v
+}
+
+/// [`scatter_chroma_lines`] for one plane: `p0` and `q0` of the low half.
+#[inline]
+#[target_feature(enable = "neon")]
+fn scatter_chroma_lines1(cbcr: &mut impl PlaneSamples, t: &[[u8; 16]; 4]) {
+    let mut a = [vdup_n_u8(0); 8];
+    for x in 0..4 {
+        a[x] = vget_low_u8(ld16(&t[x]));
+    }
+    let a = transpose8x8(a);
+    let out: [[u8; 2]; 8] = std::array::from_fn(|i| to8(a[i])[1..3].try_into().expect("p0, q0"));
+    cbcr.set_block::<2, 8>(0, -1, &out);
+}
+
+/// `DeblockChromaLt4V2_c` / `DeblockChromaLt4H2_c`, on one plane.
+pub fn deblock_chroma_lt42(
+    cbcr: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+    tc: &[i8; 4],
+) {
+    if step_y == 1 {
+        debug_assert_eq!(step_x, cbcr.stride() as isize);
+        // Taps `-2 .. 1`: one 8-wide, 4-tall span, in both halves.
+        let (p1, mut p0, mut q0, q1) = {
+            let s = cbcr.span::<8, 4>(-2, 0);
+            (
+                dup_halves(&s.row::<8>(0, 0)),
+                dup_halves(&s.row::<8>(1, 0)),
+                dup_halves(&s.row::<8>(2, 0)),
+                dup_halves(&s.row::<8>(3, 0)),
+            )
+        };
+
+        unsafe { chroma_lt4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta, tc) };
+
+        cbcr.set_block::<8, 2>(
+            -1,
+            0,
+            &[
+                p0[..8].try_into().expect("p0"),
+                q0[..8].try_into().expect("q0"),
+            ],
+        );
+    } else if step_x == 1 {
+        debug_assert_eq!(step_y, cbcr.stride() as isize);
+        // One plane read twice: the gather lands it in both halves.
+        let mut t = unsafe { gather_chroma_lines(&*cbcr, &*cbcr) };
+        let [ref t0, ref mut t1, ref mut t2, ref t3] = t;
+        unsafe { chroma_lt4_16(t0, t1, t2, t3, alpha, beta, tc) };
+        unsafe { scatter_chroma_lines1(cbcr, &t) };
+    } else {
+        crate::common::deblocking_common::deblock_chroma_lt42_scalar(
+            cbcr, step_x, step_y, alpha, beta, tc,
+        );
+    }
+}
+
+/// `DeblockChromaEq4V2_c` / `DeblockChromaEq4H2_c`, on one plane.
+pub fn deblock_chroma_eq42(
+    cbcr: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+) {
+    if step_y == 1 {
+        debug_assert_eq!(step_x, cbcr.stride() as isize);
+        let (p1, mut p0, mut q0, q1) = {
+            let s = cbcr.span::<8, 4>(-2, 0);
+            (
+                dup_halves(&s.row::<8>(0, 0)),
+                dup_halves(&s.row::<8>(1, 0)),
+                dup_halves(&s.row::<8>(2, 0)),
+                dup_halves(&s.row::<8>(3, 0)),
+            )
+        };
+
+        unsafe { chroma_eq4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta) };
+
+        cbcr.set_block::<8, 2>(
+            -1,
+            0,
+            &[
+                p0[..8].try_into().expect("p0"),
+                q0[..8].try_into().expect("q0"),
+            ],
+        );
+    } else if step_x == 1 {
+        debug_assert_eq!(step_y, cbcr.stride() as isize);
+        let mut t = unsafe { gather_chroma_lines(&*cbcr, &*cbcr) };
+        let [ref t0, ref mut t1, ref mut t2, ref t3] = t;
+        unsafe { chroma_eq4_16(t0, t1, t2, t3, alpha, beta) };
+        unsafe { scatter_chroma_lines1(cbcr, &t) };
+    } else {
+        crate::common::deblocking_common::deblock_chroma_eq42_scalar(
+            cbcr, step_x, step_y, alpha, beta,
+        );
+    }
+}
+
+// ============================================================================
 // Boundary strength
 // ============================================================================
 //
@@ -1148,6 +1270,39 @@ mod tests {
         }
     }
 
+    /// The single-plane pair the decoder takes when Cb and Cr have different QPs.
+    #[test]
+    fn test_deblock_chroma_42_parity() {
+        let stride = 32;
+        for is_horiz in [true, false] {
+            let (step_x, step_y) = if is_horiz {
+                (stride as isize, 1)
+            } else {
+                (1, stride as isize)
+            };
+            let tc = [1i8, 2, 0, 3];
+
+            let mut a = make_test_plane(16, 16, 8, stride);
+            let mut b = a.clone();
+            scalar::deblock_chroma_lt42_scalar(
+                &mut a.cursor_mut(4, 4),
+                step_x,
+                step_y,
+                18,
+                10,
+                &tc,
+            );
+            deblock_chroma_lt42(&mut b.cursor_mut(4, 4), step_x, step_y, 18, 10, &tc);
+            assert_planes_equal(&a, &b, &format!("chroma lt42 horiz={is_horiz}"));
+
+            let mut a = make_test_plane(16, 16, 8, stride);
+            let mut b = a.clone();
+            scalar::deblock_chroma_eq42_scalar(&mut a.cursor_mut(4, 4), step_x, step_y, 22, 14);
+            deblock_chroma_eq42(&mut b.cursor_mut(4, 4), step_x, step_y, 22, 14);
+            assert_planes_equal(&a, &b, &format!("chroma eq42 horiz={is_horiz}"));
+        }
+    }
+
     /// Sweeps smooth planes at several noise amplitudes (so the conditions hold on most
     /// lines and fail on some), every direction, and `alpha`/`beta`/`tc` over their whole
     /// tables — `alpha` to 255, `beta` to 18, `tc` from -1 to 25 — including the zero and
@@ -1295,6 +1450,57 @@ mod tests {
                                 &cr_b,
                                 &format!(
                                     "chroma eq4 cr amp={amp} alpha={alpha} beta={beta} horiz={is_horiz}"
+                                ),
+                            );
+
+                            // The single-plane pair, on the same planes.
+                            let mut a = smooth_plane(16, 16, 8, stride, amp, &mut seed);
+                            let mut b = a.clone();
+                            scalar::deblock_chroma_lt42_scalar(
+                                &mut a.cursor_mut(4, 4),
+                                step_x,
+                                step_y,
+                                alpha,
+                                beta,
+                                tc,
+                            );
+                            deblock_chroma_lt42(
+                                &mut b.cursor_mut(4, 4),
+                                step_x,
+                                step_y,
+                                alpha,
+                                beta,
+                                tc,
+                            );
+                            assert_planes_equal(
+                                &a,
+                                &b,
+                                &format!(
+                                    "chroma lt42 amp={amp} alpha={alpha} beta={beta} tc={tc:?} horiz={is_horiz}"
+                                ),
+                            );
+
+                            let mut a = smooth_plane(16, 16, 8, stride, amp, &mut seed);
+                            let mut b = a.clone();
+                            scalar::deblock_chroma_eq42_scalar(
+                                &mut a.cursor_mut(4, 4),
+                                step_x,
+                                step_y,
+                                alpha,
+                                beta,
+                            );
+                            deblock_chroma_eq42(
+                                &mut b.cursor_mut(4, 4),
+                                step_x,
+                                step_y,
+                                alpha,
+                                beta,
+                            );
+                            assert_planes_equal(
+                                &a,
+                                &b,
+                                &format!(
+                                    "chroma eq42 amp={amp} alpha={alpha} beta={beta} horiz={is_horiz}"
                                 ),
                             );
                         }

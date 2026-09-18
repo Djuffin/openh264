@@ -1765,10 +1765,19 @@ pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
             Some(i8x8_luma_pred_vl_top),
         ];
 
+        // The vector predictors, for the slots that have one. `WELS_CPU_SSE2` names the
+        // slot, not the instruction set: the aarch64 kernel set reports it too, so this
+        // one test installs the SSE2 kernels on x86_64 and the NEON kernels on aarch64.
+        //
+        // The slots left scalar are the ones with nothing to vectorize — the DC fills
+        // with no neighbour to average (`DC_128`, chroma `DC_L`) and the 4x4 `*_TOP`
+        // variants, which upstream also leaves in C on x86.
         if (cpu_flag & WELS_CPU_SSE2) != 0 {
             use crate::decoder::decoder_context::{
-                C_PRED_DC, C_PRED_H, C_PRED_P, C_PRED_V, I4_PRED_DC, I4_PRED_H, I4_PRED_V,
-                I16_PRED_DC, I16_PRED_DC_128, I16_PRED_DC_T, I16_PRED_H, I16_PRED_P, I16_PRED_V,
+                C_PRED_DC, C_PRED_DC_T, C_PRED_H, C_PRED_P, C_PRED_V, I4_PRED_DC, I4_PRED_DDL,
+                I4_PRED_DDR, I4_PRED_H, I4_PRED_HD, I4_PRED_HU, I4_PRED_V, I4_PRED_VL, I4_PRED_VR,
+                I16_PRED_DC, I16_PRED_DC_128, I16_PRED_DC_L, I16_PRED_DC_T, I16_PRED_H, I16_PRED_P,
+                I16_PRED_V,
             };
             use kernels::intra_pred::*;
 
@@ -1777,16 +1786,24 @@ pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
             pCtx.pGetI16x16LumaPredFunc[I16_PRED_DC] = Some(dec_i16x16_luma_pred_dc);
             pCtx.pGetI16x16LumaPredFunc[I16_PRED_P] = Some(dec_i16x16_luma_pred_plane);
             pCtx.pGetI16x16LumaPredFunc[I16_PRED_DC_T] = Some(dec_i16x16_luma_pred_dc_top);
+            pCtx.pGetI16x16LumaPredFunc[I16_PRED_DC_L] = Some(dec_i16x16_luma_pred_dc_left);
             pCtx.pGetI16x16LumaPredFunc[I16_PRED_DC_128] = Some(dec_i16x16_luma_pred_dc_na);
 
             pCtx.pGetIChromaPredFunc[C_PRED_DC] = Some(dec_chroma_pred_dc);
             pCtx.pGetIChromaPredFunc[C_PRED_H] = Some(dec_chroma_pred_h);
             pCtx.pGetIChromaPredFunc[C_PRED_V] = Some(dec_chroma_pred_v);
             pCtx.pGetIChromaPredFunc[C_PRED_P] = Some(dec_chroma_pred_plane);
+            pCtx.pGetIChromaPredFunc[C_PRED_DC_T] = Some(dec_chroma_pred_dc_top);
 
             pCtx.pGetI4x4LumaPredFunc[I4_PRED_V] = Some(dec_i4x4_luma_pred_v);
             pCtx.pGetI4x4LumaPredFunc[I4_PRED_H] = Some(dec_i4x4_luma_pred_h);
             pCtx.pGetI4x4LumaPredFunc[I4_PRED_DC] = Some(dec_i4x4_luma_pred_dc);
+            pCtx.pGetI4x4LumaPredFunc[I4_PRED_DDL] = Some(dec_i4x4_luma_pred_ddl);
+            pCtx.pGetI4x4LumaPredFunc[I4_PRED_DDR] = Some(dec_i4x4_luma_pred_ddr);
+            pCtx.pGetI4x4LumaPredFunc[I4_PRED_VR] = Some(dec_i4x4_luma_pred_vr);
+            pCtx.pGetI4x4LumaPredFunc[I4_PRED_HD] = Some(dec_i4x4_luma_pred_hd);
+            pCtx.pGetI4x4LumaPredFunc[I4_PRED_VL] = Some(dec_i4x4_luma_pred_vl);
+            pCtx.pGetI4x4LumaPredFunc[I4_PRED_HU] = Some(dec_i4x4_luma_pred_hu);
         }
     }
 }

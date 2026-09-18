@@ -202,6 +202,20 @@ fn chroma_dc_rows<S: RefSamples>(src: &S) -> ([u8; 8], [u8; 8]) {
     )
 }
 
+/// `WelsDecoderIChromaPredDcTop_AArch64_neon`: the neighbour row above folded to its
+/// two 4-sample means by `uaddlp` twice and `urshr #2` — the one row every line of the
+/// block is filled with.
+#[inline]
+#[target_feature(enable = "neon")]
+fn chroma_dc_top_row<S: RefSamples>(src: &S) -> [u8; 8] {
+    let top = ld8(&src.row_n::<8>(-1, 0));
+    let sums = vpaddl_u16(vpaddl_u8(top)); // [T0, T1]
+    let means = vrshr_n_u32::<2>(sums);
+    let m1 = vget_lane_u32::<0>(means) as u8;
+    let m2 = vget_lane_u32::<1>(means) as u8;
+    [m1, m1, m1, m1, m2, m2, m2, m2]
+}
+
 /// `WelsIChromaPredPlane_AArch64_neon`, the coefficient half.
 ///
 /// `[t2 t1 t0 t-1 | l2 l1 l0 l-1]` subtracted from `[t4 .. t7 | l4 .. l7]`,
@@ -498,6 +512,13 @@ pub fn dec_i16x16_luma_pred_dc_top(pred: &mut PlaneCursorMut<'_>) {
     fill_rows(pred, 16, &[mean; 16])
 }
 
+/// `WelsDecoderI16x16LumaPredDcLeft_AArch64_neon`.
+#[inline]
+pub fn dec_i16x16_luma_pred_dc_left(pred: &mut PlaneCursorMut<'_>) {
+    let mean = unsafe { i16x16_dc_mean(pred, false, true) };
+    fill_rows(pred, 16, &[mean; 16])
+}
+
 /// The `DC_128` fill, which upstream keeps in C.
 #[inline]
 pub fn dec_i16x16_luma_pred_dc_na(pred: &mut PlaneCursorMut<'_>) {
@@ -575,6 +596,13 @@ pub fn dec_chroma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
     }
 }
 
+/// `WelsDecoderIChromaPredDcTop_AArch64_neon`.
+#[inline]
+pub fn dec_chroma_pred_dc_top(pred: &mut PlaneCursorMut<'_>) {
+    let row = unsafe { chroma_dc_top_row(pred) };
+    fill_rows(pred, 8, &row)
+}
+
 /// `WelsIChromaPredPlane_AArch64_neon`.
 #[inline]
 pub fn enc_chroma_pred_plane(pred: &mut [u8; 64], rec: &RecCursor<'_>) {
@@ -641,10 +669,24 @@ pub fn enc_i4x4_luma_pred_ddl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     *pred = unsafe { i4x4_ddl(rec) };
 }
 
+/// `WelsDecoderI4x4LumaPredDDL_AArch64_neon`.
+#[inline]
+pub fn dec_i4x4_luma_pred_ddl(pred: &mut PlaneCursorMut<'_>) {
+    let rows = unsafe { i4x4_ddl(&*pred) };
+    put4(pred, &rows)
+}
+
 /// Diagonal down-right; see the header.
 #[inline]
 pub fn enc_i4x4_luma_pred_ddr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     *pred = unsafe { i4x4_ddr(rec) };
+}
+
+/// `WelsDecoderI4x4LumaPredDDR_AArch64_neon`.
+#[inline]
+pub fn dec_i4x4_luma_pred_ddr(pred: &mut PlaneCursorMut<'_>) {
+    let rows = unsafe { i4x4_ddr(&*pred) };
+    put4(pred, &rows)
 }
 
 /// `WelsI4x4LumaPredVR_AArch64_neon`.
@@ -653,10 +695,24 @@ pub fn enc_i4x4_luma_pred_vr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     *pred = unsafe { i4x4_vr(rec) };
 }
 
+/// `WelsDecoderI4x4LumaPredVR_AArch64_neon`.
+#[inline]
+pub fn dec_i4x4_luma_pred_vr(pred: &mut PlaneCursorMut<'_>) {
+    let rows = unsafe { i4x4_vr(&*pred) };
+    put4(pred, &rows)
+}
+
 /// `WelsI4x4LumaPredHD_AArch64_neon`.
 #[inline]
 pub fn enc_i4x4_luma_pred_hd(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     *pred = unsafe { i4x4_hd(rec) };
+}
+
+/// `WelsDecoderI4x4LumaPredHD_AArch64_neon`.
+#[inline]
+pub fn dec_i4x4_luma_pred_hd(pred: &mut PlaneCursorMut<'_>) {
+    let rows = unsafe { i4x4_hd(&*pred) };
+    put4(pred, &rows)
 }
 
 /// `WelsI4x4LumaPredVL_AArch64_neon`.
@@ -665,10 +721,24 @@ pub fn enc_i4x4_luma_pred_vl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     *pred = unsafe { i4x4_vl(rec) };
 }
 
+/// `WelsDecoderI4x4LumaPredVL_AArch64_neon`.
+#[inline]
+pub fn dec_i4x4_luma_pred_vl(pred: &mut PlaneCursorMut<'_>) {
+    let rows = unsafe { i4x4_vl(&*pred) };
+    put4(pred, &rows)
+}
+
 /// `WelsI4x4LumaPredHU_AArch64_neon`.
 #[inline]
 pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     *pred = unsafe { i4x4_hu(rec) };
+}
+
+/// `WelsDecoderI4x4LumaPredHU_AArch64_neon`.
+#[inline]
+pub fn dec_i4x4_luma_pred_hu(pred: &mut PlaneCursorMut<'_>) {
+    let rows = unsafe { i4x4_hu(&*pred) };
+    put4(pred, &rows)
 }
 
 #[inline(always)]
@@ -967,6 +1037,11 @@ mod tests {
             dec_i16x16_luma_pred_dc_top,
         );
         assert_dec_parity(
+            "16x16 DC left",
+            dec::i16x16_luma_pred_dc_left,
+            dec_i16x16_luma_pred_dc_left,
+        );
+        assert_dec_parity(
             "16x16 DC n/a",
             dec::i16x16_luma_pred_dc_na,
             dec_i16x16_luma_pred_dc_na,
@@ -985,6 +1060,11 @@ mod tests {
         assert_dec_parity("Chroma H", dec::chroma_pred_h, dec_chroma_pred_h);
         assert_dec_parity("Chroma DC", dec::chroma_pred_dc, dec_chroma_pred_dc);
         assert_dec_parity(
+            "Chroma DC top",
+            dec::chroma_pred_dc_top,
+            dec_chroma_pred_dc_top,
+        );
+        assert_dec_parity(
             "Chroma Plane",
             dec::chroma_pred_plane,
             dec_chroma_pred_plane,
@@ -997,6 +1077,12 @@ mod tests {
         assert_dec_parity("4x4 V", dec::i4x4_luma_pred_v, dec_i4x4_luma_pred_v);
         assert_dec_parity("4x4 H", dec::i4x4_luma_pred_h, dec_i4x4_luma_pred_h);
         assert_dec_parity("4x4 DC", dec::i4x4_luma_pred_dc, dec_i4x4_luma_pred_dc);
+        assert_dec_parity("4x4 DDL", dec::i4x4_luma_pred_ddl, dec_i4x4_luma_pred_ddl);
+        assert_dec_parity("4x4 DDR", dec::i4x4_luma_pred_ddr, dec_i4x4_luma_pred_ddr);
+        assert_dec_parity("4x4 VR", dec::i4x4_luma_pred_vr, dec_i4x4_luma_pred_vr);
+        assert_dec_parity("4x4 HD", dec::i4x4_luma_pred_hd, dec_i4x4_luma_pred_hd);
+        assert_dec_parity("4x4 VL", dec::i4x4_luma_pred_vl, dec_i4x4_luma_pred_vl);
+        assert_dec_parity("4x4 HU", dec::i4x4_luma_pred_hu, dec_i4x4_luma_pred_hu);
     }
 
     /// Every public kernel here reaches at least one NEON intrinsic — in its own body

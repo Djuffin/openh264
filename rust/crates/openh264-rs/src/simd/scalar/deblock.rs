@@ -1,8 +1,8 @@
 //! Scalar forwards for the `deblock` kernels — see the module header.
 
 use crate::common::deblocking_common::{
-    deblock_chroma_eq4_scalar, deblock_chroma_lt4_scalar, deblock_luma_eq4_scalar,
-    deblock_luma_lt4_scalar,
+    deblock_chroma_eq4_scalar, deblock_chroma_eq42_scalar, deblock_chroma_lt4_scalar,
+    deblock_chroma_lt42_scalar, deblock_luma_eq4_scalar, deblock_luma_lt4_scalar,
 };
 use crate::encoder::encoder_context::SMVUnitXY;
 use crate::safe::plane::PlaneSamples;
@@ -53,6 +53,29 @@ pub fn deblock_chroma_eq4(
     beta: i32,
 ) {
     deblock_chroma_eq4_scalar(cb, cr, step_x, step_y, alpha, beta)
+}
+
+#[inline(always)]
+pub fn deblock_chroma_lt42(
+    cbcr: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+    tc: &[i8; 4],
+) {
+    deblock_chroma_lt42_scalar(cbcr, step_x, step_y, alpha, beta, tc)
+}
+
+#[inline(always)]
+pub fn deblock_chroma_eq42(
+    cbcr: &mut impl PlaneSamples,
+    step_x: isize,
+    step_y: isize,
+    alpha: i32,
+    beta: i32,
+) {
+    deblock_chroma_eq42_scalar(cbcr, step_x, step_y, alpha, beta)
 }
 
 /// Boundary strengths of one macroblock — see

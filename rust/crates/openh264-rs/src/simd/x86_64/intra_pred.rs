@@ -266,6 +266,13 @@ pub fn dec_i16x16_luma_pred_dc_top(pred: &mut PlaneCursorMut<'_>) {
     fill_rows(pred, 16, &[mean; 16])
 }
 
+/// DC Left 16x16 predictor (decoder).
+#[inline]
+pub fn dec_i16x16_luma_pred_dc_left(pred: &mut PlaneCursorMut<'_>) {
+    let mean = unsafe { i16x16_dc_mean(pred, false, true) };
+    fill_rows(pred, 16, &[mean; 16])
+}
+
 /// DC NA 16x16 predictor (decoder).
 #[inline]
 pub fn dec_i16x16_luma_pred_dc_na(pred: &mut PlaneCursorMut<'_>) {
@@ -341,6 +348,33 @@ pub fn dec_chroma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
     for dy in 4..8 {
         pred.put(dy, &bot);
     }
+}
+
+/// The row every line of the DC-top chroma predictor is filled with: the two
+/// 4-sample means of the neighbour row above, one `_mm_sad_epu8` over the pair.
+///
+/// C++: `WelsIChromaPredDcTop_c` / `WelsDecoderIChromaPredDcTop_sse2`.
+#[target_feature(enable = "sse2")]
+fn chroma_dc_top_row<S: RefSamples>(src: &S) -> [u8; 8] {
+    let top = src.row_n::<8>(-1, 0);
+    // The halves in separate quadwords, so one `psadbw` sums each on its own.
+    let halves = _mm_setr_epi32(
+        i32::from_ne_bytes(top[..4].try_into().expect("top left half")),
+        0,
+        i32::from_ne_bytes(top[4..].try_into().expect("top right half")),
+        0,
+    );
+    let sad = _mm_sad_epu8(halves, _mm_setzero_si128());
+    let m1 = ((_mm_cvtsi128_si32(sad) + 2) >> 2) as u8;
+    let m2 = ((_mm_extract_epi16(sad, 4) + 2) >> 2) as u8;
+    [m1, m1, m1, m1, m2, m2, m2, m2]
+}
+
+/// DC Top Chroma 8x8 predictor in place (decoder).
+#[inline]
+pub fn dec_chroma_pred_dc_top(pred: &mut PlaneCursorMut<'_>) {
+    let row = unsafe { chroma_dc_top_row(pred) };
+    fill_rows(pred, 8, &row)
 }
 
 /// Plane Chroma 8x8 predictor for packed candidate buffer (encoder).
@@ -440,10 +474,23 @@ pub fn dec_i4x4_luma_pred_dc(pred: &mut PlaneCursorMut<'_>) {
     }
 }
 
-/// Diagonal Down-Left (DDL) 4x4 predictor for packed candidate buffer (encoder).
-#[inline]
-pub fn enc_i4x4_luma_pred_ddl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    let top = rec.row_n::<8>(-1, 0);
+/// Four packed rows of four samples into a destination — the 4x4 predictors compute
+/// their whole block as one 16-byte vector, which the encoder stores in one go and the
+/// decoder writes back a row at a time.
+#[inline(always)]
+fn put4<O: PredOut>(out: &mut O, rows: &[u8; 16]) {
+    for dy in 0..4 {
+        let row: &[u8; 4] = rows[dy * 4..][..4].try_into().expect("row");
+        out.put(dy, row);
+    }
+}
+
+/// Diagonal Down-Left (DDL) 4x4 block, row-major.
+///
+/// C++: `WelsI4x4LumaPredDDL_c` / `WelsDecoderI4x4LumaPredDDL_mmx`.
+#[inline(always)]
+fn i4x4_ddl<S: RefSamples>(src: &S) -> [u8; 16] {
+    let top = src.row_n::<8>(-1, 0);
     let t = |i: usize| top[i] as i32;
     let ddl0 = ((2 + t(0) + t(2) + (t(1) << 1)) >> 2) as u8;
     let ddl1 = ((2 + t(1) + t(3) + (t(2) << 1)) >> 2) as u8;
@@ -453,25 +500,29 @@ pub fn enc_i4x4_luma_pred_ddl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let ddl5 = ((2 + t(5) + t(7) + (t(6) << 1)) >> 2) as u8;
     let ddl6 = ((2 + t(6) + t(7) + (t(7) << 1)) >> 2) as u8;
 
+    let mut out = [0u8; 16];
     unsafe {
         let v = _mm_setr_epi8(
             ddl0 as i8, ddl1 as i8, ddl2 as i8, ddl3 as i8, ddl1 as i8, ddl2 as i8, ddl3 as i8,
             ddl4 as i8, ddl2 as i8, ddl3 as i8, ddl4 as i8, ddl5 as i8, ddl3 as i8, ddl4 as i8,
             ddl5 as i8, ddl6 as i8,
         );
-        _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
+        _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, v);
     }
+    out
 }
 
-/// Diagonal Down-Right (DDR) 4x4 predictor for packed candidate buffer (encoder).
-#[inline]
-pub fn enc_i4x4_luma_pred_ddr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    let lt = rec.at(-1, -1) as i32;
-    let l0 = rec.at(-1, 0) as i32;
-    let l1 = rec.at(-1, 1) as i32;
-    let l2 = rec.at(-1, 2) as i32;
-    let l3 = rec.at(-1, 3) as i32;
-    let top = rec.row_n::<4>(-1, 0);
+/// Diagonal Down-Right (DDR) 4x4 block, row-major.
+///
+/// C++: `WelsI4x4LumaPredDDR_c` / `WelsDecoderI4x4LumaPredDDR_mmx`.
+#[inline(always)]
+fn i4x4_ddr<S: RefSamples>(src: &S) -> [u8; 16] {
+    let lt = src.at(-1, -1) as i32;
+    let l0 = src.at(-1, 0) as i32;
+    let l1 = src.at(-1, 1) as i32;
+    let l2 = src.at(-1, 2) as i32;
+    let l3 = src.at(-1, 3) as i32;
+    let top = src.row_n::<4>(-1, 0);
     let (t0, t1, t2, t3) = (top[0] as i32, top[1] as i32, top[2] as i32, top[3] as i32);
     let tl0 = 1 + lt + l0;
     let lt0 = 1 + lt + t0;
@@ -489,24 +540,28 @@ pub fn enc_i4x4_luma_pred_ddr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let ddr5 = ((l01 + l12) >> 2) as u8;
     let ddr6 = ((l12 + l23) >> 2) as u8;
 
+    let mut out = [0u8; 16];
     unsafe {
         let v = _mm_setr_epi8(
             ddr0 as i8, ddr1 as i8, ddr2 as i8, ddr3 as i8, ddr4 as i8, ddr0 as i8, ddr1 as i8,
             ddr2 as i8, ddr5 as i8, ddr4 as i8, ddr0 as i8, ddr1 as i8, ddr6 as i8, ddr5 as i8,
             ddr4 as i8, ddr0 as i8,
         );
-        _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
+        _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, v);
     }
+    out
 }
 
-/// Vertical Right (VR) 4x4 predictor for packed candidate buffer (encoder).
-#[inline]
-pub fn enc_i4x4_luma_pred_vr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    let lt = rec.at(-1, -1) as i32;
-    let l0 = rec.at(-1, 0) as i32;
-    let l1 = rec.at(-1, 1) as i32;
-    let l2 = rec.at(-1, 2) as i32;
-    let top = rec.row_n::<4>(-1, 0);
+/// Vertical Right (VR) 4x4 block, row-major.
+///
+/// C++: `WelsI4x4LumaPredVR_c` / `WelsDecoderI4x4LumaPredVR_mmx`.
+#[inline(always)]
+fn i4x4_vr<S: RefSamples>(src: &S) -> [u8; 16] {
+    let lt = src.at(-1, -1) as i32;
+    let l0 = src.at(-1, 0) as i32;
+    let l1 = src.at(-1, 1) as i32;
+    let l2 = src.at(-1, 2) as i32;
+    let top = src.row_n::<4>(-1, 0);
     let (t0, t1, t2, t3) = (top[0] as i32, top[1] as i32, top[2] as i32, top[3] as i32);
     let vr0 = ((1 + lt + t0) >> 1) as u8;
     let vr1 = ((1 + t0 + t1) >> 1) as u8;
@@ -519,24 +574,28 @@ pub fn enc_i4x4_luma_pred_vr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let vr8 = ((2 + lt + (l0 << 1) + l1) >> 2) as u8;
     let vr9 = ((2 + l0 + (l1 << 1) + l2) >> 2) as u8;
 
+    let mut out = [0u8; 16];
     unsafe {
         let v = _mm_setr_epi8(
             vr0 as i8, vr1 as i8, vr2 as i8, vr3 as i8, vr4 as i8, vr5 as i8, vr6 as i8, vr7 as i8,
             vr8 as i8, vr0 as i8, vr1 as i8, vr2 as i8, vr9 as i8, vr4 as i8, vr5 as i8, vr6 as i8,
         );
-        _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
+        _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, v);
     }
+    out
 }
 
-/// Horizontal Down (HD) 4x4 predictor for packed candidate buffer (encoder).
-#[inline]
-pub fn enc_i4x4_luma_pred_hd(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    let lt = rec.at(-1, -1) as i32;
-    let l0 = rec.at(-1, 0) as i32;
-    let l1 = rec.at(-1, 1) as i32;
-    let l2 = rec.at(-1, 2) as i32;
-    let l3 = rec.at(-1, 3) as i32;
-    let top = rec.row_n::<4>(-1, 0);
+/// Horizontal Down (HD) 4x4 block, row-major.
+///
+/// C++: `WelsI4x4LumaPredHD_c` / `WelsDecoderI4x4LumaPredHD_mmx`.
+#[inline(always)]
+fn i4x4_hd<S: RefSamples>(src: &S) -> [u8; 16] {
+    let lt = src.at(-1, -1) as i32;
+    let l0 = src.at(-1, 0) as i32;
+    let l1 = src.at(-1, 1) as i32;
+    let l2 = src.at(-1, 2) as i32;
+    let l3 = src.at(-1, 3) as i32;
+    let top = src.row_n::<4>(-1, 0);
     let (t0, t1, t2) = (top[0] as i32, top[1] as i32, top[2] as i32);
     let hd0 = ((1 + lt + l0) >> 1) as u8;
     let hd1 = ((2 + lt + (l0 << 1) + l1) >> 2) as u8;
@@ -549,19 +608,23 @@ pub fn enc_i4x4_luma_pred_hd(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let hd8 = ((2 + lt + (t0 << 1) + t1) >> 2) as u8;
     let hd9 = ((2 + t0 + (t1 << 1) + t2) >> 2) as u8;
 
+    let mut out = [0u8; 16];
     unsafe {
         let v = _mm_setr_epi8(
             hd0 as i8, hd7 as i8, hd8 as i8, hd9 as i8, hd2 as i8, hd1 as i8, hd0 as i8, hd7 as i8,
             hd4 as i8, hd3 as i8, hd2 as i8, hd1 as i8, hd6 as i8, hd5 as i8, hd4 as i8, hd3 as i8,
         );
-        _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
+        _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, v);
     }
+    out
 }
 
-/// Vertical Left (VL) 4x4 predictor for packed candidate buffer (encoder).
-#[inline]
-pub fn enc_i4x4_luma_pred_vl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    let top = rec.row_n::<7>(-1, 0);
+/// Vertical Left (VL) 4x4 block, row-major.
+///
+/// C++: `WelsI4x4LumaPredVL_c` / `WelsDecoderI4x4LumaPredVL_mmx`.
+#[inline(always)]
+fn i4x4_vl<S: RefSamples>(src: &S) -> [u8; 16] {
+    let top = src.row_n::<7>(-1, 0);
     let t = |i: usize| top[i] as i32;
     let vl0 = ((1 + t(0) + t(1)) >> 1) as u8;
     let vl1 = ((1 + t(1) + t(2)) >> 1) as u8;
@@ -574,22 +637,26 @@ pub fn enc_i4x4_luma_pred_vl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let vl8 = ((2 + t(3) + (t(4) << 1) + t(5)) >> 2) as u8;
     let vl9 = ((2 + t(4) + (t(5) << 1) + t(6)) >> 2) as u8;
 
+    let mut out = [0u8; 16];
     unsafe {
         let v = _mm_setr_epi8(
             vl0 as i8, vl1 as i8, vl2 as i8, vl3 as i8, vl5 as i8, vl6 as i8, vl7 as i8, vl8 as i8,
             vl1 as i8, vl2 as i8, vl3 as i8, vl4 as i8, vl6 as i8, vl7 as i8, vl8 as i8, vl9 as i8,
         );
-        _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
+        _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, v);
     }
+    out
 }
 
-/// Horizontal Up (HU) 4x4 predictor for packed candidate buffer (encoder).
-#[inline]
-pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
-    let l0 = rec.at(-1, 0) as i32;
-    let l1 = rec.at(-1, 1) as i32;
-    let l2 = rec.at(-1, 2) as i32;
-    let l3 = rec.at(-1, 3) as i32;
+/// Horizontal Up (HU) 4x4 block, row-major.
+///
+/// C++: `WelsI4x4LumaPredHU_c` / `WelsDecoderI4x4LumaPredHU_mmx`.
+#[inline(always)]
+fn i4x4_hu<S: RefSamples>(src: &S) -> [u8; 16] {
+    let l0 = src.at(-1, 0) as i32;
+    let l1 = src.at(-1, 1) as i32;
+    let l2 = src.at(-1, 2) as i32;
+    let l3 = src.at(-1, 3) as i32;
     let l01 = 1 + l0 + l1;
     let l12 = 1 + l1 + l2;
     let l23 = 1 + l2 + l3;
@@ -600,13 +667,93 @@ pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
     let hu4 = (l23 >> 1) as u8;
     let hu5 = ((1 + l23 + (l3 << 1)) >> 2) as u8;
 
+    let mut out = [0u8; 16];
     unsafe {
         let v = _mm_setr_epi8(
             hu0 as i8, hu1 as i8, hu2 as i8, hu3 as i8, hu2 as i8, hu3 as i8, hu4 as i8, hu5 as i8,
             hu4 as i8, hu5 as i8, l3 as i8, l3 as i8, l3 as i8, l3 as i8, l3 as i8, l3 as i8,
         );
-        _mm_storeu_si128(pred.as_mut_ptr() as *mut __m128i, v);
+        _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, v);
     }
+    out
+}
+
+/// Diagonal Down-Left (DDL) 4x4 predictor for packed candidate buffer (encoder).
+#[inline]
+pub fn enc_i4x4_luma_pred_ddl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+    *pred = i4x4_ddl(rec);
+}
+
+/// Diagonal Down-Left (DDL) 4x4 predictor in place (decoder).
+#[inline]
+pub fn dec_i4x4_luma_pred_ddl(pred: &mut PlaneCursorMut<'_>) {
+    let rows = i4x4_ddl(&*pred);
+    put4(pred, &rows)
+}
+
+/// Diagonal Down-Right (DDR) 4x4 predictor for packed candidate buffer (encoder).
+#[inline]
+pub fn enc_i4x4_luma_pred_ddr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+    *pred = i4x4_ddr(rec);
+}
+
+/// Diagonal Down-Right (DDR) 4x4 predictor in place (decoder).
+#[inline]
+pub fn dec_i4x4_luma_pred_ddr(pred: &mut PlaneCursorMut<'_>) {
+    let rows = i4x4_ddr(&*pred);
+    put4(pred, &rows)
+}
+
+/// Vertical Right (VR) 4x4 predictor for packed candidate buffer (encoder).
+#[inline]
+pub fn enc_i4x4_luma_pred_vr(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+    *pred = i4x4_vr(rec);
+}
+
+/// Vertical Right (VR) 4x4 predictor in place (decoder).
+#[inline]
+pub fn dec_i4x4_luma_pred_vr(pred: &mut PlaneCursorMut<'_>) {
+    let rows = i4x4_vr(&*pred);
+    put4(pred, &rows)
+}
+
+/// Horizontal Down (HD) 4x4 predictor for packed candidate buffer (encoder).
+#[inline]
+pub fn enc_i4x4_luma_pred_hd(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+    *pred = i4x4_hd(rec);
+}
+
+/// Horizontal Down (HD) 4x4 predictor in place (decoder).
+#[inline]
+pub fn dec_i4x4_luma_pred_hd(pred: &mut PlaneCursorMut<'_>) {
+    let rows = i4x4_hd(&*pred);
+    put4(pred, &rows)
+}
+
+/// Vertical Left (VL) 4x4 predictor for packed candidate buffer (encoder).
+#[inline]
+pub fn enc_i4x4_luma_pred_vl(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+    *pred = i4x4_vl(rec);
+}
+
+/// Vertical Left (VL) 4x4 predictor in place (decoder).
+#[inline]
+pub fn dec_i4x4_luma_pred_vl(pred: &mut PlaneCursorMut<'_>) {
+    let rows = i4x4_vl(&*pred);
+    put4(pred, &rows)
+}
+
+/// Horizontal Up (HU) 4x4 predictor for packed candidate buffer (encoder).
+#[inline]
+pub fn enc_i4x4_luma_pred_hu(pred: &mut [u8; 16], rec: &RecCursor<'_>) {
+    *pred = i4x4_hu(rec);
+}
+
+/// Horizontal Up (HU) 4x4 predictor in place (decoder).
+#[inline]
+pub fn dec_i4x4_luma_pred_hu(pred: &mut PlaneCursorMut<'_>) {
+    let rows = i4x4_hu(&*pred);
+    put4(pred, &rows)
 }
 
 /// Combined 3-mode (Vertical, Horizontal, DC) 16x16 Intra Prediction and SAD evaluation.
@@ -1001,6 +1148,11 @@ mod tests {
             dec_i16x16_luma_pred_dc_top,
         );
         assert_dec_parity(
+            "16x16 DC left",
+            dec::i16x16_luma_pred_dc_left,
+            dec_i16x16_luma_pred_dc_left,
+        );
+        assert_dec_parity(
             "16x16 DC n/a",
             dec::i16x16_luma_pred_dc_na,
             dec_i16x16_luma_pred_dc_na,
@@ -1019,6 +1171,11 @@ mod tests {
         assert_dec_parity("Chroma H", dec::chroma_pred_h, dec_chroma_pred_h);
         assert_dec_parity("Chroma DC", dec::chroma_pred_dc, dec_chroma_pred_dc);
         assert_dec_parity(
+            "Chroma DC top",
+            dec::chroma_pred_dc_top,
+            dec_chroma_pred_dc_top,
+        );
+        assert_dec_parity(
             "Chroma Plane",
             dec::chroma_pred_plane,
             dec_chroma_pred_plane,
@@ -1031,6 +1188,12 @@ mod tests {
         assert_dec_parity("4x4 V", dec::i4x4_luma_pred_v, dec_i4x4_luma_pred_v);
         assert_dec_parity("4x4 H", dec::i4x4_luma_pred_h, dec_i4x4_luma_pred_h);
         assert_dec_parity("4x4 DC", dec::i4x4_luma_pred_dc, dec_i4x4_luma_pred_dc);
+        assert_dec_parity("4x4 DDL", dec::i4x4_luma_pred_ddl, dec_i4x4_luma_pred_ddl);
+        assert_dec_parity("4x4 DDR", dec::i4x4_luma_pred_ddr, dec_i4x4_luma_pred_ddr);
+        assert_dec_parity("4x4 VR", dec::i4x4_luma_pred_vr, dec_i4x4_luma_pred_vr);
+        assert_dec_parity("4x4 HD", dec::i4x4_luma_pred_hd, dec_i4x4_luma_pred_hd);
+        assert_dec_parity("4x4 VL", dec::i4x4_luma_pred_vl, dec_i4x4_luma_pred_vl);
+        assert_dec_parity("4x4 HU", dec::i4x4_luma_pred_hu, dec_i4x4_luma_pred_hu);
     }
 
     /// Every public kernel must reach at least one `_mm_*` intrinsic — in its own body,
