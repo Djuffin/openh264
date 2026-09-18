@@ -13,6 +13,7 @@ cd rust/crates/openh264-rs
 cargo build --release                  # Builds libopenh264_rs.{so,dylib,a,rlib}
 cargo test                             # Runs unit, conformance, differential, and doc tests
 bash ../../tools/abi_exports.sh        # Verifies cdylib exports exactly the 7 upstream C ABI symbols
+bash ../../tools/cpp_interface_test.sh # Runs GTest C/C++ virtual-table & ABI interface tests
 ```
 
 ## Rust API Usage

@@ -248,6 +248,8 @@ pub unsafe fn wels_destroy_svc_encoder(p_encoder: *mut ISVCEncoder) {
 #[cxx::bridge(namespace = "openh264rs")]
 pub mod ffi {
     unsafe extern "C++" {
+        include!("openh264rs_cxx_types.h");
+
         type EUsageType = crate::api::types::EUsageType;
         type RC_MODES = crate::api::types::RC_MODES;
         type ECOMPLEXITY_MODE = crate::api::types::ECOMPLEXITY_MODE;
