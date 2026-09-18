@@ -538,10 +538,286 @@ pub struct OpenH264Version {
     pub uReserved: u32,
 }
 
-pub use crate::api::cxx_api::ffi::{
-    SEncParamBase, SEncParamExt, SFrameBSInfo, SLayerBSInfo, SSliceArgument, SSourcePicture,
-    SSpatialLayerConfig,
-};
+/// Slice configuration (`SSliceArgument`).
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SSliceArgument {
+    pub uiSliceMode: SliceModeEnum,
+    pub uiSliceNum: u32,
+    pub uiSliceMbNum: [u32; MAX_SLICES_NUM_TMP],
+    pub uiSliceSizeConstraint: u32,
+}
+
+impl Default for SSliceArgument {
+    fn default() -> Self {
+        Self {
+            uiSliceMode: SliceModeEnum::SM_SINGLE_SLICE,
+            uiSliceNum: 0,
+            uiSliceMbNum: [0; MAX_SLICES_NUM_TMP],
+            uiSliceSizeConstraint: 0,
+        }
+    }
+}
+
+/// Spatial layer configuration (`SSpatialLayerConfig`).
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SSpatialLayerConfig {
+    pub iVideoWidth: i32,
+    pub iVideoHeight: i32,
+    pub fFrameRate: f32,
+    pub iSpatialBitrate: i32,
+    pub iMaxSpatialBitrate: i32,
+    pub uiProfileIdc: EProfileIdc,
+    pub uiLevelIdc: ELevelIdc,
+    pub iDLayerQp: i32,
+
+    pub sSliceArgument: SSliceArgument,
+
+    pub bVideoSignalTypePresent: bool,
+    pub uiVideoFormat: u8,
+    pub bFullRange: bool,
+    pub bColorDescriptionPresent: bool,
+    pub uiColorPrimaries: u8,
+    pub uiTransferCharacteristics: u8,
+    pub uiColorMatrix: u8,
+
+    pub bAspectRatioPresent: bool,
+    pub eAspectRatio: ESampleAspectRatio,
+    pub sAspectRatioExtWidth: u16,
+    pub sAspectRatioExtHeight: u16,
+}
+
+impl Default for SSpatialLayerConfig {
+    fn default() -> Self {
+        Self {
+            iVideoWidth: 0,
+            iVideoHeight: 0,
+            fFrameRate: 0.0,
+            iSpatialBitrate: 0,
+            iMaxSpatialBitrate: 0,
+            uiProfileIdc: EProfileIdc::PRO_UNKNOWN,
+            uiLevelIdc: ELevelIdc::LEVEL_UNKNOWN,
+            iDLayerQp: 0,
+            sSliceArgument: SSliceArgument::default(),
+            bVideoSignalTypePresent: false,
+            uiVideoFormat: 0,
+            bFullRange: false,
+            bColorDescriptionPresent: false,
+            uiColorPrimaries: 0,
+            uiTransferCharacteristics: 0,
+            uiColorMatrix: 0,
+            bAspectRatioPresent: false,
+            eAspectRatio: ESampleAspectRatio::ASP_UNSPECIFIED,
+            sAspectRatioExtWidth: 0,
+            sAspectRatioExtHeight: 0,
+        }
+    }
+}
+
+/// Basic encoder parameters (`SEncParamBase`).
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SEncParamBase {
+    pub iUsageType: EUsageType,
+    pub iPicWidth: i32,
+    pub iPicHeight: i32,
+    pub iTargetBitrate: i32,
+    pub iRCMode: RC_MODES,
+    pub fMaxFrameRate: f32,
+}
+
+/// Extended encoder parameters (`SEncParamExt`).
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SEncParamExt {
+    pub iUsageType: EUsageType,
+    pub iPicWidth: i32,
+    pub iPicHeight: i32,
+    pub iTargetBitrate: i32,
+    pub iRCMode: RC_MODES,
+    pub fMaxFrameRate: f32,
+
+    pub iTemporalLayerNum: i32,
+    pub iSpatialLayerNum: i32,
+    pub sSpatialLayers: [SSpatialLayerConfig; MAX_SPATIAL_LAYER_NUM],
+
+    pub iComplexityMode: ECOMPLEXITY_MODE,
+    pub uiIntraPeriod: u32,
+    pub iNumRefFrame: i32,
+    pub eSpsPpsIdStrategy: EParameterSetStrategy,
+    pub bPrefixNalAddingCtrl: bool,
+    pub bEnableSSEI: bool,
+    pub bSimulcastAVC: bool,
+    pub iPaddingFlag: i32,
+    pub iEntropyCodingModeFlag: i32,
+
+    pub bEnableFrameSkip: bool,
+    pub iMaxBitrate: i32,
+    pub iMaxQp: i32,
+    pub iMinQp: i32,
+    pub uiMaxNalSize: u32,
+
+    pub bEnableLongTermReference: bool,
+    pub iLTRRefNum: i32,
+    pub iLtrMarkPeriod: u32,
+
+    pub iMultipleThreadIdc: u16,
+    pub bUseLoadBalancing: bool,
+
+    pub iLoopFilterDisableIdc: i32,
+    pub iLoopFilterAlphaC0Offset: i32,
+    pub iLoopFilterBetaOffset: i32,
+
+    pub bEnableDenoise: bool,
+    pub bEnableBackgroundDetection: bool,
+    pub bEnableAdaptiveQuant: bool,
+    pub bEnableFrameCroppingFlag: bool,
+    pub bEnableSceneChangeDetect: bool,
+
+    pub bIsLosslessLink: bool,
+    pub bFixRCOverShoot: bool,
+    pub iIdrBitrateRatio: i32,
+    pub bPsnrY: bool,
+    pub bPsnrU: bool,
+    pub bPsnrV: bool,
+}
+
+impl Default for SEncParamExt {
+    fn default() -> Self {
+        Self {
+            iUsageType: EUsageType::CAMERA_VIDEO_REAL_TIME,
+            iPicWidth: 0,
+            iPicHeight: 0,
+            iTargetBitrate: 0,
+            iRCMode: RC_MODES::RC_QUALITY_MODE,
+            fMaxFrameRate: 0.0,
+            iTemporalLayerNum: 1,
+            iSpatialLayerNum: 1,
+            sSpatialLayers: [SSpatialLayerConfig::default(); MAX_SPATIAL_LAYER_NUM],
+            iComplexityMode: ECOMPLEXITY_MODE::LOW_COMPLEXITY,
+            uiIntraPeriod: 0,
+            iNumRefFrame: 1,
+            eSpsPpsIdStrategy: EParameterSetStrategy::INCREASING_ID,
+            bPrefixNalAddingCtrl: false,
+            bEnableSSEI: false,
+            bSimulcastAVC: false,
+            iPaddingFlag: 0,
+            iEntropyCodingModeFlag: 0,
+            bEnableFrameSkip: false,
+            iMaxBitrate: UNSPECIFIED_BIT_RATE,
+            iMaxQp: 51,
+            iMinQp: 0,
+            uiMaxNalSize: 0,
+            bEnableLongTermReference: false,
+            iLTRRefNum: 0,
+            iLtrMarkPeriod: 0,
+            iMultipleThreadIdc: 1,
+            bUseLoadBalancing: false,
+            iLoopFilterDisableIdc: 0,
+            iLoopFilterAlphaC0Offset: 0,
+            iLoopFilterBetaOffset: 0,
+            bEnableDenoise: false,
+            bEnableBackgroundDetection: true,
+            bEnableAdaptiveQuant: true,
+            bEnableFrameCroppingFlag: true,
+            bEnableSceneChangeDetect: true,
+            bIsLosslessLink: false,
+            bFixRCOverShoot: false,
+            iIdrBitrateRatio: 0,
+            bPsnrY: false,
+            bPsnrU: false,
+            bPsnrV: false,
+        }
+    }
+}
+
+/// Uncompressed input picture (`SSourcePicture`).
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SSourcePicture {
+    pub iColorFormat: i32,
+    pub iStride: [i32; 4],
+    pub pData: [*mut u8; 4],
+    pub iPicWidth: i32,
+    pub iPicHeight: i32,
+    pub uiTimeStamp: i64,
+    pub bPsnrY: bool,
+    pub bPsnrU: bool,
+    pub bPsnrV: bool,
+}
+
+impl Default for SSourcePicture {
+    fn default() -> Self {
+        Self {
+            iColorFormat: EVideoFormatType::videoFormatI420 as i32,
+            iStride: [0; 4],
+            pData: [ptr::null_mut(); 4],
+            iPicWidth: 0,
+            iPicHeight: 0,
+            uiTimeStamp: 0,
+            bPsnrY: false,
+            bPsnrU: false,
+            bPsnrV: false,
+        }
+    }
+}
+
+/// Bitstream layer output descriptor (`SLayerBSInfo`).
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SLayerBSInfo {
+    pub uiTemporalId: u8,
+    pub uiSpatialId: u8,
+    pub uiQualityId: u8,
+    pub eFrameType: EVideoFrameType,
+    pub uiLayerType: u8,
+    pub iSubSeqId: i32,
+    pub iNalCount: i32,
+    pub pNalLengthInByte: *mut i32,
+    pub pBsBuf: *mut u8,
+    pub rPsnr: [f32; 3],
+}
+
+impl Default for SLayerBSInfo {
+    fn default() -> Self {
+        Self {
+            uiTemporalId: 0,
+            uiSpatialId: 0,
+            uiQualityId: 0,
+            eFrameType: EVideoFrameType::videoFrameTypeInvalid,
+            uiLayerType: 0,
+            iSubSeqId: 0,
+            iNalCount: 0,
+            pNalLengthInByte: ptr::null_mut(),
+            pBsBuf: ptr::null_mut(),
+            rPsnr: [0.0; 3],
+        }
+    }
+}
+
+/// Bitstream frame output descriptor (`SFrameBSInfo`).
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SFrameBSInfo {
+    pub iLayerNum: i32,
+    pub sLayerInfo: [SLayerBSInfo; MAX_LAYER_NUM_OF_FRAME],
+    pub eFrameType: EVideoFrameType,
+    pub iFrameSizeInBytes: i32,
+    pub uiTimeStamp: i64,
+}
+
+impl Default for SFrameBSInfo {
+    fn default() -> Self {
+        Self {
+            iLayerNum: 0,
+            sLayerInfo: [SLayerBSInfo::default(); MAX_LAYER_NUM_OF_FRAME],
+            eFrameType: EVideoFrameType::videoFrameTypeInvalid,
+            iFrameSizeInBytes: 0,
+            uiTimeStamp: 0,
+        }
+    }
+}
 
 pub type PEncParamBase = *mut SEncParamBase;
 pub type PLayerBSInfo = *mut SLayerBSInfo;

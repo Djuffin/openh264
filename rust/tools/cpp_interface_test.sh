@@ -1,7 +1,7 @@
 #!/bin/bash
-# Build and run OpenH264's C/C++ interface parity test (`cpp_interface_test.cpp` +
-# `cpp_interface_test.c`) using GoogleTest (`gtest/googletest`), linked against
-# the Rust `cxx` C++ bindings (`cxx_api.rs.h` / `cxx_api.rs.cc`) and `libopenh264_rs`.
+# Build and run OpenH264's C++ interface test (`cpp_interface_test.cpp`) using
+# GoogleTest (`gtest/googletest`), linked against the Rust `cxx` C++ bindings
+# (`cxx_api.rs.h` / `cxx_api.rs.cc`) and `libopenh264_rs`.
 #
 #   usage: bash rust/tools/cpp_interface_test.sh
 
@@ -29,27 +29,23 @@ esac
 CXX_HEADER_DIR="$CRATE/target/cxxbridge"
 CXX_BRIDGE_CC="$CRATE/target/cxxbridge/openh264-rs/src/api/cxx_api.rs.cc"
 
-echo "=== Compiling GoogleTest, cxx bridge C++ shim, cpp_interface_test.c, and cpp_interface_test.cpp ==="
+echo "=== Compiling GoogleTest, cxx bridge C++ shim, and cpp_interface_test.cpp ==="
 c++ -std=c++14 -I "$GTEST_DIR/include" -I "$GTEST_DIR" -pthread \
     -c "$GTEST_DIR/src/gtest-all.cc" -o "$TMP/gtest-all.o"
 c++ -std=c++14 -I "$GTEST_DIR/include" -I "$GTEST_DIR" -pthread \
     -c "$GTEST_DIR/src/gtest_main.cc" -o "$TMP/gtest_main.o"
 
-c++ -std=c++14 -I "$CXX_HEADER_DIR" -I "$CRATE/include" -I "$ROOT/codec/api/wels" \
+c++ -std=c++14 -I "$CXX_HEADER_DIR" -I "$ROOT/codec/api/wels" \
     -c "$CXX_BRIDGE_CC" -o "$TMP/cxx_api.rs.o"
 
-cc  -std=c11   -I "$ROOT/codec/api/wels" \
-    -c "$HERE/cpp_interface_test.c" -o "$TMP/cpp_interface_test_c.o"
-
-c++ -std=c++14 -I "$CXX_HEADER_DIR" -I "$CRATE/include" -I "$ROOT/codec/api/wels" -I "$GTEST_DIR/include" -pthread \
-    -c "$HERE/cpp_interface_test.cpp" -o "$TMP/cpp_interface_test_cxx.o"
+c++ -std=c++14 -I "$CXX_HEADER_DIR" -I "$ROOT/codec/api/wels" -I "$GTEST_DIR/include" -pthread \
+    -c "$HERE/cpp_interface_test.cpp" -o "$TMP/cpp_interface_test.o"
 
 c++ -std=c++14 -pthread -o "$TMP/cpp_interface_test" \
     "$TMP/gtest-all.o" \
     "$TMP/gtest_main.o" \
     "$TMP/cxx_api.rs.o" \
-    "$TMP/cpp_interface_test_c.o" \
-    "$TMP/cpp_interface_test_cxx.o" \
+    "$TMP/cpp_interface_test.o" \
     "$DYLIB" \
     -Wl,-rpath,"$(dirname "$DYLIB")"
 
