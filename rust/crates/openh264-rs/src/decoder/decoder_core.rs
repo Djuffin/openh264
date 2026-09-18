@@ -45,16 +45,11 @@ pub const MAX_NAL_UNITS_IN_LAYER: usize = 128;
 pub const MAX_MB_SIZE: i32 = 36864;
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const MAX_DPB_COUNT: usize = 17;
-pub const MB_BLOCK4x4_NUM: usize = 16;
-pub const MB_COEFF_LIST_SIZE: usize = 384;
-pub const MB_PARTITION_SIZE: usize = 4;
 pub const MAX_MMCO_COUNT: usize = 66;
 pub const MAX_PPS_COUNT: usize = 256;
 pub const MAX_SPS_COUNT: usize = 32;
 pub const MAX_LAYER_NUM: usize = 8;
-pub const MAX_SLICEGROUP_IDS: usize = 8;
 pub const BASE_QUALITY_ID: u8 = 0;
-pub const MV_A: usize = 2;
 
 pub const SLICE_HEADER_IDR_PIC_ID_MAX: u32 = 65535;
 pub const SLICE_HEADER_REDUNDANT_PIC_CNT_MAX: u32 = 127;
@@ -71,7 +66,6 @@ pub const LIST_1: usize = 1;
 pub const LIST_A: usize = 2;
 
 // Macroblock Types -- `wels_common_defs.h:276-283`.
-pub const MB_TYPE_INTRA4x4: u32 = 0x00000001;
 pub use crate::decoder::decode_slice::{
     MB_TYPE_8x8, MB_TYPE_8x8_REF0, MB_TYPE_8x16, MB_TYPE_16x8, MB_TYPE_16x16, MB_TYPE_SKIP,
 };
@@ -105,7 +99,6 @@ pub const ERR_INFO_INVALID_REF_REORDERING: i32 = 23;
 pub const ERR_INFO_INVALID_REF_MARKING: i32 = 24;
 pub const ERR_INFO_INVALID_CABAC_INIT_IDC: i32 = 25;
 pub const ERR_INFO_INVALID_QP: i32 = 26;
-pub const ERR_INFO_UNSUPPORTED_SPSI: i32 = 27;
 pub const ERR_INFO_INVALID_DBLOCKING_IDC: i32 = 28;
 pub const ERR_INFO_INVALID_SLICE_ALPHA_C0_OFFSET_DIV2: i32 = 29;
 pub const ERR_INFO_INVALID_SLICE_BETA_OFFSET_DIV2: i32 = 30;
@@ -125,7 +118,6 @@ pub const dsErrorFree: i32 = 0x00;
 pub const dsFramePending: i32 = 0x01;
 pub const dsRefLost: i32 = 0x02;
 pub const dsBitstreamError: i32 = 0x04;
-pub const dsDepLayerLost: i32 = 0x08;
 pub const dsNoParamSets: i32 = 0x10;
 pub const dsDataErrorConcealed: i32 = 0x20;
 pub const dsRefListNullPtrs: i32 = 0x40;
@@ -146,7 +138,7 @@ pub const OVERWRITE_PPS: i32 = 1;
 pub const OVERWRITE_SPS: i32 = 2;
 pub const OVERWRITE_SUBSETSPS: i32 = 4;
 
-pub use crate::decoder::error_concealment::{ERROR_CON_IDC, ERROR_CON_IDC::*};
+pub use crate::decoder::error_concealment::ERROR_CON_IDC::*;
 
 // Log levels
 pub use crate::common::wels_trace::{
@@ -158,11 +150,6 @@ pub const videoFormatI420: i32 = 23;
 #[inline]
 pub fn GENERATE_ERROR_NO(level: i32, info: i32) -> i32 {
     (level << 16) | info
-}
-
-#[inline]
-pub fn WELS_MAX<T: PartialOrd>(a: T, b: T) -> T {
-    if a > b { a } else { b }
 }
 
 #[inline]
@@ -183,13 +170,13 @@ pub fn WELS_CLIP3(x: i32, min_val: i32, max_val: i32) -> i32 {
 
 #[inline]
 pub fn WELS_ABS(x: i32) -> i32 {
-    x.abs()
+    if x < 0 { -x } else { x }
 }
 
 #[inline]
-pub fn IS_VCL_NAL(eNalType: EWelsNalUnitType, _unused: i32) -> bool {
+pub fn IS_VCL_NAL(t: EWelsNalUnitType, _unused: i32) -> bool {
     matches!(
-        eNalType,
+        t,
         NAL_UNIT_CODED_SLICE
             | NAL_UNIT_CODED_SLICE_DPA
             | NAL_UNIT_CODED_SLICE_DPB
@@ -199,7 +186,6 @@ pub fn IS_VCL_NAL(eNalType: EWelsNalUnitType, _unused: i32) -> bool {
     )
 }
 
-pub use crate::decoder::slice::EWelsSliceType;
 pub use crate::decoder::slice::EWelsSliceType::*;
 
 pub use crate::decoder::nalu::EWelsNalUnitType;
@@ -207,70 +193,24 @@ pub use crate::decoder::nalu::EWelsNalUnitType::*;
 
 // Data Structures
 
-pub use crate::decoder::decoder_context::SPosOffset;
 use crate::decoder::decoder_context::{
     IMinInt32, PICT_INFO_LIST_SIZE, SPictInfo, SPictReoderingStatus, ec_active_idc, slice_split,
 };
 
 pub use crate::decoder::decoder_context::ParseOnlyBsBuffers;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SVui {
-    pub bAspectRatioInfoPresentFlag: bool,
-    pub uiAspectRatioIdc: u8,
-    pub uiSarWidth: u32,
-    pub uiSarHeight: u32,
-    pub bOverscanInfoPresentFlag: bool,
-    pub bOverscanAppropriateFlag: bool,
-    pub bVideoSignalTypePresentFlag: bool,
-    pub uiVideoFormat: u8,
-    pub bVideoFullRangeFlag: bool,
-    pub bColourDescriptionPresentFlag: bool,
-    pub bColourDescripPresentFlag: bool,
-    pub uiColourPrimaries: u8,
-    pub uiTransferCharacteristics: u8,
-    pub uiMatrixCoefficients: u8,
-    pub uiMatrixCoeffs: u8,
-    pub bChromaLocInfoPresentFlag: bool,
-    pub uiChromaSampleLocTypeTopField: u8,
-    pub uiChromaSampleLocTypeBottomField: u8,
-    pub bTimingInfoPresentFlag: bool,
-    pub uiNumUnitsInTick: u32,
-    pub uiTimeScale: u32,
-    pub bFixedFrameRateFlag: bool,
-    pub bNalHrdParamPresentFlag: bool,
-    pub bVclHrdParamPresentFlag: bool,
-    pub bPicStructPresentFlag: bool,
-    pub bBitstreamRestrictionFlag: bool,
-    pub bMotionVectorsOverPicBoundariesFlag: bool,
-    pub uiMaxBytesPerPicDenom: u32,
-    pub uiMaxBitsPerMbDenom: u32,
-    pub uiLog2MaxMvLengthHorizontal: u32,
-    pub uiLog2MaxMvLengthVertical: u32,
-    pub uiMaxNumReorderFrames: u32,
-    pub uiMaxDecFrameBuffering: u32,
-}
+pub use crate::decoder::parameter_sets::{SPps, SSps};
 
-pub use crate::decoder::parameter_sets::SLevelLimits;
+pub use crate::decoder::slice::SPredWeightTable;
 
-pub use crate::decoder::decoder_context::SWelsDecoderSpsPpsCTX as SSpsPpsCtx;
-pub use crate::decoder::parameter_sets::{SPps, SSps, SSpsSvcExt, SSubsetSps};
+pub use crate::decoder::slice::{SRefPicListReorderSyn, SRefPicMarking};
 
-pub use crate::decoder::slice::{SPredList, SPredWeightTable};
-
-pub use crate::decoder::slice::{
-    SRefBasePicMarking, SRefPicListReorderSyn, SRefPicMarking, SReorderingSyntax,
-};
-
-pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer};
-pub use crate::decoder::decoder_context::{
-    FEEDBACK_NON_VCL_NAL, FEEDBACK_UNKNOWN_NAL, FEEDBACK_VCL_NAL,
-};
+pub use crate::decoder::bit_stream::RawDataBuffer;
+pub use crate::decoder::decoder_context::{FEEDBACK_UNKNOWN_NAL, FEEDBACK_VCL_NAL};
 pub use crate::decoder::decoder_context::{SNalUnitHeader, SNalUnitHeaderExt};
 pub use crate::decoder::slice::{SSlice, SSliceHeader, SSliceHeaderExt};
 use crate::safe::bits::BsCursor;
-pub use crate::safe::mb_grid::{LIST_COUNT, MbArray, MbDims, MbGrid};
+pub use crate::safe::mb_grid::{MbDims, MbGrid};
 
 use crate::decoder::decoder_context::{
     SpsRef, active_fmo, active_pps, active_sps, au_has_nals, cur_and_refs, cur_au, dec_pic,
@@ -391,27 +331,15 @@ impl DqLayerState {
     }
 }
 
-pub use crate::decoder::decoder_context::SRefPic;
-
 pub use crate::api::codec_api::SBufferInfo;
 
 pub use crate::decoder::decoder_context::SDecoderStatistics;
 
 pub use crate::decoder::decoder_context::{SDecodingParam, SLogContext};
 
-pub use crate::decoder::decoder_context::SWelsCabacDecEngine;
-
-pub use crate::decoder::fmo::SFmo;
-
-/// Reference-picture border expansion length (`PADDING_LENGTH` in
-/// `codec/common/inc/expand_pic.h`).
-pub const PADDING_LENGTH: usize = 32;
-
 pub use crate::decoder::decoder_context::SWelsDecoderContext;
 
 pub use crate::decoder::nalu::SNalUnit;
-
-pub use crate::decoder::decoder_context::{Picture, SPicBuff, SPicture};
 
 // Logging and Bitstream Reading Helpers
 
@@ -575,19 +503,6 @@ pub fn WelsDecodeSlice(
             Some(dq) => {
                 crate::decoder::decode_slice::WelsDecodeSlice(pCtx, dq, bFreshSlice, pCurNal)
             }
-            None => ERR_NONE,
-        }
-    }
-}
-
-#[inline]
-pub fn WelsDecodeAndConstructSlice(
-    pCtx: &mut SWelsDecoderContext,
-    pCurDqLayer: Option<&mut DqLayerState>,
-) -> i32 {
-    {
-        match pCurDqLayer {
-            Some(dq) => crate::decoder::decode_slice::WelsDecodeAndConstructSlice(pCtx, dq),
             None => ERR_NONE,
         }
     }
@@ -826,8 +741,6 @@ pub fn SyncPictureResolutionExt(pCtx: &mut SWelsDecoderContext, iWidth: u32, iHe
 pub fn WelsResetRefPic(pCtx: &mut SWelsDecoderContext) {
     crate::decoder::manage_dec_ref::WelsResetRefPic(pCtx)
 }
-
-pub use crate::decoder::pic_queue::PrefetchLastPicForThread;
 
 use crate::decoder::error_concealment::{ImplementErrorCon, MarkECFrameAsRef, NeedErrorCon};
 
@@ -2803,33 +2716,6 @@ fn parse_slice_header_into(
     }
 }
 
-pub fn PrefetchNalHeaderExtSyntax(
-    pCtx: &mut SWelsDecoderContext,
-    dst_idx: usize,
-    kpSrc: &SNalUnit,
-) -> bool {
-    let Some(kpDst) = cur_au(&mut pCtx.access_unit).and_then(|au| au.node_mut(dst_idx)) else {
-        return false;
-    };
-    let pNalHdrExtS = kpSrc.sNalHeaderExt;
-    let pPrefixS = kpSrc.sNalData.sPrefixNal;
-
-    kpDst.sNalHeaderExt.uiDependencyId = pNalHdrExtS.uiDependencyId;
-    kpDst.sNalHeaderExt.uiQualityId = pNalHdrExtS.uiQualityId;
-    kpDst.sNalHeaderExt.uiTemporalId = pNalHdrExtS.uiTemporalId;
-    kpDst.sNalHeaderExt.uiPriorityId = pNalHdrExtS.uiPriorityId;
-    kpDst.sNalHeaderExt.bIdrFlag = pNalHdrExtS.bIdrFlag;
-    kpDst.sNalHeaderExt.bNoInterLayerPredFlag = pNalHdrExtS.bNoInterLayerPredFlag;
-    kpDst.sNalHeaderExt.bDiscardableFlag = pNalHdrExtS.bDiscardableFlag;
-    kpDst.sNalHeaderExt.bOutputFlag = pNalHdrExtS.bOutputFlag;
-    kpDst.sNalHeaderExt.bUseRefBasePicFlag = pNalHdrExtS.bUseRefBasePicFlag;
-    kpDst.sNalHeaderExt.uiLayerDqId = pNalHdrExtS.uiLayerDqId;
-
-    kpDst.sNalData.sVclNal.sSliceHeaderExt.bStoreRefBasePicFlag = pPrefixS.bStoreRefBasePicFlag;
-    kpDst.sNalData.sVclNal.sSliceHeaderExt.sRefBasePicMarking = pPrefixS.sRefPicBaseMarking;
-    true
-}
-
 pub fn UpdateAccessUnit(pCtx: &mut SWelsDecoderContext) -> i32 {
     {
         let Some(pCurAu) = cur_au(&mut pCtx.access_unit) else {
@@ -3013,20 +2899,6 @@ pub fn ForceResetCurrentAccessUnit(
     pAu.uiStartPos = 0;
     pAu.uiEndPos = 0;
     pAu.bCompletedAuFlag = false;
-}
-
-pub fn ForceResetParaSetStatusAndAUList(pCtx: &mut SWelsDecoderContext) {
-    pCtx.sSpsPpsCtx.bSpsExistAheadFlag = false;
-    pCtx.sSpsPpsCtx.bSubspsExistAheadFlag = false;
-    pCtx.sSpsPpsCtx.bPpsExistAheadFlag = false;
-
-    if let Some(pAu) = cur_au(&mut pCtx.access_unit) {
-        pAu.uiAvailUnitsNum = 0;
-        pAu.uiActualUnitsNum = 0;
-        pAu.uiStartPos = 0;
-        pAu.uiEndPos = 0;
-        pAu.bCompletedAuFlag = false;
-    }
 }
 
 pub fn CheckAvailNalUnitsListContinuity(
@@ -4090,17 +3962,12 @@ pub fn DecodeCurrentAccessUnit(
                         ComputeColocatedTemporalScaling(pCtx, dq_cur.as_deref_mut());
                     }
 
-                    // Unreachable: `GetThreadCount` returns 0.
-                    if iThreadCount > 1 {
-                        iRet = WelsDecodeAndConstructSlice(pCtx, dq_cur.as_deref_mut());
-                    } else {
-                        iRet = WelsDecodeSlice(
-                            pCtx,
-                            dq_cur.as_deref_mut(),
-                            bFreshSliceAvailable,
-                            pNalCur,
-                        );
-                    }
+                    iRet = WelsDecodeSlice(
+                        pCtx,
+                        dq_cur.as_deref_mut(),
+                        bFreshSliceAvailable,
+                        pNalCur,
+                    );
 
                     if iRet != ERR_NONE {
                         bAllRefComplete = false;
@@ -4526,6 +4393,7 @@ pub fn CheckRefPicturesComplete(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::safe::mb_grid::LIST_COUNT;
 
     /// `safe/mb_grid.rs` declares its own `LIST_COUNT`; this is the one place it and
     /// `decoder_context::LIST_A` are both in scope, so the identity is checked here.
@@ -4644,7 +4512,6 @@ mod tests {
                 let pCtx = &mut *ctx;
                 assert_eq!(WelsTargetSliceConstruction(pCtx, None), ERR_NONE);
                 assert_eq!(WelsDecodeSlice(pCtx, None, true, None), ERR_NONE);
-                assert_eq!(WelsDecodeAndConstructSlice(pCtx, None), ERR_NONE);
                 assert_eq!(WelsInitRefList(pCtx, None, 0), ERR_NONE);
                 assert_eq!(WelsInitBSliceRefList(pCtx, None, 0), ERR_NONE);
                 // The three shims below forward into `manage_dec_ref`, whose

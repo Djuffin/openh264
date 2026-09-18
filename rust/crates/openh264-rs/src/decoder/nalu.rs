@@ -64,15 +64,6 @@ pub const PPS_CHROMA_QP_INDEX_OFFSET_MAX: i32 = 12;
 pub const SCALING_LIST_DELTA_SCALE_MIN: i32 = -128;
 pub const SCALING_LIST_DELTA_SCALE_MAX: i32 = 127;
 
-pub const VUI_MAX_CHROMA_LOG_TYPE_TOP_BOTTOM_FIELD_MAX: u32 = 5;
-pub const VUI_NUM_UNITS_IN_TICK_MIN: u32 = 1;
-pub const VUI_TIME_SCALE_MIN: u32 = 1;
-pub const VUI_MAX_BYTES_PER_PIC_DENOM_MAX: u32 = 16;
-pub const VUI_MAX_BITS_PER_MB_DENOM_MAX: u32 = 16;
-pub const VUI_LOG2_MAX_MV_LENGTH_HOR_MAX: u32 = 16;
-pub const VUI_LOG2_MAX_MV_LENGTH_VER_MAX: u32 = 16;
-pub const VUI_MAX_DEC_FRAME_BUFFERING_MAX: u32 = 16;
-
 pub const LOG2_MAX_FRAME_NUM_OFFSET: u32 = 4;
 pub const LOG2_MAX_PIC_ORDER_CNT_LSB_OFFSET: i32 = 4;
 pub const PIC_WIDTH_IN_MBS_OFFSET: i32 = 1;
@@ -115,14 +106,11 @@ pub const dsOutOfMemory: i32 = 0x4000;
 // Re-exported so the parser and `WriteBackActiveParameters` agree on the bits
 // (`decoder_context.h`: PPS = 1, SPS = 2, SUBSETSPS = 4).
 pub use crate::decoder::decode_slice::{g_kuiZigzagScan, g_kuiZigzagScan8x8};
-pub use crate::decoder::decoder_core::{
-    OVERWRITE_NONE, OVERWRITE_PPS, OVERWRITE_SPS, OVERWRITE_SUBSETSPS,
-};
+pub use crate::decoder::decoder_core::{OVERWRITE_PPS, OVERWRITE_SPS, OVERWRITE_SUBSETSPS};
 use crate::decoder::decoder_core::{WELS_LOG_ERROR, WELS_LOG_WARNING, WelsLog};
 
 pub const EXTENDED_SAR: u8 = 255;
 pub const NRI_PRI_LOWEST: u8 = 0;
-pub const ERROR_CON_DISABLE: i32 = 0;
 
 #[inline(always)]
 pub fn GENERATE_ERROR_NO(level: i32, info: i32) -> i32 {
@@ -137,6 +125,7 @@ pub fn GENERATE_ERROR_NO(level: i32, info: i32) -> i32 {
 ///
 /// Matches `enum EWelsNalUnitType` in `codec/common/inc/wels_common_defs.h`.
 #[repr(C)]
+#[allow(dead_code)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum EWelsNalUnitType {
     #[default]
@@ -2670,11 +2659,6 @@ pub fn ParseVui(pSps: &mut SSps, buf: &[u8], pBsAux: &mut BsCursor) -> i32 {
     ERR_NONE
 }
 
-/// Reserved SEI message parsing hook.
-pub fn ParseSei(_pBsAux: &mut BsCursor) -> i32 {
-    ERR_NONE
-}
-
 /// Decodes frequency scaling matrix values from signed delta codes.
 pub fn SetScalingListValue(
     pScalingList: &mut [u8],
@@ -2937,15 +2921,6 @@ pub fn prefetch_nal_header_ext(kppDst: &mut SNalUnit, kpSrc: &SNalUnit) -> bool 
     pNalHdrExtD.bNoInterLayerPredFlag = pNalHdrExtS.bNoInterLayerPredFlag;
 
     true
-}
-
-/// Resets active SPS pointers for each layer if MB reconstruction has not started.
-pub fn ResetActiveSPSForEachLayer(pCtx: &mut SWelsDecoderContext) {
-    if pCtx.iTotalNumMbRec == 0 {
-        for i in 0..MAX_LAYER_NUM {
-            pCtx.sSpsPpsCtx.pActiveLayerSps[i] = None;
-        }
-    }
 }
 
 // ============================================================================

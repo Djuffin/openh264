@@ -15,19 +15,11 @@ use crate::safe::bits::BsCursor;
 
 pub const ERR_NONE: i32 = 0;
 pub use crate::decoder::decoder_core::ERR_INFO_REF_COUNT_OVERFLOW;
-pub const ERR_INVALID_PARAMETERS: i32 = 1;
-pub const ERR_MALLOC_FAILED: i32 = 2;
-pub const ERR_API_FAILED: i32 = 3;
 
-pub const ERR_LEVEL_ACCESS_UNIT: i32 = 1;
-pub const ERR_LEVEL_NAL_UNIT_HEADER: i32 = 2;
-pub const ERR_LEVEL_PREFIX_NAL: i32 = 3;
-pub const ERR_LEVEL_PARAM_SETS: i32 = 4;
 pub const ERR_LEVEL_SLICE_HEADER: i32 = 5;
 pub const ERR_LEVEL_SLICE_DATA: i32 = 6;
 pub const ERR_LEVEL_MB_DATA: i32 = 7;
 
-pub const ERR_INFO_COMMON_BASE: i32 = 1;
 pub const ERR_INFO_SYNTAX_BASE: i32 = 1001;
 pub const ERR_INFO_LOGIC_BASE: i32 = 10001;
 
@@ -48,13 +40,6 @@ pub const ERR_INFO_MB_RECON_FAIL: i32 = ERR_INFO_LOGIC_BASE + 7;
 pub const ERR_INFO_MB_NUM_EXCEED_FAIL: i32 = ERR_INFO_LOGIC_BASE + 8;
 pub const ERR_INFO_BS_INCOMPLETE: i32 = ERR_INFO_LOGIC_BASE + 9;
 
-pub const dsBitstreamError: i32 = 0x04;
-
-// Log levels — re-exported, not redeclared.
-pub use crate::common::wels_trace::{
-    WELS_LOG_DEBUG, WELS_LOG_ERROR, WELS_LOG_INFO, WELS_LOG_WARNING,
-};
-
 #[inline(always)]
 pub fn GENERATE_ERROR_NO(iErrLevel: i32, iErrInfo: i32) -> i32 {
     (iErrLevel << 16) | (iErrInfo & 0xFFFF)
@@ -72,22 +57,9 @@ pub fn WELS_CLIP3(x: i32, min_val: i32, max_val: i32) -> i32 {
 }
 
 #[inline(always)]
-pub fn WELS_MAX(x: i32, y: i32) -> i32 {
-    if x > y { x } else { y }
-}
-
-#[inline(always)]
 pub fn WELS_MIN(x: i32, y: i32) -> i32 {
     if x < y { x } else { y }
 }
-
-// Slice Types
-pub const P_SLICE: i32 = 0;
-pub const B_SLICE: i32 = 1;
-pub const I_SLICE: i32 = 2;
-pub const SP_SLICE: i32 = 3;
-pub const SI_SLICE: i32 = 4;
-pub const UNKNOWN_SLICE: i32 = 5;
 
 // Reference List Indices
 pub const LIST_0: usize = 0;
@@ -176,11 +148,6 @@ pub fn IS_INTER_8x16(mb_type: u32) -> bool {
 }
 
 #[inline(always)]
-pub fn IS_SKIP(mb_type: u32) -> bool {
-    (mb_type & MB_TYPE_SKIP) != 0
-}
-
-#[inline(always)]
 pub fn IS_DIRECT(mb_type: u32) -> bool {
     (mb_type & MB_TYPE_DIRECT) != 0
 }
@@ -228,10 +195,6 @@ pub fn IS_SUB_4x4(sub_type: u32) -> bool {
 // Residual Properties
 pub const I16_LUMA_DC: i32 = 1;
 pub const I16_LUMA_AC: i32 = 2;
-pub const LUMA_DC_AC: i32 = 3;
-pub const CHROMA_DC: i32 = 4;
-pub const CHROMA_AC: i32 = 5;
-pub const LUMA_DC_AC_8: i32 = 6;
 pub const CHROMA_DC_U: i32 = 7;
 pub const CHROMA_DC_V: i32 = 8;
 pub const CHROMA_AC_U: i32 = 9;
@@ -696,29 +659,14 @@ pub type PWelsDecMbFunc = fn(
 // ============================================================================
 
 pub use crate::decoder::parse_mb_syn_cavlc::SWelsNeighAvail;
-
-pub use crate::decoder::parameter_sets::{SPps, SSps};
-pub use crate::decoder::slice::{EWelsSliceType, SSlice, SSliceHeader, SSliceHeaderExt};
+pub use crate::decoder::slice::EWelsSliceType;
 
 pub use crate::decoder::decoder_core::{
-    DqLayerState, ERR_INFO_INVALID_ACCESS, ERR_INFO_INVALID_PARAM, ERR_INFO_INVALID_PTR,
-    SLayerInfo, SPredWeightTable,
+    DqLayerState, ERR_INFO_INVALID_ACCESS, ERR_INFO_INVALID_PARAM, SPredWeightTable,
 };
 pub use crate::decoder::nalu::SNalUnit;
 
 pub use crate::decoder::picture::SPicture;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SParam {
-    pub bParseOnly: bool,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SSpsPpsCtx {
-    pub bAvcBasedFlag: bool,
-}
 
 pub use crate::decoder::decoder_context::SWelsDecoderContext;
 
@@ -5570,176 +5518,6 @@ pub fn WelsDecodeSlice(
     ERR_NONE
 }
 
-/// The multi-threaded parse arm — the `iThreadCount > 1` branch of
-/// `decoder_core.rs`'s slice loop. `GetThreadCount` returns 0 unconditionally, so
-/// nothing reaches it, and it is incomplete: the per-macroblock loop has no
-/// `pSliceIdc` write (`decode_slice.cpp:1708`), no `pNzc` copy into the picture, no
-/// `SetNonZeroCount` call, no per-MB deblocking call and no border-padding block, and
-/// `decoder_core.cpp:2595`'s re-point of `pMbCorrectlyDecodedFlag` has no counterpart.
-/// `pSliceIdc` is what every neighbour-availability predicate compares, so at its -1
-/// reset every neighbour reads as available and prediction crosses slice boundaries.
-/// This has to be finished before `GetThreadCount` returns anything above 1.
-pub fn WelsDecodeAndConstructSlice(
-    pCtx: &mut SWelsDecoderContext,
-    pCurDqLayer: &mut DqLayerState,
-) -> i32 {
-    {
-        // The `None` arm is a null `pNalCur`.
-        let Some(iNalCur) = pCtx.nal_cur else {
-            return ERR_NONE;
-        };
-        let dq: &mut DqLayerState = pCurDqLayer;
-
-        dq.sLayerInfo.sSliceInLayer.iTotalMbInCurSlice = 0;
-
-        let pDecMbFunc: PWelsDecMbFunc = if active_pps(&pCtx.sSpsPpsCtx, pCtx.active_pps)
-            .is_some_and(|pps| pps.bEntropyCodingModeFlag)
-        {
-            if dq
-                .sLayerInfo
-                .sSliceInLayer
-                .sSliceHeaderExt
-                .sSliceHeader
-                .eSliceType
-                == EWelsSliceType::P_SLICE
-            {
-                WelsDecodeMbCabacPSlice
-            } else if dq
-                .sLayerInfo
-                .sSliceInLayer
-                .sSliceHeaderExt
-                .sSliceHeader
-                .eSliceType
-                == EWelsSliceType::B_SLICE
-            {
-                WelsDecodeMbCabacBSlice
-            } else {
-                WelsDecodeMbCabacISlice
-            }
-        } else {
-            if dq
-                .sLayerInfo
-                .sSliceInLayer
-                .sSliceHeaderExt
-                .sSliceHeader
-                .eSliceType
-                == EWelsSliceType::P_SLICE
-            {
-                WelsDecodeMbCavlcPSlice
-            } else if dq
-                .sLayerInfo
-                .sSliceInLayer
-                .sSliceHeaderExt
-                .sSliceHeader
-                .eSliceType
-                == EWelsSliceType::B_SLICE
-            {
-                WelsDecodeMbCavlcBSlice
-            } else {
-                WelsDecodeMbCavlcISlice
-            }
-        };
-
-        // `pSliceHeader->pPps` in decode_slice.cpp; the slice header stores it opaquely.
-        let bConstrainedIntra = pps_of(
-            &pCtx.sSpsPpsCtx,
-            dq.sLayerInfo
-                .sSliceInLayer
-                .sSliceHeaderExt
-                .sSliceHeader
-                .pps_id,
-        )
-        .is_some_and(|pps| pps.bConstainedIntraPredFlag);
-        pCtx.eIntraPredConstraint = IntraPredConstraint::from_flag(bConstrainedIntra);
-
-        pCtx.eSliceType = dq
-            .sLayerInfo
-            .sSliceInLayer
-            .sSliceHeaderExt
-            .sSliceHeader
-            .eSliceType;
-        WelsCalcDeqCoeffScalingList(pCtx);
-
-        let (pDec, pRefs, mut view, nal) = slice_split(pCtx, Some(iNalCur));
-        let Some(pNalCur) = nal else {
-            return ERR_NONE;
-        };
-        let Some(pDec) = pDec else {
-            return GENERATE_ERROR_NO(ERR_LEVEL_SLICE_DATA, ERR_INFO_REF_COUNT_OVERFLOW);
-        };
-        let pCtx = &mut view;
-
-        let mut iNextMbXyIndex = dq
-            .sLayerInfo
-            .sSliceInLayer
-            .sSliceHeaderExt
-            .sSliceHeader
-            .iFirstMbInSlice;
-        if dq.iMbWidth > 0 {
-            dq.iMbX = iNextMbXyIndex % dq.iMbWidth;
-            dq.iMbY = iNextMbXyIndex / dq.iMbWidth;
-        }
-        dq.iMbXyIndex = iNextMbXyIndex;
-
-        let kiCountNumMb = pCtx
-            .sps_of(
-                dq.sLayerInfo
-                    .sSliceInLayer
-                    .sSliceHeaderExt
-                    .sSliceHeader
-                    .sps_ref,
-            )
-            .map_or(0, |sps| sps.uiTotalMbCount as i32);
-
-        let mut uiEosFlag: u32 = 0;
-
-        loop {
-            if iNextMbXyIndex < 0 || iNextMbXyIndex >= kiCountNumMb {
-                break;
-            }
-
-            *pCtx.bMbRefConcealed = false;
-            let iRet = pDecMbFunc(pCtx, dq, &mut *pDec, pRefs, pNalCur, &mut uiEosFlag);
-            *dq.grid
-                .mb_ref_concealed_flag
-                .get_mut(iNextMbXyIndex as usize) = *pCtx.bMbRefConcealed;
-            if iRet != ERR_NONE {
-                return iRet;
-            }
-
-            let ret = WelsTargetMbConstruction(pCtx, dq, Some(&mut *pDec), pRefs);
-            if ret != ERR_NONE {
-                return ERR_INFO_MB_RECON_FAIL;
-            }
-
-            let idx = iNextMbXyIndex as usize;
-            if !*dq.grid.mb_correctly_decoded_flag.get(idx) {
-                *dq.grid.mb_correctly_decoded_flag.get_mut(idx) = true;
-                if *dq.grid.mb_ref_concealed_flag.get(idx) {
-                    pDec.iMbEcedPropNum += 1;
-                }
-                *pCtx.iTotalNumMbRec += 1;
-            }
-
-            dq.sLayerInfo.sSliceInLayer.iTotalMbInCurSlice += 1;
-            if uiEosFlag != 0 {
-                break;
-            }
-
-            iNextMbXyIndex += 1;
-            if dq.iMbWidth > 0 {
-                dq.iMbX = iNextMbXyIndex % dq.iMbWidth;
-                dq.iMbY = iNextMbXyIndex / dq.iMbWidth;
-            }
-            dq.iMbXyIndex = iNextMbXyIndex;
-        }
-
-        ERR_NONE
-    }
-}
-
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{WELS_CPU_NEON, WELS_CPU_SSE2};
 use crate::common::deblocking_common::nonzero_count;
 use crate::decoder::cabac_decoder::{
     InitCabacDecEngineFromBS, RestoreCabacDecEngineToBS, WelsCabacContextInit,
@@ -5787,10 +5565,6 @@ mod tests {
                 );
                 assert_eq!(
                     crate::decoder::decoder_core::WelsDecodeSlice(&mut ctx, None, false, None),
-                    ERR_NONE
-                );
-                assert_eq!(
-                    crate::decoder::decoder_core::WelsDecodeAndConstructSlice(&mut ctx, None),
                     ERR_NONE
                 );
             }

@@ -50,23 +50,14 @@ pub const PICTURE_RESOLUTION_ALIGNMENT: i32 = 32;
 /// Perimeter reference extension padding in pixels around all 4 edges.
 pub const PADDING_LENGTH: i32 = 32;
 
-/// Chroma reference extension padding in pixels.
-pub const CHROMA_PADDING_LENGTH: i32 = 16;
-
-/// Motion vector list indices.
-pub const LIST_0: usize = 0;
-pub const LIST_1: usize = 1;
+/// Motion vector list count.
 pub const LIST_A: usize = 2;
-
-/// Sub-block counts and motion vector component counts per macroblock.
-pub const MB_BLOCK4x4_NUM: usize = 16;
-pub const MV_A: usize = 2;
 
 // ============================================================================
 // Data Structures & Enums
 // ============================================================================
 
-pub use crate::decoder::picture::{PPicture, SPicture};
+pub use crate::decoder::picture::SPicture;
 use crate::safe::mb_grid::MbDims;
 pub use crate::safe::plane::PaddedPlane;
 pub use crate::safe::pool::{Pool, PoolRest};
@@ -95,7 +86,6 @@ pub type PicSlot = Option<Box<SPicture>>;
 
 /// The C's name for [`PicPool`].
 pub type SPicBuff = PicPool;
-pub type PPicBuff = *mut PicPool;
 
 /// A decode bracket's view of the pool: `PicId` → picture, with the pool reached once
 /// at the bracket top and nowhere below it.
@@ -235,6 +225,7 @@ impl PicPool {
     }
 
     /// The circular cursor — the C's `iCurrentIdx`.
+    #[cfg(test)]
     #[inline]
     pub fn cursor(&self) -> i32 {
         self.cursor
@@ -372,28 +363,6 @@ impl PicPool {
         }
     }
 
-    /// `PrefetchPicForThread`'s round-robin step: the slot under the cursor, and the
-    /// cursor advanced one with a wrap.
-    pub fn next_for_thread(&mut self) -> Option<PicId> {
-        let capacity = self.capacity();
-        if capacity == 0 {
-            return None;
-        }
-
-        let taken = self.cursor;
-        let occupied = self.stamp_buff_idx(taken);
-
-        self.cursor += 1;
-        if self.cursor >= capacity {
-            self.cursor = 0;
-        }
-        if occupied {
-            Some(self.id(taken as usize))
-        } else {
-            None
-        }
-    }
-
     /// Writes `iPicBuffIdx` into the picture at `index`, and answers whether there
     /// was one — the two scans' shared stamp.
     #[inline]
@@ -424,7 +393,6 @@ pub const fn WELS_ALIGN(x: i32, n: i32) -> i32 {
     (x + (n - 1)) & !(n - 1)
 }
 
-pub use crate::decoder::decoder_core::GetThreadCount;
 use crate::safe::pool::Id;
 
 // ============================================================================
@@ -526,32 +494,6 @@ pub fn alloc_picture(bParseOnly: bool, kiPicWidth: i32, kiPicHeight: i32) -> Opt
     pic.pSetUnRef = None;
 
     Some(pic)
-}
-
-// ============================================================================
-// Queue Retrieval Interface Routines
-// ============================================================================
-
-/// The next circular picture node, in round-robin FIFO sequence, for multi-threaded
-/// decoding.
-pub fn PrefetchPicForThread(pPicBuf: Option<&mut PicPool>) -> Option<&mut SPicture> {
-    let pool = pPicBuf?;
-    let id = pool.next_for_thread()?;
-    pool.slot_mut(id)
-}
-
-/// The picture node at the recorded buffer pool index (`iLastPicBuffIdx`).
-pub fn PrefetchLastPicForThread(
-    pPicBuf: Option<&mut PicPool>,
-    iLastPicBuffIdx: i32,
-) -> Option<&mut SPicture> {
-    let pool = pPicBuf?;
-    // `slot_at_mut`'s range test, spelled here.
-    if iLastPicBuffIdx < 0 || iLastPicBuffIdx >= pool.capacity() {
-        return None;
-    }
-    let id = pool.id(iLastPicBuffIdx as usize);
-    pool.slot_mut(id)
 }
 
 // ============================================================================
@@ -1042,37 +984,6 @@ mod tests {
                 pool.slot(got).unwrap().iPicBuffIdx,
                 0,
                 "the winner learns its slot"
-            );
-
-            DestroyPicBuff(&mut ctx, Some(pool));
-        }
-    }
-
-    #[test]
-    fn test_prefetch_pic_for_thread() {
-        let param = SDecodingParam::default();
-        let mut ctx = SWelsDecoderContext::new_boxed();
-        ctx.pParam = param;
-
-        {
-            let mut pool = CreatePicBuff(false, 3, 64, 64).expect("pool");
-            let pic0 = PrefetchPicForThread(Some(&mut pool)).map(|p| p.iPicBuffIdx);
-            assert_eq!(pic0, Some(0));
-            assert_eq!(pool.cursor(), 1);
-
-            let pic1 = PrefetchPicForThread(Some(&mut pool)).map(|p| p.iPicBuffIdx);
-            assert_eq!(pic1, Some(1));
-            assert_eq!(pool.cursor(), 2);
-
-            let pic2 = PrefetchPicForThread(Some(&mut pool)).map(|p| p.iPicBuffIdx);
-            assert_eq!(pic2, Some(2));
-            assert_eq!(pool.cursor(), 0); // Wraps around
-
-            let pic_lookup = PrefetchLastPicForThread(Some(&mut pool), 1).map(|p| p.iPicBuffIdx);
-            assert_eq!(pic_lookup, pic1);
-            assert!(
-                PrefetchPicForThread(None).is_none(),
-                "the null test is the Option"
             );
 
             DestroyPicBuff(&mut ctx, Some(pool));
