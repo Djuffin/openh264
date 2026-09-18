@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build and run OpenH264's C++ interface test (`cpp_interface_test.cpp`) using
-# GoogleTest (`gtest/googletest`), linked against the Rust `cxx` C++ bindings
-# (`cxx_api.rs.h` / `cxx_api.rs.cc`) and `libopenh264_rs`.
+# GoogleTest (`gtest/googletest`), linked against the self-contained Rust `cxx`
+# C++ bindings (`cxx_api.rs.h` / `cxx_api.rs.cc`) and `libopenh264_rs`.
 #
 #   usage: bash rust/tools/cpp_interface_test.sh
 
@@ -35,10 +35,10 @@ c++ -std=c++14 -I "$GTEST_DIR/include" -I "$GTEST_DIR" -pthread \
 c++ -std=c++14 -I "$GTEST_DIR/include" -I "$GTEST_DIR" -pthread \
     -c "$GTEST_DIR/src/gtest_main.cc" -o "$TMP/gtest_main.o"
 
-c++ -std=c++14 -I "$CXX_HEADER_DIR" -I "$ROOT/codec/api/wels" \
+c++ -std=c++14 -I "$CXX_HEADER_DIR" \
     -c "$CXX_BRIDGE_CC" -o "$TMP/cxx_api.rs.o"
 
-c++ -std=c++14 -I "$CXX_HEADER_DIR" -I "$ROOT/codec/api/wels" -I "$GTEST_DIR/include" -pthread \
+c++ -std=c++14 -I "$CXX_HEADER_DIR" -I "$GTEST_DIR/include" -pthread \
     -c "$HERE/cpp_interface_test.cpp" -o "$TMP/cpp_interface_test.o"
 
 c++ -std=c++14 -pthread -o "$TMP/cpp_interface_test" \

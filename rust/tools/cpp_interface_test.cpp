@@ -45,14 +45,14 @@ TEST (CppInterfaceTest, EncoderLifecycleAndMethods) {
   param.sSpatialLayers[0].iSpatialBitrate = 500000;
   ASSERT_EQ (0, encoder->InitializeExt (&param));
 
-  int trace_level = WELS_LOG_QUIET;
+  int trace_level = static_cast<int> (WelsLogLevel::WELS_LOG_QUIET);
   EXPECT_EQ (0, encoder->SetOption (
-      ENCODER_OPTION_TRACE_LEVEL,
+      ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
       reinterpret_cast<c_void*> (&trace_level)));
 
   int idr_interval = -1;
   EXPECT_EQ (0, encoder->GetOption (
-      ENCODER_OPTION_IDR_INTERVAL,
+      ENCODER_OPTION::ENCODER_OPTION_IDR_INTERVAL,
       reinterpret_cast<c_void*> (&idr_interval)));
 
   EXPECT_EQ (0, encoder->ForceIntraFrame (true, -1));
@@ -68,7 +68,7 @@ TEST (CppInterfaceTest, EncoderLifecycleAndMethods) {
 
   SSourcePicture src_pic;
   memset (&src_pic, 0, sizeof (src_pic));
-  src_pic.iColorFormat = videoFormatI420;
+  src_pic.iColorFormat = static_cast<int32_t> (EVideoFormatType::videoFormatI420);
   src_pic.iPicWidth = width;
   src_pic.iPicHeight = height;
   src_pic.iStride[0] = width;
@@ -81,7 +81,7 @@ TEST (CppInterfaceTest, EncoderLifecycleAndMethods) {
   SFrameBSInfo bs_info;
   memset (&bs_info, 0, sizeof (bs_info));
   EXPECT_EQ (0, encoder->EncodeFrame (&src_pic, &bs_info));
-  EXPECT_EQ (videoFrameTypeIDR, bs_info.eFrameType);
+  EXPECT_EQ (EVideoFrameType::videoFrameTypeIDR, bs_info.eFrameType);
   EXPECT_GT (bs_info.iLayerNum, 0);
 
   EXPECT_EQ (0, encoder->Uninitialize ());
@@ -89,13 +89,13 @@ TEST (CppInterfaceTest, EncoderLifecycleAndMethods) {
   // Re-initialize using SEncParamBase via Initialize()
   SEncParamBase base_param;
   memset (&base_param, 0, sizeof (base_param));
-  base_param.iUsageType = CAMERA_VIDEO_REAL_TIME;
+  base_param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
   base_param.iPicWidth = width;
   base_param.iPicHeight = height;
   base_param.fMaxFrameRate = 30.0f;
   base_param.iTargetBitrate = 500000;
   encoder->SetOption (
-      ENCODER_OPTION_TRACE_LEVEL,
+      ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
       reinterpret_cast<c_void*> (&trace_level));
   EXPECT_EQ (0, encoder->Initialize (&base_param));
   EXPECT_EQ (0, encoder->Uninitialize ());
@@ -123,9 +123,9 @@ TEST (CppInterfaceTest, EncodeAndDecodeLoopback) {
   param.sSpatialLayers[0].iSpatialBitrate = 500000;
   ASSERT_EQ (0, encoder->InitializeExt (&param));
 
-  int trace_level = WELS_LOG_QUIET;
+  int trace_level = static_cast<int> (WelsLogLevel::WELS_LOG_QUIET);
   encoder->SetOption (
-      ENCODER_OPTION_TRACE_LEVEL,
+      ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
       reinterpret_cast<c_void*> (&trace_level));
 
   std::vector<uint8_t> y_plane (width * height, 128);
@@ -134,7 +134,7 @@ TEST (CppInterfaceTest, EncodeAndDecodeLoopback) {
 
   SSourcePicture src_pic;
   memset (&src_pic, 0, sizeof (src_pic));
-  src_pic.iColorFormat = videoFormatI420;
+  src_pic.iColorFormat = static_cast<int32_t> (EVideoFormatType::videoFormatI420);
   src_pic.iPicWidth = width;
   src_pic.iPicHeight = height;
   src_pic.iStride[0] = width;
@@ -172,16 +172,16 @@ TEST (CppInterfaceTest, EncodeAndDecodeLoopback) {
 
   SDecodingParam dec_param;
   memset (&dec_param, 0, sizeof (dec_param));
-  dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+  dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_SVC;
   ASSERT_EQ (0, decoder->Initialize (&dec_param));
 
   EXPECT_EQ (0, decoder->SetOption (
-      DECODER_OPTION_TRACE_LEVEL,
+      DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
       reinterpret_cast<c_void*> (&trace_level)));
 
   int eos = 0;
   EXPECT_EQ (0, decoder->GetOption (
-      DECODER_OPTION_END_OF_STREAM,
+      DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
       reinterpret_cast<c_void*> (&eos)));
   EXPECT_EQ (0, eos);
 
@@ -189,9 +189,9 @@ TEST (CppInterfaceTest, EncodeAndDecodeLoopback) {
   unsigned char* dst[3] = { nullptr, nullptr, nullptr };
   SBufferInfo buf_info;
   memset (&buf_info, 0, sizeof (buf_info));
-  DECODING_STATE state = decoder->DecodeFrameNoDelay (
+  int32_t state = decoder->DecodeFrameNoDelay (
       frames[0].data (), static_cast<int> (frames[0].size ()), dst, &buf_info);
-  EXPECT_EQ (dsErrorFree, state);
+  EXPECT_EQ (static_cast<int32_t> (DECODING_STATE_FLAGS::dsErrorFree), state);
   EXPECT_EQ (1, buf_info.iBufferStatus);
   EXPECT_EQ (width, buf_info.UsrData.sSystemBuffer.iWidth);
   EXPECT_EQ (height, buf_info.UsrData.sSystemBuffer.iHeight);
@@ -203,14 +203,14 @@ TEST (CppInterfaceTest, EncodeAndDecodeLoopback) {
   memset (&buf_info, 0, sizeof (buf_info));
   state = decoder->DecodeFrame2 (
       frames[1].data (), static_cast<int> (frames[1].size ()), dst, &buf_info);
-  EXPECT_EQ (dsErrorFree, state);
+  EXPECT_EQ (static_cast<int32_t> (DECODING_STATE_FLAGS::dsErrorFree), state);
 
   int end_of_stream = 1;
   decoder->SetOption (
-      DECODER_OPTION_END_OF_STREAM,
+      DECODER_OPTION::DECODER_OPTION_END_OF_STREAM,
       reinterpret_cast<c_void*> (&end_of_stream));
   state = decoder->FlushFrame (dst, &buf_info);
-  EXPECT_EQ (dsErrorFree, state);
+  EXPECT_EQ (static_cast<int32_t> (DECODING_STATE_FLAGS::dsErrorFree), state);
 
   EXPECT_EQ (0, decoder->Uninitialize ());
   WelsDestroyDecoder (decoder);
@@ -236,9 +236,9 @@ TEST (CppInterfaceTest, DecodeParserMode) {
   param.sSpatialLayers[0].iSpatialBitrate = 500000;
   ASSERT_EQ (0, encoder->InitializeExt (&param));
 
-  int trace_level = WELS_LOG_QUIET;
+  int trace_level = static_cast<int> (WelsLogLevel::WELS_LOG_QUIET);
   encoder->SetOption (
-      ENCODER_OPTION_TRACE_LEVEL,
+      ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
       reinterpret_cast<c_void*> (&trace_level));
 
   std::vector<uint8_t> y_plane (width * height, 128);
@@ -247,7 +247,7 @@ TEST (CppInterfaceTest, DecodeParserMode) {
 
   SSourcePicture src_pic;
   memset (&src_pic, 0, sizeof (src_pic));
-  src_pic.iColorFormat = videoFormatI420;
+  src_pic.iColorFormat = static_cast<int32_t> (EVideoFormatType::videoFormatI420);
   src_pic.iPicWidth = width;
   src_pic.iPicHeight = height;
   src_pic.iStride[0] = width;
@@ -279,21 +279,21 @@ TEST (CppInterfaceTest, DecodeParserMode) {
   SDecodingParam parse_param;
   memset (&parse_param, 0, sizeof (parse_param));
   parse_param.bParseOnly = true;
-  parse_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+  parse_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_SVC;
   ASSERT_EQ (0, parser->Initialize (&parse_param));
   parser->SetOption (
-      DECODER_OPTION_TRACE_LEVEL,
+      DECODER_OPTION::DECODER_OPTION_TRACE_LEVEL,
       reinterpret_cast<c_void*> (&trace_level));
 
   SParserBsInfo parser_info;
   memset (&parser_info, 0, sizeof (parser_info));
-  DECODING_STATE state = parser->DecodeParser (
+  int32_t state = parser->DecodeParser (
       bitstream.data (), static_cast<int> (bitstream.size ()), &parser_info);
-  EXPECT_EQ (dsErrorFree, state);
+  EXPECT_EQ (static_cast<int32_t> (DECODING_STATE_FLAGS::dsErrorFree), state);
 
   memset (&parser_info, 0, sizeof (parser_info));
   state = parser->DecodeParser (nullptr, 0, &parser_info);
-  EXPECT_EQ (dsErrorFree, state);
+  EXPECT_EQ (static_cast<int32_t> (DECODING_STATE_FLAGS::dsErrorFree), state);
   EXPECT_GT (parser_info.iNalNum, 0);
 
   EXPECT_EQ (0, parser->Uninitialize ());

@@ -1033,28 +1033,11 @@ pub struct SBitrateInfo {
 }
 
 /// Logging trace callback prototype (`WelsTraceCallback`) — `codec_api.h:129`.
-///
-/// `ctx` is the caller's own opaque context, installed through
-/// `ENCODER_OPTION_TRACE_CALLBACK_CONTEXT` or the decoder's equivalent and handed
-/// back untouched. This crate never dereferences it.
 pub type WelsTraceCallback =
     Option<unsafe extern "C" fn(ctx: *mut c_void, level: i32, string: *const c_char)>;
 
 /// The caller's opaque trace handle. Never dereferenced here; `deliver` hands it
 /// straight back to the caller untouched.
-///
-/// Stored as its address: `usize` is `Sync` and `Send`, and `repr(transparent)` over
-/// a pointer-width integer keeps `SLogContext`'s byte image identical. The round trip
-/// uses the strict-provenance pair, `expose_provenance` in and
-/// `with_exposed_provenance_mut` out, because the pointer it rebuilds goes straight
-/// to a C callback that will use it.
-///
-/// The sink is only reachable from inside the crate:
-///
-/// ```compile_fail,E0624
-/// # unsafe extern "C" fn sink(_: *mut std::ffi::c_void, _: i32, _: *const std::ffi::c_char) {}
-/// openh264_rs::api::codec_api::TraceUserCtx::default().deliver(sink, 1, c"x");
-/// ```
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug)]
 pub struct TraceUserCtx(usize);
@@ -1067,24 +1050,11 @@ impl Default for TraceUserCtx {
 }
 
 impl TraceUserCtx {
-    /// Takes in whatever the caller installed through
-    /// `ENCODER_OPTION_TRACE_CALLBACK_CONTEXT` or the decoder's equivalent.
     #[inline]
     pub(crate) fn from_abi(p: *mut c_void) -> Self {
-        // `expose_provenance`, not `as usize`: the pointer `deliver` rebuilds must be
-        // usable, not merely numerically equal.
         Self(p.expose_provenance())
     }
 
-    /// Invokes the caller's sink.
-    ///
-    /// `pfLog` and the handle were installed together through `SetOption`; neither can
-    /// carry a lifetime across the C ABI, so their validity is the caller's contract.
-    ///
-    /// Sound only because it is unreachable from safe code: this method, `from_abi`
-    /// and `SLogContext`'s two callback fields are all `pub(crate)`, so the pair can
-    /// only have arrived through the `unsafe` installers that took on that contract.
-    /// Widening any one of those visibilities makes this unsound.
     #[inline]
     #[allow(unsafe_code)]
     pub(crate) fn deliver(
@@ -1099,17 +1069,11 @@ impl TraceUserCtx {
 }
 
 /// The default trace sink — `welsCodecTrace.cpp`'s `welsStderrTrace`.
-///
-/// # Safety
-/// `string` is the NUL-terminated buffer [`crate::common::wels_trace::WelsLog`] just
-/// formatted; `ctx` is whatever was installed beside the callback and is not read here.
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn welsStderrTrace(_ctx: *mut c_void, _level: i32, string: *const c_char) {
     if string.is_null() {
         return;
     }
-    // Written through `std::io::stderr()` so it interleaves with the rest of this
-    // process's stderr.
     let bytes = unsafe { std::ffi::CStr::from_ptr(string) }.to_bytes();
     use std::io::Write as _;
     let out = std::io::stderr();
