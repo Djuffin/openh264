@@ -1863,16 +1863,10 @@ pub extern "C" fn SvcMdSCDMbEnc(
         &mut pWelsMd.sMe.sMe16x16.sMv,
     );
 
-    if pWelsMd.bMdUsingSad {
-        pWelsMd.iCostLuma = pCurMb.iSadCost;
-    } else {
-        let pEncPicture = layer_enc_view_expect(pCurDqLayer);
-        let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
-        pWelsMd.iCostLuma = sad_16x16(
-            &pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
-            &pRefPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
-        );
-    }
+    // `svc_mode_decision.cpp:454-458` recomputes `pfSampleSad[BLOCK_16x16]` at `(0, 0)`
+    // when `!bMdUsingSad`, but `WelsMdInterMb` returns immediately after `SvcMdSCDMbEnc`
+    // and `WelsRcMbInfoUpdate` ignores `_iCostLuma` on every installed RC mode.
+    pWelsMd.iCostLuma = pCurMb.iSadCost;
 
     WelsInterMbEncode(pEncCtx, pSlice, pCurMb);
     WelsPMbChromaEncode(pEncCtx, &mut *pSlice, pCurMb);
