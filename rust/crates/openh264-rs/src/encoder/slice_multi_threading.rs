@@ -336,7 +336,7 @@ pub fn NeedDynamicAdjust(pCurDq: &mut SDqLayer, iSliceNum: i32) -> i32 {
         let fDiffRatio = fRatio - kfMeanRatio;
         fRmse += fDiffRatio * fDiffRatio;
         iSliceIdx += 1;
-        if iSliceIdx + 1 >= iSliceNum {
+        if iSliceIdx >= iSliceNum {
             break;
         }
     }
@@ -451,8 +451,8 @@ pub fn DynamicAdjustSlicePEncCtxAll(pCurDq: &mut SDqLayer, pRunLength: &[i32]) -
     let mut iSliceIdx = 0i32;
 
     while iSliceIdx < iCountSliceNumInFrame {
-        let first: &[i32] = &pCurDq.pFirstMbIdxOfSlice;
-        if pRunLength[iSliceIdx as usize] != first[iSliceIdx as usize] {
+        let count: &[i32] = &pCurDq.pCountMbNumInSlice;
+        if pRunLength[iSliceIdx as usize] != count[iSliceIdx as usize] {
             iSameRunLenFlag = 0;
             break;
         }
@@ -1883,6 +1883,42 @@ mod tests {
         let mut dq_layer = layer_with_bank(2);
         let ret = NeedDynamicAdjust(&mut dq_layer, 2);
         assert_eq!(ret, 0);
+    }
+
+    #[test]
+    fn test_need_dynamic_adjust_includes_last_slice() {
+        let mut dq_layer = layer_with_bank(4);
+        // Slices 0..3 are near-mean (240 each); slice 3 (last slice) is skewed (280).
+        // Total = 1000, mean ratio = 0.25.
+        // Without slice 3, sum of squared diffs = 3 * (-0.01)^2 = 0.0003, RMSE = sqrt(0.000075) = 0.00866 < 0.0200 (THRESHOLD_RMSE_CORE4).
+        // With slice 3 (+0.03), sum of squared diffs = 0.0003 + 0.0009 = 0.0012, RMSE = sqrt(0.0003) = 0.01732.
+        // With slice 0..3 = [235, 235, 235, 295], without slice 3 RMSE = sqrt(3 * 0.015^2 / 4) = 0.01299 < 0.0200,
+        // whereas with slice 3 (+0.045) RMSE = sqrt((3 * 0.000225 + 0.002025) / 4) = sqrt(0.000675) = 0.02598 > 0.0200.
+        dq_layer.sSliceBufferInfo[0].pSliceBuffer[0].uiSliceConsumeTime = 235;
+        dq_layer.sSliceBufferInfo[0].pSliceBuffer[1].uiSliceConsumeTime = 235;
+        dq_layer.sSliceBufferInfo[0].pSliceBuffer[2].uiSliceConsumeTime = 235;
+        dq_layer.sSliceBufferInfo[0].pSliceBuffer[3].uiSliceConsumeTime = 295;
+        assert_eq!(NeedDynamicAdjust(&mut dq_layer, 4), 1);
+    }
+
+    #[test]
+    fn test_dynamic_adjust_slice_penc_ctx_all_same_run_len_returns_early() {
+        let mut dq_layer = layer_with_bank(2);
+        dq_layer.sSliceEncCtx.iMbNumInFrame = 100;
+        dq_layer
+            .sSliceEncCtx
+            .iSliceNumInFrame
+            .store(2, Ordering::Relaxed);
+        dq_layer.sSliceEncCtx.pOverallMbMap = (0..100).map(|_| AtomicU16::new(0)).collect();
+        dq_layer.pFirstMbIdxOfSlice = vec![0, 50];
+        dq_layer.pCountMbNumInSlice = vec![50, 50];
+
+        // Same run lengths [50, 50]: should return 1 (no adjustment needed).
+        assert_eq!(DynamicAdjustSlicePEncCtxAll(&mut dq_layer, &[50, 50]), 1);
+        // Changed run lengths [60, 40]: should return 0 and update slice boundaries.
+        assert_eq!(DynamicAdjustSlicePEncCtxAll(&mut dq_layer, &[60, 40]), 0);
+        assert_eq!(dq_layer.pFirstMbIdxOfSlice, vec![0, 60]);
+        assert_eq!(dq_layer.pCountMbNumInSlice, vec![60, 40]);
     }
 
     #[test]

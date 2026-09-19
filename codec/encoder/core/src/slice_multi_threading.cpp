@@ -146,7 +146,7 @@ int32_t NeedDynamicAdjust (SSlice** ppSliceInLayer, const int32_t iSliceNum) {
     const float fDiffRatio = fRatio - kfMeanRatio;
     fRmse += (fDiffRatio * fDiffRatio);
     ++ iSliceIdx;
-  } while (iSliceIdx + 1 < iSliceNum);
+  } while (iSliceIdx < iSliceNum);
   fRmse = sqrtf (fRmse / iSliceNum);
   if (iSliceNum >= 8) {
     fThr += THRESHOLD_RMSE_CORE8;

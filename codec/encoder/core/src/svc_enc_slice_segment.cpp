@@ -651,7 +651,7 @@ int32_t DynamicAdjustSlicePEncCtxAll (SDqLayer* pCurDq,
   assert (iCountSliceNumInFrame <= MAX_THREADS_NUM);
 
   while (iSliceIdx < iCountSliceNumInFrame) {
-    if (pRunLength[iSliceIdx] != pCurDq->pFirstMbIdxOfSlice[iSliceIdx]) {
+    if (pRunLength[iSliceIdx] != pCurDq->pCountMbNumInSlice[iSliceIdx]) {
       iSameRunLenFlag = 0;
       break;
     }
