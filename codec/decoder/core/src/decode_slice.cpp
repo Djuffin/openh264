@@ -1505,7 +1505,7 @@ int32_t  WelsCalcDeqCoeffScalingList (PWelsDecoderContext pCtx) {
       for (i = 0; i < 6; i++) {
         pCtx->pDequant_coeff4x4[i] = pCtx->pDequant_coeff_buffer4x4[i];
         pCtx->pDequant_coeff8x8[i] = pCtx->pDequant_coeff_buffer8x8[i];
-        for (q = 0; q < 51; q++) {
+        for (q = 0; q < 52; q++) {
           for (x = 0; x < 16; x++) {
             pCtx->pDequant_coeff4x4[i][q][x] = pCtx->pPps->bPicScalingMatrixPresentFlag ? pCtx->pPps->iScalingList4x4[i][x] *
                                                g_kuiDequantCoeff[q][x & 0x07] : pCtx->pSps->iScalingList4x4[i][x] * g_kuiDequantCoeff[q][x & 0x07];

@@ -679,7 +679,7 @@ pub fn WelsCalcDeqCoeffScalingList(pCtx: &mut SWelsDecoderContext) -> i32 {
 
         if !pCtx.bDequantCoeff4x4Init || pCtx.iDequantCoeffPpsid != iPpsId {
             for i in 0..6 {
-                for q in 0..51 {
+                for q in 0..52 {
                     for x in 0..16 {
                         let scale4 = kList4x4[i][x] as u32;
                         pCtx.pDequant_coeff_buffer4x4[i][q][x] =
@@ -5484,6 +5484,7 @@ mod tests {
                 let mut ctx = SWelsDecoderContext::new_boxed();
                 ctx.sSpsPpsCtx.sSpsBuffer[0].bSeqScalingMatrixPresentFlag = true;
                 ctx.sSpsPpsCtx.sSpsBuffer[0].iScalingList4x4[0][0] = 16;
+                ctx.sSpsPpsCtx.sSpsBuffer[0].iScalingList8x8[0][0] = 16;
                 ctx.sSpsPpsCtx.sPpsBuffer[1].iPpsId = 1;
                 ctx.active_sps = Some(SpsRef {
                     id: 0,
@@ -5495,6 +5496,14 @@ mod tests {
                 assert!(ctx.bUseScalingList);
                 assert!(ctx.bDequantCoeff4x4Init);
                 assert_eq!(ctx.iDequantCoeffPpsid, 1);
+                assert_eq!(
+                    ctx.pDequant_coeff_buffer4x4[0][51][0],
+                    16 * g_kuiDequantCoeff[51][0]
+                );
+                assert_eq!(
+                    ctx.pDequant_coeff_buffer8x8[0][51][0],
+                    16 * g_kuiMatrixV[51 % 6][0][0] as u16
+                );
             }
         }
     }

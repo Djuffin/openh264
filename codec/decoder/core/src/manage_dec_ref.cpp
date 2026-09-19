@@ -350,6 +350,12 @@ int32_t WelsInitBSliceRefList (PWelsDecoderContext pCtx, int32_t iPoc) {
     pCtx->sRefPic.pRefList[LIST_1][iCount++] = ppLongRefList[i];
   }
   pCtx->sRefPic.uiRefCount[LIST_1] = iCount;
+  if (iCount > 1 && memcmp (pCtx->sRefPic.pRefList[LIST_0], pCtx->sRefPic.pRefList[LIST_1],
+                            iCount * sizeof (PPicture)) == 0) {
+    PPicture pTemp = pCtx->sRefPic.pRefList[LIST_1][0];
+    pCtx->sRefPic.pRefList[LIST_1][0] = pCtx->sRefPic.pRefList[LIST_1][1];
+    pCtx->sRefPic.pRefList[LIST_1][1] = pTemp;
+  }
   return ERR_NONE;
 }
 

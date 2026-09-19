@@ -995,6 +995,14 @@ pub fn WelsInitBSliceRefList(
     }
     pCtx.sRefPic.uiRefCount[LIST_1] = iCount as u8;
 
+    // H.264 8.2.4.2.3 step 3: when RefPicList1 has more than one entry and is identical to
+    // RefPicList0, switch RefPicList1[0] and RefPicList1[1].
+    if iCount > 1
+        && pCtx.sRefPic.pRefList[LIST_1][..iCount] == pCtx.sRefPic.pRefList[LIST_0][..iCount]
+    {
+        pCtx.sRefPic.pRefList[LIST_1].swap(0, 1);
+    }
+
     ERR_NONE
 }
 
@@ -1564,5 +1572,48 @@ mod tests {
             assert_eq!(pCtx.sRefPic.uiShortRefCount[LIST_0], 0);
             assert_eq!(pCtx.sRefPic.pShortRefList[LIST_0][0], None);
         }
+    }
+
+    #[test]
+    fn test_b_slice_ref_list_swaps_l1_when_identical_to_l0() {
+        let mut pic0 = SPicture::default();
+        pic0.iFrameNum = 0;
+        pic0.iFramePoc = 0;
+        pic0.bUsedAsRef = true;
+        pic0.bIsLongRef = false;
+
+        let mut pic1 = SPicture::default();
+        pic1.iFrameNum = 1;
+        pic1.iFramePoc = 2;
+        pic1.bUsedAsRef = true;
+        pic1.bIsLongRef = false;
+
+        let pool = crate::decoder::pic_queue::PicPool::over(vec![
+            Some(Box::new(pic0)),
+            Some(Box::new(pic1)),
+        ]);
+        let (s0, s1) = (Some(pool.id(0)), Some(pool.id(1)));
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        ctx.pPicBuff = Some(pool);
+        let pCtx = &mut *ctx;
+
+        AddShortTermToList(pCtx, false, s0);
+        AddShortTermToList(pCtx, false, s1);
+
+        // Current B-slice POC = 4 (both short-term refs have POC < 4):
+        // L0 = [s1 (POC 2), s0 (POC 0)]; L1 must swap to [s0 (POC 0), s1 (POC 2)].
+        assert_eq!(WelsInitBSliceRefList(pCtx, None, 4), ERR_NONE);
+        assert_eq!(pCtx.sRefPic.pRefList[LIST_0][0], s1);
+        assert_eq!(pCtx.sRefPic.pRefList[LIST_0][1], s0);
+        assert_eq!(pCtx.sRefPic.pRefList[LIST_1][0], s0);
+        assert_eq!(pCtx.sRefPic.pRefList[LIST_1][1], s1);
+
+        // Current B-slice POC = 1 (s0 has POC 0 < 1, s1 has POC 2 > 1):
+        // L0 = [s0, s1], L1 = [s1, s0] (already distinct, so no swap).
+        assert_eq!(WelsInitBSliceRefList(pCtx, None, 1), ERR_NONE);
+        assert_eq!(pCtx.sRefPic.pRefList[LIST_0][0], s0);
+        assert_eq!(pCtx.sRefPic.pRefList[LIST_0][1], s1);
+        assert_eq!(pCtx.sRefPic.pRefList[LIST_1][0], s1);
+        assert_eq!(pCtx.sRefPic.pRefList[LIST_1][1], s0);
     }
 }
