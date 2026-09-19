@@ -639,10 +639,9 @@ mod tests {
     use crate::encoder::encode_mb_aux::{dct_4x4 as dct_4x4_c, dct_four_4x4 as dct_four_4x4_c};
     // The `_c` scalar kernels, not the same-named dispatchers: a dispatcher routes to
     // the kernel under test, which would make every assertion below a tautology.
-    use crate::decoder::decode_mb_aux::idct_res_add_pred_c as idct_res_add_pred;
+    use crate::decoder::decode_mb_aux::idct_res_add_pred_c;
     use crate::encoder::decode_mb_aux::{
-        idct_rec_i16x16_dc_c as idct_rec_i16x16_dc, idct_t4_rec_c as idct_t4_rec,
-        idct_t4_rec_in_place_c as idct_t4_rec_in_place,
+        idct_rec_i16x16_dc_c, idct_t4_rec_c, idct_t4_rec_in_place_c,
     };
     use crate::encoder::rec_view::shared_plane_for_test;
     use crate::safe::plane::PaddedPlane;
@@ -735,7 +734,7 @@ mod tests {
                 *v = lcg_i16(&mut seed);
             }
 
-            idct_res_add_pred(&mut p_c.cursor_mut(0, 0), &rs);
+            idct_res_add_pred_c(&mut p_c.cursor_mut(0, 0), &rs);
             idct_res_add_pred(&mut p_simd.cursor_mut(0, 0), &rs);
 
             for y in 0..4isize {
@@ -766,7 +765,7 @@ mod tests {
         rs[0] = 20000;
         rs[8] = 20000;
 
-        idct_res_add_pred(&mut p_c.cursor_mut(0, 0), &rs);
+        idct_res_add_pred_c(&mut p_c.cursor_mut(0, 0), &rs);
         idct_res_add_pred(&mut p_simd.cursor_mut(0, 0), &rs);
 
         assert_eq!(p_c.at(0, 0), 255, "the scalar reference itself moved");
@@ -791,7 +790,7 @@ mod tests {
                 *v = lcg_i16(&mut seed);
             }
 
-            idct_t4_rec(&mut rec_c.cursor_mut(0, 0), &pred.cursor(0, 0), &rs);
+            idct_t4_rec_c(&mut rec_c.cursor_mut(0, 0), &pred.cursor(0, 0), &rs);
             idct_t4_rec(&mut rec_simd.cursor_mut(0, 0), &pred.cursor(0, 0), &rs);
 
             for y in 0..4isize {
@@ -822,7 +821,7 @@ mod tests {
                 *v = lcg_i16(&mut seed);
             }
 
-            idct_rec_i16x16_dc(&mut rec_c.cursor_mut(0, 0), &pred.cursor(0, 0), &dc);
+            idct_rec_i16x16_dc_c(&mut rec_c.cursor_mut(0, 0), &pred.cursor(0, 0), &dc);
             idct_rec_i16x16_dc(&mut rec_simd.cursor_mut(0, 0), &pred.cursor(0, 0), &dc);
 
             for y in 0..16isize {
@@ -894,7 +893,7 @@ mod tests {
         let (mut pa, mut pb) = twin_planes(&mut seed);
         let dct: [i16; 16] = coeffs(&mut seed);
 
-        idct_t4_rec_in_place(&mut pa.cursor_mut(5, 7), &dct);
+        idct_t4_rec_in_place_c(&mut pa.cursor_mut(5, 7), &dct);
         idct_t4_rec_in_place(&mut pb.cursor_mut(5, 7), &dct);
 
         assert_eq!(pa.as_slice(), pb.as_slice());
@@ -910,7 +909,7 @@ mod tests {
 
         for (k, &(dx, dy)) in SUBS.iter().enumerate() {
             let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-            idct_t4_rec(&mut pa.cursor_mut(6 + dx, 9 + dy), &pp.cursor(dx, dy), sub);
+            idct_t4_rec_c(&mut pa.cursor_mut(6 + dx, 9 + dy), &pp.cursor(dx, dy), sub);
         }
         idct_four_t4_rec(&mut pb.cursor_mut(6, 9), &pp.cursor(0, 0), &dct);
 
@@ -925,7 +924,7 @@ mod tests {
 
         for (k, &(dx, dy)) in SUBS.iter().enumerate() {
             let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-            idct_t4_rec_in_place(&mut pa.cursor_mut(6 + dx, 9 + dy), sub);
+            idct_t4_rec_in_place_c(&mut pa.cursor_mut(6 + dx, 9 + dy), sub);
         }
         idct_four_t4_rec_in_place(&mut pb.cursor_mut(6, 9), &dct);
 
@@ -940,7 +939,7 @@ mod tests {
         let pred = noisy_pred(&mut seed, 16, 4);
         let pp = pred_as_plane(&pred, 16, 4);
 
-        idct_t4_rec(&mut pa.cursor_mut(5, 7), &pp.cursor(0, 0), &dct);
+        idct_t4_rec_c(&mut pa.cursor_mut(5, 7), &pp.cursor(0, 0), &dct);
 
         let view = shared_plane_for_test(&mut pb);
         idct_t4_rec_to_view(&view.cursor(5, 7), &pred, 16, &dct);
@@ -958,7 +957,7 @@ mod tests {
 
         for (k, &(dx, dy)) in SUBS.iter().enumerate() {
             let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-            idct_t4_rec(&mut pa.cursor_mut(6 + dx, 9 + dy), &pp.cursor(dx, dy), sub);
+            idct_t4_rec_c(&mut pa.cursor_mut(6 + dx, 9 + dy), &pp.cursor(dx, dy), sub);
         }
 
         let view = shared_plane_for_test(&mut pb);
@@ -973,7 +972,7 @@ mod tests {
         let (mut pa, mut pb) = twin_planes(&mut seed);
         let dct: [i16; 16] = coeffs(&mut seed);
 
-        idct_t4_rec_in_place(&mut pa.cursor_mut(5, 7), &dct);
+        idct_t4_rec_in_place_c(&mut pa.cursor_mut(5, 7), &dct);
 
         let view = shared_plane_for_test(&mut pb);
         idct_t4_rec_in_place_view(&view.cursor(5, 7), &dct);
@@ -989,7 +988,7 @@ mod tests {
 
         for (k, &(dx, dy)) in SUBS.iter().enumerate() {
             let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-            idct_t4_rec_in_place(&mut pa.cursor_mut(6 + dx, 9 + dy), sub);
+            idct_t4_rec_in_place_c(&mut pa.cursor_mut(6 + dx, 9 + dy), sub);
         }
 
         let view = shared_plane_for_test(&mut pb);
@@ -1010,7 +1009,7 @@ mod tests {
             for (k, &(dx, dy)) in SUBS.iter().enumerate() {
                 let off = (q << 6) + (k << 4);
                 let sub: &[i16; 16] = (&dct[off..][..16]).try_into().unwrap();
-                idct_t4_rec_in_place(&mut pa.cursor_mut(4 + qx + dx, 6 + qy + dy), sub);
+                idct_t4_rec_in_place_c(&mut pa.cursor_mut(4 + qx + dx, 6 + qy + dy), sub);
             }
         }
 
@@ -1028,7 +1027,7 @@ mod tests {
         let pred = noisy_pred(&mut seed, 16, 16);
         let pp = pred_as_plane(&pred, 16, 16);
 
-        idct_rec_i16x16_dc(&mut pa.cursor_mut(5, 7), &pp.cursor(0, 0), &dc);
+        idct_rec_i16x16_dc_c(&mut pa.cursor_mut(5, 7), &pp.cursor(0, 0), &dc);
 
         let view = shared_plane_for_test(&mut pb);
         idct_rec_i16x16_dc_to_view(&view.cursor(5, 7), &pred, 16, &dc);
