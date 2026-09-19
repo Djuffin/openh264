@@ -1766,6 +1766,9 @@ impl CWelsH264SVCEncoder {
         if kpSrcPic.iColorFormat != VideoFormat::videoFormatI420 as i32 {
             return cmInitParaError;
         }
+        if kpSrcPic.iStride[1] != kpSrcPic.iStride[2] {
+            return cmInitParaError;
+        }
         let kiEncoderReturn = self.EncodeFrameInternal(kpSrcPic, pBsInfo);
         if kiEncoderReturn != cmResultSuccess {
             return kiEncoderReturn;

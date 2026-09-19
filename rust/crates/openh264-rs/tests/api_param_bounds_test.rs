@@ -239,3 +239,50 @@ fn test_decoder_get_set_options_vcl_nal_framenum_idr_isref() {
         WelsDestroyDecoder(p_decoder);
     }
 }
+
+#[test]
+fn test_encoder_rejects_mismatched_u_and_v_strides() {
+    unsafe {
+        let mut p_encoder: *mut ISVCEncoder = std::ptr::null_mut();
+        assert_eq!(WelsCreateSVCEncoder(&mut p_encoder), CM_RESULT_SUCCESS);
+
+        let param = SEncParamBase {
+            iUsageType: EUsageType::CAMERA_VIDEO_REAL_TIME,
+            iPicWidth: 16,
+            iPicHeight: 16,
+            iTargetBitrate: 100_000,
+            iRCMode: RC_MODES::RC_QUALITY_MODE,
+            fMaxFrameRate: 30.0,
+        };
+        assert_eq!(
+            ISVCEncoder::Initialize(p_encoder, &param as *const SEncParamBase),
+            CM_RESULT_SUCCESS
+        );
+
+        let mut y = [128u8; 16 * 16];
+        let mut u = [128u8; 16 * 8];
+        let mut v = [128u8; 16 * 8];
+        let src = SSourcePicture {
+            iColorFormat: EVideoFormatType::videoFormatI420 as i32,
+            iStride: [16, 8, 16, 0], // strideU (8) != strideV (16)
+            pData: [
+                y.as_mut_ptr(),
+                u.as_mut_ptr(),
+                v.as_mut_ptr(),
+                std::ptr::null_mut(),
+            ],
+            iPicWidth: 16,
+            iPicHeight: 16,
+            uiTimeStamp: 0,
+            ..SSourcePicture::default()
+        };
+        let mut bs = SFrameBSInfo::default();
+        assert_eq!(
+            ISVCEncoder::EncodeFrame(p_encoder, &src as *const SSourcePicture, &mut bs),
+            CM_INIT_PARA_ERROR
+        );
+
+        ISVCEncoder::Uninitialize(p_encoder);
+        WelsDestroySVCEncoder(p_encoder);
+    }
+}
