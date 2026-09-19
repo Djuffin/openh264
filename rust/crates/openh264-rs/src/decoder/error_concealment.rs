@@ -124,7 +124,6 @@ impl Default for SCopyFunc {
 }
 
 pub use crate::common::copy_mb::{copy_8x8, copy_16x16};
-pub use crate::common::mc::SMcFunc;
 
 // ============================================================================
 // Core Decoder Context Structs

@@ -4,7 +4,6 @@
 
 #![forbid(unsafe_code)]
 
-use crate::common::mc::SMcFunc;
 use crate::encoder::deblocking::DeblockingFunc;
 use crate::encoder::decode_mb_aux::{dequant_4x4, dequant_four_4x4, dequant_ihadamard_4x4};
 use crate::encoder::encode_mb_aux::{
@@ -291,7 +290,6 @@ pub struct SWelsFuncPtrList {
     pub pfSCDPSkipDecision: PInterMdScrollingPSkipDecisionFunc,
     pub pfSetScrollingMv: Option<PSetScrollingMv>,
 
-    pub sMcFuncs: SMcFunc,
     pub sSampleDealingFuncs: SSampleDealingFunc,
     pub pfGetLumaI16x16Pred: [Option<PGetLumaI16x16PredFunc>; I16_PRED_DC_A],
     pub pfGetLumaI4x4Pred: [Option<PGetLumaI4x4PredFunc>; I4_PRED_A],
@@ -392,7 +390,6 @@ impl Default for SWelsFuncPtrList {
             pfMdBackgroundInfoUpdate: WelsMdUpdateBGDInfoNULL,
             pfSCDPSkipDecision: WelsMdInterJudgeSCDPskipFalse,
             pfSetScrollingMv: None,
-            sMcFuncs: SMcFunc::default(),
             sSampleDealingFuncs: SSampleDealingFunc::default(),
             pfGetLumaI16x16Pred: [None; I16_PRED_DC_A],
             pfGetLumaI4x4Pred: [None; I4_PRED_A],

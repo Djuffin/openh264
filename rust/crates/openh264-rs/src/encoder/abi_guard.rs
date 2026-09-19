@@ -16,7 +16,6 @@
 
 use std::mem::size_of;
 
-use crate::common::mc::SMcFunc;
 use crate::common::wels_common_defs::{SNalUnitHeader, SNalUnitHeaderExt};
 use crate::encoder::encoder_context::SParaSetOffset;
 use crate::encoder::encoder_context::{SCropOffset, SDCTCoeff, SMVComponentUnit, SMVUnitXY};
@@ -132,7 +131,6 @@ assert_size!(SCabacCtx, 504);
 assert_size!(SLTRState, 60);
 assert_size!(SLTRMarkingFeedback, 16);
 assert_size!(SLTRRecoverRequest, 20);
-assert_size!(SMcFunc, 48);
 // `pfMdCost` and `pfMeCost` are `CostFamily` tags where the C++ has two function
 // pointers into this same struct's sibling arrays; the eight `pfIntra*Combined3*` slots,
 // `*mut c_void` never assigned on any target, are not carried.
@@ -246,12 +244,12 @@ assert_size_by_profile!(SDqLayer, debug 808, release 736);
 // De-virtualized: the four entropy slots are one `EntropyCoder` discriminant,
 // `SWelsRcFunc`'s nine slots are one `RCMode`, and `pParametersetStrategy` is an
 // `Option<Box<CWelsParametersetIdStrategyObj>>` whose 20-entry vtable costs nothing here.
-// The embedded `sExpandPicFunc` table is not carried — `common/expand_pic.rs` names its
-// kernels directly — and neither are the slots nothing reads: `SSampleDealingFunc`'s
-// eight `pfIntra*Combined3*`, the three `pfSetMemZeroSize*`, the three `pfIDct*`,
-// `DeblockingFunc`'s eight kernel slots, `pfSampleSadHor8`, `pfDeblockingBSCalc`,
+// The embedded `sExpandPicFunc` and `sMcFuncs` tables are not carried — `common/expand_pic.rs`
+// and `common/mc.rs` name their kernels directly — and neither are the slots nothing reads:
+// `SSampleDealingFunc`'s eight `pfIntra*Combined3*`, the three `pfSetMemZeroSize*`, the three
+// `pfIDct*`, `DeblockingFunc`'s eight kernel slots, `pfSampleSadHor8`, `pfDeblockingBSCalc`,
 // `pfSetNZCZero` and `pfAccumulateSadForRc`.
-assert_size!(SWelsFuncPtrList, 944);
+assert_size!(SWelsFuncPtrList, 896);
 
 // codec/encoder/core/inc/encoder_context.h:116. `WELS_MUTEX` is an opaque 8-byte handle
 // here, as it is in `SSliceThreading`.

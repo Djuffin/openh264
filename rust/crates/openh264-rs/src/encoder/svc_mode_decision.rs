@@ -15,7 +15,6 @@ pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
 pub use crate::encoder::md::SMB;
 pub use crate::encoder::md::SMbCache;
-pub use crate::encoder::md::SMcFunc;
 pub use crate::encoder::md::SWelsMD;
 pub use crate::encoder::md::{MB_BLOCK4x4_NUM, MB_BLOCK8x8_NUM, MB_LUMA_CHROMA_BLOCK4x4_NUM};
 use crate::encoder::md::{PredictSad, PredictSadSkip, WelsMedian};

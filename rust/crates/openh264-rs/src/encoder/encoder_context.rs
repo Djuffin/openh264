@@ -316,7 +316,6 @@ use crate::encoder::svc_mode_decision::{
 
 pub use crate::encoder::deblocking::DeblockingFunc as SDeblockingFunc;
 
-pub use crate::encoder::md::SMcFunc;
 pub use crate::encoder::nal_encap::EWelsNalRefIdc;
 pub use crate::encoder::nal_encap::EWelsNalUnitType;
 pub use crate::encoder::param_svc::SSubsetSps;
@@ -1611,9 +1610,6 @@ pub fn InitFunctionPointers(pEncCtx: &mut sWelsEncCtx, _uiCpuFlag: u32) -> i32 {
     );
 
     InitIntraAnalysisVaaInfo(&mut *fl, _uiCpuFlag);
-
-    /* Motion compensation */
-    InitMcFunc(&mut fl.sMcFuncs, _uiCpuFlag);
     InitCoeffFunc(&mut *fl, _uiCpuFlag, kiEntropyCodingModeFlag);
 
     WelsInitEncodingFuncs(&mut *fl, _uiCpuFlag);
@@ -2542,7 +2538,6 @@ pub use crate::common::cpu_core::{
     WELS_CPU_AVX, WELS_CPU_AVX2, WELS_CPU_FMA, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON,
     WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3,
 };
-use crate::common::mc::InitMcFunc;
 use crate::encoder::deblocking::DeblockingInit;
 use crate::encoder::decode_mb_aux::WelsInitReconstructionFuncs;
 use crate::encoder::encode_mb_aux::WelsInitEncodingFuncs;

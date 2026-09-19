@@ -35,24 +35,6 @@
 use crate::common::mc::copy_rows;
 use crate::safe::plane::{PlaneCursorMut, RefSamples};
 
-/// C++: `WelsCopy4x4_c`.
-#[inline(always)]
-pub fn copy_4x4<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<4, _>(src, dst, 4);
-}
-
-/// C++: `WelsCopy8x4_c`.
-#[inline(always)]
-pub fn copy_8x4<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<8, _>(src, dst, 4);
-}
-
-/// C++: `WelsCopy4x8_c`.
-#[inline(always)]
-pub fn copy_4x8<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>) {
-    copy_rows::<4, _>(src, dst, 8);
-}
-
 /// C++: `WelsCopy8x8_c`.
 #[inline(always)]
 pub fn copy_8x8<S: RefSamples + Copy>(src: &S, dst: &mut PlaneCursorMut<'_>) {

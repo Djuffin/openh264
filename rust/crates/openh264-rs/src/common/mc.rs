@@ -8,55 +8,6 @@ use crate::safe::plane::{BlockRows, PlaneCursor, PlaneCursorMut, RefSamples};
 /// default, `simd::scalar` under `--features scalar` or on a target with neither.
 use crate::simd::kernels;
 
-// Function pointer signatures matching mc.h.
-pub type PWelsMcFunc = fn(
-    src: &PlaneCursor<'_>,
-    dst: &mut PlaneCursorMut<'_>,
-    mv_x: i16,
-    mv_y: i16,
-    width: usize,
-    height: usize,
-);
-
-pub type PWelsLumaHalfpelMcFunc =
-    fn(src: &PlaneCursor<'_>, dst: &mut PlaneCursorMut<'_>, width: usize, height: usize);
-
-pub type PWelsSampleAveragingFunc = fn(
-    dst: &mut PlaneCursorMut<'_>,
-    a: &PlaneCursor<'_>,
-    b: &PlaneCursor<'_>,
-    width: usize,
-    height: usize,
-);
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct TagMcFunc {
-    pub pfLumaHalfpelHor: PWelsLumaHalfpelMcFunc,
-    pub pfLumaHalfpelVer: PWelsLumaHalfpelMcFunc,
-    pub pfLumaHalfpelCen: PWelsLumaHalfpelMcFunc,
-    pub pMcChromaFunc: PWelsMcFunc,
-    pub pMcLumaFunc: PWelsMcFunc,
-    pub pfSampleAveraging: PWelsSampleAveragingFunc,
-}
-
-pub type SMcFunc = TagMcFunc;
-
-impl Default for TagMcFunc {
-    /// Non-capturing closures rather than bare paths: the kernels are generic over the
-    /// cursor type, and only a closure coerces to a higher-ranked slot type.
-    fn default() -> Self {
-        Self {
-            pfLumaHalfpelHor: |s, d, w, h| mc_hor_ver20_c(s, d, w, h),
-            pfLumaHalfpelVer: |s, d, w, h| mc_hor_ver02_c(s, d, w, h),
-            pfLumaHalfpelCen: |s, d, w, h| mc_hor_ver22_c(s, d, w, h),
-            pMcChromaFunc: |s, d, mx, my, w, h| mc_chroma_c(s, d, mx, my, w, h),
-            pMcLumaFunc: |s, d, mx, my, w, h| mc_luma_c(s, d, mx, my, w, h),
-            pfSampleAveraging: |dst, a, b, w, h| pixel_avg_c(dst, a, b, w, h),
-        }
-    }
-}
-
 // Chroma interpolation weight lookup table: g_kuiABCD[dy][dx]
 pub static g_kuiABCD: [[[u8; 4]; 8]; 8] = [
     // dy = 0
@@ -506,7 +457,7 @@ pub(crate) fn chroma_shaped<L: McLeaves, S: RefSamples + Copy>(
 // Kernels
 // ============================================================================
 
-/// C++: `PixelAvg_c` — the rounded average of two surfaces, `SMcFunc::pfSampleAveraging`.
+/// C++: `PixelAvg_c` — the rounded average of two surfaces.
 #[inline(always)]
 pub fn pixel_avg_c<A: RefSamples, B: RefSamples>(
     dst: &mut PlaneCursorMut<'_>,
@@ -1895,34 +1846,6 @@ pub fn mc_chroma_same(
 // scratch (`encoder/md.rs`), with the search window bounded before the call rather
 // than by a clamp inside it.
 
-/// C++: `InitMcFunc`, `codec/common/src/mc.cpp` — both codecs call it at open time.
-///
-/// The six slots it fills are never read: `mc_luma`, `mc_chroma`, `pixel_avg` and the
-/// half-pel filters call `simd::kernels` directly, and which kernel set that names is
-/// decided at compile time. So `uiCpuFlag` here does not select scalar or SSE2 motion
-/// compensation — `--features scalar` does, and everywhere at once. The table is still
-/// filled because the fields are part of the context layout (`decoder_context.rs`,
-/// `encoder/wels_func_ptr_def.rs`).
-pub fn InitMcFunc(pMcFuncs: &mut SMcFunc, uiCpuFlag: u32) {
-    *pMcFuncs = SMcFunc::default();
-    if (uiCpuFlag & WELS_CPU_SSE2) != 0 {
-        pMcFuncs.pfLumaHalfpelHor = |s, d, w, h| kernels::mc::mc_hor_ver20(s, d, w, h);
-        pMcFuncs.pfLumaHalfpelVer = |s, d, w, h| kernels::mc::mc_hor_ver02(s, d, w, h);
-        pMcFuncs.pfLumaHalfpelCen = |s, d, w, h| kernels::mc::mc_hor_ver22(s, d, w, h);
-        pMcFuncs.pfSampleAveraging = |dst, a, b, w, h| kernels::mc::pixel_avg(dst, a, b, w, h);
-        pMcFuncs.pMcChromaFunc = |s, d, mx, my, w, h| kernels::mc::mc_chroma(s, d, mx, my, w, h);
-        pMcFuncs.pMcLumaFunc = |s, d, mx, my, w, h| kernels::mc::mc_luma(s, d, mx, my, w, h);
-    }
-}
-
-// WELS_CPU_* flags: one definition, in `common/cpu_core.rs`.
-pub use crate::common::cpu_core::{
-    WELS_CPU_3DNOW, WELS_CPU_3DNOWEXT, WELS_CPU_ALTIVEC, WELS_CPU_ARMv7, WELS_CPU_AVX,
-    WELS_CPU_AVX2, WELS_CPU_LSX, WELS_CPU_MMI, WELS_CPU_MMX, WELS_CPU_MMXEXT, WELS_CPU_NEON,
-    WELS_CPU_SSE, WELS_CPU_SSE2, WELS_CPU_SSE3, WELS_CPU_SSE41, WELS_CPU_SSE42, WELS_CPU_SSSE3,
-    WELS_CPU_VFPv3,
-};
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2108,10 +2031,6 @@ mod tests {
     /// entry of the shape tables at the head of this module over both operand
     /// storages: the plane cursor the decoder hands the kernels and the shared cell
     /// view the encoder does.
-    ///
-    /// The fallbacks it proves unreachable still have to exist and be correct: the
-    /// decoder's `SMcFunc` slots hold these kernels, and a `match` that panicked on a
-    /// shape handed to it would be a crash in production.
     #[test]
     fn mc_shapes_all_reach_a_const_arm() {
         let base = filled_plane();
@@ -2224,73 +2143,6 @@ mod tests {
                 want, got,
                 "fused quarter-pel ({qx}, {qy}) differs from the composite"
             );
-        }
-    }
-
-    /// Scope: `InitMcFunc` only. The slots it fills are never read, so this says
-    /// nothing about which kernels motion compensation actually runs.
-    #[test]
-    #[cfg_attr(miri, ignore)]
-    fn init_mc_func_cpu_flags() {
-        use crate::common::cpu_core::*;
-        let scalar_flags: [u32; 5] = [0, WELS_CPU_NEON, WELS_CPU_MMI, WELS_CPU_LSX, WELS_CPU_MMX];
-        let mut base = SMcFunc::default();
-        InitMcFunc(&mut base, 0);
-        let addrs = |t: &SMcFunc| -> [usize; 6] {
-            [
-                t.pfLumaHalfpelHor as usize,
-                t.pfLumaHalfpelVer as usize,
-                t.pfLumaHalfpelCen as usize,
-                t.pfSampleAveraging as usize,
-                t.pMcChromaFunc as usize,
-                t.pMcLumaFunc as usize,
-            ]
-        };
-        const NAMES: [&str; 6] = [
-            "pfLumaHalfpelHor",
-            "pfLumaHalfpelVer",
-            "pfLumaHalfpelCen",
-            "pfSampleAveraging",
-            "pMcChromaFunc",
-            "pMcLumaFunc",
-        ];
-        let scalar_want = addrs(&base);
-        for flag in scalar_flags {
-            let mut t = SMcFunc::default();
-            InitMcFunc(&mut t, flag);
-            for (i, (got, expected)) in addrs(&t).into_iter().zip(scalar_want).enumerate() {
-                assert_eq!(
-                    got, expected,
-                    "scalar cpu flag {flag:#x} selected a different function for slot {}",
-                    NAMES[i]
-                );
-            }
-        }
-
-        {
-            let mut sse2_base = SMcFunc::default();
-            InitMcFunc(&mut sse2_base, WELS_CPU_SSE2);
-            let sse2_want = addrs(&sse2_base);
-
-            let sse2_flags: [u32; 6] = [
-                WELS_CPU_SSE2,
-                WELS_CPU_SSE2 | WELS_CPU_SSE41,
-                WELS_CPU_SSE2 | WELS_CPU_SSE42,
-                WELS_CPU_SSE2 | WELS_CPU_AVX,
-                WELS_CPU_SSE2 | WELS_CPU_AVX2,
-                u32::MAX,
-            ];
-            for flag in sse2_flags {
-                let mut t = SMcFunc::default();
-                InitMcFunc(&mut t, flag);
-                for (i, (got, expected)) in addrs(&t).into_iter().zip(sse2_want).enumerate() {
-                    assert_eq!(
-                        got, expected,
-                        "SSE2 cpu flag {flag:#x} selected a different function for slot {}",
-                        NAMES[i]
-                    );
-                }
-            }
         }
     }
 }

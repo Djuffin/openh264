@@ -429,24 +429,6 @@ impl Default for SWelsMD<'_> {
 
 pub type PCopyFunc =
     unsafe extern "C" fn(pDst: *mut u8, iStrideD: i32, pSrc: *mut u8, iStrideS: i32);
-pub type PWelsSampleAveragingFunc = unsafe extern "C" fn(
-    pDst: *mut u8,
-    iDstStride: i32,
-    pSrcA: *const u8,
-    iStrideA: i32,
-    pSrcB: *const u8,
-    iStrideB: i32,
-    iWidth: i32,
-    iHeight: i32,
-);
-pub type PWelsLumaHalfpelMcFunc = unsafe extern "C" fn(
-    pSrc: *const u8,
-    iSrcStride: i32,
-    pDst: *mut u8,
-    iDstStride: i32,
-    iWidth: i32,
-    iHeight: i32,
-);
 /// `PSampleSadSatdCostFunc` (`wels_func_ptr_def.h:127`) — one SAD or SATD of two
 /// equal-shaped blocks, the cost-table slot type of `SSampleDealingFunc::pfSampleSad`
 /// and `pfSampleSatd`.
@@ -785,8 +767,6 @@ pub type PGetMbSignFromInterVaaFunc = fn(kpSad8x8: &[i32; 4]) -> u8;
 /// The kernel writes all sixteen entries, so it takes the macroblock's whole MV row.
 pub type PUpdateMbMvFunc = fn(pMvBuffer: &mut [SMVUnitXY; MB_BLOCK4x4_NUM], ksMv: SMVUnitXY);
 
-// SMcFunc is a common-layer type (codec/common/inc/mc.h:46).
-pub use crate::common::mc::SMcFunc;
 // MC and the half-pel filters are called directly, not via `sMcFuncs`.
 use crate::common::mc::{mc_hor_ver02, mc_hor_ver20, mc_hor_ver22, pixel_avg};
 pub use crate::encoder::encoder_context::BLOCK_SIZE_ALL;

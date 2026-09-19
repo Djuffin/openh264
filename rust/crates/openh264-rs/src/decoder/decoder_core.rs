@@ -757,7 +757,6 @@ pub fn GetVclNalTemporalId(pCtx: &mut SWelsDecoderContext) {
 use crate::decoder::fmo::{FmoNextMb, FmoParamUpdate};
 
 use crate::common::cpu_core::WELS_CPU_SSE2;
-use crate::common::mc::InitMcFunc;
 use crate::decoder::decode_mb_aux::{idct_four_res_add_pred, idct_res_add_pred8x8};
 use crate::decoder::error_concealment::InitErrorCon;
 use crate::decoder::get_intra_predictor::{
@@ -1678,9 +1677,6 @@ pub fn ExpandBsLenBuffer(pCtx: &mut SWelsDecoderContext, kiCurrLen: i32) -> i32 
 pub fn WelsInitDecoderFuncs(pCtx: &mut SWelsDecoderContext) {
     {
         let cpu_flag = pCtx.uiCpuFlag;
-
-        // 2. Motion Compensation
-        InitMcFunc(&mut pCtx.sMcFunc, cpu_flag);
 
         // 3. IDCT Inverse Transform
         pCtx.pIdctResAddPredFunc = Some(crate::decoder::decode_mb_aux::idct_res_add_pred);
