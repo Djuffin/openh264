@@ -84,81 +84,83 @@ pub fn idct_res_add_pred_c(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
 ///
 /// C++: `IdctResAddPred8x8_c`, `codec/decoder/core/src/decode_mb_aux.cpp`.
 pub fn idct_res_add_pred8x8(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 64]) {
-    let mut p = [0i16; 8];
-    let mut b = [0i16; 8];
-    let mut a = [0i16; 4];
+    let mut p = [0i32; 8];
+    let mut b = [0i32; 8];
+    let mut a = [0i32; 4];
 
     let mut tmp = [0i16; 64];
     let mut res = [0i16; 64];
 
     // Horizontal 1D IDCT pass.
     for i in 0..8 {
-        p.copy_from_slice(&rs[i << 3..][..8]);
+        for j in 0..8 {
+            p[j] = rs[j + (i << 3)] as i32;
+        }
 
-        a[0] = p[0] + p[4];
-        a[1] = p[0] - p[4];
-        a[2] = p[6] - (p[2] >> 1);
-        a[3] = p[2] + (p[6] >> 1);
+        a[0] = (p[0] + p[4]) as i16 as i32;
+        a[1] = (p[0] - p[4]) as i16 as i32;
+        a[2] = (p[6] - (p[2] >> 1)) as i16 as i32;
+        a[3] = (p[2] + (p[6] >> 1)) as i16 as i32;
 
-        b[0] = a[0] + a[3];
-        b[2] = a[1] - a[2];
-        b[4] = a[1] + a[2];
-        b[6] = a[0] - a[3];
+        b[0] = (a[0] + a[3]) as i16 as i32;
+        b[2] = (a[1] - a[2]) as i16 as i32;
+        b[4] = (a[1] + a[2]) as i16 as i32;
+        b[6] = (a[0] - a[3]) as i16 as i32;
 
-        a[0] = -p[3] + p[5] - p[7] - (p[7] >> 1);
-        a[1] = p[1] + p[7] - p[3] - (p[3] >> 1);
-        a[2] = -p[1] + p[7] + p[5] + (p[5] >> 1);
-        a[3] = p[3] + p[5] + p[1] + (p[1] >> 1);
+        a[0] = (-p[3] + p[5] - p[7] - (p[7] >> 1)) as i16 as i32;
+        a[1] = (p[1] + p[7] - p[3] - (p[3] >> 1)) as i16 as i32;
+        a[2] = (-p[1] + p[7] + p[5] + (p[5] >> 1)) as i16 as i32;
+        a[3] = (p[3] + p[5] + p[1] + (p[1] >> 1)) as i16 as i32;
 
-        b[1] = a[0] + (a[3] >> 2);
-        b[3] = a[1] + (a[2] >> 2);
-        b[5] = a[2] - (a[1] >> 2);
-        b[7] = a[3] - (a[0] >> 2);
+        b[1] = (a[0] + (a[3] >> 2)) as i16 as i32;
+        b[3] = (a[1] + (a[2] >> 2)) as i16 as i32;
+        b[5] = (a[2] - (a[1] >> 2)) as i16 as i32;
+        b[7] = (a[3] - (a[0] >> 2)) as i16 as i32;
 
-        tmp[i << 3] = b[0] + b[7];
-        tmp[1 + (i << 3)] = b[2] - b[5];
-        tmp[2 + (i << 3)] = b[4] + b[3];
-        tmp[3 + (i << 3)] = b[6] + b[1];
-        tmp[4 + (i << 3)] = b[6] - b[1];
-        tmp[5 + (i << 3)] = b[4] - b[3];
-        tmp[6 + (i << 3)] = b[2] + b[5];
-        tmp[7 + (i << 3)] = b[0] - b[7];
+        tmp[i << 3] = (b[0] + b[7]) as i16;
+        tmp[1 + (i << 3)] = (b[2] - b[5]) as i16;
+        tmp[2 + (i << 3)] = (b[4] + b[3]) as i16;
+        tmp[3 + (i << 3)] = (b[6] + b[1]) as i16;
+        tmp[4 + (i << 3)] = (b[6] - b[1]) as i16;
+        tmp[5 + (i << 3)] = (b[4] - b[3]) as i16;
+        tmp[6 + (i << 3)] = (b[2] + b[5]) as i16;
+        tmp[7 + (i << 3)] = (b[0] - b[7]) as i16;
     }
 
     // Vertical 1D IDCT pass.
     for i in 0..8 {
         for j in 0..8 {
-            p[j] = tmp[i + (j << 3)];
+            p[j] = tmp[i + (j << 3)] as i32;
         }
 
-        a[0] = p[0] + p[4];
-        a[1] = p[0] - p[4];
-        a[2] = p[6] - (p[2] >> 1);
-        a[3] = p[2] + (p[6] >> 1);
+        a[0] = (p[0] + p[4]) as i16 as i32;
+        a[1] = (p[0] - p[4]) as i16 as i32;
+        a[2] = (p[6] - (p[2] >> 1)) as i16 as i32;
+        a[3] = (p[2] + (p[6] >> 1)) as i16 as i32;
 
-        b[0] = a[0] + a[3];
-        b[2] = a[1] - a[2];
-        b[4] = a[1] + a[2];
-        b[6] = a[0] - a[3];
+        b[0] = (a[0] + a[3]) as i16 as i32;
+        b[2] = (a[1] - a[2]) as i16 as i32;
+        b[4] = (a[1] + a[2]) as i16 as i32;
+        b[6] = (a[0] - a[3]) as i16 as i32;
 
-        a[0] = -p[3] + p[5] - p[7] - (p[7] >> 1);
-        a[1] = p[1] + p[7] - p[3] - (p[3] >> 1);
-        a[2] = -p[1] + p[7] + p[5] + (p[5] >> 1);
-        a[3] = p[3] + p[5] + p[1] + (p[1] >> 1);
+        a[0] = (-p[3] + p[5] - p[7] - (p[7] >> 1)) as i16 as i32;
+        a[1] = (p[1] + p[7] - p[3] - (p[3] >> 1)) as i16 as i32;
+        a[2] = (-p[1] + p[7] + p[5] + (p[5] >> 1)) as i16 as i32;
+        a[3] = (p[3] + p[5] + p[1] + (p[1] >> 1)) as i16 as i32;
 
-        b[1] = a[0] + (a[3] >> 2);
-        b[7] = a[3] - (a[0] >> 2);
-        b[3] = a[1] + (a[2] >> 2);
-        b[5] = a[2] - (a[1] >> 2);
+        b[1] = (a[0] + (a[3] >> 2)) as i16 as i32;
+        b[7] = (a[3] - (a[0] >> 2)) as i16 as i32;
+        b[3] = (a[1] + (a[2] >> 2)) as i16 as i32;
+        b[5] = (a[2] - (a[1] >> 2)) as i16 as i32;
 
-        res[i] = b[0] + b[7];
-        res[(1 << 3) + i] = b[2] - b[5];
-        res[(2 << 3) + i] = b[4] + b[3];
-        res[(3 << 3) + i] = b[6] + b[1];
-        res[(4 << 3) + i] = b[6] - b[1];
-        res[(5 << 3) + i] = b[4] - b[3];
-        res[(6 << 3) + i] = b[2] + b[5];
-        res[(7 << 3) + i] = b[0] - b[7];
+        res[i] = (b[0] + b[7]) as i16;
+        res[(1 << 3) + i] = (b[2] - b[5]) as i16;
+        res[(2 << 3) + i] = (b[4] + b[3]) as i16;
+        res[(3 << 3) + i] = (b[6] + b[1]) as i16;
+        res[(4 << 3) + i] = (b[6] - b[1]) as i16;
+        res[(5 << 3) + i] = (b[4] - b[3]) as i16;
+        res[(6 << 3) + i] = (b[2] + b[5]) as i16;
+        res[(7 << 3) + i] = (b[0] - b[7]) as i16;
     }
 
     for i in 0..8 {
@@ -269,5 +271,26 @@ mod tests {
             seen.iter()
                 .all(|&(x, y)| (0..16).contains(&x) && (0..16).contains(&y))
         );
+    }
+
+    #[test]
+    fn test_idct_res_add_pred8x8_does_not_overflow_on_large_or_min_coefficients() {
+        // Spec-valid intermediate sum where p[1] + p[7] > 32767 before subtracting p[3]:
+        // e_{03} = 20000 + 20000 - 20000 - 10000 = 10000 (within [-32768, 32767]).
+        let mut pred = [128u8; 64];
+        let mut rs = [0i16; 64];
+        rs[1] = 20000;
+        rs[3] = 20000;
+        rs[7] = 20000;
+        idct_res_add_pred8x8(&mut PlaneCursorMut::new(&mut pred, 0, 8), &rs);
+
+        // Extreme malformed input with i16::MIN (-32768) and i16::MAX (32767).
+        let mut pred_min = [128u8; 64];
+        let rs_min = [i16::MIN; 64];
+        idct_res_add_pred8x8(&mut PlaneCursorMut::new(&mut pred_min, 0, 8), &rs_min);
+
+        let mut pred_max = [128u8; 64];
+        let rs_max = [i16::MAX; 64];
+        idct_res_add_pred8x8(&mut PlaneCursorMut::new(&mut pred_max, 0, 8), &rs_max);
     }
 }
