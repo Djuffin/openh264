@@ -141,17 +141,7 @@ pub const PADDING_LENGTH: i32 = 32;
 /// `MB_BLOCK8x8_NUM` — `wels_const_common.h:58`.
 pub const MB_BLOCK8x8_NUM: usize = 4;
 
-/// `WELS_ALIGN` — `macros.h`.
-#[inline]
-pub fn WELS_ALIGN(x: i32, n: i32) -> i32 {
-    (x + n - 1) & !(n - 1)
-}
-
-/// `WELS_ROUND` — `macros.h`, for the float form used by `RequestMemorySvc`.
-#[inline]
-fn WELS_ROUND_f(x: f32) -> i32 {
-    (x + 0.5) as i32
-}
+pub use crate::common::macros::{WELS_ALIGN, WELS_ROUND_f};
 
 /// `WelsGetEncBlockStrideOffset` — `decode_mb_aux.cpp:235`.
 pub fn WelsGetEncBlockStrideOffset(pBlock: &mut [i32; 24], kiStrideY: i32, kiStrideUV: i32) {
@@ -2616,6 +2606,161 @@ pub fn DynSliceRealloc(pCtx: &mut sWelsEncCtx, pFbi: &mut SFrameBSInfo, iLbi: us
     iRet
 }
 
+/// How [`code_and_encapsulate_slice`] must prepare the slice it is about to code.
+///
+/// The two arms are the only places the three single-threaded slice-coding call
+/// sites ever differed before the slice is handed to [`WelsCodeOneSlice`].
+enum SliceCodeMode {
+    /// Dynamic slicing (`SM_SIZELIMITED_SLICE`, `WelsCodeOnePicPartition`): slice
+    /// indices are not contiguous, so the index is stamped here, and the forward
+    /// slot at `iSliceIdx + iSliceIdxStep` is handed to [`WelsCodeOneSlice`] so it
+    /// can open the next slice when `AddSliceBoundary` fires. The boundary info is
+    /// produced by that coding pass, never installed up front.
+    DynamicPartition { iSliceIdxStep: i32 },
+    /// Fixed slicing: the slice index was stamped when the bank was built, and the
+    /// MB range is known before coding, so `SetSliceBoundaryInfo` installs it here.
+    /// The dynamic boundary never fires, hence no next slice.
+    FixedPreStamped,
+}
+
+/// Code one slice into the encoder output bitstream and encapsulate it as a NAL in
+/// `pFrameBs`, returning the encapsulated slice size (also added to
+/// `pCtx.iPosBsBuffer`) or the encoder error code that stopped it.
+///
+/// The caller owns its own prologue (`AddPrefixNal` / [`WelsLoadNal`]), its own
+/// size accumulator and its own layer-info trailer; this owns the part that the
+/// borrow checker makes unpleasant, namely temporarily moving the slice bank, the
+/// MB data and the output bitstream buffer out of `pCtx` so `WelsCodeOneSlice` can
+/// hold `&sWelsEncCtx` alongside `&mut` views into them. Every early return puts
+/// all of it back first.
+///
+/// # Panics
+/// Panics if the frame's current DQ layer has not been stamped, or if the output
+/// block has not been built.
+fn code_and_encapsulate_slice(
+    pCtx: &mut sWelsEncCtx,
+    uSlcBuffIdx: usize,
+    iSliceIdx: i32,
+    eMode: SliceCodeMode,
+    keNalType: EWelsNalUnitType,
+    iNalIdxInLayer: i32,
+) -> Result<i32, i32> {
+    let mut sBank =
+        std::mem::take(&mut current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx]);
+    let kiCurSlot = iSliceIdx as usize;
+    if kiCurSlot >= sBank.pSliceBuffer.len() {
+        current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx] = sBank;
+        return Err(ENC_RETURN_UNEXPECTED);
+    }
+
+    let iPrepareRet = match eMode {
+        SliceCodeMode::DynamicPartition { .. } => {
+            sBank.pSliceBuffer[kiCurSlot].iSliceIdx = iSliceIdx;
+            ENC_RETURN_SUCCESS
+        }
+        SliceCodeMode::FixedPreStamped => {
+            let pCurSlice = &mut sBank.pSliceBuffer[kiCurSlot];
+            debug_assert_eq!(iSliceIdx, pCurSlice.iSliceIdx);
+            SetSliceBoundaryInfo(current_layer_ref(pCtx), pCurSlice, iSliceIdx)
+        }
+    };
+    if iPrepareRet != ENC_RETURN_SUCCESS {
+        current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx] = sBank;
+        return Err(iPrepareRet);
+    }
+
+    let (kpHead, kpTail) = sBank.pSliceBuffer.split_at_mut(kiCurSlot + 1);
+    let pCurSlice = &mut kpHead[kiCurSlot];
+    let pNextSlice = match eMode {
+        // The forward slot at the old ST index exactly (`iSliceIdx + step`,
+        // i.e. `tail[step - 1]`).
+        SliceCodeMode::DynamicPartition { iSliceIdxStep } => {
+            kpTail.get_mut((iSliceIdxStep - 1) as usize)
+        }
+        SliceCodeMode::FixedPreStamped => None,
+    };
+
+    StampLayerIdrFlagForSliceType(pCtx);
+
+    let pOutRef = pCtx.out_mut();
+    let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
+    let mut sOutBsWrite = pOutRef.sBsWrite;
+    let mut pCtxOutBs: Option<&mut BsWriter> = Some(&mut sOutBsWrite);
+    let mut sMbData = std::mem::replace(
+        &mut current_layer_expect_mut(pCtx).sMbDataP,
+        MbArray::empty(),
+    );
+    let mut sMbWindow = MbWindow::whole(&mut sMbData, 0);
+    // The CABAC restore scratch — partition 0 is the only one a
+    // single-threaded encode names (`kiSliceIdx % iActiveThreadsNum` with one
+    // thread). Empty means never allocated for this configuration.
+    let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
+    let pRestoreBuf = if vRestoreBuf.is_empty() {
+        None
+    } else {
+        Some(vRestoreBuf.as_mut_slice())
+    };
+    let iCodeRet = WelsCodeOneSlice(
+        pCtx,
+        &mut *pCurSlice,
+        keNalType as i32,
+        vOutBsBuf.as_mut_slice(),
+        &mut pCtxOutBs,
+        &mut sMbWindow,
+        pRestoreBuf,
+        pNextSlice,
+    );
+    pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
+    drop(sMbWindow);
+    current_layer_expect_mut(pCtx).sMbDataP = sMbData;
+    current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx] = sBank;
+    let pOutRef = pCtx.out_mut();
+    pOutRef.sBsBuffer = vOutBsBuf;
+    pOutRef.sBsWrite = sOutBsWrite;
+    if iCodeRet != ENC_RETURN_SUCCESS {
+        return Err(iCodeRet);
+    }
+
+    WelsUnloadNal(pCtx.out_mut());
+
+    let kNalHeaderExt = current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
+    let sWelsEncCtx {
+        pOut,
+        pFrameBs,
+        iPosBsBuffer,
+        ..
+    } = &mut *pCtx;
+    let SWelsEncoderOutput {
+        sNalList,
+        sBsBuffer,
+        sNalLen,
+        iNalIndex,
+        iNalLenBase,
+        ..
+    } = &mut **pOut.as_mut().expect("pOut lives");
+    let kiPos = *iPosBsBuffer as usize;
+    let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
+    let kiSlot = *iNalLenBase + iNalIdxInLayer.max(0) as usize;
+    let mut kiNalLenOut = 0i32;
+    let kiEncodeNalRet = WelsEncodeNal(
+        &sNalList[*iNalIndex as usize - 1],
+        &sBsBuffer[..],
+        Some(&kNalHeaderExt),
+        pDstTail,
+        &mut kiNalLenOut,
+    );
+    // Written through `&AtomicI32`, never `&mut i32` — a `&mut` here retags the
+    // whole buffer `Unique` and pops the C-ABI pointer the application holds.
+    sNalLen[kiSlot].store(kiNalLenOut, Ordering::Relaxed);
+    if kiEncodeNalRet != ENC_RETURN_SUCCESS {
+        return Err(kiEncodeNalRet);
+    }
+    let iSliceSize = pCtx.out().nal_len_at(iNalIdxInLayer.max(0) as usize);
+
+    pCtx.iPosBsBuffer += iSliceSize;
+    Ok(iSliceSize)
+}
+
 /// `WelsCodeOnePicPartition` — encoder_ext.cpp:4543.
 ///
 /// The dynamic-slicing coding loop: keeps emitting slices until the partition's
@@ -2694,97 +2839,19 @@ pub fn WelsCodeOnePicPartition(
         }
 
         WelsLoadNal(pCtx.out_mut(), keNalType as i32, keNalRefIdc as i32);
-        let mut sBank =
-            std::mem::take(&mut current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx]);
-        let kiCurSlot = iSliceIdx as usize;
-        if kiCurSlot >= sBank.pSliceBuffer.len() {
-            current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx] = sBank;
-            return ENC_RETURN_UNEXPECTED;
-        }
-        let (kpHead, kpTail) = sBank.pSliceBuffer.split_at_mut(kiCurSlot + 1);
-        let pCurSlice = &mut kpHead[kiCurSlot];
-        pCurSlice.iSliceIdx = iSliceIdx;
-        // The forward slot at the old ST index exactly (`iSliceIdx + step`,
-        // i.e. `tail[step - 1]`).
-        let pNextSlice = kpTail.get_mut((kiSliceIdxStep - 1) as usize);
-
-        StampLayerIdrFlagForSliceType(pCtx);
-
-        let pOutRef = pCtx.out_mut();
-        let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
-        let mut sOutBsWrite = pOutRef.sBsWrite;
-        let mut pCtxOutBs: Option<&mut BsWriter> = Some(&mut sOutBsWrite);
-        let mut sMbData = std::mem::replace(
-            &mut current_layer_expect_mut(pCtx).sMbDataP,
-            MbArray::empty(),
-        );
-        let mut sMbWindow = MbWindow::whole(&mut sMbData, 0);
-        // The CABAC restore scratch — partition 0 is the only one a
-        // single-threaded encode names (`kiSliceIdx % iActiveThreadsNum` with one
-        // thread). Empty means never allocated for this configuration.
-        let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
-        let pRestoreBuf = if vRestoreBuf.is_empty() {
-            None
-        } else {
-            Some(vRestoreBuf.as_mut_slice())
-        };
-        iReturn = WelsCodeOneSlice(
+        let iSliceSize = match code_and_encapsulate_slice(
             pCtx,
-            &mut *pCurSlice,
-            keNalType as i32,
-            vOutBsBuf.as_mut_slice(),
-            &mut pCtxOutBs,
-            &mut sMbWindow,
-            pRestoreBuf,
-            pNextSlice,
-        );
-        pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
-        drop(sMbWindow);
-        current_layer_expect_mut(pCtx).sMbDataP = sMbData;
-        current_layer_expect_mut(pCtx).sSliceBufferInfo[uSlcBuffIdx] = sBank;
-        let pOutRef = pCtx.out_mut();
-        pOutRef.sBsBuffer = vOutBsBuf;
-        pOutRef.sBsWrite = sOutBsWrite;
-        if iReturn != ENC_RETURN_SUCCESS {
-            return iReturn;
-        }
-        WelsUnloadNal(pCtx.out_mut());
-
-        let kNalHeaderExt = current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
-        let sWelsEncCtx {
-            pOut,
-            pFrameBs,
-            iPosBsBuffer,
-            ..
-        } = &mut *pCtx;
-        let SWelsEncoderOutput {
-            sNalList,
-            sBsBuffer,
-            sNalLen,
-            iNalIndex,
-            iNalLenBase,
-            ..
-        } = &mut **pOut.as_mut().expect("pOut lives");
-        let kiPos = *iPosBsBuffer as usize;
-        let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
-        let kiSlot = *iNalLenBase + iNalIdxInLayer.max(0) as usize;
-        let mut kiNalLenOut = 0i32;
-        iReturn = WelsEncodeNal(
-            &sNalList[(*iNalIndex - 1) as usize],
-            &sBsBuffer[..],
-            Some(&kNalHeaderExt),
-            pDstTail,
-            &mut kiNalLenOut,
-        );
-        // Written through `&AtomicI32`, never `&mut i32` — a `&mut` here retags the
-        // whole buffer `Unique` and pops the C-ABI pointer the application holds.
-        sNalLen[kiSlot].store(kiNalLenOut, Ordering::Relaxed);
-        if iReturn != ENC_RETURN_SUCCESS {
-            return iReturn;
-        }
-        let iSliceSize = pCtx.out().nal_len_at(iNalIdxInLayer.max(0) as usize);
-
-        pCtx.iPosBsBuffer += iSliceSize;
+            uSlcBuffIdx,
+            iSliceIdx,
+            SliceCodeMode::DynamicPartition {
+                iSliceIdxStep: kiSliceIdxStep,
+            },
+            keNalType,
+            iNalIdxInLayer,
+        ) {
+            Ok(size) => size,
+            Err(err) => return err,
+        };
         iPartitionBsSize += iSliceSize;
 
         iNalIdxInLayer += 1;
@@ -3109,11 +3176,6 @@ pub fn WelsEncoderEncodeExt(
         {
             // only one slice within a quality layer
             let mut iPayloadSize = 0i32;
-            let mut sBank = std::mem::take(&mut current_layer_expect_mut(pCtx).sSliceBufferInfo[0]);
-            let pCurSlice = sBank
-                .pSliceBuffer
-                .get_mut(0)
-                .expect("the single-slice bank holds slot 0");
 
             if pCtx.bNeedPrefixNalFlag {
                 pCtx.iEncoderError = AddPrefixNal(
@@ -3131,94 +3193,22 @@ pub fn WelsEncoderEncodeExt(
             }
 
             WelsLoadNal(pCtx.out_mut(), eNalType as i32, eNalRefIdc as i32);
-            debug_assert_eq!(0, pCurSlice.iSliceIdx);
-            pCtx.iEncoderError = SetSliceBoundaryInfo(current_layer_ref(pCtx), &mut *pCurSlice, 0);
-            if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
-                return pCtx.iEncoderError;
-            }
-
-            StampLayerIdrFlagForSliceType(pCtx);
-            let pOutRef = pCtx.out_mut();
-            let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
-            let mut sOutBsWrite = pOutRef.sBsWrite;
-            let mut pCtxOutBs: Option<&mut BsWriter> = Some(&mut sOutBsWrite);
-            let mut sMbData = std::mem::replace(
-                &mut current_layer_expect_mut(pCtx).sMbDataP,
-                MbArray::empty(),
-            );
-            let mut sMbWindow = MbWindow::whole(&mut sMbData, 0);
-            // The CABAC restore scratch — partition 0 is the only one a
-            // single-threaded encode names (`kiSliceIdx % iActiveThreadsNum` with
-            // one thread). Empty means never allocated for this configuration.
-            let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
-            let pRestoreBuf = if vRestoreBuf.is_empty() {
-                None
-            } else {
-                Some(vRestoreBuf.as_mut_slice())
-            };
-            // Single-slice — the dynamic boundary never fires.
-            let iCodeRet = WelsCodeOneSlice(
+            let iSliceSize = match code_and_encapsulate_slice(
                 pCtx,
-                &mut *pCurSlice,
-                eNalType as i32,
-                vOutBsBuf.as_mut_slice(),
-                &mut pCtxOutBs,
-                &mut sMbWindow,
-                pRestoreBuf,
-                None,
-            );
-            pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
-            drop(sMbWindow);
-            current_layer_expect_mut(pCtx).sMbDataP = sMbData;
-            current_layer_expect_mut(pCtx).sSliceBufferInfo[0] = sBank;
-            let pOutRef = pCtx.out_mut();
-            pOutRef.sBsBuffer = vOutBsBuf;
-            pOutRef.sBsWrite = sOutBsWrite;
-            pCtx.iEncoderError = iCodeRet;
-            if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
-                return pCtx.iEncoderError;
-            }
-
-            WelsUnloadNal(pCtx.out_mut());
-
-            let kNalHeaderExt = current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
-            let sWelsEncCtx {
-                pOut,
-                pFrameBs,
-                iPosBsBuffer,
-                ..
-            } = &mut *pCtx;
-            let SWelsEncoderOutput {
-                sNalList,
-                sBsBuffer,
-                sNalLen,
-                iNalIndex,
-                iNalLenBase,
-                ..
-            } = &mut **pOut.as_mut().expect("pOut lives");
-            let kiPos = *iPosBsBuffer as usize;
-            let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
-            let kiSlot = *iNalLenBase + iNalIdxInLayer.max(0) as usize;
-            let mut kiNalLenOut = 0i32;
-            let kiEncodeNalRet = WelsEncodeNal(
-                &sNalList[*iNalIndex as usize - 1],
-                &sBsBuffer[..],
-                Some(&kNalHeaderExt),
-                pDstTail,
-                &mut kiNalLenOut,
-            );
-            // Written through `&AtomicI32`, never `&mut i32` — a `&mut` here retags
-            // the whole buffer `Unique` and pops the C-ABI pointer the application
-            // holds.
-            sNalLen[kiSlot].store(kiNalLenOut, Ordering::Relaxed);
-            pCtx.iEncoderError = kiEncodeNalRet;
-            if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
-                return pCtx.iEncoderError;
-            }
-            let iSliceSize = pCtx.out().nal_len_at(iNalIdxInLayer.max(0) as usize);
+                0,
+                0,
+                SliceCodeMode::FixedPreStamped,
+                eNalType,
+                iNalIdxInLayer,
+            ) {
+                Ok(size) => size,
+                Err(err) => {
+                    pCtx.iEncoderError = err;
+                    return pCtx.iEncoderError;
+                }
+            };
 
             iLayerSize += iSliceSize;
-            pCtx.iPosBsBuffer += iSliceSize;
             iNalIdxInLayer += 1;
             pFbi.sLayerInfo[iLbi].uiLayerType = VIDEO_CODING_LAYER;
             pFbi.sLayerInfo[iLbi].uiSpatialId = iCurDid as u8;
@@ -3353,98 +3343,21 @@ pub fn WelsEncoderEncodeExt(
 
                 WelsLoadNal(pCtx.out_mut(), eNalType as i32, eNalRefIdc as i32);
 
-                let mut sBank =
-                    std::mem::take(&mut current_layer_expect_mut(pCtx).sSliceBufferInfo[0]);
-                let pCurSlice = sBank
-                    .pSliceBuffer
-                    .get_mut(iSliceIdx as usize)
-                    .expect("the fixed-mode bank holds every stamped slice");
-                debug_assert_eq!(iSliceIdx, pCurSlice.iSliceIdx);
-                pCtx.iEncoderError =
-                    SetSliceBoundaryInfo(current_layer_ref(pCtx), &mut *pCurSlice, iSliceIdx);
-
-                StampLayerIdrFlagForSliceType(pCtx);
-                let pOutRef = pCtx.out_mut();
-                let mut vOutBsBuf = std::mem::take(&mut pOutRef.sBsBuffer);
-                let mut sOutBsWrite = pOutRef.sBsWrite;
-                let mut pCtxOutBs: Option<&mut BsWriter> = Some(&mut sOutBsWrite);
-                let mut sMbData = std::mem::replace(
-                    &mut current_layer_expect_mut(pCtx).sMbDataP,
-                    MbArray::empty(),
-                );
-                let mut sMbWindow = MbWindow::whole(&mut sMbData, 0);
-                // The CABAC restore scratch — partition 0 is the only one a
-                // single-threaded encode names (`kiSliceIdx % iActiveThreadsNum`
-                // with one thread). Empty means never allocated for this
-                // configuration.
-                let mut vRestoreBuf = std::mem::take(&mut pCtx.pDynamicBsBuffer[0]);
-                let pRestoreBuf = if vRestoreBuf.is_empty() {
-                    None
-                } else {
-                    Some(vRestoreBuf.as_mut_slice())
-                };
-                // Fixed-mode ST — the dynamic boundary never fires.
-                let iCodeRet = WelsCodeOneSlice(
+                let iSliceSize = match code_and_encapsulate_slice(
                     pCtx,
-                    &mut *pCurSlice,
-                    eNalType as i32,
-                    vOutBsBuf.as_mut_slice(),
-                    &mut pCtxOutBs,
-                    &mut sMbWindow,
-                    pRestoreBuf,
-                    None,
-                );
-                pCtx.pDynamicBsBuffer[0] = vRestoreBuf;
-                drop(sMbWindow);
-                current_layer_expect_mut(pCtx).sMbDataP = sMbData;
-                current_layer_expect_mut(pCtx).sSliceBufferInfo[0] = sBank;
-                let pOutRef = pCtx.out_mut();
-                pOutRef.sBsBuffer = vOutBsBuf;
-                pOutRef.sBsWrite = sOutBsWrite;
-                pCtx.iEncoderError = iCodeRet;
-                if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
-                    return pCtx.iEncoderError;
-                }
+                    0,
+                    iSliceIdx,
+                    SliceCodeMode::FixedPreStamped,
+                    eNalType,
+                    iNalIdxInLayer,
+                ) {
+                    Ok(size) => size,
+                    Err(err) => {
+                        pCtx.iEncoderError = err;
+                        return pCtx.iEncoderError;
+                    }
+                };
 
-                WelsUnloadNal(pCtx.out_mut());
-
-                let kNalHeaderExt = current_layer_expect(pCtx).sLayerInfo.sNalHeaderExt;
-                let sWelsEncCtx {
-                    pOut,
-                    pFrameBs,
-                    iPosBsBuffer,
-                    ..
-                } = &mut *pCtx;
-                let SWelsEncoderOutput {
-                    sNalList,
-                    sBsBuffer,
-                    sNalLen,
-                    iNalIndex,
-                    iNalLenBase,
-                    ..
-                } = &mut **pOut.as_mut().expect("pOut lives");
-                let kiPos = *iPosBsBuffer as usize;
-                let pDstTail = (kiPos <= pFrameBs.len()).then(|| &mut pFrameBs[kiPos..]);
-                let kiSlot = *iNalLenBase + iNalIdxInLayer.max(0) as usize;
-                let mut kiNalLenOut = 0i32;
-                let kiEncodeNalRet = WelsEncodeNal(
-                    &sNalList[*iNalIndex as usize - 1],
-                    &sBsBuffer[..],
-                    Some(&kNalHeaderExt),
-                    pDstTail,
-                    &mut kiNalLenOut,
-                );
-                // Written through `&AtomicI32`, never `&mut i32` — a `&mut` here
-                // retags the whole buffer `Unique` and pops the C-ABI pointer the
-                // application holds.
-                sNalLen[kiSlot].store(kiNalLenOut, Ordering::Relaxed);
-                pCtx.iEncoderError = kiEncodeNalRet;
-                if pCtx.iEncoderError != ENC_RETURN_SUCCESS {
-                    return pCtx.iEncoderError;
-                }
-                let iSliceSize = pCtx.out().nal_len_at(iNalIdxInLayer.max(0) as usize);
-
-                pCtx.iPosBsBuffer += iSliceSize;
                 iLayerSize += iSliceSize;
 
                 iNalIdxInLayer += 1;

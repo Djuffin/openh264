@@ -21,5 +21,5 @@ pub mod parse_mb_syn_cabac;
 pub mod parse_mb_syn_cavlc;
 pub(crate) mod pic_queue;
 pub mod picture;
-pub mod slice;
+pub(crate) mod slice;
 pub mod vlc_tables;

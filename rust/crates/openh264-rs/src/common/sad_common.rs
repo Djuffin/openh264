@@ -23,11 +23,7 @@ pub enum SubBlockMultiple {
     BLOCK_SIZE_ALL = 7,
 }
 
-/// Absolute difference helper matching `WELS_ABS` in `macros.h`.
-#[inline(always)]
-pub fn WELS_ABS(iX: i32) -> i32 {
-    iX.abs()
-}
+pub use crate::common::macros::WELS_ABS;
 
 //=================== Safe kernels =====================//
 

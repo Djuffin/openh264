@@ -152,26 +152,7 @@ pub fn GENERATE_ERROR_NO(level: i32, info: i32) -> i32 {
     (level << 16) | info
 }
 
-#[inline]
-pub fn WELS_MIN<T: PartialOrd>(a: T, b: T) -> T {
-    if a < b { a } else { b }
-}
-
-#[inline]
-pub fn WELS_CLIP3(x: i32, min_val: i32, max_val: i32) -> i32 {
-    if x < min_val {
-        min_val
-    } else if x > max_val {
-        max_val
-    } else {
-        x
-    }
-}
-
-#[inline]
-pub fn WELS_ABS(x: i32) -> i32 {
-    if x < 0 { -x } else { x }
-}
+pub use crate::common::macros::{WELS_ABS, WELS_CLIP3, WELS_MIN};
 
 #[inline]
 pub fn IS_VCL_NAL(t: EWelsNalUnitType, _unused: i32) -> bool {

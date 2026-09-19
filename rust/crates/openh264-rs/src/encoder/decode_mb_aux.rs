@@ -16,14 +16,7 @@ pub use crate::encoder::svc_encode_mb::{
     WelsDequantIHadamard2x2Dc, WelsDequantLumaDc4x4, WelsIHadamard4x4Dc,
 };
 
-#[inline(always)]
-fn WelsClip1(iX: i32) -> u8 {
-    if (iX & !255) != 0 {
-        if -iX < 0 { 255 } else { 0 }
-    } else {
-        iX as u8
-    }
-}
+use crate::common::macros::WelsClip1;
 
 use crate::encoder::rec_view::RecCursor;
 use crate::encoder::svc_encode_mb::g_kuiDequantCoeff;

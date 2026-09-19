@@ -97,22 +97,10 @@ pub const uiLastCoeffFlagOffset: [u16; 5] = [0, 15, 29, 44, 47];
 pub const uiCoeffAbsLevelMinus1Offset: [u16; 5] = [0, 10, 20, 30, 39];
 pub const uiCodecBlockFlagOffset: [u16; 5] = [0, 4, 8, 12, 16];
 
-pub const g_kiMapModeI16x16: [i8; 7] = [0, 1, 2, 3, 2, 2, 2];
-pub const g_kiMapModeIntraChroma: [i8; 7] = [0, 1, 2, 3, 0, 0, 0];
-
-pub const g_kuiMbCountScan4Idx: [u8; 24] = [
-    0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15, 16, 17, 20, 21, 18, 19, 22, 23,
-];
-
-pub const g_kuiCache48CountScan4Idx: [u8; 24] = [
-    9, 10, 17, 18, 11, 12, 19, 20, 25, 26, 33, 34, 27, 28, 35, 36, 14, 15, 22, 23, 38, 39, 46, 47,
-];
-
-pub const g_kuiChromaQpTable: [u8; 52] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-    26, 27, 28, 29, 29, 30, 31, 32, 32, 33, 34, 34, 35, 35, 36, 36, 37, 37, 37, 38, 38, 38, 39, 39,
-    39, 39,
-];
+pub use crate::common::common_tables::{
+    g_kiMapModeI16x16, g_kiMapModeIntraChroma, g_kuiCache48CountScan4Idx, g_kuiChromaQpTable,
+    g_kuiMbCountScan4Idx,
+};
 
 pub use crate::encoder::encoder_context::EWelsSliceType;
 pub use crate::encoder::md::SMB;

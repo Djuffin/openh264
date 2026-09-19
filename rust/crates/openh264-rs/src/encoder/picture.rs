@@ -16,11 +16,7 @@ use crate::safe::pool::{Id, Pool};
 /// `AllocPicture` puts around every picture; chroma gets half of it.
 const PADDING_LENGTH: usize = 32;
 
-/// `WELS_ALIGN(x, n)` for the two alignments this file needs, in `usize`.
-#[inline]
-const fn align_up(x: usize, n: usize) -> usize {
-    (x + n - 1) & !(n - 1)
-}
+use crate::common::macros::align_up;
 
 /// `LTR_MARKING_RECEIVE_STATE` — `codec/encoder/core/inc/wels_const.h:150`.
 pub const RECIEVE_UNKOWN: u8 = 0;

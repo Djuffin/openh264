@@ -118,27 +118,11 @@ pub const MB_TYPE_8x8_REF0: u32 = 0x00000080;
 pub const MB_TYPE_SKIP: u32 = 0x00000100;
 
 // Global Lookup Tables
-pub const g_kiQpCostTable: [i32; 52] = [
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 6, 6, 7, 8, 9,
-    10, 11, 13, 14, 16, 18, 20, 23, 25, 29, 32, 36, 40, 45, 51, 57, 64, 72, 81, 91,
-];
+pub use crate::common::common_tables::{
+    g_kiMapModeI16x16, g_kiMapModeIntraChroma, g_kiQpCostTable,
+};
 
-pub const g_kiMapModeI16x16: [i8; 7] = [0, 1, 2, 3, 2, 2, 2];
-pub const g_kiMapModeIntraChroma: [i8; 7] = [0, 1, 2, 3, 0, 0, 0];
-
-pub const G_KUI_GOLOMB_UE_LENGTH: [u32; 256] = [
-    1, 3, 3, 5, 5, 5, 5, 7, 7, 7, 7, 7, 7, 7, 7, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
-    11, 11, 11, 11, 11, 11, 11, 11, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
-    15, 15, 15, 15, 15, 15, 15, 15, 17,
-];
+pub use crate::common::wels_common_defs::g_kuiGolombUELength as G_KUI_GOLOMB_UE_LENGTH;
 
 // Data Structures
 
@@ -931,24 +915,7 @@ pub fn REPLACE_SAD_MULTIPLY(x: i32) -> i32 {
     x - (x >> 3) + (x >> 5)
 }
 
-#[inline(always)]
-pub fn WelsMedian(iA: i32, iB: i32, iC: i32) -> i32 {
-    let mut min = iA;
-    let mut max = iA;
-    if iB < min {
-        min = iB;
-    }
-    if iB > max {
-        max = iB;
-    }
-    if iC < min {
-        min = iC;
-    }
-    if iC > max {
-        max = iC;
-    }
-    iA + iB + iC - min - max
-}
+pub use crate::common::macros::WelsMedian;
 
 #[inline(always)]
 pub fn IS_SVC_INTER(uiMbType: u32) -> bool {
@@ -1048,155 +1015,22 @@ pub fn FillNeighborCacheIntra(pMbCache: &mut SMbCache, mbs: &MbSplit<'_, SMB>) {
     pMbCache.uiNeighborIntra = uiNeighborIntra as u8;
 }
 
-pub fn FillNeighborCacheInterWithoutBGD(
-    pMbCache: &mut SMbCache,
-    mbs: &MbSplit<'_, SMB>,
-    _pVaaBgMbFlag: &[i8],
-    kpMbSkipSad: &SharedMbArray<i32>,
-) {
-    let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
-    let kiMbXY = mbs.cur().iMbXY as isize;
-    let iMbWidth = mbs.stride() as i32;
-    let pMvComp = &mut pMbCache.sMvComponents;
-
-    if (uiNeighborAvail & LEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.left().uiMbType) {
-        let pLeftMb = mbs.left();
-        pMvComp.sMotionVectorCache[6] = pLeftMb.sMv[3];
-        pMvComp.sMotionVectorCache[12] = pLeftMb.sMv[7];
-        pMvComp.sMotionVectorCache[18] = pLeftMb.sMv[11];
-        pMvComp.sMotionVectorCache[24] = pLeftMb.sMv[15];
-        pMvComp.iRefIndexCache[6] = pLeftMb.iRefIndex[1];
-        pMvComp.iRefIndexCache[12] = pLeftMb.iRefIndex[1];
-        pMvComp.iRefIndexCache[18] = pLeftMb.iRefIndex[3];
-        pMvComp.iRefIndexCache[24] = pLeftMb.iRefIndex[3];
-        pMbCache.iSadCost[3] = pLeftMb.iSadCost;
-
-        if pLeftMb.uiMbType == MB_TYPE_SKIP {
-            pMbCache.bMbTypeSkip[3] = true;
-            pMbCache.iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
-        } else {
-            pMbCache.bMbTypeSkip[3] = false;
-            pMbCache.iSadCostSkip[3] = 0;
-        }
-    } else {
-        pMvComp.sMotionVectorCache[6] = SMVUnitXY::default();
-        pMvComp.sMotionVectorCache[12] = SMVUnitXY::default();
-        pMvComp.sMotionVectorCache[18] = SMVUnitXY::default();
-        pMvComp.sMotionVectorCache[24] = SMVUnitXY::default();
-        let ref_val = if (uiNeighborAvail & LEFT_MB_POS) != 0 {
-            REF_NOT_IN_LIST
-        } else {
-            REF_NOT_AVAIL
-        };
-        pMvComp.iRefIndexCache[6] = ref_val;
-        pMvComp.iRefIndexCache[12] = ref_val;
-        pMvComp.iRefIndexCache[18] = ref_val;
-        pMvComp.iRefIndexCache[24] = ref_val;
-        pMbCache.iSadCost[3] = 0;
-        pMbCache.bMbTypeSkip[3] = false;
-        pMbCache.iSadCostSkip[3] = 0;
-    }
-
-    if (uiNeighborAvail & TOP_MB_POS) != 0 && IS_SVC_INTER(mbs.top().uiMbType) {
-        let pTopMb = mbs.top();
-        let pTopMv = &pTopMb.sMv;
-        pMvComp.sMotionVectorCache[1..3].copy_from_slice(&pTopMv[12..14]);
-        pMvComp.sMotionVectorCache[3..5].copy_from_slice(&pTopMv[14..16]);
-        pMvComp.iRefIndexCache[1] = pTopMb.iRefIndex[2];
-        pMvComp.iRefIndexCache[2] = pTopMb.iRefIndex[2];
-        pMvComp.iRefIndexCache[3] = pTopMb.iRefIndex[3];
-        pMvComp.iRefIndexCache[4] = pTopMb.iRefIndex[3];
-        pMbCache.iSadCost[1] = pTopMb.iSadCost;
-
-        if pTopMb.uiMbType == MB_TYPE_SKIP {
-            pMbCache.bMbTypeSkip[1] = true;
-            pMbCache.iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
-        } else {
-            pMbCache.bMbTypeSkip[1] = false;
-            pMbCache.iSadCostSkip[1] = 0;
-        }
-    } else {
-        pMvComp.sMotionVectorCache[1] = SMVUnitXY::default();
-        pMvComp.sMotionVectorCache[2] = SMVUnitXY::default();
-        pMvComp.sMotionVectorCache[3] = SMVUnitXY::default();
-        pMvComp.sMotionVectorCache[4] = SMVUnitXY::default();
-        let ref_val = if (uiNeighborAvail & TOP_MB_POS) != 0 {
-            REF_NOT_IN_LIST
-        } else {
-            REF_NOT_AVAIL
-        };
-        pMvComp.iRefIndexCache[1] = ref_val;
-        pMvComp.iRefIndexCache[2] = ref_val;
-        pMvComp.iRefIndexCache[3] = ref_val;
-        pMvComp.iRefIndexCache[4] = ref_val;
-        pMbCache.iSadCost[1] = 0;
-        pMbCache.bMbTypeSkip[1] = false;
-        pMbCache.iSadCostSkip[1] = 0;
-    }
-
-    if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_left().uiMbType) {
-        let pTopLeftMb = mbs.top_left();
-        pMvComp.sMotionVectorCache[0] = pTopLeftMb.sMv[15];
-        pMvComp.iRefIndexCache[0] = pTopLeftMb.iRefIndex[3];
-        pMbCache.iSadCost[0] = pTopLeftMb.iSadCost;
-
-        if pTopLeftMb.uiMbType == MB_TYPE_SKIP {
-            pMbCache.bMbTypeSkip[0] = true;
-            pMbCache.iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
-        } else {
-            pMbCache.bMbTypeSkip[0] = false;
-            pMbCache.iSadCostSkip[0] = 0;
-        }
-    } else {
-        pMvComp.sMotionVectorCache[0] = SMVUnitXY::default();
-        pMvComp.iRefIndexCache[0] = if (uiNeighborAvail & TOPLEFT_MB_POS) != 0 {
-            REF_NOT_IN_LIST
-        } else {
-            REF_NOT_AVAIL
-        };
-        pMbCache.iSadCost[0] = 0;
-        pMbCache.bMbTypeSkip[0] = false;
-        pMbCache.iSadCostSkip[0] = 0;
-    }
-
-    if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 && IS_SVC_INTER(mbs.top_right().uiMbType) {
-        let pTopRightMb = mbs.top_right();
-        pMvComp.sMotionVectorCache[5] = pTopRightMb.sMv[12];
-        pMvComp.iRefIndexCache[5] = pTopRightMb.iRefIndex[2];
-        pMbCache.iSadCost[2] = pTopRightMb.iSadCost;
-
-        if pTopRightMb.uiMbType == MB_TYPE_SKIP {
-            pMbCache.bMbTypeSkip[2] = true;
-            pMbCache.iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
-        } else {
-            pMbCache.bMbTypeSkip[2] = false;
-            pMbCache.iSadCostSkip[2] = 0;
-        }
-    } else {
-        pMvComp.sMotionVectorCache[5] = SMVUnitXY::default();
-        pMvComp.iRefIndexCache[5] = if (uiNeighborAvail & TOPRIGHT_MB_POS) != 0 {
-            REF_NOT_IN_LIST
-        } else {
-            REF_NOT_AVAIL
-        };
-        pMbCache.iSadCost[2] = 0;
-        pMbCache.bMbTypeSkip[2] = false;
-        pMbCache.iSadCostSkip[2] = 0;
-    }
-
-    pMvComp.sMotionVectorCache[9] = SMVUnitXY::default();
-    pMvComp.sMotionVectorCache[21] = SMVUnitXY::default();
-    pMvComp.sMotionVectorCache[11] = SMVUnitXY::default();
-    pMvComp.sMotionVectorCache[17] = SMVUnitXY::default();
-    pMvComp.sMotionVectorCache[23] = SMVUnitXY::default();
-    pMvComp.iRefIndexCache[9] = REF_NOT_AVAIL;
-    pMvComp.iRefIndexCache[11] = REF_NOT_AVAIL;
-    pMvComp.iRefIndexCache[17] = REF_NOT_AVAIL;
-    pMvComp.iRefIndexCache[21] = REF_NOT_AVAIL;
-    pMvComp.iRefIndexCache[23] = REF_NOT_AVAIL;
-}
-
-pub fn FillNeighborCacheInterWithBGD(
+/// Fills the inter-prediction neighbor cache (MVs, reference indices, SAD costs)
+/// for the current macroblock from its left / top / top-left / top-right neighbors.
+///
+/// This merges the two upstream C++ functions
+/// `WelsMdInterMbEnc`'s helpers `FillNeighborCacheInterWithoutBGD`
+/// (codec/encoder/core/src/md.cpp:132) and `FillNeighborCacheInterWithBGD`
+/// (codec/encoder/core/src/md.cpp:253), which are character-identical except for
+/// four extra background-detection guards on the neighbor "skip" decision.
+///
+/// `BGD` is a *const* generic (not a runtime flag) so the `false` instantiation
+/// compiles to exactly the non-BGD code: the `pVaaBgMbFlag` lookups are dead-code
+/// eliminated. This matters for correctness, not just speed — callers may pass an
+/// empty `pVaaBgMbFlag` slice when background detection is disabled, so the
+/// non-BGD path must never index it.
+#[inline(always)]
+fn fill_neighbor_cache_inter<const BGD: bool>(
     pMbCache: &mut SMbCache,
     mbs: &MbSplit<'_, SMB>,
     pVaaBgMbFlag: &[i8],
@@ -1219,7 +1053,9 @@ pub fn FillNeighborCacheInterWithBGD(
         pMvComp.iRefIndexCache[24] = pLeftMb.iRefIndex[3];
         pMbCache.iSadCost[3] = pLeftMb.iSadCost;
 
-        if pLeftMb.uiMbType == MB_TYPE_SKIP && pVaaBgMbFlag[(kiMbXY - 1) as usize] == 0 {
+        // With BGD enabled, a neighbor sitting on detected background is not
+        // treated as a skip candidate.
+        if pLeftMb.uiMbType == MB_TYPE_SKIP && (!BGD || pVaaBgMbFlag[(kiMbXY - 1) as usize] == 0) {
             pMbCache.bMbTypeSkip[3] = true;
             pMbCache.iSadCostSkip[3] = kpMbSkipSad.get((kiMbXY - 1) as usize);
         } else {
@@ -1257,7 +1093,7 @@ pub fn FillNeighborCacheInterWithBGD(
         pMbCache.iSadCost[1] = pTopMb.iSadCost;
 
         if pTopMb.uiMbType == MB_TYPE_SKIP
-            && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize) as usize] == 0
+            && (!BGD || pVaaBgMbFlag[(kiMbXY - iMbWidth as isize) as usize] == 0)
         {
             pMbCache.bMbTypeSkip[1] = true;
             pMbCache.iSadCostSkip[1] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize) as usize);
@@ -1291,7 +1127,7 @@ pub fn FillNeighborCacheInterWithBGD(
         pMbCache.iSadCost[0] = pTopLeftMb.iSadCost;
 
         if pTopLeftMb.uiMbType == MB_TYPE_SKIP
-            && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize - 1) as usize] == 0
+            && (!BGD || pVaaBgMbFlag[(kiMbXY - iMbWidth as isize - 1) as usize] == 0)
         {
             pMbCache.bMbTypeSkip[0] = true;
             pMbCache.iSadCostSkip[0] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize - 1) as usize);
@@ -1318,7 +1154,7 @@ pub fn FillNeighborCacheInterWithBGD(
         pMbCache.iSadCost[2] = pTopRightMb.iSadCost;
 
         if pTopRightMb.uiMbType == MB_TYPE_SKIP
-            && pVaaBgMbFlag[(kiMbXY - iMbWidth as isize + 1) as usize] == 0
+            && (!BGD || pVaaBgMbFlag[(kiMbXY - iMbWidth as isize + 1) as usize] == 0)
         {
             pMbCache.bMbTypeSkip[2] = true;
             pMbCache.iSadCostSkip[2] = kpMbSkipSad.get((kiMbXY - iMbWidth as isize + 1) as usize);
@@ -1348,6 +1184,26 @@ pub fn FillNeighborCacheInterWithBGD(
     pMvComp.iRefIndexCache[17] = REF_NOT_AVAIL;
     pMvComp.iRefIndexCache[21] = REF_NOT_AVAIL;
     pMvComp.iRefIndexCache[23] = REF_NOT_AVAIL;
+}
+
+/// Mirrors `FillNeighborCacheInterWithoutBGD`, codec/encoder/core/src/md.cpp:132.
+pub fn FillNeighborCacheInterWithoutBGD(
+    pMbCache: &mut SMbCache,
+    mbs: &MbSplit<'_, SMB>,
+    _pVaaBgMbFlag: &[i8],
+    kpMbSkipSad: &SharedMbArray<i32>,
+) {
+    fill_neighbor_cache_inter::<false>(pMbCache, mbs, _pVaaBgMbFlag, kpMbSkipSad);
+}
+
+/// Mirrors `FillNeighborCacheInterWithBGD`, codec/encoder/core/src/md.cpp:253.
+pub fn FillNeighborCacheInterWithBGD(
+    pMbCache: &mut SMbCache,
+    mbs: &MbSplit<'_, SMB>,
+    pVaaBgMbFlag: &[i8],
+    kpMbSkipSad: &SharedMbArray<i32>,
+) {
+    fill_neighbor_cache_inter::<true>(pMbCache, mbs, pVaaBgMbFlag, kpMbSkipSad);
 }
 
 pub extern "C" fn InitFillNeighborCacheInterFunc(pFuncList: &mut SWelsFuncPtrList, kiFlag: i32) {

@@ -30,14 +30,7 @@ use crate::common::cpu_core::WELS_CPU_SSE2;
 /// default, `simd::scalar` under `--features scalar` or on a target with neither.
 use crate::simd::kernels;
 
-#[inline(always)]
-fn WelsClip1(iX: i32) -> u8 {
-    if (iX & !255) != 0 {
-        if -iX < 0 { 255 } else { 0 }
-    } else {
-        iX as u8
-    }
-}
+use crate::common::macros::WelsClip1;
 
 // ============================================================================
 // Safe kernels

@@ -73,100 +73,16 @@ pub fn IS_INTRA(mb_type: u32) -> bool {
 // H.264 Deblocking Lookup Tables
 // ============================================================================
 
-/// Table 8-16 in H.264/AVC standard: Alpha table indexed by clipped QP + offset (0..51 + padding)
-// The encoder's and decoder's copies of these three tables are file-local and sized
-// differently: `[52 + 12]` here, `[52 + 24]` in the decoder.
-pub static g_kuiAlphaTable: [u8; 52 + 12] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6, 7, 8, 9, 10, 12, 13, 15, 17, 20,
-    22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 71, 80, 90, 101, 113, 127, 144, 162, 182, 203, 226,
-    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-];
-
-/// Table 8-16 in H.264/AVC standard: Beta table indexed by clipped QP + offset (0..51 + padding)
-pub static g_kiBetaTable: [i8; 52 + 12] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 6, 6, 7, 7, 8, 8,
-    9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 18, 18, 18, 18,
-    18, 18, 18, 18, 18, 18, 18, 18,
-];
-
-/// Table 8-17 in H.264/AVC standard: Clipping parameter matrix indexed by IndexA and bS
-pub static g_kiTc0Table: [[i8; 4]; 52 + 12] = [
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 0],
-    [-1, 0, 0, 1],
-    [-1, 0, 0, 1],
-    [-1, 0, 0, 1],
-    [-1, 0, 0, 1],
-    [-1, 0, 1, 1],
-    [-1, 0, 1, 1],
-    [-1, 1, 1, 1],
-    [-1, 1, 1, 1],
-    [-1, 1, 1, 1],
-    [-1, 1, 1, 1],
-    [-1, 1, 1, 2],
-    [-1, 1, 1, 2],
-    [-1, 1, 1, 2],
-    [-1, 1, 1, 2],
-    [-1, 1, 2, 3],
-    [-1, 1, 2, 3],
-    [-1, 2, 2, 3],
-    [-1, 2, 2, 4],
-    [-1, 2, 3, 4],
-    [-1, 2, 3, 4],
-    [-1, 3, 3, 5],
-    [-1, 3, 4, 6],
-    [-1, 3, 4, 6],
-    [-1, 4, 5, 7],
-    [-1, 4, 5, 8],
-    [-1, 4, 6, 9],
-    [-1, 5, 7, 10],
-    [-1, 6, 8, 11],
-    [-1, 6, 8, 13],
-    [-1, 7, 10, 14],
-    [-1, 8, 11, 16],
-    [-1, 9, 12, 18],
-    [-1, 10, 13, 20],
-    [-1, 11, 15, 23],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-    [-1, 13, 17, 25],
-];
-
-/// Sub-block index mapping table for marginal boundary edges
-pub static g_kuiTableBIdx: [[u8; 8]; 2] =
-    [[0, 4, 8, 12, 3, 7, 11, 15], [0, 1, 2, 3, 12, 13, 14, 15]];
-
 // ============================================================================
-// Core Data Structures
+// Core Data Structures & Shared Lookup Tables
 // ============================================================================
 
 use crate::common::deblocking_common::{
     deblock_chroma_eq4, deblock_chroma_lt4, deblock_luma_eq4, deblock_luma_lt4,
+};
+pub use crate::common::deblocking_common::{
+    alpha_table, beta_table, g_kiBetaTable, g_kiTc0Table, g_kuiAlphaTable, g_kuiTableBIdx,
+    tc0_table,
 };
 use crate::encoder::rec_view::{RecCursor, RecPicView};
 /// 4-byte motion vector unit $(MV_x, MV_y)$ in quarter-pel precision.
@@ -239,32 +155,7 @@ pub use crate::encoder::svc_encode_slice::{SDqLayer, SSlice, current_layer_ref};
 // Math & Bitwise Inline Macros
 // ============================================================================
 
-#[inline(always)]
-pub fn CLIP3_QP_0_51(x: i32) -> i32 {
-    x.clamp(0, 51)
-}
-
-#[inline(always)]
-pub fn WELS_CLIP3(x: i32, min_val: i32, max_val: i32) -> i32 {
-    if x < min_val {
-        min_val
-    } else if x > max_val {
-        max_val
-    } else {
-        x
-    }
-}
-
-#[inline(always)]
-pub fn WelsClip1(x: i32) -> u8 {
-    if x < 0 {
-        0
-    } else if x > 255 {
-        255
-    } else {
-        x as u8
-    }
-}
+pub use crate::common::macros::{CLIP3_QP_0_51, WELS_CLIP3, WelsClip1};
 
 #[inline(always)]
 pub fn MB_BS_MV(
@@ -319,13 +210,13 @@ pub fn GET_ALPHA_BETA_FROM_QP(
 ) {
     let idxA = CLIP3_QP_0_51(qp + iAlphaOffset);
     *iIdexA = idxA;
-    *iAlpha = g_kuiAlphaTable[idxA as usize] as i32;
-    *iBeta = g_kiBetaTable[CLIP3_QP_0_51(qp + iBetaOffset) as usize] as i32;
+    *iAlpha = alpha_table(idxA) as i32;
+    *iBeta = beta_table(CLIP3_QP_0_51(qp + iBetaOffset)) as i32;
 }
 
 #[inline(always)]
 pub fn TC0_TBL_LOOKUP(iTc: &mut [i8; 4], iIdexA: i32, pBS: &[u8], bchroma: i8) {
-    let tbl = g_kiTc0Table[iIdexA as usize];
+    let tbl = tc0_table(iIdexA);
     iTc[0] = tbl[pBS[0] as usize] + bchroma;
     iTc[1] = tbl[pBS[1] as usize] + bchroma;
     iTc[2] = tbl[pBS[2] as usize] + bchroma;

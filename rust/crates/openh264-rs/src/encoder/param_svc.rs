@@ -76,21 +76,7 @@ pub const g_kuiTemporalIdListTable: [[u8; MAX_GOP_SIZE + 1]; MAX_TEMPORAL_LEVEL]
     [0, 3, 2, 3, 1, 3, 2, 3, 0], // uiGopSize = 8
 ];
 
-#[inline]
-pub fn WELS_CLIP3<T: PartialOrd + Copy>(val: T, min_val: T, max_val: T) -> T {
-    if val < min_val {
-        min_val
-    } else if val > max_val {
-        max_val
-    } else {
-        val
-    }
-}
-
-#[inline]
-pub fn WELS_ALIGN(x: i32, n: i32) -> i32 {
-    (x + (n - 1)) & !(n - 1)
-}
+pub use crate::common::macros::{WELS_ALIGN, WELS_CLIP3};
 
 #[inline]
 pub fn WELS_LOG2(x: u32) -> i32 {

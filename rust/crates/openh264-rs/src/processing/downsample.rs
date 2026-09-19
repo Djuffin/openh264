@@ -22,17 +22,7 @@ use super::vaacalc::{RET_INVALIDPARAM, RET_SUCCESS};
 const MAX_SAMPLE_WIDTH: usize = 1920;
 const MAX_SAMPLE_HEIGHT: usize = 1088;
 
-/// `WELS_ALIGN` — `macros.h:85`.
-#[inline]
-fn WELS_ALIGN(x: usize, n: usize) -> usize {
-    (x + n - 1) & !(n - 1)
-}
-
-/// `WELS_ROUND` — `macros.h:120`: `(int32_t)(0.5 + x)`.
-#[inline]
-fn WELS_ROUND(x: f32) -> i32 {
-    (0.5 + x as f64) as i32
-}
+use crate::common::macros::{WELS_ROUND_f as WELS_ROUND, align_up as WELS_ALIGN};
 
 /// `DyadicBilinearDownsampler_c` — `downsamplefuncs.cpp:47`. A 2x2 box average with
 /// the rounding done in two halves: each row pair first, then the two rows.

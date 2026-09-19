@@ -15,14 +15,7 @@ pub const I16x16_COUNT: usize = 16;
 
 use crate::safe::plane::PlaneCursorMut;
 
-#[inline(always)]
-pub fn WelsClip1(iX: i32) -> u8 {
-    if (iX & !255) != 0 {
-        ((-iX) >> 31) as u8
-    } else {
-        iX as u8
-    }
-}
+pub use crate::common::macros::WelsClip1;
 
 // ============================================================================
 // Kernels

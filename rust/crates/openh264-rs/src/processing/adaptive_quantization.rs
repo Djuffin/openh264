@@ -45,14 +45,7 @@ const MB_WIDTH_LUMA: i32 = 16;
 pub const AQ_QUALITY_MODE: i32 = 0;
 pub const AQ_BITRATE_MODE: i32 = 1;
 
-#[inline]
-fn WELS_DIV_ROUND64(x: i64, y: i64) -> i64 {
-    if y == 0 {
-        x / (y + 1)
-    } else {
-        ((y / 2) + x) / y
-    }
-}
+use crate::common::macros::WELS_DIV_ROUND64;
 
 //=================== Safe kernels =====================//
 

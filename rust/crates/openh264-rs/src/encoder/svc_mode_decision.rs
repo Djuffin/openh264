@@ -63,8 +63,7 @@ pub const MB_TOP_BIT: u32 = 1;
 pub const MB_TOPRIGHT_BIT: u32 = 2;
 pub const REF_NOT_AVAIL: i8 = -2;
 
-pub const g_kuiCache30ScanIdx: [u8; 16] =
-    [7, 8, 13, 14, 9, 10, 15, 16, 19, 20, 25, 26, 21, 22, 27, 28];
+pub use crate::common::common_tables::{g_kiMapModeI16x16, g_kuiCache30ScanIdx};
 
 pub const I16_PRED_V: i8 = 0;
 pub const I16_PRED_H: i8 = 1;
@@ -121,8 +120,6 @@ pub const g_kiIntra16AvaliMode: [[i8; 5]; 8] = [
     ],
     [I16_PRED_V, I16_PRED_H, I16_PRED_DC, I16_PRED_P, 4],
 ];
-
-pub const g_kiMapModeI16x16: [i8; 7] = [0, 1, 2, 3, 2, 2, 2];
 
 // Neighbor Availability Bitmasks
 pub const LEFT_MB_POS: u8 = 0x01;
@@ -248,16 +245,7 @@ pub fn IS_SVC_INTRA(uiMbType: Mb_Type) -> bool {
     IS_I_BL(uiMbType) || IS_INTRA(uiMbType)
 }
 
-#[inline(always)]
-pub fn WELS_CLIP3(iX: i32, iMin: i32, iMax: i32) -> i32 {
-    if iX < iMin {
-        iMin
-    } else if iX > iMax {
-        iMax
-    } else {
-        iX
-    }
-}
+pub use crate::common::macros::WELS_CLIP3;
 
 // ============================================================================
 // External C Routine Declarations

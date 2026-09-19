@@ -149,14 +149,7 @@ pub static g_kuiABCD: [[[u8; 4]; 8]; 8] = [
     ],
 ];
 
-#[inline(always)]
-pub fn WelsClip1(iX: i32) -> u8 {
-    if (iX & !255) != 0 {
-        if iX < 0 { 0 } else { 255 }
-    } else {
-        iX as u8
-    }
-}
+pub use crate::common::macros::WelsClip1;
 
 // ============================================================================
 // Kernels

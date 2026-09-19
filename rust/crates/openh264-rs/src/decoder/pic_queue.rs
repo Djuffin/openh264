@@ -387,11 +387,7 @@ pub use crate::decoder::decoder_context::SWelsDecoderContext;
 // Helper Macros / Inline Functions
 // ============================================================================
 
-/// Alignment calculation macro matching `WELS_ALIGN(x, n)`.
-#[inline]
-pub const fn WELS_ALIGN(x: i32, n: i32) -> i32 {
-    (x + (n - 1)) & !(n - 1)
-}
+pub use crate::common::macros::WELS_ALIGN;
 
 use crate::safe::pool::Id;
 

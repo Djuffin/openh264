@@ -211,18 +211,7 @@ pub fn set_rect_mv(block: &mut [[i16; 2]; 16], origin: usize, val: [i16; 2]) {
 // Mathematical Helper Functions
 // ============================================================================
 
-/// Calculates component-wise median of three signed 16-bit integers.
-#[inline(always)]
-pub fn WelsMedian(a: i16, b: i16, c: i16) -> i16 {
-    let a32 = a as i32;
-    let b32 = b as i32;
-    let c32 = c as i32;
-    let min_ab = std::cmp::min(a32, b32);
-    let min_abc = std::cmp::min(min_ab, c32);
-    let max_ab = std::cmp::max(a32, b32);
-    let max_abc = std::cmp::max(max_ab, c32);
-    (a32 + b32 + c32 - min_abc - max_abc) as i16
-}
+pub use crate::common::macros::WelsMedian;
 
 /// Returns the minimum positive reference index (>= 0), or the other value if negative.
 #[inline(always)]

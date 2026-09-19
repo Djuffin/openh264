@@ -9,30 +9,145 @@
 // Arithmetic and Clipping Helpers
 // ============================================================================
 
-#[inline(always)]
-pub fn WELS_ABS(iX: i32) -> i32 {
-    if iX > 0 { iX } else { -iX }
-}
+pub use crate::common::macros::{WELS_ABS, WELS_CLIP3, WelsClip1};
+
+// ============================================================================
+// H.264 Deblocking Lookup Tables
+// ============================================================================
+
+/// Table 8-16 in H.264/AVC standard: Alpha table with +12 leading and trailing index offset padding.
+pub static g_kuiAlphaTable: [u8; 52 + 24] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6,
+    7, 8, 9, 10, 12, 13, 15, 17, 20, 22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 71, 80, 90, 101, 113,
+    127, 144, 162, 182, 203, 226, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255,
+];
+
+/// Table 8-16 in H.264/AVC standard: Beta table with +12 leading and trailing index offset padding.
+pub static g_kiBetaTable: [i8; 52 + 24] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 3,
+    3, 3, 3, 4, 4, 4, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16,
+    16, 17, 17, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
+];
+
+/// Table 8-17 in H.264/AVC standard: Tc0 table indexed by `(IndexA + 12)` and `bS` (`0..=3`).
+pub static g_kiTc0Table: [[i8; 4]; 52 + 24] = [
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 0],
+    [-1, 0, 0, 1],
+    [-1, 0, 0, 1],
+    [-1, 0, 0, 1],
+    [-1, 0, 0, 1],
+    [-1, 0, 1, 1],
+    [-1, 0, 1, 1],
+    [-1, 1, 1, 1],
+    [-1, 1, 1, 1],
+    [-1, 1, 1, 1],
+    [-1, 1, 1, 1],
+    [-1, 1, 1, 2],
+    [-1, 1, 1, 2],
+    [-1, 1, 1, 2],
+    [-1, 1, 1, 2],
+    [-1, 1, 2, 3],
+    [-1, 1, 2, 3],
+    [-1, 2, 2, 3],
+    [-1, 2, 2, 4],
+    [-1, 2, 3, 4],
+    [-1, 2, 3, 4],
+    [-1, 3, 3, 5],
+    [-1, 3, 4, 6],
+    [-1, 3, 4, 6],
+    [-1, 4, 5, 7],
+    [-1, 4, 5, 8],
+    [-1, 4, 6, 9],
+    [-1, 5, 7, 10],
+    [-1, 6, 8, 11],
+    [-1, 6, 8, 13],
+    [-1, 7, 10, 14],
+    [-1, 8, 11, 16],
+    [-1, 9, 12, 18],
+    [-1, 10, 13, 20],
+    [-1, 11, 15, 23],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+    [-1, 13, 17, 25],
+];
 
 #[inline(always)]
-pub fn WELS_CLIP3(iX: i32, iY: i32, iZ: i32) -> i32 {
-    if iX < iY {
-        iY
-    } else if iX > iZ {
-        iZ
+pub fn alpha_table(x: i32) -> u8 {
+    let idx = (x + 12) as usize;
+    if idx < g_kuiAlphaTable.len() {
+        g_kuiAlphaTable[idx]
     } else {
-        iX
+        255
     }
 }
 
 #[inline(always)]
-pub fn WelsClip1(iX: i32) -> u8 {
-    if (iX & !255) != 0 {
-        ((-iX) >> 31) as u8
+pub fn beta_table(x: i32) -> i8 {
+    let idx = (x + 12) as usize;
+    if idx < g_kiBetaTable.len() {
+        g_kiBetaTable[idx]
     } else {
-        iX as u8
+        18
     }
 }
+
+#[inline(always)]
+pub fn tc0_table(x: i32) -> &'static [i8; 4] {
+    let idx = (x + 12) as usize;
+    if idx < g_kiTc0Table.len() {
+        &g_kiTc0Table[idx]
+    } else {
+        &g_kiTc0Table[g_kiTc0Table.len() - 1]
+    }
+}
+
+/// Sub-block index mapping table for marginal boundary edges.
+///
+/// Row `0` is the left (vertical) edge, row `1` the top (horizontal) edge; the low
+/// four entries are the current macroblock's 4x4 block indices along that edge and
+/// the high four the co-located neighbour indices. Encoder and decoder carried
+/// byte-for-byte identical copies of this before it was hoisted here.
+pub static g_kuiTableBIdx: [[u8; 8]; 2] =
+    [[0, 4, 8, 12, 3, 7, 11, 15], [0, 1, 2, 3, 12, 13, 14, 15]];
 
 // ============================================================================
 // Safe kernels

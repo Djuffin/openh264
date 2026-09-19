@@ -137,28 +137,7 @@ pub fn WELS_LOG2(mut v: u32) -> i32 {
     r
 }
 
-#[inline(always)]
-pub fn WELS_CLIP3<T: PartialOrd + Copy>(v: T, min_val: T, max_val: T) -> T {
-    if v < min_val {
-        min_val
-    } else if v > max_val {
-        max_val
-    } else {
-        v
-    }
-}
-
-#[inline(always)]
-pub fn WELS_MAX<T: PartialOrd + Copy>(a: T, b: T) -> T {
-    if a > b { a } else { b }
-}
-
-/// `WELS_MIN` — `macros.h`, whose set this module hosts (`WELS_MAX`, `WELS_CLIP3`,
-/// `WELS_ABS`, `WELS_LOG2`).
-#[inline(always)]
-pub fn WELS_MIN<T: PartialOrd + Copy>(a: T, b: T) -> T {
-    if a < b { a } else { b }
-}
+pub use crate::common::macros::{WELS_CLIP3, WELS_MAX, WELS_MIN};
 
 /// `(RC_MODES) iValue` — `welsEncoderExt.cpp:957`.
 ///
@@ -175,11 +154,6 @@ pub(crate) fn rc_mode_from_raw(iValue: i32) -> RCMode {
         -1 => RC_OFF_MODE,
         _ => RC_QUALITY_MODE,
     }
-}
-
-#[inline(always)]
-pub fn WELS_ABS(a: f32) -> f32 {
-    a.abs()
 }
 
 #[inline(always)]

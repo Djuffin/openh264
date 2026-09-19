@@ -6,15 +6,7 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![forbid(unsafe_code)]
 
-/// Saturates `iX` to `[0, 255]`.
-#[inline(always)]
-pub fn WelsClip1(iX: i32) -> u8 {
-    if (iX & !255) != 0 {
-        (((-iX) >> 31) & 255) as u8
-    } else {
-        iX as u8
-    }
-}
+pub use crate::common::macros::WelsClip1;
 
 // Every kernel here writes a fixed-size block and reaches forward only from the
 // block's own (0, 0) — no `-1` column, no `-stride` row — so the reachable span

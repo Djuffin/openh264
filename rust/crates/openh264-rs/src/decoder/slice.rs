@@ -9,9 +9,13 @@
 
 use crate::decoder::decoder_context::SpsRef;
 
+/// H.264 slice coding types — `EWelsSliceType` in `codec/common/inc/wels_common_defs.h`.
+///
+/// The decoder shares the encoder's definition; this is a re-export rather than a
+/// second copy of the same six variants.
+pub use crate::common::wels_common_defs::EWelsSliceType;
+
 // Constants matching `wels_common_defs.h` and `wels_const.h`
-pub const LIST_0: usize = 0;
-pub const LIST_1: usize = 1;
 pub const LIST_A: usize = 2;
 
 pub const MAX_REF_PIC_COUNT: usize = 16;
@@ -26,45 +30,6 @@ pub const MMCO_SHORT2LONG: u32 = 3;
 pub const MMCO_SET_MAX_LONG: u32 = 4;
 pub const MMCO_RESET: u32 = 5;
 pub const MMCO_LONG: u32 = 6;
-
-// Reference picture list reordering command opcodes
-pub const REORDER_SHORT_SUB: u16 = 0;
-pub const REORDER_SHORT_ADD: u16 = 1;
-pub const REORDER_LONG: u16 = 2;
-pub const REORDER_END: u16 = 3;
-
-/// H.264 slice coding types — `EWelsSliceType` in `codec/common/inc/wels_common_defs.h`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EWelsSliceType {
-    #[default]
-    P_SLICE = 0,
-    B_SLICE = 1,
-    I_SLICE = 2,
-    SP_SLICE = 3,
-    SI_SLICE = 4,
-    UNKNOWN_SLICE = 5,
-}
-
-/// Scalable extension slice types — `ESliceTypeExt` in `codec/common/inc/wels_common_defs.h`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum ESliceTypeExt {
-    #[default]
-    EP_SLICE = 0,
-    EB_SLICE = 1,
-    EI_SLICE = 2,
-}
-
-/// Reference picture list indices — `EListIndex` in `codec/common/inc/wels_common_defs.h`.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum EListIndex {
-    #[default]
-    LIST_0 = 0,
-    LIST_1 = 1,
-    LIST_A = 2,
-}
 
 /// Single reference picture list reordering command syntax element.
 #[repr(C)]
@@ -133,7 +98,6 @@ pub struct TagPredWeightTabSyntax {
 
 pub type SPredWeightTabSyn = TagPredWeightTabSyntax;
 pub type SPredWeightTable = SPredWeightTabSyn;
-pub type SPredList = SPredWeightList;
 
 impl Default for TagPredWeightTabSyntax {
     fn default() -> Self {
@@ -416,55 +380,14 @@ impl Default for TagSlice {
 }
 
 // ---------------------------------------------------------------------------
-// Algorithmic Math & Syntax Helper Functions
+// Note: the slice-QP, MB-QP, POC-MSB and implicit-weight derivations used to be
+// mirrored here as standalone helpers. They had no callers outside this file's
+// own unit tests, while the decode path computes them inline in `decoder_core`
+// (`WelsDecodeSlice` for the QP derivations, `DecodePocFromSliceHeader` for the
+// POC MSB, and `CreateImplicitWeightTable` for the implicit weights). Testing the
+// copies proved nothing about the shipping code, so the copies are gone.
 // ---------------------------------------------------------------------------
 
-/// Derives the baseline slice quantization parameter and clamps it to [0, 51].
-#[inline(always)]
-pub fn calc_slice_qp(pic_init_qp: i32, slice_qp_delta: i32) -> i32 {
-    let qp = pic_init_qp + slice_qp_delta;
-    qp.clamp(0, 51)
-}
-
-/// Updates the running macroblock quantization parameter using `mb_qp_delta`.
-#[inline(always)]
-pub fn update_mb_qp(prev_qp: i32, mb_qp_delta: i32) -> i32 {
-    (prev_qp + mb_qp_delta + 52) % 52
-}
-
-/// Computes the Picture Order Count MSB for POC Type 0.
-#[inline]
-pub fn calc_poc_msb(
-    pic_order_cnt_lsb: i32,
-    prev_poc_msb: i32,
-    prev_poc_lsb: i32,
-    max_poc_lsb: i32,
-) -> i32 {
-    let half_max = max_poc_lsb / 2;
-    if (pic_order_cnt_lsb < prev_poc_lsb) && (prev_poc_lsb - pic_order_cnt_lsb >= half_max) {
-        prev_poc_msb + max_poc_lsb
-    } else if (pic_order_cnt_lsb > prev_poc_lsb) && (pic_order_cnt_lsb - prev_poc_lsb > half_max) {
-        prev_poc_msb - max_poc_lsb
-    } else {
-        prev_poc_msb
-    }
-}
-
-/// Computes the implicit bi-prediction scaling factor and weight matrix entry.
-/// `CreateImplicitWeightTable` in `decoder_core.cpp`.
-#[inline]
-pub fn calc_implicit_weight(poc_curr: i32, poc_ref0: i32, poc_ref1: i32) -> i32 {
-    let tb = (poc_curr - poc_ref0).clamp(-128, 127);
-    let td = (poc_ref1 - poc_ref0).clamp(-128, 127);
-    if td != 0 {
-        let tx = (16384 + (td.abs() / 2)) / td;
-        let dist_scale_factor = (tb * tx + 32) >> 8;
-        if (-64..=128).contains(&dist_scale_factor) {
-            return 64 - dist_scale_factor;
-        }
-    }
-    32
-}
 
 #[cfg(test)]
 mod tests {
@@ -491,36 +414,5 @@ mod tests {
         assert_eq!(s.iLastMbQp, 0);
         assert_eq!(s.iTotalMbInCurSlice, 0);
         assert_eq!(s.iMvScale[0][0], 0);
-    }
-
-    #[test]
-    fn test_calc_slice_qp() {
-        assert_eq!(calc_slice_qp(26, -5), 21);
-        assert_eq!(calc_slice_qp(26, 30), 51);
-        assert_eq!(calc_slice_qp(10, -20), 0);
-    }
-
-    #[test]
-    fn test_update_mb_qp() {
-        assert_eq!(update_mb_qp(26, 2), 28);
-        assert_eq!(update_mb_qp(0, -1), 51);
-        assert_eq!(update_mb_qp(50, 4), 2);
-    }
-
-    #[test]
-    fn test_calc_poc_msb() {
-        let max_lsb = 256;
-        // Normal progression
-        assert_eq!(calc_poc_msb(10, 0, 8, max_lsb), 0);
-        // Wrap-around forward
-        assert_eq!(calc_poc_msb(2, 0, 250, max_lsb), 256);
-        // Wrap-around backward
-        assert_eq!(calc_poc_msb(250, 256, 2, max_lsb), 0);
-    }
-
-    #[test]
-    fn test_calc_implicit_weight() {
-        let w = calc_implicit_weight(2, 0, 4);
-        assert_eq!(w, 32);
     }
 }

@@ -627,24 +627,7 @@ use crate::safe::mb_grid::MbArray;
 // Helper Utilities & Math Primitives
 // ============================================================================
 
-#[inline(always)]
-pub fn WelsMedian(a: i16, b: i16, c: i16) -> i16 {
-    let mut min = a;
-    let mut max = a;
-    if b < min {
-        min = b;
-    }
-    if b > max {
-        max = b;
-    }
-    if c < min {
-        min = c;
-    }
-    if c > max {
-        max = c;
-    }
-    (a as i32 + b as i32 + c as i32 - min as i32 - max as i32) as i16
-}
+pub use crate::common::macros::WelsMedian;
 
 pub use crate::decoder::decoder_core::GetThreadCount;
 // Used by the B-slice motion-info branches in ParseInterBMotionInfoCabac.

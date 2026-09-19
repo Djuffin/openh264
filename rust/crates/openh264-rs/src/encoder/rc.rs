@@ -185,63 +185,19 @@ pub const g_kiQpToQstepTable: [i32; 52] = [
 ];
 
 /// Chroma QP translation table for H.264 standard luma-to-chroma QP mapping.
-pub const g_kuiChromaQpTable: [u8; 52] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-    26, 27, 28, 29, 29, 30, 31, 32, 32, 33, 34, 34, 35, 35, 36, 36, 37, 37, 37, 38, 38, 38, 39, 39,
-    39, 39,
-];
+pub use crate::common::common_tables::g_kuiChromaQpTable;
 
 // ============================================================================
 // Math Helper Macros / Inline Functions
 // ============================================================================
 
-#[inline]
-pub fn WELS_CLIP3<T: PartialOrd + Copy>(x: T, min_val: T, max_val: T) -> T {
-    if x < min_val {
-        min_val
-    } else if x > max_val {
-        max_val
-    } else {
-        x
-    }
-}
+pub use crate::common::macros::{
+    WELS_CLIP3, WELS_DIV_ROUND, WELS_DIV_ROUND64, WELS_MAX, WELS_ROUND, WELS_ROUND64,
+};
 
 #[inline]
 pub fn CLIP3_QP_0_51(x: i32) -> usize {
     WELS_CLIP3(x, 0, 51) as usize
-}
-
-#[inline]
-pub fn WELS_ROUND(x: f64) -> i32 {
-    (x + 0.5) as i32
-}
-
-#[inline]
-pub fn WELS_ROUND64(x: f64) -> i64 {
-    (x + 0.5) as i64
-}
-
-#[inline]
-pub fn WELS_DIV_ROUND(x: i32, y: i32) -> i32 {
-    if y == 0 {
-        x / (y + 1)
-    } else {
-        ((y / 2) + x) / y
-    }
-}
-
-#[inline]
-pub fn WELS_DIV_ROUND64(x: i64, y: i64) -> i64 {
-    if y == 0 {
-        x / (y + 1)
-    } else {
-        ((y / 2) + x) / y
-    }
-}
-
-#[inline]
-pub fn WELS_MAX<T: PartialOrd + Copy>(x: T, y: T) -> T {
-    if x > y { x } else { y }
 }
 
 // ============================================================================
