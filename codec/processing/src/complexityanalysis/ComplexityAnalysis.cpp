@@ -452,9 +452,9 @@ void CComplexityAnalysisScreen::GomComplexityAnalysisInter (SPixMap* pSrc, SPixM
       iInterSad = m_pSadFunc (pTmpCur, iStrideY, pTmpRef, iStrideX);
       if (bScrollFlag) {
         if ((iInterSad != 0) &&
-            (iBlockPointX + iScrollMvX >= 0) && (iBlockPointX + iScrollMvX <= iWidth - 8) &&
-            (iBlockPointY + iScrollMvY >= 0) && (iBlockPointY + iScrollMvY <= iHeight - 8)) {
-          pTmpRefScroll = pTmpRef - iScrollMvY * iStrideX + iScrollMvX;
+            (iBlockPointX + iScrollMvX >= 0) && (iBlockPointX + iScrollMvX <= iWidth - 16) &&
+            (iBlockPointY + iScrollMvY >= 0) && (iBlockPointY + iScrollMvY <= iHeight - 16)) {
+          pTmpRefScroll = pTmpRef + iScrollMvY * iStrideX + iScrollMvX;
           iScrollSad = m_pSadFunc (pTmpCur, iStrideY, pTmpRefScroll, iStrideX);
 
           if (iScrollSad < iInterSad) {

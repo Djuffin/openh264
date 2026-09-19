@@ -520,14 +520,14 @@ impl CComplexityAnalysisScreen {
                 if bScrollFlag
                     && (iInterSad != 0)
                     && (iBlockPointX + iScrollMvX >= 0)
-                    && (iBlockPointX + iScrollMvX <= iWidth - 8)
+                    && (iBlockPointX + iScrollMvX <= iWidth - 16)
                     && (iBlockPointY + iScrollMvY >= 0)
-                    && (iBlockPointY + iScrollMvY <= iHeight - 8)
+                    && (iBlockPointY + iScrollMvY <= iHeight - 16)
                 {
                     // Signed throughout: the vector may be negative, and folding it
                     // into a `usize` a component at a time would wrap.
                     let iRefScrollOff = (j * 16 * iStrideX + i * 16) as isize
-                        - iScrollMvY as isize * iStrideX as isize
+                        + iScrollMvY as isize * iStrideX as isize
                         + iScrollMvX as isize;
                     let pTmpRefScroll = PlaneCursor::new(
                         planes.refp,
@@ -751,5 +751,63 @@ mod screen_tests {
             p.iGomNumInFrame, 2,
             "the plugin's count, not the staged 999"
         );
+    }
+
+    #[test]
+    fn scrolled_inter_frame_matches_scroll_vector_without_panicking() {
+        const W: usize = 64;
+        const H: usize = 64;
+        let mut state = 67890u32;
+        let refp: Vec<u8> = (0..W * H)
+            .map(|_| {
+                state = state.wrapping_mul(1103515245).wrapping_add(12345) & 0x7fff_ffff;
+                (state >> 16) as u8
+            })
+            .collect();
+
+        for &(mv_x, mv_y) in &[(0i32, 4i32), (0, -4), (4, 8), (-4, -8)] {
+            // Construct `cur` such that `cur(x, y) == refp(x + mv_x, y + mv_y)` wherever in bounds.
+            let mut cur = vec![0u8; W * H];
+            for y in 0..H as i32 {
+                for x in 0..W as i32 {
+                    let rx = (x + mv_x).clamp(0, W as i32 - 1) as usize;
+                    let ry = (y + mv_y).clamp(0, H as i32 - 1) as usize;
+                    cur[y as usize * W + x as usize] = refp[ry * W + rx];
+                }
+            }
+
+            let mut gom_scroll = vec![0i32; 8];
+            let mut gom_no_scroll = vec![0i32; 8];
+            let map = pixmap(W as i32, H as i32);
+
+            let mut c_no = CComplexityAnalysisScreen::default();
+            c_no.Set(&param(0, 4));
+            assert_eq!(
+                c_no.Process(&map, Some(&map), &planes(&cur, &refp, W), &mut gom_no_scroll),
+                RET_SUCCESS
+            );
+            let mut out_no = SComplexityAnalysisScreenParam::default();
+            c_no.Get(&mut out_no);
+
+            let mut c_sc = CComplexityAnalysisScreen::default();
+            let mut p_sc = param(0, 4);
+            p_sc.sScrollResult.bScrollDetectFlag = true;
+            p_sc.sScrollResult.iScrollMvX = mv_x;
+            p_sc.sScrollResult.iScrollMvY = mv_y;
+            c_sc.Set(&p_sc);
+            assert_eq!(
+                c_sc.Process(&map, Some(&map), &planes(&cur, &refp, W), &mut gom_scroll),
+                RET_SUCCESS
+            );
+            let mut out_sc = SComplexityAnalysisScreenParam::default();
+            c_sc.Get(&mut out_sc);
+
+            assert!(
+                out_sc.iFrameComplexity < out_no.iFrameComplexity,
+                "scroll MV ({mv_x}, {mv_y}) should reduce frame complexity ({} vs {})",
+                out_sc.iFrameComplexity,
+                out_no.iFrameComplexity
+            );
+        }
     }
 }
