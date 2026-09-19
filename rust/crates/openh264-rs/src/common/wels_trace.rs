@@ -89,7 +89,7 @@ impl Default for SLogContext {
 /// `utils.cpp:51`, with `welsCodecTrace::CodecTrace`'s level filter folded in.
 ///
 /// Call sites format the message themselves and pass a `&str`; the level filter and
-/// the `[OpenH264] this = …` tag are both applied here, and the caller's callback is
+/// the `[OpenH264rs] this = …` tag are both applied here, and the caller's callback is
 /// invoked once per delivered message.
 pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
     let Some(pfLog) = ctx.pfLog else {
@@ -106,7 +106,7 @@ pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
         WELS_LOG_DEBUG => "Debug:",
         _ => "Detail:",
     };
-    let mut line = format!("[OpenH264] this = 0x{:x}, {tag}{msg}", ctx.pCodecInstance);
+    let mut line = format!("[OpenH264rs] this = 0x{:x}, {tag}{msg}", ctx.pCodecInstance);
     // The whole line is bounded at `MAX_LOG_SIZE`, which is the same guarantee for a
     // caller whose buffer is that size.
     if line.len() >= MAX_LOG_SIZE {

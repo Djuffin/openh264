@@ -92,8 +92,8 @@ fn test_encoder_trace_callback_receives_the_init_line() {
             .unwrap_or_else(|| panic!("no init line among {:?}", sink.lines));
         assert_eq!(init.0, WELS_LOG_INFO, "the init line's level is not INFO");
         assert!(
-            init.1.starts_with("[OpenH264] this = 0x"),
-            "the message carries no OpenH264 tag: {:?}",
+            init.1.starts_with("[OpenH264rs] this = 0x"),
+            "the message carries no OpenH264rs tag: {:?}",
             init.1
         );
         assert!(

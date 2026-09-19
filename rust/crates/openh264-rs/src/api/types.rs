@@ -1074,10 +1074,6 @@ pub unsafe extern "C" fn welsStderrTrace(_ctx: *mut c_void, _level: i32, string:
     if string.is_null() {
         return;
     }
-    let bytes = unsafe { std::ffi::CStr::from_ptr(string) }.to_bytes();
-    use std::io::Write as _;
-    let out = std::io::stderr();
-    let mut lock = out.lock();
-    let _ = lock.write_all(bytes);
-    let _ = lock.write_all(b"\n");
+    let s = unsafe { std::ffi::CStr::from_ptr(string) }.to_string_lossy();
+    eprintln!("{s}");
 }

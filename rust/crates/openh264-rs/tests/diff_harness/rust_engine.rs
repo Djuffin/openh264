@@ -10,6 +10,14 @@ impl RustEngine {
         let ret = unsafe { WelsCreateSVCEncoder(&mut p) };
         assert_eq!(ret, 0, "Rust WelsCreateSVCEncoder failed with code {}", ret);
         assert!(!p.is_null(), "Rust WelsCreateSVCEncoder returned null pointer");
+        let mut quiet: i32 = openh264_rs::common::wels_trace::WELS_LOG_QUIET;
+        unsafe {
+            ISVCEncoder::SetOption(
+                p,
+                ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
+                (&raw mut quiet).cast::<std::ffi::c_void>(),
+            );
+        }
         p
     }
 

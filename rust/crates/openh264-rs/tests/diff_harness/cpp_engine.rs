@@ -131,6 +131,14 @@ impl CppLibrary {
         let ret = unsafe { (self.create_fn)(&mut p) };
         assert_eq!(ret, 0, "C++ WelsCreateSVCEncoder failed with code {}", ret);
         assert!(!p.is_null(), "C++ WelsCreateSVCEncoder returned null pointer");
+        let mut quiet: i32 = openh264_rs::common::wels_trace::WELS_LOG_QUIET;
+        unsafe {
+            ISVCEncoder::SetOption(
+                p,
+                ENCODER_OPTION::ENCODER_OPTION_TRACE_LEVEL,
+                (&raw mut quiet).cast::<c_void>(),
+            );
+        }
         p
     }
 

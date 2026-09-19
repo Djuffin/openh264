@@ -148,7 +148,7 @@ unsafe extern "C" fn quiet_sink(
 fn a_fresh_decoder_writes_its_error_to_stderr_with_no_callback_installed() {
     let err = stderr_of("decoder_default");
     assert!(
-        err.contains("[OpenH264]")
+        err.contains("[OpenH264rs]")
             && err.contains("Error:")
             && err.contains("invalid input argument"),
         "the default sink must be upstream's stderr writer; got:\n{err}"
@@ -159,7 +159,7 @@ fn a_fresh_decoder_writes_its_error_to_stderr_with_no_callback_installed() {
 fn a_fresh_encoder_writes_its_error_to_stderr_with_no_callback_installed() {
     let err = stderr_of("encoder_default");
     assert!(
-        err.contains("[OpenH264]") && err.contains("Error:") && err.contains("invalid argv"),
+        err.contains("[OpenH264rs]") && err.contains("Error:") && err.contains("invalid argv"),
         "the default sink must be upstream's stderr writer; got:\n{err}"
     );
 }
@@ -169,7 +169,7 @@ fn an_installed_callback_replaces_the_default_sink_on_both_codecs() {
     for case in ["decoder_quiet", "encoder_quiet"] {
         let err = stderr_of(case);
         assert!(
-            !err.contains("[OpenH264]"),
+            !err.contains("[OpenH264rs]"),
             "{case}: a caller who installs a sink must not also get the default one; got:\n{err}"
         );
     }
