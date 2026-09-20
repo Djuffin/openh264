@@ -493,27 +493,11 @@ impl CWelsH264SVCEncoder {
                 }
             }
             EncoderOption::ENCODER_OPTION_GET_STATISTICS => {
-                let pStatistics = unsafe { &mut *(pOption as *mut crate::SEncoderStatistics) };
                 let iLayerIdx = (pCtx.param().iSpatialLayerNum - 1) as usize;
-                let pEncStats = &pCtx.sEncoderStatistics[iLayerIdx];
-
-                pStatistics.uiWidth = pEncStats.uiWidth;
-                pStatistics.uiHeight = pEncStats.uiHeight;
-                pStatistics.fAverageFrameSpeedInMs = pEncStats.fAverageFrameSpeedInMs;
-
-                // rate control related
-                pStatistics.fAverageFrameRate = pEncStats.fAverageFrameRate;
-                pStatistics.fLatestFrameRate = pEncStats.fLatestFrameRate;
-                pStatistics.uiBitRate = pEncStats.uiBitRate;
-                pStatistics.uiAverageFrameQP = pEncStats.uiAverageFrameQP;
-
-                pStatistics.uiInputFrameCount = pEncStats.uiInputFrameCount;
-                pStatistics.uiSkippedFrameCount = pEncStats.uiSkippedFrameCount;
-
-                pStatistics.uiResolutionChangeTimes = pEncStats.uiResolutionChangeTimes;
-                pStatistics.uiIDRReqNum = pEncStats.uiIDRReqNum;
-                pStatistics.uiIDRSentNum = pEncStats.uiIDRSentNum;
-                pStatistics.uiLTRSentNum = pEncStats.uiLTRSentNum;
+                unsafe {
+                    *(pOption as *mut crate::SEncoderStatistics) =
+                        pCtx.sEncoderStatistics[iLayerIdx];
+                }
             }
             EncoderOption::ENCODER_OPTION_STATISTICS_LOG_INTERVAL => {
                 unsafe { *(pOption as *mut i32) = pCtx.iStatisticsLogInterval };

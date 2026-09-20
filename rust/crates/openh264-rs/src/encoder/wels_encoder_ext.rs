@@ -222,51 +222,7 @@ pub use crate::encoder::param_svc::SWelsSvcCodingParam;
 
 pub use crate::encoder::encoder_context::SLTRState;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct TagVideoEncoderStatistics {
-    pub uiWidth: u32,
-    pub uiHeight: u32,
-    pub fAverageFrameSpeedInMs: f32,
-    pub fAverageFrameRate: f32,
-    pub fLatestFrameRate: f32,
-    pub uiBitRate: u32,
-    pub uiAverageFrameQP: u32,
-    pub uiInputFrameCount: u32,
-    pub uiSkippedFrameCount: u32,
-    pub uiResolutionChangeTimes: u32,
-    pub uiIDRReqNum: u32,
-    pub uiIDRSentNum: u32,
-    pub uiLTRSentNum: u32,
-    pub iStatisticsTs: i64,
-    pub iTotalEncodedBytes: u64,
-    pub iLastStatisticsBytes: u64,
-    pub iLastStatisticsFrameCount: u32,
-}
-
-impl Default for TagVideoEncoderStatistics {
-    fn default() -> Self {
-        Self {
-            uiWidth: 0,
-            uiHeight: 0,
-            fAverageFrameSpeedInMs: 0.0,
-            fAverageFrameRate: 0.0,
-            fLatestFrameRate: 0.0,
-            uiBitRate: 0,
-            uiAverageFrameQP: 0,
-            uiInputFrameCount: 0,
-            uiSkippedFrameCount: 0,
-            uiResolutionChangeTimes: 0,
-            uiIDRReqNum: 0,
-            uiIDRSentNum: 0,
-            uiLTRSentNum: 0,
-            iStatisticsTs: 0,
-            iTotalEncodedBytes: 0,
-            iLastStatisticsBytes: 0,
-            iLastStatisticsFrameCount: 0,
-        }
-    }
-}
+pub use crate::SEncoderStatistics as TagVideoEncoderStatistics;
 
 pub use crate::encoder::encoder_context::SLogContext;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
@@ -2075,24 +2031,24 @@ uiResolutionChangeTimes={}, uIDRReqNum={}, uIDRSentNum={}, uLTRSentNum=NA, iTota
                     pStatistics.uiLTRSentNum += 1;
                 }
 
-                pStatistics.iTotalEncodedBytes += kiCurrentFrameSize as u64;
+                pStatistics.iTotalEncodedBytes +=
+                    std::ffi::c_ulong::try_from(kiCurrentFrameSize).unwrap_or(0);
 
-                let kiDeltaFrames =
-                    (pStatistics.uiInputFrameCount - pStatistics.iLastStatisticsFrameCount) as i32;
+                let input_frames = std::ffi::c_ulong::from(pStatistics.uiInputFrameCount);
+                let kiDeltaFrames = (input_frames - pStatistics.iLastStatisticsFrameCount) as i32;
                 if kiDeltaFrames as f32 > kfMaxFrameRate * 2.0 {
                     if kiTimeDiff >= kiStatisticsLogInterval as i64 {
                         let fTimeDiffSec = kiTimeDiff as f32 / 1000.0;
                         if fTimeDiffSec > 0.0 {
-                            pStatistics.fLatestFrameRate = (pStatistics.uiInputFrameCount
-                                - pStatistics.iLastStatisticsFrameCount)
-                                as f32
-                                / fTimeDiffSec;
+                            pStatistics.fLatestFrameRate =
+                                (input_frames - pStatistics.iLastStatisticsFrameCount) as f32
+                                    / fTimeDiffSec;
                             pStatistics.uiBitRate = ((pStatistics.iTotalEncodedBytes as f32) * 8.0
                                 / fTimeDiffSec)
                                 as u32;
                         }
                         pStatistics.iLastStatisticsBytes = pStatistics.iTotalEncodedBytes;
-                        pStatistics.iLastStatisticsFrameCount = pStatistics.uiInputFrameCount;
+                        pStatistics.iLastStatisticsFrameCount = input_frames;
                         ctx.iLastStatisticsLogTs = kiCurrentFrameTs;
                         // `LogStatistics` takes `&mut self` and the reset writes back
                         // into the statistics this scope holds, so both move below the
