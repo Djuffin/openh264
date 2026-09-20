@@ -3956,12 +3956,8 @@ pub fn DecodeCurrentAccessUnit(
                         ComputeColocatedTemporalScaling(pCtx, dq_cur.as_deref_mut());
                     }
 
-                    iRet = WelsDecodeSlice(
-                        pCtx,
-                        dq_cur.as_deref_mut(),
-                        bFreshSliceAvailable,
-                        pNalCur,
-                    );
+                    iRet =
+                        WelsDecodeSlice(pCtx, dq_cur.as_deref_mut(), bFreshSliceAvailable, pNalCur);
 
                     if iRet != ERR_NONE {
                         bAllRefComplete = false;

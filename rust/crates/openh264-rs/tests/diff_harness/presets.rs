@@ -1,7 +1,7 @@
 //! Preset generators matching the configuration matrix of `sweep.sh`.
 
 use super::config::{BaseInitMode, DiffConfig, LtrConfig, SliceConfig, SpatialLayersConfig};
-use super::inputs::{generate_screen_clip, load_looped_res, YuvClip};
+use super::inputs::{YuvClip, generate_screen_clip, load_looped_res};
 use openh264_rs::api::codec_api::*;
 
 const SMALL_INPUTS: [(&str, i32, i32); 3] = [
@@ -110,10 +110,7 @@ pub fn preset_qp() -> Vec<(DiffConfig, YuvClip)> {
     for &(rel_path, w, h) in &SMALL_INPUTS {
         for qp in 0..52 {
             for &cabac in &[false, true] {
-                let label = format!(
-                    "qp {} qp={} cabac={}",
-                    rel_path, qp, cabac as i32
-                );
+                let label = format!("qp {} qp={} cabac={}", rel_path, qp, cabac as i32);
                 let mut cfg = DiffConfig::new(label, w, h, 3);
                 cfg.qp = qp;
                 cfg.cabac = cabac;
@@ -162,7 +159,10 @@ pub fn preset_sl() -> Vec<(DiffConfig, YuvClip)> {
     for &(qp, con) in &sl_rows {
         for &rc in &[-1, 2] {
             for &cabac in &[false, true] {
-                let label = format!("sl 320x192 qp={} con={} rc={} cabac={}", qp, con, rc, cabac as i32);
+                let label = format!(
+                    "sl 320x192 qp={} con={} rc={} cabac={}",
+                    qp, con, rc, cabac as i32
+                );
                 let clip = load_looped_res(rel_path, w, h, 16);
                 let mut cfg = DiffConfig::new(label, w, h, clip.num_frames());
                 cfg.qp = qp;
@@ -193,8 +193,14 @@ pub fn preset_ltr() -> Vec<(DiffConfig, YuvClip)> {
         ("res/CiscoVT2people_320x192_12fps.yuv", 320, 192),
     ];
     let ltr_rows: [(i32, u32); 8] = [
-        (0, 0), (0, 1), (0, 2), (0, 3),
-        (8, 0), (8, 1), (8, 2), (8, 3),
+        (0, 0),
+        (0, 1),
+        (0, 2),
+        (0, 3),
+        (8, 0),
+        (8, 1),
+        (8, 2),
+        (8, 3),
     ];
 
     for &(rel_path, w, h) in &inputs {
@@ -366,12 +372,15 @@ pub fn preset_scc(tier: SccTier) -> Vec<(DiffConfig, YuvClip)> {
                 cfg.cabac = cabac;
                 cfg.rc_mode = Some(RC_MODES::RC_OFF_MODE);
                 cfg.threads = 1;
-                out.push((cfg, YuvClip {
-                    name: clip.name.clone(),
-                    width: clip.width,
-                    height: clip.height,
-                    frames_yuv: clip.frames_yuv.clone(),
-                }));
+                out.push((
+                    cfg,
+                    YuvClip {
+                        name: clip.name.clone(),
+                        width: clip.width,
+                        height: clip.height,
+                        frames_yuv: clip.frames_yuv.clone(),
+                    },
+                ));
             }
         }
     }
@@ -397,18 +406,22 @@ pub fn preset_scc(tier: SccTier) -> Vec<(DiffConfig, YuvClip)> {
                         "scc {} rc={} gop={} cabac={} sm=0 t=1",
                         clip.name, rc, gop, cabac as i32
                     );
-                    let mut cfg = DiffConfig::new(label, clip.width, clip.height, clip.num_frames());
+                    let mut cfg =
+                        DiffConfig::new(label, clip.width, clip.height, clip.num_frames());
                     cfg.usage = EUsageType::SCREEN_CONTENT_REAL_TIME;
                     cfg.rc_mode = Some(rc_enum);
                     cfg.gop = gop;
                     cfg.cabac = cabac;
                     cfg.threads = 1;
-                    out.push((cfg, YuvClip {
-                        name: clip.name.clone(),
-                        width: clip.width,
-                        height: clip.height,
-                        frames_yuv: clip.frames_yuv.clone(),
-                    }));
+                    out.push((
+                        cfg,
+                        YuvClip {
+                            name: clip.name.clone(),
+                            width: clip.width,
+                            height: clip.height,
+                            frames_yuv: clip.frames_yuv.clone(),
+                        },
+                    ));
 
                     // Size-limited slices, 4 threads (skipped in Gate tier due to C++ reference race)
                     if tier == SccTier::All {
@@ -416,7 +429,8 @@ pub fn preset_scc(tier: SccTier) -> Vec<(DiffConfig, YuvClip)> {
                             "scc {} rc={} gop={} cabac={} sm=3 t=4",
                             clip.name, rc, gop, cabac as i32
                         );
-                        let mut cfg = DiffConfig::new(label, clip.width, clip.height, clip.num_frames());
+                        let mut cfg =
+                            DiffConfig::new(label, clip.width, clip.height, clip.num_frames());
                         cfg.usage = EUsageType::SCREEN_CONTENT_REAL_TIME;
                         cfg.rc_mode = Some(rc_enum);
                         cfg.gop = gop;
@@ -426,12 +440,15 @@ pub fn preset_scc(tier: SccTier) -> Vec<(DiffConfig, YuvClip)> {
                             arg: 1500,
                         };
                         cfg.threads = 4;
-                        out.push((cfg, YuvClip {
-                            name: clip.name.clone(),
-                            width: clip.width,
-                            height: clip.height,
-                            frames_yuv: clip.frames_yuv.clone(),
-                        }));
+                        out.push((
+                            cfg,
+                            YuvClip {
+                                name: clip.name.clone(),
+                                width: clip.width,
+                                height: clip.height,
+                                frames_yuv: clip.frames_yuv.clone(),
+                            },
+                        ));
                     }
                 }
             }
@@ -450,7 +467,8 @@ pub fn preset_scc(tier: SccTier) -> Vec<(DiffConfig, YuvClip)> {
                         "scc {} rc={} cabac={} t={} ltr=4 lossless",
                         clip.name, rc, cabac as i32, thr
                     );
-                    let mut cfg = DiffConfig::new(label, clip.width, clip.height, clip.num_frames());
+                    let mut cfg =
+                        DiffConfig::new(label, clip.width, clip.height, clip.num_frames());
                     cfg.usage = EUsageType::SCREEN_CONTENT_REAL_TIME;
                     cfg.rc_mode = Some(rc_enum);
                     cfg.cabac = cabac;
@@ -461,12 +479,15 @@ pub fn preset_scc(tier: SccTier) -> Vec<(DiffConfig, YuvClip)> {
                         mark_period: 30,
                         feedback_mask: 0,
                     });
-                    out.push((cfg, YuvClip {
-                        name: clip.name.clone(),
-                        width: clip.width,
-                        height: clip.height,
-                        frames_yuv: clip.frames_yuv.clone(),
-                    }));
+                    out.push((
+                        cfg,
+                        YuvClip {
+                            name: clip.name.clone(),
+                            width: clip.width,
+                            height: clip.height,
+                            frames_yuv: clip.frames_yuv.clone(),
+                        },
+                    ));
                 }
             }
         }

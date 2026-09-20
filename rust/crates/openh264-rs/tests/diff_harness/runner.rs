@@ -114,7 +114,9 @@ pub unsafe fn encode_in_memory(
             SliceModeEnum::SM_SIZELIMITED_SLICE => {
                 sParam.sSpatialLayers[0].sSliceArgument.uiSliceMode =
                     SliceModeEnum::SM_SIZELIMITED_SLICE;
-                sParam.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint = config.slice.arg;
+                sParam.sSpatialLayers[0]
+                    .sSliceArgument
+                    .uiSliceSizeConstraint = config.slice.arg;
             }
             _ => {
                 sParam.sSpatialLayers[0].sSliceArgument.uiSliceMode =
@@ -185,7 +187,11 @@ pub unsafe fn encode_in_memory(
                 ENCODER_OPTION::ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
                 std::ptr::from_mut(&mut sParam).cast::<std::ffi::c_void>(),
             );
-            assert_eq!(opt_ret, 0, "SetOption failed at frame {}: code {}", f, opt_ret);
+            assert_eq!(
+                opt_ret, 0,
+                "SetOption failed at frame {}: code {}",
+                f, opt_ret
+            );
         }
 
         if sInfo.eFrameType != EVideoFrameType::videoFrameTypeSkip {

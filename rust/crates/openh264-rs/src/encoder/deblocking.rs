@@ -77,12 +77,12 @@ pub fn IS_INTRA(mb_type: u32) -> bool {
 // Core Data Structures & Shared Lookup Tables
 // ============================================================================
 
-use crate::common::deblocking_common::{
-    deblock_chroma_eq4, deblock_chroma_lt4, deblock_luma_eq4, deblock_luma_lt4,
-};
 pub use crate::common::deblocking_common::{
     alpha_table, beta_table, g_kiBetaTable, g_kiTc0Table, g_kuiAlphaTable, g_kuiTableBIdx,
     tc0_table,
+};
+use crate::common::deblocking_common::{
+    deblock_chroma_eq4, deblock_chroma_lt4, deblock_luma_eq4, deblock_luma_lt4,
 };
 use crate::encoder::rec_view::{RecCursor, RecPicView};
 /// 4-byte motion vector unit $(MV_x, MV_y)$ in quarter-pel precision.

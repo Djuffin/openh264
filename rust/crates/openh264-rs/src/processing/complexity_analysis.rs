@@ -783,7 +783,12 @@ mod screen_tests {
             let mut c_no = CComplexityAnalysisScreen::default();
             c_no.Set(&param(0, 4));
             assert_eq!(
-                c_no.Process(&map, Some(&map), &planes(&cur, &refp, W), &mut gom_no_scroll),
+                c_no.Process(
+                    &map,
+                    Some(&map),
+                    &planes(&cur, &refp, W),
+                    &mut gom_no_scroll
+                ),
                 RET_SUCCESS
             );
             let mut out_no = SComplexityAnalysisScreenParam::default();

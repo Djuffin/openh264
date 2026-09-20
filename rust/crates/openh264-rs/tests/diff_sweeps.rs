@@ -60,7 +60,10 @@ fn test_sweep_ps() {
 }
 
 #[test]
-#[cfg_attr(target_arch = "x86_64", ignore = "C++ reference on x86 uses SSE downsampler with divergent rounding")]
+#[cfg_attr(
+    target_arch = "x86_64",
+    ignore = "C++ reference on x86 uses SSE downsampler with divergent rounding"
+)]
 fn test_sweep_dl() {
     let configs = presets::preset_dl();
     for (config, clip) in configs {

@@ -926,10 +926,8 @@ unsafe extern "C" fn decoder_decode_frame_nodelay_c(
         {
             // `iRet |=` on `DECODING_STATE`, which is a bitset of `ds*` flags — the two
             // calls' states are ORed, not replaced, so an error in either half survives.
-            let first =
-                unsafe { decoder_decode_frame2_c(this, kpSrc, kiSrcLen, ppDst, pDstInfo) };
-            let second =
-                unsafe { decoder_decode_frame2_c(this, ptr::null(), 0, ppDst, pDstInfo) };
+            let first = unsafe { decoder_decode_frame2_c(this, kpSrc, kiSrcLen, ppDst, pDstInfo) };
+            let second = unsafe { decoder_decode_frame2_c(this, ptr::null(), 0, ppDst, pDstInfo) };
             DECODING_STATE(first.0 | second.0)
         }
     )
@@ -1302,10 +1300,11 @@ unsafe extern "C" fn decoder_flush_frame_c(
             }
             // A caller that hands either out-parameter null gets the drain skipped
             // rather than a write through null.
-            let (Some(ppDst), Some(pDstInfo)) = (
-                unsafe { (ppDst as *mut [*mut u8; 3]).as_mut() },
-                unsafe { pDstInfo.as_mut() },
-            ) else {
+            let (Some(ppDst), Some(pDstInfo)) =
+                (unsafe { (ppDst as *mut [*mut u8; 3]).as_mut() }, unsafe {
+                    pDstInfo.as_mut()
+                })
+            else {
                 return DECODING_STATE::dsErrorFree;
             };
             let core = unsafe { &mut (*(this as *mut CWelsDecoderImpl)).core };

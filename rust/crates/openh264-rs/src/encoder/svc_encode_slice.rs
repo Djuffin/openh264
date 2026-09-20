@@ -2024,10 +2024,7 @@ fn StashPopMbStatusOfSlice(
 /// The macroblock's nine plane cursors, once: everything below reads them off
 /// `pMd`. The C++ computes the same nine pointers here, off `kiMbX`/`kiMbY`.
 #[inline(always)]
-fn refresh_mb_cursors<'a>(
-    pMd: &mut SWelsMD<'a>,
-    pMbs: &crate::safe::mb_grid::MbWindow<'_, SMB>,
-) {
+fn refresh_mb_cursors<'a>(pMd: &mut SWelsMD<'a>, pMbs: &crate::safe::mb_grid::MbWindow<'_, SMB>) {
     if pMd.sctx.is_some() {
         // The three views and the reference picture's three entries, taken
         // before either write: the cursors are built straight into `pMd.mbc`

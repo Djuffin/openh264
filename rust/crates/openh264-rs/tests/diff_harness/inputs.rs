@@ -204,7 +204,14 @@ pub fn generate_screen_clip(
     hold_every: usize,
     seed: u32,
 ) -> YuvClip {
-    let (w, h, n, k, c, d) = (width as usize, height as usize, frames, scroll, cut_every, hold_every);
+    let (w, h, n, k, c, d) = (
+        width as usize,
+        height as usize,
+        frames,
+        scroll,
+        cut_every,
+        hold_every,
+    );
     let page_h = h + k * n + PAGE_TAIL;
     let mut pages: HashMap<usize, Vec<u8>> = HashMap::new();
 
@@ -220,9 +227,9 @@ pub fn generate_screen_clip(
         } else {
             let o = if c > 0 { (f % c) * k } else { f * k };
             let page_idx = if c > 0 { f / c } else { 0 };
-            let page = pages.entry(page_idx).or_insert_with(|| {
-                draw_page(w, page_h, seed + page_idx as u32)
-            });
+            let page = pages
+                .entry(page_idx)
+                .or_insert_with(|| draw_page(w, page_h, seed + page_idx as u32));
             page[o * w..(o + h) * w].to_vec()
         };
 

@@ -12,6 +12,6 @@ pub mod rust_engine;
 
 pub use config::{BaseInitMode, DiffConfig, LtrConfig, SliceConfig, SpatialLayersConfig};
 pub use cpp_engine::CppLibrary;
-pub use inputs::{generate_screen_clip, load_looped_res, YuvClip};
+pub use inputs::{YuvClip, generate_screen_clip, load_looped_res};
 pub use presets::*;
 pub use runner::run_diff_config;

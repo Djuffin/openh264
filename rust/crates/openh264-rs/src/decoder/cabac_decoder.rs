@@ -45,8 +45,7 @@
 pub const WELS_CABAC_HALF: u64 = 0x01FE;
 pub const WELS_CABAC_QUARTER: u64 = 0x0100;
 pub use crate::common::cabac_tables::{
-    CTX_NA, WELS_CONTEXT_COUNT, g_kiCabacGlobalContextIdx, g_kuiCabacRangeLps,
-    g_kuiStateTransTable,
+    CTX_NA, WELS_CONTEXT_COUNT, g_kiCabacGlobalContextIdx, g_kuiCabacRangeLps, g_kuiStateTransTable,
 };
 pub const WELS_QP_MAX: i32 = 51;
 
@@ -77,10 +76,6 @@ pub const g_kRenormTable256: [u8; 256] = [
 ];
 
 pub const g_kMvdBinPos2Ctx: [i16; 8] = [0, 1, 2, 3, 3, 3, 3, 3];
-
-
-
-
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]

@@ -52,7 +52,9 @@ pub fn format_divergence_report(
         }
     }
     if let Some(byte_idx) = first_diff_byte {
-        msg.push_str(&format!("First byte discrepancy at global offset {byte_idx} (0x{byte_idx:X}):\n"));
+        msg.push_str(&format!(
+            "First byte discrepancy at global offset {byte_idx} (0x{byte_idx:X}):\n"
+        ));
         let start = byte_idx.saturating_sub(8);
         let end = (byte_idx + 16).min(min_len);
         msg.push_str(&format!(
@@ -89,8 +91,16 @@ pub fn format_divergence_report(
     if let Some(i) = divergent_nal_idx {
         let r_nal = rust_nals[i];
         let c_nal = cpp_nals[i];
-        let r_type = if !r_nal.is_empty() { r_nal[0] & 0x1F } else { 0 };
-        let c_type = if !c_nal.is_empty() { c_nal[0] & 0x1F } else { 0 };
+        let r_type = if !r_nal.is_empty() {
+            r_nal[0] & 0x1F
+        } else {
+            0
+        };
+        let c_type = if !c_nal.is_empty() {
+            c_nal[0] & 0x1F
+        } else {
+            0
+        };
 
         msg.push_str(&format!(
             "\nFirst Divergent NAL index: #{i}\n\
@@ -129,6 +139,8 @@ pub fn format_divergence_report(
         ));
     }
 
-    msg.push_str("================================================================================\n");
+    msg.push_str(
+        "================================================================================\n",
+    );
     msg
 }

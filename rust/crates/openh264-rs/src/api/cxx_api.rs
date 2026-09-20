@@ -578,7 +578,8 @@ impl ISVCEncoder {
     pub unsafe fn initialize(&mut self, param: *const ffi::SEncParamBase) -> i32 {
         let log = self.log_ctx();
         abi_guard!("ISVCEncoder::Initialize", log, CM_INIT_PARA_ERROR, {
-            let param_opt = (unsafe { param.as_ref() }).map(|p| rust_types::SEncParamBase::from(*p));
+            let param_opt =
+                (unsafe { param.as_ref() }).map(|p| rust_types::SEncParamBase::from(*p));
             self.inner.0.Initialize(param_opt.as_ref())
         })
     }
@@ -621,9 +622,9 @@ impl ISVCEncoder {
     ) -> i32 {
         let log = self.log_ctx();
         abi_guard!("ISVCEncoder::EncodeFrame", log, CM_UNKNOWN_REASON, {
-            let (Some(src_ref), Some(bs_mut)) = (unsafe { src_pic.as_ref() }, unsafe {
-                bs_info.as_mut()
-            }) else {
+            let (Some(src_ref), Some(bs_mut)) =
+                (unsafe { src_pic.as_ref() }, unsafe { bs_info.as_mut() })
+            else {
                 return CM_INIT_PARA_ERROR;
             };
             let rust_src: rust_types::SSourcePicture = (*src_ref).into();
@@ -790,14 +791,14 @@ impl ISVCDecoder {
         }
     }
 
-    pub unsafe fn flush_frame(&mut self, dst: *mut *mut u8, dst_info: *mut ffi::SBufferInfo) -> i32 {
+    pub unsafe fn flush_frame(
+        &mut self,
+        dst: *mut *mut u8,
+        dst_info: *mut ffi::SBufferInfo,
+    ) -> i32 {
         unsafe {
-            c_api::ISVCDecoder::FlushFrame(
-                self.ptr,
-                dst,
-                dst_info as *mut rust_types::SBufferInfo,
-            )
-            .0
+            c_api::ISVCDecoder::FlushFrame(self.ptr, dst, dst_info as *mut rust_types::SBufferInfo)
+                .0
         }
     }
 

@@ -100,21 +100,13 @@ pub fn WELS_ROUND64(x: f64) -> i64 {
 /// Rounded integer division `((y) == 0 ? ((x) / ((y) + 1)) : (((y) / 2 + (x)) / (y)))`.
 #[inline(always)]
 pub const fn WELS_DIV_ROUND(x: i32, y: i32) -> i32 {
-    if y == 0 {
-        x / (y + 1)
-    } else {
-        (y / 2 + x) / y
-    }
+    if y == 0 { x / (y + 1) } else { (y / 2 + x) / y }
 }
 
 /// 64-bit rounded integer division `((y) == 0 ? ((x) / ((y) + 1)) : (((y) / 2 + (x)) / (y)))`.
 #[inline(always)]
 pub const fn WELS_DIV_ROUND64(x: i64, y: i64) -> i64 {
-    if y == 0 {
-        x / (y + 1)
-    } else {
-        (y / 2 + x) / y
-    }
+    if y == 0 { x / (y + 1) } else { (y / 2 + x) / y }
 }
 
 /// Median of three values (`WelsMedian` in `codec/common/inc/macros.h`).

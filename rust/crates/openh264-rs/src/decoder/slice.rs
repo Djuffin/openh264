@@ -388,7 +388,6 @@ impl Default for TagSlice {
 // copies proved nothing about the shipping code, so the copies are gone.
 // ---------------------------------------------------------------------------
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

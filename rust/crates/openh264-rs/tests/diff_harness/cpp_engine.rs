@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 
 use openh264_rs::api::codec_api::*;
-use std::ffi::{c_void, CStr};
+use std::ffi::{CStr, c_void};
 use std::path::{Path, PathBuf};
 
 type CppWelsCreateSVCEncoderFn = unsafe extern "C" fn(ppEncoder: *mut *mut ISVCEncoder) -> i32;
@@ -38,7 +38,8 @@ unsafe fn dlopen(path: &Path) -> *mut c_void {
 #[cfg(windows)]
 unsafe fn dlsym(handle: *mut c_void, name: &CStr) -> *mut c_void {
     unsafe extern "system" {
-        fn GetProcAddress(hModule: *mut c_void, lpProcName: *const std::ffi::c_char) -> *mut c_void;
+        fn GetProcAddress(hModule: *mut c_void, lpProcName: *const std::ffi::c_char)
+        -> *mut c_void;
     }
     unsafe { GetProcAddress(handle, name.as_ptr()) }
 }
@@ -74,7 +75,9 @@ impl CppLibrary {
             manifest_dir.join("../"),
         ];
         for c in candidates {
-            if c.join("res").exists() && (c.join("codec").exists() || c.join("libopenh264.so").exists()) {
+            if c.join("res").exists()
+                && (c.join("codec").exists() || c.join("libopenh264.so").exists())
+            {
                 if let Ok(canon) = c.canonicalize() {
                     return canon;
                 }
@@ -130,7 +133,10 @@ impl CppLibrary {
         let mut p: *mut ISVCEncoder = std::ptr::null_mut();
         let ret = unsafe { (self.create_fn)(&mut p) };
         assert_eq!(ret, 0, "C++ WelsCreateSVCEncoder failed with code {}", ret);
-        assert!(!p.is_null(), "C++ WelsCreateSVCEncoder returned null pointer");
+        assert!(
+            !p.is_null(),
+            "C++ WelsCreateSVCEncoder returned null pointer"
+        );
         let mut quiet: i32 = openh264_rs::common::wels_trace::WELS_LOG_QUIET;
         unsafe {
             ISVCEncoder::SetOption(
