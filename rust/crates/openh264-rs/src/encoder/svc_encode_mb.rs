@@ -302,8 +302,6 @@ pub fn WelsEncRecI4x4Y(
     let pCurDqLayer = current_layer_expect(pEncCtx);
     let uiQp = pCurMb.uiLumaQp;
 
-    let iRecStride = pCurDqLayer.iCsStride[0];
-
     let uiOffset = g_kuiMbCountScan4Idx[uiI4x4Idx as usize] as usize;
     // The source plane comes through the frame's read-only view; the prediction scratch
     // is owned by the cache and has stride 4.
@@ -315,29 +313,16 @@ pub fn WelsEncRecI4x4Y(
         4,
     );
     let kiBlk = uiI4x4Idx as usize;
+    let dx = crate::encoder::svc_base_layer_md::g_kiCoordinateIdx4x4X[kiBlk] as isize;
+    let dy = crate::encoder::svc_base_layer_md::g_kiCoordinateIdx4x4Y[kiBlk] as isize;
 
     let pMF = &g_kiQuantMF[uiQp as usize];
     let pFF = get_quant_intra_ff(uiQp as usize);
 
-    let did = pEncCtx.uiDependencyId as usize;
-    let tid_is_zero = if pEncCtx.uiTemporalId == 0 { 1 } else { 0 };
-    let tab = pEncCtx
-        .pStrideTab
-        .as_ref()
-        .expect("the stride tables are built at init");
-    let enc_block_offset =
-        tab.EncBlockOffsets(did)
-            .expect("the enc block-offset table is built")[uiI4x4Idx as usize] as isize;
-    let dec_block_offset =
-        tab.DecBlockOffsets(did, tid_is_zero)
-            .expect("the dec block-offset table is built")[uiI4x4Idx as usize] as isize;
-
     let func = pFuncList.pfDctT4;
-    // `advance(n, 0)` moves the centre by exactly `n` bytes; the block offset is a byte
-    // offset, not a sample coordinate.
     func(
         &mut pMbCache.sCoeffLevel,
-        &pEncMb.advance(enc_block_offset, 0),
+        &pEncMb.advance(dx, dy),
         &pBestPred,
     );
     (pFuncList.pfQuantization4x4)(blk4x4_mut(&mut pMbCache.sCoeffLevel, 0), pFF, pMF);
@@ -349,23 +334,16 @@ pub fn WelsEncRecI4x4Y(
     let iNoneZeroCount = (pFuncList.pfGetNoneZeroCount)(&pMbCache.sDct.iLumaBlock[kiBlk]);
     pCurMb.iNonZeroCount[uiOffset] = iNoneZeroCount as i8;
 
+    let view = layer_rec_view_expect(pCurDqLayer);
+    let (lx, ly) = pMbCache.SPicData.luma_origin();
+    let kiPredOff = best_pred_i4x4_blk4_off(pMbCache.uiBestPredI4x4Blk4Half);
+
     if iNoneZeroCount > 0 {
         pCurMb.uiCbp |= 1 << (uiI4x4Idx >> 2);
         (pFuncList.pfDequantization4x4)(
             blk4x4_mut(&mut pMbCache.sCoeffLevel, 0),
             &g_kuiDequantCoeff[uiQp as usize],
         );
-        // `dec_block_offset` is a flat byte offset into a plane of `iRecStride`, so
-        // `(off % stride, off / stride)` names the same address. The 4x4 blocks sit at
-        // `dx, dy` in `{0,4,8,12}` and the stride is never below 16, so neither term
-        // can wrap into the other. The prediction is `sMemPredBlk4` at stride 4.
-        let view = layer_rec_view_expect(pCurDqLayer);
-        let (lx, ly) = pMbCache.SPicData.luma_origin();
-        let (dx, dy) = (
-            dec_block_offset % iRecStride as isize,
-            dec_block_offset / iRecStride as isize,
-        );
-        let kiPredOff = best_pred_i4x4_blk4_off(pMbCache.uiBestPredI4x4Blk4Half);
         idct_t4_rec_to_view(
             &view.plane(0).cursor(lx + dx, ly + dy),
             &pMbCache.sMemPredBlk4[kiPredOff..],
@@ -373,14 +351,6 @@ pub fn WelsEncRecI4x4Y(
             blk4x4(&pMbCache.sCoeffLevel, 0),
         );
     } else {
-        // Same address arithmetic as the branch above.
-        let view = layer_rec_view_expect(pCurDqLayer);
-        let (lx, ly) = pMbCache.SPicData.luma_origin();
-        let (dx, dy) = (
-            dec_block_offset % iRecStride as isize,
-            dec_block_offset / iRecStride as isize,
-        );
-        let kiPredOff = best_pred_i4x4_blk4_off(pMbCache.uiBestPredI4x4Blk4Half);
         copy_block_to_view::<4, 4>(
             &pMbCache.sMemPredBlk4[kiPredOff..kiPredOff + 16],
             &view.plane(0).cursor(lx + dx, ly + dy),

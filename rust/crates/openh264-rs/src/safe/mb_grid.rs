@@ -97,8 +97,13 @@ impl MbDims {
     /// Mirrors `if (iCurX != 0) iLeftXy = iCurXy - 1;` (`mv_pred.rs:486-487`).
     #[inline]
     pub fn left(&self, mb_xy: usize) -> Option<usize> {
-        let (x, _) = self.xy_of(mb_xy);
-        (x != 0).then(|| mb_xy - 1)
+        assert!(
+            mb_xy < self.count(),
+            "MbDims::left: mb_xy {} out of range {}",
+            mb_xy,
+            self.count()
+        );
+        (mb_xy % self.mb_width != 0).then(|| mb_xy - 1)
     }
 
     /// The macroblock above, if the grid has one.
@@ -106,8 +111,13 @@ impl MbDims {
     /// Mirrors `if (iCurY != 0) iTopXy = iCurXy - iMbWidth;` (`mv_pred.rs:495-496`).
     #[inline]
     pub fn top(&self, mb_xy: usize) -> Option<usize> {
-        let (_, y) = self.xy_of(mb_xy);
-        (y != 0).then(|| mb_xy - self.mb_width)
+        assert!(
+            mb_xy < self.count(),
+            "MbDims::top: mb_xy {} out of range {}",
+            mb_xy,
+            self.count()
+        );
+        (mb_xy >= self.mb_width).then(|| mb_xy - self.mb_width)
     }
 
     /// The macroblock above-left, if the grid has one.
@@ -116,8 +126,13 @@ impl MbDims {
     /// `iLeftTopXy = iTopXy - 1` inside `if (iCurY != 0)`, so both edges matter.
     #[inline]
     pub fn top_left(&self, mb_xy: usize) -> Option<usize> {
-        let (x, y) = self.xy_of(mb_xy);
-        (x != 0 && y != 0).then(|| mb_xy - self.mb_width - 1)
+        assert!(
+            mb_xy < self.count(),
+            "MbDims::top_left: mb_xy {} out of range {}",
+            mb_xy,
+            self.count()
+        );
+        (mb_xy >= self.mb_width && mb_xy % self.mb_width != 0).then(|| mb_xy - self.mb_width - 1)
     }
 
     /// The macroblock above-right, if the grid has one.
@@ -126,8 +141,14 @@ impl MbDims {
     /// (`mv_pred.rs:506-507`), likewise nested inside the `iCurY != 0` guard.
     #[inline]
     pub fn top_right(&self, mb_xy: usize) -> Option<usize> {
-        let (x, y) = self.xy_of(mb_xy);
-        (y != 0 && x + 1 != self.mb_width).then(|| mb_xy - self.mb_width + 1)
+        assert!(
+            mb_xy < self.count(),
+            "MbDims::top_right: mb_xy {} out of range {}",
+            mb_xy,
+            self.count()
+        );
+        (mb_xy >= self.mb_width && mb_xy % self.mb_width + 1 != self.mb_width)
+            .then(|| mb_xy - self.mb_width + 1)
     }
 }
 
