@@ -2834,6 +2834,7 @@ fn swap_au_nodes(
 }
 
 pub fn ResetCurrentAccessUnit(pCtx: &mut SWelsDecoderContext) {
+    pCtx.bAuReadyFlag = false;
     let SWelsDecoderContext {
         access_unit,
         nal_cur,
@@ -2849,18 +2850,33 @@ pub fn ResetCurrentAccessUnit(pCtx: &mut SWelsDecoderContext) {
     if pCurAu.uiActualUnitsNum > 0 {
         let kuiActualNum = pCurAu.uiActualUnitsNum;
         let kuiAvailNum = pCurAu.uiAvailUnitsNum;
-        let kuiLeftNum = kuiAvailNum.saturating_sub(kuiActualNum);
-        for iIdx in 0..kuiLeftNum as usize {
-            swap_au_nodes(
-                pCurAu,
-                nal_cur,
-                slice_hdr_nal,
-                kuiActualNum as usize + iIdx,
-                iIdx,
-            );
+        // Guard: counter mismatch after timeout-early-return can cause unsigned underflow.
+        if kuiActualNum > kuiAvailNum {
+            pCurAu.uiActualUnitsNum = 0;
+            pCurAu.uiAvailUnitsNum = 0;
+            return;
         }
-        pCurAu.uiActualUnitsNum = kuiLeftNum;
-        pCurAu.uiAvailUnitsNum = kuiLeftNum;
+        let kuiLeftNum = kuiAvailNum - kuiActualNum;
+        // Guard: swap must stay within allocated list capacity.
+        let kuiSwapLimit = if (kuiAvailNum as usize) <= pCurAu.nal_units.len() {
+            kuiLeftNum
+        } else {
+            0
+        };
+        let cap = pCurAu.nal_units.len();
+        for iIdx in 0..kuiSwapLimit as usize {
+            if kuiActualNum as usize + iIdx < cap {
+                swap_au_nodes(
+                    pCurAu,
+                    nal_cur,
+                    slice_hdr_nal,
+                    kuiActualNum as usize + iIdx,
+                    iIdx,
+                );
+            }
+        }
+        pCurAu.uiActualUnitsNum = kuiSwapLimit;
+        pCurAu.uiAvailUnitsNum = kuiSwapLimit;
     }
 }
 
@@ -4853,5 +4869,51 @@ mod tests {
         // The queued slice reader start offset was not overwritten
         let au = ctx.access_unit.as_ref().unwrap();
         assert_eq!(au.nal_units[0].sNalData.sVclNal.sSliceBitsRead.start, 2);
+    }
+
+    #[test]
+    fn test_reset_current_access_unit_bounds_guards() {
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        let mut au = SAccessUnit::with_nodes(4);
+
+        // Case 1: kuiActualNum > kuiAvailNum (counter mismatch)
+        au.uiActualUnitsNum = 5;
+        au.uiAvailUnitsNum = 3;
+        ctx.access_unit = Some(au);
+        ctx.bAuReadyFlag = true;
+
+        ResetCurrentAccessUnit(&mut ctx);
+        assert!(!ctx.bAuReadyFlag);
+        let au = ctx.access_unit.as_ref().unwrap();
+        assert_eq!(au.uiActualUnitsNum, 0);
+        assert_eq!(au.uiAvailUnitsNum, 0);
+
+        // Case 2: kuiAvailNum > nal_units.len() (capacity overflow)
+        let mut au = SAccessUnit::with_nodes(4);
+        au.uiActualUnitsNum = 2;
+        au.uiAvailUnitsNum = 10; // > 4
+        ctx.access_unit = Some(au);
+
+        ResetCurrentAccessUnit(&mut ctx);
+        let au = ctx.access_unit.as_ref().unwrap();
+        assert_eq!(au.uiActualUnitsNum, 0);
+        assert_eq!(au.uiAvailUnitsNum, 0);
+
+        // Case 3: normal in-bounds swap
+        let mut au = SAccessUnit::with_nodes(4);
+        au.nal_units[0].sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = 1;
+        au.nal_units[1].sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = 2;
+        au.nal_units[2].sNalHeaderExt.sNalUnitHeader.uiNalRefIdc = 3;
+        au.uiActualUnitsNum = 1;
+        au.uiAvailUnitsNum = 3; // left = 2, total = 3 <= 4
+        ctx.access_unit = Some(au);
+
+        ResetCurrentAccessUnit(&mut ctx);
+        let au = ctx.access_unit.as_ref().unwrap();
+        assert_eq!(au.uiActualUnitsNum, 2);
+        assert_eq!(au.uiAvailUnitsNum, 2);
+        // Node 1 swapped to 0 (idc 2), Node 2 swapped to 1 (idc 3)
+        assert_eq!(au.nal_units[0].sNalHeaderExt.sNalUnitHeader.uiNalRefIdc, 2);
+        assert_eq!(au.nal_units[1].sNalHeaderExt.sNalUnitHeader.uiNalRefIdc, 3);
     }
 }
