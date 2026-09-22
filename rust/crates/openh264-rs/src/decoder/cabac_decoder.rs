@@ -112,54 +112,62 @@ pub use crate::decoder::bit_stream::{BsReader, RawDataBuffer};
 
 pub use crate::decoder::decoder_context::SWelsDecoderContext;
 
+const fn build_cabac_model_tables() -> CabacModelTables {
+    let mut contexts = [[[SWelsCabacCtx {
+        uiState: 0,
+        uiMPS: 0,
+    }; WELS_CONTEXT_COUNT]; WELS_QP_MAX as usize + 1]; 4];
+    let mut iModel = 0;
+    while iModel < 4 {
+        let mut iQp = 0i32;
+        while iQp <= WELS_QP_MAX {
+            let mut iIdx = 0;
+            while iIdx < WELS_CONTEXT_COUNT {
+                let m = g_kiCabacGlobalContextIdx[iIdx][iModel][0] as i32;
+                let n = g_kiCabacGlobalContextIdx[iIdx][iModel][1] as i32;
+                let iPreCtxState = WELS_CLIP3(((m * iQp) >> 4) + n, 1, 126);
+                let (uiStateIdx, uiValMps) = if iPreCtxState <= 63 {
+                    ((63 - iPreCtxState) as u8, 0)
+                } else {
+                    ((iPreCtxState - 64) as u8, 1)
+                };
+                contexts[iModel][iQp as usize][iIdx] = SWelsCabacCtx {
+                    uiState: uiStateIdx,
+                    uiMPS: uiValMps,
+                };
+                iIdx += 1;
+            }
+            iQp += 1;
+        }
+        iModel += 1;
+    }
+    contexts
+}
+
+pub static G_WELS_CABAC_CONTEXTS: CabacModelTables = build_cabac_model_tables();
+
 // 1. CABAC context initialization
 pub fn WelsCabacGlobalInit(contexts: &mut CabacModelTables, inited: &mut bool) {
-    {
-        for iModel in 0..4 {
-            for iQp in 0..=WELS_QP_MAX {
-                for iIdx in 0..WELS_CONTEXT_COUNT {
-                    let m = g_kiCabacGlobalContextIdx[iIdx][iModel][0] as i32;
-                    let n = g_kiCabacGlobalContextIdx[iIdx][iModel][1] as i32;
-                    let iPreCtxState = WELS_CLIP3(((m * iQp) >> 4) + n, 1, 126);
-                    let uiValMps: u8;
-                    let uiStateIdx: u8;
-                    if iPreCtxState <= 63 {
-                        uiStateIdx = (63 - iPreCtxState) as u8;
-                        uiValMps = 0;
-                    } else {
-                        uiStateIdx = (iPreCtxState - 64) as u8;
-                        uiValMps = 1;
-                    }
-                    contexts[iModel][iQp as usize][iIdx].uiState = uiStateIdx;
-                    contexts[iModel][iQp as usize][iIdx].uiMPS = uiValMps;
-                }
-            }
-        }
-        *inited = true;
-    }
+    *contexts = G_WELS_CABAC_CONTEXTS;
+    *inited = true;
 }
 
 pub fn WelsCabacContextInit(
-    contexts: &mut CabacModelTables,
     inited: &mut bool,
     active: &mut [SWelsCabacCtx; WELS_CONTEXT_COUNT],
     eSliceType: u8,
     iCabacInitIdc: i32,
     iQp: i32,
 ) {
-    {
-        let iIdx = if eSliceType as i32 == I_SLICE as i32 {
-            0
-        } else {
-            (iCabacInitIdc + 1) as usize
-        };
-        if !*inited {
-            WelsCabacGlobalInit(contexts, inited);
-        }
-        let qp_idx = iQp as usize;
-        let model_idx = iIdx;
-        *active = contexts[model_idx][qp_idx];
-    }
+    let iIdx = if eSliceType as i32 == I_SLICE as i32 {
+        0
+    } else {
+        (iCabacInitIdc + 1) as usize
+    };
+    *inited = true;
+    let qp_idx = iQp as usize;
+    let model_idx = iIdx;
+    *active = G_WELS_CABAC_CONTEXTS[model_idx][qp_idx];
 }
 
 // 2. Decoding engine initialization
@@ -649,18 +657,16 @@ mod tests {
         let mut ctx = SWelsDecoderContext::new_boxed();
         ctx.eSliceType = crate::decoder::slice::EWelsSliceType::I_SLICE;
         ctx.bCabacInited = false;
-        WelsCabacGlobalInit(&mut ctx.sWelsCabacContexts, &mut ctx.bCabacInited);
-        assert!(ctx.bCabacInited);
         WelsCabacContextInit(
-            &mut ctx.sWelsCabacContexts,
             &mut ctx.bCabacInited,
             &mut ctx.pCabacCtx,
             crate::decoder::slice::EWelsSliceType::I_SLICE as u8,
             0,
             26,
         );
+        assert!(ctx.bCabacInited);
         // The active contexts *are* the model row the two indices select.
-        assert_eq!(ctx.pCabacCtx, ctx.sWelsCabacContexts[0][26]);
+        assert_eq!(ctx.pCabacCtx, G_WELS_CABAC_CONTEXTS[0][26]);
     }
 
     // -----------------------------------------------------------------------

@@ -1319,7 +1319,6 @@ pub struct sWelsEncCtx {
     pub iLastStatisticsLogTs: i64,
     pub iEncoderError: i32,
     pub bDeliveryFlag: bool,
-    pub sWelsCabacContexts: [[[SStateCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
     pub uiLastTimestamp: i64,
     pub pDynamicBsBuffer: [Vec<u8>; MAX_THREADS_NUM],
 }
@@ -1451,10 +1450,6 @@ impl sWelsEncCtx {
             iEncoderError: 0, // == ENC_RETURN_SUCCESS
             bDeliveryFlag: false,
 
-            // The CABAC probability tables. Zero is `{ MPS = 0, state = 0 }`, not a valid
-            // coding state: `WelsCabacContextInit` fills all four models for every QP
-            // before any of it is read.
-            sWelsCabacContexts: [[[SStateCtx::new(0); WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
             uiLastTimestamp: 0,
 
             // One dynamic bitstream buffer per thread, allocated on the first slice
@@ -2145,13 +2140,12 @@ mod tests {
             iLastStatisticsLogTs,
             iEncoderError,
             bDeliveryFlag,
-            sWelsCabacContexts,
             uiLastTimestamp,
             pDynamicBsBuffer,
         ];
         assert_eq!(
             extents.len(),
-            65,
+            64,
             "a field was added or removed without updating this list"
         );
 

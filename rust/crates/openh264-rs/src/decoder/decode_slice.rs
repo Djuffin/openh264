@@ -5312,7 +5312,6 @@ pub fn WelsDecodeSlice(
             .sSliceHeader
             .iCabacInitIdc;
         WelsCabacContextInit(
-            &mut pCtx.sWelsCabacContexts,
             &mut pCtx.bCabacInited,
             &mut pCtx.pCabacCtx,
             pCurDqLayer.sLayerInfo.sSliceInLayer.eSliceType,

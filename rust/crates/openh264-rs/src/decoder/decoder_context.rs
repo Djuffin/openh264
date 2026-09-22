@@ -1164,7 +1164,6 @@ pub struct SWelsDecoderContext {
     /// `CWelsDecoderImpl::sLastDecPicInfo`, owned. Initialised at context
     /// construction to `WelsDecoderLastDecPicInfoDefaults`, which are not zeros.
     pub pLastDecPicInfo: SWelsLastDecPicInfo,
-    pub sWelsCabacContexts: [[[SWelsCabacCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1]; 4],
     pub bCabacInited: bool,
     pub pCabacCtx: [SWelsCabacCtx; WELS_CONTEXT_COUNT],
     /// The arithmetic decoding engine, by value.
@@ -1298,10 +1297,6 @@ impl Default for SWelsDecoderContext {
             iIgnoredErrorInfoPacketCount: 0,
             pTraceHandle: std::ptr::null_mut(),
             pLastDecPicInfo: SWelsLastDecPicInfo::default(),
-            // `WelsCabacGlobalInit` overwrites every entry on the first CABAC access
-            // unit; `bCabacInited` is the guard.
-            sWelsCabacContexts: [[[SWelsCabacCtx::default(); WELS_CONTEXT_COUNT]; WELS_QP_MAX + 1];
-                4],
             bCabacInited: false,
             pCabacCtx: [SWelsCabacCtx::default(); WELS_CONTEXT_COUNT],
             // A zeroed engine is inert: `pos = 0` against an empty window takes the

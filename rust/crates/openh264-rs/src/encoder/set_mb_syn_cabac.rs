@@ -189,32 +189,54 @@ pub fn PropagateCarry(buf: &mut [u8], mut iBufCur: usize, iBufStart: usize) {
     }
 }
 
-/// Precomputes the global CABAC context model lookup tables for all 4 models, 52 QPs, and 460 contexts.
-#[inline]
-pub fn WelsCabacInitContexts(
-    contexts: &mut [[[SStateCtx; WELS_CONTEXT_COUNT]; (WELS_QP_MAX + 1) as usize]; 4],
-) {
-    for iModel in 0..4 {
-        for iQp in 0..=(WELS_QP_MAX as usize) {
-            for iIdx in 0..WELS_CONTEXT_COUNT {
+const fn build_enc_cabac_contexts()
+-> [[[SStateCtx; WELS_CONTEXT_COUNT]; (WELS_QP_MAX + 1) as usize]; 4] {
+    let mut contexts = [[[SStateCtx::new(0); WELS_CONTEXT_COUNT]; (WELS_QP_MAX + 1) as usize]; 4];
+    let mut iModel = 0;
+    while iModel < 4 {
+        let mut iQp = 0;
+        while iQp <= (WELS_QP_MAX as usize) {
+            let mut iIdx = 0;
+            while iIdx < WELS_CONTEXT_COUNT {
                 let m = g_kiCabacGlobalContextIdx[iIdx][iModel][0] as i32;
                 let n = g_kiCabacGlobalContextIdx[iIdx][iModel][1] as i32;
-                let iPreCtxState = (((m * (iQp as i32)) >> 4) + n).clamp(1, 126);
+                let raw = ((m * (iQp as i32)) >> 4) + n;
+                let iPreCtxState = if raw < 1 {
+                    1
+                } else if raw > 126 {
+                    126
+                } else {
+                    raw
+                };
                 let (uiStateIdx, uiValMps) = if iPreCtxState <= 63 {
                     ((63 - iPreCtxState) as u8, 0u8)
                 } else {
                     ((iPreCtxState - 64) as u8, 1u8)
                 };
-                contexts[iModel][iQp][iIdx].Set(uiStateIdx, uiValMps);
+                contexts[iModel][iQp][iIdx] =
+                    SStateCtx::new((uiStateIdx as u32 * 2 + uiValMps as u32) as u8);
+                iIdx += 1;
             }
+            iQp += 1;
         }
+        iModel += 1;
     }
+    contexts
 }
 
-/// `WelsCabacInit` — set_mb_syn_cabac.cpp:64. Fills `sWelsCabacContexts[4][52][460]`.
-pub extern "C" fn WelsCabacInit(pEncCtx: &mut sWelsEncCtx) {
-    WelsCabacInitContexts(&mut pEncCtx.sWelsCabacContexts);
+pub static G_WELS_ENC_CABAC_CONTEXTS: [[[SStateCtx; WELS_CONTEXT_COUNT];
+    (WELS_QP_MAX + 1) as usize]; 4] = build_enc_cabac_contexts();
+
+/// Precomputes the global CABAC context model lookup tables for all 4 models, 52 QPs, and 460 contexts.
+#[inline]
+pub fn WelsCabacInitContexts(
+    contexts: &mut [[[SStateCtx; WELS_CONTEXT_COUNT]; (WELS_QP_MAX + 1) as usize]; 4],
+) {
+    *contexts = G_WELS_ENC_CABAC_CONTEXTS;
 }
+
+/// `WelsCabacInit` — set_mb_syn_cabac.cpp:64. No-op because `G_WELS_ENC_CABAC_CONTEXTS` is precomputed at compile time.
+pub extern "C" fn WelsCabacInit(_pEncCtx: &mut sWelsEncCtx) {}
 
 /// Initializes the slice's active context models from a precomputed table.
 #[inline]
@@ -241,7 +263,7 @@ pub extern "C" fn WelsCabacContextInit(pCtx: &sWelsEncCtx, pCbCtx: &mut SCabacCt
     let pEncCtx = pCtx;
     WelsCabacContextInitFromContexts(
         pCbCtx,
-        &pEncCtx.sWelsCabacContexts,
+        &G_WELS_ENC_CABAC_CONTEXTS,
         pEncCtx.eSliceType as i32,
         pEncCtx.iGlobalQp,
         iModel,

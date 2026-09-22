@@ -265,7 +265,7 @@ assert_size!(crate::encoder::encoder_context::SLogContext, 32);
 // `iCurDqLayer` (`Option<LayerIdx>`); `pSps`/`pPps` are `Option<SpsId>` /
 // `Option<PpsId>`; `pSubsetSps`, `pPSOVector` and `pMemAlign` are not carried at all; and
 // `pDynamicBsBuffer` is `[Vec<u8>; 4]` where the C++ has four raw pointers.
-assert_size_by_profile!(sWelsEncCtx, debug 98064, release 97976);
+assert_size_by_profile!(sWelsEncCtx, debug 2384, release 2296);
 
 // The `sWelsEncCtx` fields the preprocessor touches, pinned at their offsets. What they
 // catch is a *second declaration* of this context, read at the wrong offsets — which a

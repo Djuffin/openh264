@@ -518,15 +518,28 @@ impl From<rust_types::SLayerBSInfo> for ffi::SLayerBSInfo {
     }
 }
 
+#[inline]
+fn write_frame_bs_info(dst: &mut ffi::SFrameBSInfo, src: &rust_types::SFrameBSInfo) {
+    let layer_count = src
+        .iLayerNum
+        .clamp(0, rust_types::MAX_LAYER_NUM_OF_FRAME as i32) as usize;
+    dst.iLayerNum = src.iLayerNum;
+    for (dst_layer, src_layer) in dst.sLayerInfo[..layer_count]
+        .iter_mut()
+        .zip(&src.sLayerInfo[..layer_count])
+    {
+        *dst_layer = (*src_layer).into();
+    }
+    dst.eFrameType = src.eFrameType.into();
+    dst.iFrameSizeInBytes = src.iFrameSizeInBytes;
+    dst.uiTimeStamp = src.uiTimeStamp;
+}
+
 impl From<rust_types::SFrameBSInfo> for ffi::SFrameBSInfo {
     fn from(v: rust_types::SFrameBSInfo) -> Self {
-        Self {
-            iLayerNum: v.iLayerNum,
-            sLayerInfo: v.sLayerInfo.map(Into::into),
-            eFrameType: v.eFrameType.into(),
-            iFrameSizeInBytes: v.iFrameSizeInBytes,
-            uiTimeStamp: v.uiTimeStamp,
-        }
+        let mut out = Self::default();
+        write_frame_bs_info(&mut out, &v);
+        out
     }
 }
 
@@ -630,7 +643,7 @@ impl ISVCEncoder {
             let rust_src: rust_types::SSourcePicture = (*src_ref).into();
             let mut rust_bs = rust_types::SFrameBSInfo::default();
             let rc = self.inner.0.EncodeFrame(&rust_src, &mut rust_bs);
-            *bs_mut = rust_bs.into();
+            write_frame_bs_info(bs_mut, &rust_bs);
             rc
         })
     }
@@ -648,7 +661,7 @@ impl ISVCEncoder {
                 };
                 let mut rust_bs = rust_types::SFrameBSInfo::default();
                 let rc = self.inner.encode_parameter_sets(&mut rust_bs);
-                *bs_mut = rust_bs.into();
+                write_frame_bs_info(bs_mut, &rust_bs);
                 rc
             }
         )
@@ -1596,7 +1609,13 @@ impl Default for ffi::SLayerBSInfo {
 
 impl Default for ffi::SFrameBSInfo {
     fn default() -> Self {
-        rust_types::SFrameBSInfo::default().into()
+        Self {
+            iLayerNum: 0,
+            sLayerInfo: [ffi::SLayerBSInfo::default(); rust_types::MAX_LAYER_NUM_OF_FRAME],
+            eFrameType: rust_types::EVideoFrameType::videoFrameTypeInvalid.into(),
+            iFrameSizeInBytes: 0,
+            uiTimeStamp: 0,
+        }
     }
 }
 
