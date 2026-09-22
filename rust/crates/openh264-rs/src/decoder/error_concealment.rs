@@ -185,6 +185,45 @@ pub extern "C" fn NeedErrorCon(
     false
 }
 
+#[inline]
+pub fn GetEcPicWidthInPixel(pPic: &SPicture, sps_mb_width: i32) -> i32 {
+    if pPic.iWidthInPixel > 0 {
+        pPic.iWidthInPixel
+    } else {
+        sps_mb_width << 4
+    }
+}
+
+#[inline]
+pub fn GetEcPicHeightInPixel(pPic: &SPicture, sps_mb_height: i32) -> i32 {
+    if pPic.iHeightInPixel > 0 {
+        pPic.iHeightInPixel
+    } else {
+        sps_mb_height << 4
+    }
+}
+
+#[inline]
+pub fn IsEcRefPicCompatible(
+    pDstPic: &SPicture,
+    pSrcPic: &SPicture,
+    sps_mb_width: i32,
+    sps_mb_height: i32,
+) -> bool {
+    let iDstWidthInPixel = GetEcPicWidthInPixel(pDstPic, sps_mb_width);
+    let iDstHeightInPixel = GetEcPicHeightInPixel(pDstPic, sps_mb_height);
+    let iSrcWidthInPixel = GetEcPicWidthInPixel(pSrcPic, sps_mb_width);
+    let iSrcHeightInPixel = GetEcPicHeightInPixel(pSrcPic, sps_mb_height);
+
+    if iDstWidthInPixel != iSrcWidthInPixel || iDstHeightInPixel != iSrcHeightInPixel {
+        return false;
+    }
+
+    pSrcPic.linesize(0) >= pDstPic.linesize(0)
+        && pSrcPic.linesize(1) >= pDstPic.linesize(1)
+        && pSrcPic.linesize(2) >= pDstPic.linesize(2)
+}
+
 /// Performs full-frame error concealment by copying pixel planes from the previous reference picture.
 pub extern "C" fn DoErrorConFrameCopy(
     pCtx: &mut SWelsDecoderContext,
@@ -206,7 +245,7 @@ pub extern "C" fn DoErrorConFrameCopy(
     };
     let mut pSrcPic = pRefs.classify(prev);
 
-    let uiHeightInPixelY = iMbHeight << 4;
+    let uiHeightInPixelY = GetEcPicHeightInPixel(pDstPic, iMbHeight as i32) as u32;
     let iStrideY = pDstPic.linesize(0);
     let iStrideUV = pDstPic.linesize(1);
     pDstPic.iMbEcedNum = (iMbWidth * iMbHeight) as i32;
@@ -216,6 +255,12 @@ pub extern "C" fn DoErrorConFrameCopy(
         && layer.sLayerInfo.sNalHeaderExt.bIdrFlag
     {
         pSrcPic = RefSlot::Empty;
+    }
+
+    if let RefSlot::Other(src_pic) = pSrcPic {
+        if !IsEcRefPicCompatible(pDstPic, src_pic, iMbWidth as i32, iMbHeight as i32) {
+            pSrcPic = RefSlot::Empty;
+        }
     }
 
     if matches!(pSrcPic, RefSlot::Empty) {
@@ -277,6 +322,12 @@ pub extern "C" fn DoErrorConSliceCopy(
         && pCurDqLayer.sLayerInfo.sNalHeaderExt.bIdrFlag
     {
         pSrcPic = RefSlot::Empty;
+    }
+
+    if let RefSlot::Other(src_pic) = pSrcPic {
+        if !IsEcRefPicCompatible(pDstPic, src_pic, iMbWidth as i32, iMbHeight as i32) {
+            pSrcPic = RefSlot::Empty;
+        }
     }
 
     // Self-copy returns before the loop, so `iMbEcedNum` stays untouched; an empty
@@ -990,5 +1041,130 @@ mod tests {
             ImplementErrorCon(&mut ctx, None);
             assert_eq!(ctx.iErrorCode & dsBitstreamError, dsBitstreamError);
         }
+    }
+
+    #[test]
+    fn test_do_error_con_frame_copy_resolution_mismatch_falls_back_to_fill() {
+        // C++ test: ErrorConTest.DoErrorConFrameCopyResolutionMismatchFallsBackToFill
+        const W: usize = 2;
+        const H: usize = 2;
+        const STRIDE: usize = W * 16;
+        const PLANE: usize = STRIDE * (H * 16 + 1);
+
+        let planes = |fill: u8| {
+            [
+                PaddedPlane::from_parts(vec![fill; PLANE], STRIDE, 0, W * 16, H * 16),
+                PaddedPlane::from_parts(vec![fill; PLANE], STRIDE / 2, 0, W * 8, H * 8),
+                PaddedPlane::from_parts(vec![fill; PLANE], STRIDE / 2, 0, W * 8, H * 8),
+            ]
+        };
+
+        let mut dst = SPicture::with_planes(planes(7), MbDims::none());
+        dst.iWidthInPixel = (W * 16) as i32;
+        dst.iHeightInPixel = (H * 16) as i32;
+
+        let mut src = SPicture::with_planes(planes(0x11), MbDims::none());
+        // Mismatch width:
+        src.iWidthInPixel = (W * 16 - 16) as i32;
+        src.iHeightInPixel = (H * 16) as i32;
+
+        let sps = SSps {
+            iMbWidth: W as u32,
+            iMbHeight: H as u32,
+            ..Default::default()
+        };
+        let mut last = crate::decoder::decoder_context::SWelsLastDecPicInfo::default();
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        ctx.pParam.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_FRAME_COPY_CROSS_IDR;
+
+        let pool = crate::decoder::pic_queue::PicPool::over(vec![
+            Some(Box::new(dst)),
+            Some(Box::new(src)),
+        ]);
+        let dst_id = pool.id(0);
+        let src_id = pool.id(1);
+        last.pPreviousDecodedPictureInDpb = Some(src_id);
+        ctx.sSpsPpsCtx.sSpsBuffer[0] = sps;
+        ctx.active_sps = Some(SpsRef {
+            id: 0,
+            subset: false,
+        });
+        ctx.pPicBuff = Some(pool);
+        ctx.pDec = Some(dst_id);
+        ctx.pLastDecPicInfo = last;
+
+        DoErrorConFrameCopy(&mut ctx, None);
+
+        let pool = ctx.pPicBuff.as_deref().unwrap();
+        let dst_pic = pool.slot(dst_id).unwrap();
+        assert_eq!(dst_pic.plane(0).at(0, 0), 128);
+        assert_eq!(dst_pic.plane(1).at(0, 0), 128);
+        assert_eq!(dst_pic.plane(2).at(0, 0), 128);
+    }
+
+    #[test]
+    fn test_do_error_con_slice_copy_resolution_mismatch_falls_back_to_fill() {
+        // C++ test: ErrorConTest.DoErrorConSliceCopyResolutionMismatchFallsBackToFill
+        const W: usize = 2;
+        const H: usize = 2;
+        const STRIDE: usize = W * 16;
+        const PLANE: usize = STRIDE * (H * 16 + 1);
+
+        let planes = |fill: u8| {
+            [
+                PaddedPlane::from_parts(vec![fill; PLANE], STRIDE, 0, W * 16, H * 16),
+                PaddedPlane::from_parts(vec![fill; PLANE], STRIDE / 2, 0, W * 8, H * 8),
+                PaddedPlane::from_parts(vec![fill; PLANE], STRIDE / 2, 0, W * 8, H * 8),
+            ]
+        };
+
+        let mut dst = SPicture::with_planes(planes(7), MbDims::none());
+        dst.iWidthInPixel = (W * 16) as i32;
+        dst.iHeightInPixel = (H * 16) as i32;
+
+        let mut src = SPicture::with_planes(planes(0x11), MbDims::none());
+        // Mismatch height:
+        src.iWidthInPixel = (W * 16) as i32;
+        src.iHeightInPixel = (H * 16 - 16) as i32;
+
+        let sps = SSps {
+            iMbWidth: W as u32,
+            iMbHeight: H as u32,
+            ..Default::default()
+        };
+        let mut dq_layer = DqLayerState::for_grid(MbDims::new(W, H));
+        dq_layer
+            .grid
+            .mb_correctly_decoded_flag
+            .as_mut_slice()
+            .fill(false);
+        let mut last = crate::decoder::decoder_context::SWelsLastDecPicInfo::default();
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        ctx.pParam.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY_CROSS_IDR;
+        ctx.sCopyFunc = SCopyFunc::default();
+
+        let pool = crate::decoder::pic_queue::PicPool::over(vec![
+            Some(Box::new(dst)),
+            Some(Box::new(src)),
+        ]);
+        let dst_id = pool.id(0);
+        let src_id = pool.id(1);
+        last.pPreviousDecodedPictureInDpb = Some(src_id);
+        ctx.sSpsPpsCtx.sSpsBuffer[0] = sps;
+        ctx.active_sps = Some(SpsRef {
+            id: 0,
+            subset: false,
+        });
+        ctx.pPicBuff = Some(pool);
+        ctx.pDec = Some(dst_id);
+        ctx.pLastDecPicInfo = last;
+
+        DoErrorConSliceCopy(&mut ctx, Some(&mut dq_layer));
+
+        let pool = ctx.pPicBuff.as_deref().unwrap();
+        let dst_pic = pool.slot(dst_id).unwrap();
+        assert_eq!(dst_pic.plane(0).at(0, 0), 128);
+        assert_eq!(dst_pic.plane(1).at(0, 0), 128);
+        assert_eq!(dst_pic.plane(2).at(0, 0), 128);
     }
 }
