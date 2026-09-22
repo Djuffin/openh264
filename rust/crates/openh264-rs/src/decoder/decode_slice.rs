@@ -708,9 +708,7 @@ pub fn WelsCalcDeqCoeffScalingList(pCtx: &mut SWelsDecoderContext) -> i32 {
 /// `bConstainedIntraPredFlag`, as a type. (The misspelling is the PPS field's, and the
 /// `Constrain0`/`Constrain1` function names'.)
 ///
-/// `Constrain0 = 0` is load-bearing: `SWelsDecoderContext` is built from a
-/// `MaybeUninit::zeroed()` shell (`decoder_context.rs`), so the zero pattern must be a
-/// declared variant.
+/// `Constrain0 = 0` matches the H.264 specification and C OpenH264 enum definitions.
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum IntraPredConstraint {
@@ -1598,7 +1596,7 @@ pub fn GetInterBPred(
             }
         }
     } else if IS_INTER_8x16(iMBType) {
-        // The 16x8 arm, in columns (`rec_mb.cpp:787-831`).
+        // The 8x16 arm, in columns (`rec_mb.cpp:787-831`).
         for i in 0..2usize {
             let iPartIdx = i << 1;
             let at = mb.blk((i as isize) << 3, 0);

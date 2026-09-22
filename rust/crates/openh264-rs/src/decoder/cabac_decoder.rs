@@ -95,7 +95,7 @@ pub type CabacModelTables = [[[SWelsCabacCtx; WELS_CONTEXT_COUNT]; WELS_QP_MAX a
 /// ([`RawDataBuffer::rbsp_window`]). Field order matters: `uiRange` and `uiOffset` stay
 /// adjacent so they load as a pair.
 ///
-/// `WelsMalloczHelper` zeroes this at allocation (`decoder_core.rs:3591`), and a zeroed
+/// `SWelsCabacDecEngine::default()` zeroes this at allocation, and a zeroed
 /// engine is inert rather than null-pointered: `pos = 0` with an empty window takes the
 /// ladder's error arm.
 #[repr(C)]
@@ -676,7 +676,7 @@ mod tests {
 
     use crate::decoder::bit_stream::{DecInitBits, READER_SLOP};
 
-    /// An RBSP plus the slack every real caller has (`decoder_core.rs:3644`).
+    /// An RBSP buffer with standard decoder parsing slack headroom.
     fn rbsp_with_slack(payload: &[u8]) -> Vec<u8> {
         let mut v = payload.to_vec();
         v.extend_from_slice(&[0u8; READER_SLOP + 1]);

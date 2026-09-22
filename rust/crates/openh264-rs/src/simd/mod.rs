@@ -34,7 +34,7 @@ pub use scalar as kernels;
 ///
 /// | build | resolves to | what runs |
 /// |---|---|---|
-/// | x86_64, default | [`x86_64`] | `core::arch` SSE2 intrinsics |
+/// | x86_64, default | [`x86_64`] | `core::arch` SSE2, SSSE3, SSE4.1, and AVX2 intrinsics |
 /// | aarch64, default | [`aarch64`] | `core::arch` NEON intrinsics |
 /// | `--features scalar` | [`scalar`] | forwards to the scalar body |
 /// | no kernels for this target, or Miri on aarch64 | [`scalar`] | likewise |

@@ -1842,7 +1842,7 @@ pub fn mc_chroma_same(
 // allocates (`decoder/pic_queue.rs`), with nothing to spare at either end. Chroma is
 // the same argument at half scale against the 16-sample chroma border.
 //
-// The encoder's callers filter out of the reference picture into `pBufferInterPredMe`
+// The encoder's callers filter out of the reference picture into `sBufferInterPredMe`
 // scratch (`encoder/md.rs`), with the search window bounded before the call rather
 // than by a clamp inside it.
 

@@ -1,4 +1,4 @@
-//! SSE2 implementations of Motion Compensation (MC) kernels:
+//! SSE4.1 / SSSE3 implementations of Motion Compensation (MC) kernels:
 //! - Pixel averaging (`pixel_avg`)
 //! - Chroma motion compensation (`mc_chroma`)
 //! - Horizontal 6-tap Wiener filter (`mc_hor_ver20`)
@@ -434,7 +434,7 @@ fn filter_6tap_intermediate_8_samples(
 }
 
 // ============================================================================
-// Horizontal 6-Tap Filter: McHorVer20 (SSE2)
+// Horizontal 6-Tap Filter: McHorVer20 (SSE4.1 / SSSE3)
 // ============================================================================
 
 /// Vectorized 6-tap Wiener filter on 8 samples using SSSE3 pmaddubsw and pshufb.
@@ -578,7 +578,7 @@ pub fn mc_hor_ver20<S: RefSamples + Copy>(
 }
 
 // ============================================================================
-// Vertical 6-Tap Filter: McHorVer02 (SSE2)
+// Vertical 6-Tap Filter: McHorVer02 (SSE4.1 / SSSE3)
 // ============================================================================
 
 #[target_feature(enable = "sse4.1")]
@@ -829,7 +829,7 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
 }
 
 // ============================================================================
-// 2D Center 6x6-Tap Filter: McHorVer22 (SSE2)
+// 2D Center 6x6-Tap Filter: McHorVer22 (SSE4.1 / SSSE3)
 // ============================================================================
 
 #[target_feature(enable = "sse4.1")]
@@ -986,7 +986,7 @@ pub fn mc_hor_ver22<S: RefSamples + Copy>(
 }
 
 // ============================================================================
-// Luma Quarter-Pel MC (SSE2)
+// Luma Quarter-Pel MC (SSE4.1 / SSSE3)
 // ============================================================================
 
 /// The SSE2 leaf set — `McLeaves` with the four kernels in this file. The twelve
@@ -1006,7 +1006,7 @@ impl McLeaves for Sse2Leaves {
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     ) {
-        // SAFETY: SSE2 is baseline on x86_64.
+        // SAFETY: Requires target CPU support for SSE4.1.
         unsafe { hor_block::<S, W, SW, H, AVG>(src, dst) }
     }
     #[inline(always)]
@@ -1029,7 +1029,7 @@ impl McLeaves for Sse2Leaves {
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     ) {
-        // SAFETY: SSE2 is baseline on x86_64.
+        // SAFETY: Requires target CPU support for SSE4.1.
         unsafe { ver_block::<S, W, H, SH, AVG>(src, dst) }
     }
     #[inline(always)]
@@ -1052,7 +1052,7 @@ impl McLeaves for Sse2Leaves {
         src: &S,
         dst: &mut PlaneCursorMut<'_>,
     ) {
-        // SAFETY: SSE2 is baseline on x86_64.
+        // SAFETY: Requires target CPU support for SSE4.1.
         unsafe { cen_block::<S, W, SW, H, SH>(src, dst) }
     }
     #[inline(always)]
@@ -1094,7 +1094,7 @@ impl McLeaves for Sse2Leaves {
         dst: &mut PlaneCursorMut<'_>,
         w: &[u8; 4],
     ) {
-        // SAFETY: SSE2 is baseline on x86_64.
+        // SAFETY: Requires target CPU support for SSE4.1.
         unsafe { chroma_block::<S, W, SW, H, SH>(src, dst, w) }
     }
     #[inline(always)]

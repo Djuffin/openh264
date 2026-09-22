@@ -485,7 +485,7 @@ fn mc_rows(rows: &mut Vec<Row>) {
             out_sum(&s1.out, c)
         }
     );
-    // Quarter-pel (1, 3): the horizontal filter averaged with the centre filter.
+    // Quarter-pel (1, 3): the horizontal filter averaged with the vertical filter.
     row!(
         *rows,
         "mc luma qpel(1,3) 16x16",

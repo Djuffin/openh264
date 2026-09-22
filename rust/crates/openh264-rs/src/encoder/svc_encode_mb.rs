@@ -440,8 +440,8 @@ pub fn WelsEncInterY(pFuncList: &SWelsFuncPtrList, pCurMb: &mut SMB, pMbCache: &
 /// 2x2 chroma DC Hadamard transform, 4x4 AC quantization, JVT-O079 thresholding and
 /// inverse dequantization for one chroma plane (`iUV = 1` for Cb, `iUV = 2` for Cr).
 ///
-/// `kiResOff` is the caller's base into `sCoeffLevel`, not a function of `iUV`:
-/// `WelsIMbChromaEncode` passes 0 and `WelsPMbChromaEncode` passes 256.
+/// `kiResOff` is the caller's base into `sCoeffLevel`: callers pass 0 (Cb) / 64 (Cr) for Intra
+/// (`WelsIMbChromaEncode`), and 256 (Cb) / 320 (Cr) for Inter (`WelsPMbChromaEncode`).
 ///
 /// # Panics
 /// If `kiResOff .. kiResOff + 64` is out of bounds of `pMbCache.sCoeffLevel`; one

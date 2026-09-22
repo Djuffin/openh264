@@ -156,8 +156,8 @@ pub static g_kuiTableBIdx: [[u8; 8]; 2] =
 // Direction is encoded in the step arguments: every edge kernel takes `(step_x, step_y)`
 // in **bytes**, reads its taps at multiples of `step_x` around the cursor's anchor, and
 // advances a line by `step_y`, addressing `i * step_y + j * step_x` as a flat byte offset
-// through `at(off, 0)` / `set(off, 0, _)`. A V call passes `(stride, 1)`, an H call
-// `(1, stride)`.
+// through `at(off, 0)` / `set(off, 0, _)`. A V call passes `(1, stride)`, an H call
+// `(stride, 1)`.
 //
 // Arithmetic is `i32` over `u8` samples with `|tc0| <= 26`, so no intermediate can
 // leave `i32` range. The bS<4 kernels store `p1 + clip` and `q1 + clip` (range

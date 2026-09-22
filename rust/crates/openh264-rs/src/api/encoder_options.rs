@@ -505,7 +505,7 @@ impl CWelsH264SVCEncoder {
             EncoderOption::ENCODER_OPTION_COMPLEXITY => {
                 unsafe { *(pOption as *mut i32) = pCtx.param().iComplexityMode as i32 };
             }
-            // Trace level is set-only; a get falls to the error arm below.
+            // Unhandled or set-only options fall to the error arm below.
             _ => return cmInitParaError,
         }
         0

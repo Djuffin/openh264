@@ -1678,7 +1678,7 @@ pub(crate) mod abi_test_driver {
     /// * `cabac` picks the entropy writers — `svc_set_mb_syn_cabac.rs` or
     ///   `svc_set_mb_syn_cavlc.rs`.
     /// * `complexity` picks the mode-decision family: `LOW_COMPLEXITY` installs
-    ///   `SetFastCodingFunc` (`encoder_ext.rs:2485`, `bFastMode`) and anything else
+    ///   `SetFastCodingFunc` (`bFastMode`) and anything else
     ///   runs the fine intra partition search (`WelsMdIntraFinePartition`,
     ///   `WelsMdI4x4`) and the `pMemPredBlk4` ping-pong.
     ///
@@ -1962,7 +1962,7 @@ mod f23_boundary_provenance {
             dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
             dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
             // The write that is out of bounds for an eight-byte borrow: this call
-            // stores `*pParam` into `CWelsDecoderImpl::param`.
+            // stores `*pParam` into `SWelsDecoderContext::pParam` via `core.initialize()`.
             assert_eq!(
                 ISVCDecoder::Initialize(p_decoder, &dec_param),
                 CM_RESULT_SUCCESS as i64

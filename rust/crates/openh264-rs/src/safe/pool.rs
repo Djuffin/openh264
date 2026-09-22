@@ -308,7 +308,7 @@ impl<T> Pool<T> {
     /// Replaces a slot's contents, invalidating every outstanding handle to it in
     /// debug builds.
     ///
-    /// The recycling operation (`AllocPicture`/`FreePicture`'s slot reuse). In release it
+    /// The recycling operation (`alloc_picture`/`prefetch_free` slot reuse). In release it
     /// is a plain assignment, so an old handle silently names the new occupant.
     pub fn replace(&mut self, id: Id, value: T) -> T {
         self.check(id);

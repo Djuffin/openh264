@@ -777,11 +777,11 @@ pub fn WelsEncoderParamAdjust(
         /* adaptive quantization control */
         pOldParam.bEnableAdaptiveQuant = pNewParam.bEnableAdaptiveQuant;
 
-        /* int32_t term reference control */
+        /* long term reference control */
         pOldParam.bEnableLongTermReference = pNewParam.bEnableLongTermReference;
         pOldParam.iLtrMarkPeriod = pNewParam.iLtrMarkPeriod;
 
-        // keep below values unchanged as before
+        // update parameters from new configuration
         pOldParam.bEnableSSEI = pNewParam.bEnableSSEI;
         pOldParam.bSimulcastAVC = pNewParam.bSimulcastAVC;
         pOldParam.bEnableFrameCroppingFlag = pNewParam.bEnableFrameCroppingFlag;

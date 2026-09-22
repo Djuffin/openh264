@@ -415,7 +415,7 @@ impl SPicture {
     /// strides and no bytes, and every caller tests for that with `.is_null()`. An empty
     /// `Vec`'s `as_mut_ptr()` is dangling-but-non-null, so emptiness is checked instead.
     ///
-    /// The public output path (`decoder_core.rs:1087`) hands these pointers to the API
+    /// The public output path hands these pointers to the API
     /// consumer, where they outlive the call by contract.
     ///
     /// # Provenance

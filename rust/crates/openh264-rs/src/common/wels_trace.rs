@@ -152,7 +152,7 @@ pub struct welsCodecTrace {
 ///
 /// The default sink, installed by the constructor below. An `extern "C" fn` because it
 /// occupies the same slot a caller's own callback does: `SetTraceCallback` replaces it
-/// and `GetOption(*_TRACE_CALLBACK)` hands its address back. Defined in the C-ABI
+/// (trace callback is write-only via `SetOption`). Defined in the C-ABI
 /// island — [`crate::api::codec_api::welsStderrTrace`] — and re-exported here.
 pub use crate::api::codec_api::welsStderrTrace;
 

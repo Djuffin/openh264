@@ -4,7 +4,7 @@
 //!
 //! Neighbour availability is not here: `left()` answers only "is there a macroblock to
 //! the left of this one in the grid". The decoder's real predicate also compares
-//! `pSliceIdc` values (`mv_pred.rs:485-510`) — slice logic layered on top of geometry.
+//! `pSliceIdc` values — slice logic layered on top of geometry.
 //!
 //! The grid carries the allocation's dimensions, not the current slice's: it is sized
 //! once, at `InitialDqLayersContext`, from the negotiated maximum, so a stream decoding
@@ -38,8 +38,7 @@ impl MbDims {
     }
 
     /// The grid covering a picture of `width` × `height` pixels, rounding partial
-    /// macroblocks up — `(kiPicWidth + 15) >> 4`, as `AllocPicture` does
-    /// (`pic_queue.rs:267-269`).
+    /// macroblocks up — `(kiPicWidth + 15) >> 4`, as `alloc_picture` does.
     pub fn from_pixels(width: usize, height: usize) -> Self {
         Self::new((width + 15) >> 4, (height + 15) >> 4)
     }
@@ -94,7 +93,7 @@ impl MbDims {
 
     /// The macroblock to the left, if the grid has one.
     ///
-    /// Mirrors `if (iCurX != 0) iLeftXy = iCurXy - 1;` (`mv_pred.rs:486-487`).
+    /// Mirrors `if (iCurX != 0) iLeftXy = iCurXy - 1;`.
     #[inline]
     pub fn left(&self, mb_xy: usize) -> Option<usize> {
         assert!(
@@ -108,7 +107,7 @@ impl MbDims {
 
     /// The macroblock above, if the grid has one.
     ///
-    /// Mirrors `if (iCurY != 0) iTopXy = iCurXy - iMbWidth;` (`mv_pred.rs:495-496`).
+    /// Mirrors `if (iCurY != 0) iTopXy = iCurXy - iMbWidth;`.
     #[inline]
     pub fn top(&self, mb_xy: usize) -> Option<usize> {
         assert!(
@@ -122,7 +121,7 @@ impl MbDims {
 
     /// The macroblock above-left, if the grid has one.
     ///
-    /// Mirrors the nested guard at `mv_pred.rs:499-500`: the C++ only computes
+    /// Mirrors the nested guard: the C++ only computes
     /// `iLeftTopXy = iTopXy - 1` inside `if (iCurY != 0)`, so both edges matter.
     #[inline]
     pub fn top_left(&self, mb_xy: usize) -> Option<usize> {
@@ -137,8 +136,8 @@ impl MbDims {
 
     /// The macroblock above-right, if the grid has one.
     ///
-    /// Mirrors `if (iCurX != iMbWidth - 1) iRightTopXy = iTopXy + 1;`
-    /// (`mv_pred.rs:506-507`), likewise nested inside the `iCurY != 0` guard.
+    /// Mirrors `if (iCurX != iMbWidth - 1) iRightTopXy = iTopXy + 1;`,
+    /// likewise nested inside the `iCurY != 0` guard.
     #[inline]
     pub fn top_right(&self, mb_xy: usize) -> Option<usize> {
         assert!(

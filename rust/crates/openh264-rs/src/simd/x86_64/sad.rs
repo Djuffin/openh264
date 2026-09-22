@@ -535,8 +535,8 @@ mod tests {
         ]
     }
 
-    /// Four anchors covering every residue mod 8. Each leaves at least 16 rows and
-    /// 16 columns of margin on all sides.
+    /// Four anchors covering every residue mod 4 (with residues [0, 3, 6, 5] mod 8). Each
+    /// leaves at least 16 rows and 16 columns of margin on all sides.
     const ANCHORS: [usize; 4] = [64 * 16 + 16, 64 * 17 + 19, 64 * 18 + 22, 64 * 19 + 21];
 
     #[test]

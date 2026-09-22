@@ -16,7 +16,7 @@ fn scale(n: usize) -> usize {
     if cfg!(miri) { (n / 100).max(2) } else { n }
 }
 
-/// The luma geometry `AllocPicture` (`decoder/pic_queue.rs:198-252`) computes for a
+/// The luma geometry `AllocPicture` computes for a
 /// picture of `w` x `h`, with `PADDING_LENGTH = 32` and
 /// `PICTURE_RESOLUTION_ALIGNMENT = 32`.
 fn alloc_picture_luma_geometry(w: usize, h: usize) -> (usize, usize, usize) {
@@ -111,7 +111,7 @@ fn plane_samples_match_raw_mid_pointer_arithmetic() {
 
 #[test]
 fn plane_cursors_match_the_roving_macroblock_pointer() {
-    // The access pattern of `decode_slice.rs:1944` and `svc_base_layer_md.rs:327-358`:
+    // The access pattern of macroblock reconstruction:
     // anchor at an MB origin, then read and write at small signed offsets.
     let mut rng = Prng::new(0x9A5D_0002);
     let (w, h) = (176usize, 144usize);

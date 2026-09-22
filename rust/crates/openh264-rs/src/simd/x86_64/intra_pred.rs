@@ -1094,8 +1094,8 @@ mod tests {
     // ========================================================================
     // The decoder-side predictors.
     //
-    // The `dec_*` kernels are the in-place reconstructors the decoder installs at
-    // `decoder_core.rs:1817..1830`: they write back into the picture through a
+    // The `dec_*` kernels are the in-place reconstructors the decoder installs:
+    // they write back into the picture through a
     // `PlaneCursorMut` whose neighbours are the samples just read, which is where an
     // off-by-one row or column hides, so these compare the whole allocation of two
     // identically built planes rather than the block.

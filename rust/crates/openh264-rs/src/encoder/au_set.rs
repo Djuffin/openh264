@@ -41,9 +41,8 @@ pub const CpbBrNalFactor: i32 = 1200;
 /// Returns 1 if `kpLevelLimit` can carry the picture described by `kpSps` at
 /// `fFrameRate` and `iTargetBitRate`, 0 otherwise.
 ///
-/// The arithmetic is 32-bit unsigned throughout: `iMbWidth`/`iMbHeight` widen from
-/// `i16` before multiplying and the products are allowed to wrap.
-/// `uiPicInMBs * fFrameRate` promotes to `f32` and truncates back.
+/// `iMbWidth`/`iMbHeight` widen from `i16` to `u32` before multiplying and the products
+/// are allowed to wrap. `uiPicInMBs * fFrameRate` promotes to `f32` and truncates back.
 pub fn WelsCheckLevelLimitation(
     kpSps: &SWelsSPS,
     kpLevelLimit: &SLevelLimits,
@@ -98,8 +97,8 @@ pub fn WelsGetLevelIdc(kpSps: &SWelsSPS, fFrameRate: f32, iTargetBitRate: i32) -
 /// `WelsAdjustLevel` — au_set.cpp:76.
 ///
 /// Walks up the level table from `pCurLevelIdx` until one whose max bitrate can
-/// carry `iMaxSpatialBitrate`, and adopts it. Returns 0 on success, 1 if even
-/// LEVEL_5_2 is too small.
+/// carry `iMaxSpatialBitrate`, and adopts it. Returns 0 on success, 1 if no matching
+/// level before LEVEL_5_2 is found (note: the loop breaks upon reaching LEVEL_5_2 without evaluating it).
 pub fn WelsAdjustLevel(pSpatialLayer: &mut SSpatialLayerConfig, iCurLevelIdx: usize) -> i32 {
     let iMaxBitrate = pSpatialLayer.iMaxSpatialBitrate;
     let mut idx = iCurLevelIdx;
@@ -109,7 +108,7 @@ pub fn WelsAdjustLevel(pSpatialLayer: &mut SSpatialLayerConfig, iCurLevelIdx: us
             return 0;
         }
         idx += 1;
-        // Stop once the walk has stepped past LEVEL_5_2.
+        // Stop once the walk reaches LEVEL_5_2 (breaks without evaluating it).
         if idx >= LEVEL_NUMBER
             || level_idc_from_raw(g_ksLevelLimits[idx].uiLevelIdc) == ELevelIdc::LEVEL_5_2
         {
@@ -313,7 +312,7 @@ pub fn WelsCheckNumRefSetting(
     }
 
     // if the setting is larger than needed, use the needed one and write the max
-    // into the SPS, leaving memory sized for later expansion
+    // into pParam, leaving memory sized for later expansion
     if pParam.iMaxNumRefFrame < pParam.iNumRefFrame {
         pParam.iMaxNumRefFrame = pParam.iNumRefFrame;
     }

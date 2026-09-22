@@ -12,11 +12,11 @@
 //!    and Access Units ([`SAccessUnit`]).
 //! 2. NAL header parsing and SVC extension unpacking ([`ParseNalHeader`], [`DecodeNalHeaderExt`]).
 //!    (Annex B start-code scanning is `split_annexb_units` in `lib.rs`.)
-//! 4. Access Unit (AU) boundary detection algorithms ([`CheckAccessUnitBoundary`], [`CheckAccessUnitBoundaryExt`]).
-//! 5. Syntactic Parameter Set parsers for Sequence Parameter Sets ([`ParseSps`], [`DecodeSpsSvcExt`]),
+//! 3. Access Unit (AU) boundary detection algorithms ([`CheckAccessUnitBoundary`], [`CheckAccessUnitBoundaryExt`]).
+//! 4. Syntactic Parameter Set parsers for Sequence Parameter Sets ([`ParseSps`], [`DecodeSpsSvcExt`]),
 //!    Picture Parameter Sets ([`ParsePps`]), Video Usability Information ([`ParseVui`]),
 //!    and frequency scaling matrices ([`ParseScalingList`], [`SetScalingListValue`]).
-//! 6. Access-unit NAL node storage ([`TagAccessUnits::with_nodes`], [`MemGetNextNal`]).
+//! 5. Access-unit NAL node storage ([`TagAccessUnits::with_nodes`], [`MemGetNextNal`]).
 
 use crate::decoder::bit_stream::*;
 use crate::decoder::dec_golomb::*;

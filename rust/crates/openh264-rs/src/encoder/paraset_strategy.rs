@@ -729,7 +729,7 @@ pub fn WelsGenerateNewSps(
 /// `ParasetIdAdditionIdAdjust` — `paraset_strategy.cpp:337`.
 ///
 /// Rotates the id actually written to the bitstream, recording the delta from the
-/// encoder-side id. `paraset_type = 0: SPS; = 1: PPS`.
+/// encoder-side id. `paraset_type = 0: SPS; = 1: Subset SPS; = 2: PPS`.
 fn ParasetIdAdditionIdAdjust(
     sParaSetOffsetVariable: &mut SParaSetOffsetVariable,
     kiCurEncoderParaSetId: i32,

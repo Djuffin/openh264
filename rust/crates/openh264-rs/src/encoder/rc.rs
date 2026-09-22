@@ -2242,8 +2242,8 @@ pub extern "C" fn WelsRcPictureInfoUpdateGomTimeStamp(pEncCtx: &mut sWelsEncCtx,
 
 /// Populates the rate control function dispatch table.
 ///
-/// Its two callers — `InitFunctionPointers` and `SetOption(ENCODER_OPTION_RC_MODE)`
-/// — are the only places the installed mode may change.
+/// Its callers — `InitFunctionPointers`, `WelsRcInitModule`, and
+/// `SetOption(ENCODER_OPTION_RC_MODE)` — are the only places the installed mode may change.
 pub fn WelsRcInitFuncPointers(pRcf: &mut SWelsRcFunc, iRcMode: RCMode) {
     pRcf.eInstalledMode = iRcMode;
 }

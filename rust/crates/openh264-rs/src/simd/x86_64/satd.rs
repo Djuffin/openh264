@@ -1,4 +1,4 @@
-//! x86_64 SSE2 & SSSE3 implementations of SATD (Hadamard transformed SAD).
+//! x86_64 SSE2 & AVX2 implementations of SATD (Hadamard transformed SAD).
 //!
 //! The 4x4 block every shape is built from cuts each operand once into a
 //! `RefSamples::span` and indexes its four rows inside it: one bounds cut per operand

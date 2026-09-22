@@ -569,8 +569,8 @@ pub fn IncreasePicBuff(
 /// * every picture's own `pRefPic` graph — cleared below;
 /// * the reordering buffers — [`ResetReorderingPictureBuffers`], called below;
 /// * `pDec` — the caller nulls it (`decoder.cpp:537`);
-/// * `pECRefPic` — rebuilt from `pRefList` at each use (`error_concealment.rs:691`
-///   clears all sixteen before filling them), and `pRefList` is one of the three above.
+/// * `pECRefPic` — rebuilt from `pRefList` at each use (clearing all sixteen before
+///   filling them), and `pRefList` is one of the three above.
 ///
 /// A slot that keeps its own value keeps its handles, so a shrink with no reorder
 /// invalidates nothing.

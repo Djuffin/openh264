@@ -1162,7 +1162,7 @@ pub struct SWelsDecoderContext {
     pub iIgnoredErrorInfoPacketCount: i32,
     pub pTraceHandle: *mut c_void,
     /// `CWelsDecoderImpl::sLastDecPicInfo`, owned. Initialised at context
-    /// construction to `WelsDecoderLastDecPicInfoDefaults`, which are not zeros.
+    /// construction to `SWelsLastDecPicInfo::default()`.
     pub pLastDecPicInfo: SWelsLastDecPicInfo,
     pub bCabacInited: bool,
     pub pCabacCtx: [SWelsCabacCtx; WELS_CONTEXT_COUNT],

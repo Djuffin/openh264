@@ -44,7 +44,7 @@ pub const BLOCK_SIZE_ALL: usize = 7;
 pub const MAX_DQ_LAYER_NUM: usize = MAX_DEPENDENCY_LAYER;
 /// `wels_const.h:51-52` — `MAX_PPS_COUNT_LIMITED`.
 pub const MAX_PPS_COUNT: usize = 57;
-/// `wels_const.h:54` — SPS+PPS.
+/// `wels_const.h:54` — SPS + Subset SPS + PPS.
 pub const PARA_SET_TYPE: usize = 3;
 
 // ============================================================================
@@ -239,14 +239,15 @@ pub use crate::encoder::wels_encoder_ext::{SSpatialLayerInternal, SWelsSvcCoding
 pub use crate::encoder::nal_encap::SWelsEncoderOutput;
 
 /// `TagParaSetOffsetVariable` — `codec/encoder/core/inc/wels_common_basis.h:72`.
+/// Tracks SPS/PPS ID remapping between the encoder and output bitstream.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SParaSetOffsetVariable {
-    /// delta between SPS_ID_in_bs and sps_id_in_encoder, per dq-layer; may be negative
+    /// delta between parameter set ID in bitstream and encoder, per dq-layer; may be negative
     pub iParaSetIdDelta: [i32; MAX_DQ_LAYER_NUM],
-    /// marks the used SPS_ID with 1
+    /// marks the used parameter set ID with 1
     pub bUsedParaSetIdInBs: [bool; MAX_PPS_COUNT],
-    /// the next SPS_ID_in_bs, for all layers
+    /// the next parameter set ID to use in bitstream, for all layers
     pub uiNextParaSetIdToUseInBs: u32,
 }
 
@@ -1603,9 +1604,8 @@ pub fn InitFunctionPointers(pEncCtx: &mut sWelsEncCtx, _uiCpuFlag: u32) -> i32 {
 
     InitFillNeighborCacheInterFunc(&mut *fl, kbEnableBackgroundDetection as i32);
 
-    // Only CONSTANT_ID and INCREASING_ID are supported, so this returns `None` — and
-    // hence ENC_RETURN_MEMALLOCERR — for the three listing strategies rather than
-    // substituting one; see `paraset_strategy::CreateParametersetStrategy`.
+    // All five parameter set strategies are supported; see
+    // `paraset_strategy::CreateParametersetStrategy`.
     fl.pParametersetStrategy = crate::encoder::paraset_strategy::CreateParametersetStrategy(
         keSpsPpsIdStrategy,
         kbSimulcastAVC,
@@ -1621,8 +1621,8 @@ pub fn InitFunctionPointers(pEncCtx: &mut sWelsEncCtx, _uiCpuFlag: u32) -> i32 {
 /// `set_mb_syn_cavlc.cpp:305`. Selects the coefficient-writing entry points for the
 /// configured entropy coder.
 ///
-/// The SSE2/SSE4.2 `CavlcParamCal` variants are x86-only and `WelsCPUFeatureDetect`
-/// reports no features here, so only the `_c` kernel is ever assigned.
+/// No SIMD implementation exists for `CavlcParamCal` in Rust, so the scalar (`_c`)
+/// kernel is used regardless of CPU flags.
 fn InitCoeffFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32, iEntropyCodingModeFlag: i32) {
     pFuncList.pfCavlcParamCal = CavlcParamCal_c;
     pFuncList.eEntropyCoder = EntropyCoder::from_flag(iEntropyCodingModeFlag);

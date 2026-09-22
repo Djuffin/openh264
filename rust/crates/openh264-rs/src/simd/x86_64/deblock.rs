@@ -1622,7 +1622,7 @@ pub fn bs_calc(
     inside: u8,
     bs: &mut [[[u8; 4]; 4]; 2],
 ) {
-    // SAFETY: SSE4.1/SSSE3 is baseline for x86_64 SIMD.
+    // SAFETY: Requires target CPU support for SSE4.1 (x86-64-v2 microarchitecture level).
     unsafe {
         bs_calc_sse41(cur_nzc, cur_mv, left, top, inside, bs);
     }

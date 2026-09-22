@@ -667,7 +667,7 @@ pub struct SMbCache {
     /// `WelsMdI16x16` scores a candidate in the upper half with
     /// `WelsSampleSad16x16_c`, whose last 8x8 sub-block starts at +392 and reads
     /// through byte 511, in bounds; the kernel then bumps its row pointer past the
-    /// final row (`sad_common.rs:158`), forming `base + 520` without dereferencing it.
+    /// final row, forming `base + 520` without dereferencing it.
     /// The extra 16 bytes are one luma row at the ping-pong's stride of 16, enough to
     /// keep that arithmetic in bounds; they are never read or written.
     pub sMemPredMb: [u8; 2 * 256 + 16],

@@ -1,4 +1,4 @@
-//! SSE2 implementations of Forward 4x4 DCT and Inverse DCT (IDCT) with Prediction Addition.
+//! SSE4.1 and SSE2 implementations of Forward 4x4 DCT and Inverse DCT (IDCT) with Prediction Addition.
 #![allow(unsafe_code)]
 
 use crate::encoder::rec_view::RecCursor;

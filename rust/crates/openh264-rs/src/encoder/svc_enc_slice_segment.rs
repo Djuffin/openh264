@@ -414,7 +414,7 @@ pub fn GetInitialSliceNum(pSliceArgument: &SSliceArgument) -> i32 {
         SM_SINGLE_SLICE | SM_FIXEDSLCNUM_SLICE | SM_RASTER_SLICE => {
             pSliceArgument.uiSliceNum as i32
         }
-        // at the beginning of dynamic slicing, set the uiSliceNum to be 1
+        // at the beginning of dynamic slicing, set slice count to AVERSLICENUM_CONSTRAINT (MAX_SLICES_NUM)
         SM_SIZELIMITED_SLICE => AVERSLICENUM_CONSTRAINT as i32,
         _ => -1,
     }
@@ -473,7 +473,7 @@ pub fn InitSliceSegment(
 
         pSliceSeg.pOverallMbMap = new_mb_map(kiCountMbNum);
 
-        // SM_SIZELIMITED_SLICE: init, set pSliceSeg->iSliceNumInFrame = 1
+        // SM_SIZELIMITED_SLICE: init, set pSliceSeg->iSliceNumInFrame via GetInitialSliceNum
         pSliceSeg
             .iSliceNumInFrame
             .store(GetInitialSliceNum(pSliceArgument), Ordering::Relaxed);

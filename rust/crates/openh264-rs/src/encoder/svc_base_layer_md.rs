@@ -762,7 +762,7 @@ pub extern "C" fn WelsMdI4x4Fast(
 
                 if !iBestModeFake {
                     //Horizontal is not the best, go on checking...
-                    //select the best one from VL and VR
+                    //select the best one from HD and HU
                     if iCostHD < iCostHU {
                         //I4_PRED_DDR(4)
                         let iCurCost = score!(I4_PRED_DDR, alt_buf!());

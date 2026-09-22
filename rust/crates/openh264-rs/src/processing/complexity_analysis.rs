@@ -475,12 +475,12 @@ impl CComplexityAnalysisScreen {
     /// minimum of the three. There is no `if (i || j)` guard here — at the top-left
     /// macroblock both intra costs are `i32::MAX` and the minimum is the inter cost.
     ///
-    /// The scrolled reference is read at `pTmpRef - iScrollMvY * iStrideX + iScrollMvX`
-    /// (`:451`) — minus on Y, where the scene-change detector adds it for the same
-    /// vector — and the bounds test around it uses an 8x8 margin for a 16x16 read, so it
-    /// does not bound the read it guards. `AnalyzePictureComplexity` zeroes
-    /// `sScrollResult` before every `Set` (`wels_preprocess.cpp:863-865`), so
-    /// `bScrollFlag` is false on every call the encoder makes and the branch is dark.
+    /// In C++ (`:451`), the scrolled reference was read with `- iScrollMvY` and
+    /// bounds-checked with `iHeight - 8` instead of `iHeight - 16`. The Rust port
+    /// intentionally fixed both issues by using `+ iScrollMvY` and `iHeight - 16`.
+    /// Note that `AnalyzePictureComplexity` zeroes `sScrollResult` before every `Set`
+    /// (`wels_preprocess.cpp:863-865`), so `bScrollFlag` is false on every call the
+    /// encoder makes and the branch is dark.
     fn GomComplexityAnalysisInter(
         &mut self,
         pSrc: &SPixMap,

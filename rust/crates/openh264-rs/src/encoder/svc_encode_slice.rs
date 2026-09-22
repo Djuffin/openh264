@@ -2744,7 +2744,7 @@ pub fn WelsCodeOneSlice(
 
     WelsSliceHeaderExtInit(pEncCtx, Some(pCurLayer), &mut *pCurSlice);
 
-    //RomRC init slice by slice
+    //GomRC init slice by slice
     if !pEncCtx.rc().is_empty() {
         let pWelsSvcRc = pEncCtx.rc_at(pEncCtx.uiDependencyId as usize);
         if pWelsSvcRc.bGomRC {
@@ -3177,7 +3177,7 @@ pub fn InitSliceInLayer(
     pDqLayer: &mut SDqLayer,
     kiDlayerIndex: i32,
 ) -> i32 {
-    // `SSliceArgument` is `Copy` (`codec_api.rs:577`) and only read here, so it is
+    // `SSliceArgument` is `Copy` and only read here, so it is
     // copied out; nothing writes the parameter block in between.
     let sSliceArgument = pCtx.param().sSpatialLayers[kiDlayerIndex as usize].sSliceArgument;
     let kuiSliceMode = sSliceArgument.uiSliceMode;
@@ -3744,8 +3744,9 @@ pub fn SliceLayerInfoUpdate(
     ENC_RETURN_SUCCESS
 }
 
+/// Preserved no-op compatibility stub for slice encoding function initialization.
 pub fn WelsInitSliceEncodingFuncs(_uiCpuFlag: u32) {
-    // Dynamically wires CPU architecture flags if SIMD variants are enabled
+    // Preserved no-op compatibility stub; function pointers are wired directly in Rust.
 }
 
 /// Gate for the differential-bisection dump; see `encoder::dump_enabled`.
@@ -3845,7 +3846,7 @@ mod tests {
     /// The two workers' derivations of the shared context must not invalidate each
     /// other, and the assembly must read what they wrote.
     ///
-    /// 112x112 is forced: `MIN_NUM_MB_PER_SLICE` is 48 (`wels_encoder_ext.rs:106`) and
+    /// 112x112 is forced: `MIN_NUM_MB_PER_SLICE` is 48 and
     /// `SliceArgumentValidationFixedSliceMode` silently rewrites a multi-slice request
     /// on a smaller picture to `SM_SINGLE_SLICE`, so 7x7 = 49 macroblocks is the
     /// smallest grid above the threshold. Two frames: an IDR to build the slice banks

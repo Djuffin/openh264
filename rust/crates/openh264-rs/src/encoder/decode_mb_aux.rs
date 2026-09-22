@@ -3,9 +3,8 @@
 //!
 //! `codec/encoder/core/src/decode_mb_aux.cpp`.
 //!
-//! `WelsIHadamard4x4Dc`, `WelsDequantLumaDc4x4`, `WelsDequantIHadamard2x2Dc`,
-//! `WelsIDctT4Rec_c` and `WelsIDctFourT4Rec_c` live in `svc_encode_mb.rs` and are
-//! re-exported here.
+//! `WelsIHadamard4x4Dc`, `WelsDequantLumaDc4x4`, and `WelsDequantIHadamard2x2Dc`
+//! live in `svc_encode_mb.rs` and are re-exported here.
 
 #![allow(non_snake_case)]
 #![forbid(unsafe_code)]
@@ -393,8 +392,8 @@ pub fn ihadamard_4x4_dc(res: &mut [i16; 16]) {
 /// `(v * mf + round) >> shift` in `i32`, narrowed per store.
 ///
 /// `qp < 12` is part of the contract: at `qp >= 12` the shift count
-/// `1 - qp/6` goes negative, which panics in a debug build (the one caller is
-/// gated on `uiQp < 12`, `svc_encode_mb.rs:586`).
+/// `1 - qp/6` goes negative, which panics in a debug build (the caller is
+/// gated on `uiQp < 12`).
 ///
 /// C++: `WelsDequantLumaDc4x4`, `codec/encoder/core/src/decode_mb_aux.cpp`.
 pub fn dequant_luma_dc_4x4(res: &mut [i16; 16], qp: i32) {

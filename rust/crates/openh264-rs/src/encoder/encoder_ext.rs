@@ -2224,9 +2224,8 @@ pub fn WriteSavcParaset(
 
 /// `encoder_ext.cpp:3251` — the parameter-set writer for the three listing strategies.
 ///
-/// The caller's test is `! (SPS_LISTING & eSpsPpsIdStrategy)` (`:3424`), a bitmask over
-/// `codec_app_def.h`'s 0x02 / 0x03 / 0x06, so all three listing strategies route here
-/// regardless of `bSimulcastAVC`.
+/// The caller tests `(eSpsPpsIdStrategy & SPS_LISTING) != 0`, routing all three
+/// listing strategies here regardless of `bSimulcastAVC`.
 ///
 /// Unlike [`WriteSavcParaset`] it writes lists: every one of `iSpsNum` SPSs and, after
 /// `UpdatePpsList` has expanded the array, every one of `iPpsNum` PPSs — per spatial
@@ -2410,7 +2409,7 @@ pub fn PrepareEncodeFrame(
                 }
             } else {
                 // All three listing strategies: the test is
-                // `! (SPS_LISTING & eSpsPpsIdStrategy)`, a bitmask over 0x02/0x03/0x06.
+                // `(eSpsPpsIdStrategy & SPS_LISTING) != 0`.
                 pCtx.iEncoderError =
                     WriteSavcParaset_Listing(pCtx, iSpatialNum, pFbi, iLbi, iLayerNum, iFrameSize);
             }
@@ -2571,7 +2570,7 @@ pub fn WelsInitCurrentDlayerMltslc(pCtx: &mut sWelsEncCtx, iPartitionNum: i32) {
                 uiFrmByte = (uiFrmByte as f32 * (iQDeltaTo26 as f32 / 4.0)) as u32;
             } else if iQDeltaTo26 < 0 {
                 // larger QP than 26
-                iQDeltaTo26 = (-iQDeltaTo26) >> 2; // delta mod 4
+                iQDeltaTo26 = (-iQDeltaTo26) >> 2; // delta / 4
                 uiFrmByte >>= iQDeltaTo26; // if delta 4, byte /2
             }
         }

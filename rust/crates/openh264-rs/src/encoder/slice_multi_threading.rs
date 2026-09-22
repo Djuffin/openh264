@@ -758,8 +758,8 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
 
     let iNeedAdj: i32;
     if kbModelingFromSpatial {
-        // The two names can be the same layer (base == current when `iCurDid`
-        // is the base), so the load is hoisted above the exclusive borrow.
+        // Hoist the load above `dq_layer_mut` to avoid a conflicting borrow
+        // on `pCtx` between `current_layer_expect` and `dq_layer_mut`.
         let kiSliceNumInFrame = current_layer_expect(pCtx)
             .sSliceEncCtx
             .iSliceNumInFrame
@@ -820,7 +820,7 @@ pub fn AdjustEnhanceLayer(pCtx: &mut sWelsEncCtx, iCurDid: i32) -> i32 {
 }
 
 // ============================================================================
-// Unit Tests
+// Slice Threading Execution Engine
 // ============================================================================
 
 /// One worker's share of a frame's slices, and the one value in this crate that
@@ -1050,7 +1050,7 @@ fn EncodeOneSliceInJob(
         {
             // The walker's window is the worker's own carved run, the same one
             // the coding chain just wrote through. `uiFilterIdc == 1` (MT
-            // validation rewrites idc 0 → 2, `encoder_ext.rs:1506`) confines
+            // validation rewrites idc 0 → 2) confines
             // walk and neighbour reads to it.
             let pCurDq = current_layer_expect(pCtx);
             if let Some(view) = layer_rec_view(pCurDq) {

@@ -4735,9 +4735,9 @@ mod tests {
         ctx.sSpsPpsCtx.sSpsBuffer[7].iSpsId = 7;
         ctx.sSpsPpsCtx.sSpsBuffer[7].uiTotalMbCount = 99;
 
-        // `pMemAlign` is null on a bare context, so `SyncPictureResolutionExt` returns
-        // 1 at its own guard — after the scan has run and stored its answer, the step
-        // under test.
+        // `CreatePicBuff` returns `None` on a bare context with zero dimensions, so
+        // `SyncPictureResolutionExt` returns 1 at its own guard — after the scan has run
+        // and stored its answer, the step under test.
         let _ = AllocPicBuffOnNewSeqBegin(&mut ctx);
         assert_eq!(
             ctx.active_sps,

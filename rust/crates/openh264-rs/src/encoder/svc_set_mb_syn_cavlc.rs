@@ -521,8 +521,7 @@ pub fn WelsSpatialWriteSubMbPred(
             SUB_MB_TYPE_8x8 => {
                 BsWriteUE(buf, &mut *pBs, 0);
             }
-            // Every writer of `uiSubMbType` in this encoder sets `SUB_MB_TYPE_8x8`
-            // (`svc_base_layer_md.rs:1164`/`:1249`/`:1262`, `svc_mode_decision.rs:2495`),
+            // Every writer of `uiSubMbType` in this encoder sets `SUB_MB_TYPE_8x8`,
             // and upstream's only other writers are inside `#if 0` at
             // `svc_mode_decision.cpp:634-661`. Loud rather than silent: emitting nothing
             // for an unexpected partition would desynchronise the whole slice.

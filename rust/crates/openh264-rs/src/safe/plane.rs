@@ -4,7 +4,7 @@
 //!
 //! A decoder picture plane is one allocation of `(pad + height + pad) * stride`
 //! bytes whose logical `(0, 0)` sits *inside* it, at byte `pad * stride + pad`.
-//! `AllocPicture` (`decoder/pic_queue.rs:177-330`) builds exactly that:
+//! `AllocPicture` (C++ `pic_queue.cpp:177-330`) builds exactly that:
 //!
 //! ```text
 //! stride  = WELS_ALIGN(width  + 2*PADDING_LENGTH, PICTURE_RESOLUTION_ALIGNMENT)
@@ -65,7 +65,7 @@ impl PaddedPlane {
     /// in a row of the allocation. That is a geometry bug in the caller.
     ///
     /// Freshly allocated picture buffers are filled with `128`, not `0`
-    /// (`pic_queue.rs:236`); `Picture::new` does that explicitly through
+    /// (C++ `pic_queue.cpp:236`); `Picture::new` does that explicitly through
     /// [`as_mut_slice`](Self::as_mut_slice).
     pub fn new(width: usize, height: usize, pad: usize, stride: usize) -> Self {
         assert!(
@@ -283,7 +283,7 @@ impl PaddedPlane {
     }
 
     /// A write cursor anchored at logical `(x, y)` — the safe form of the roving
-    /// `pDstY` pointer in `decode_slice.rs:1944`.
+    /// `pDstY` pointer in C++ `decode_slice.cpp:1944`.
     #[inline]
     pub fn cursor_mut(&mut self, x: isize, y: isize) -> PlaneCursorMut<'_> {
         let center = idx(self.origin, x, y, self.stride);
@@ -619,7 +619,7 @@ pub trait PlaneSamples: RefSamples {
     /// Bytes per row of the plane this view is anchored in.
     ///
     /// The scalar deblocking kernels never need this — they address in flat byte offsets
-    /// and are stride-agnostic (`deblocking_common.rs:52`). Their SSE2 twins address in 2D
+    /// and are stride-agnostic. Their SSE2 twins address in 2D
     /// through the cursor, which requires the caller's cross-line step to be this stride;
     /// exposing it lets them check that rather than assume it.
     fn stride(&self) -> usize;
@@ -658,8 +658,8 @@ pub trait PlaneSamples: RefSamples {
 }
 
 /// A read-write view of a plane anchored at some sample — the safe form of the
-/// `pDstY`/`pEncMb`/`pDecMb` cursors (`decode_slice.rs:1944`,
-/// `svc_base_layer_md.rs:327-358`).
+/// `pDstY`/`pEncMb`/`pDecMb` cursors (C++ `decode_slice.cpp:1944`,
+/// `svc_base_layer_md.cpp:327-358`).
 ///
 /// Same-plane read-while-write — intra prediction reading `(-1, dy)` and `(dx, -1)`
 /// while writing `(0..16, 0..16)`, deblocking straddling an MB edge — is a serial

@@ -40,8 +40,7 @@ use crate::common::macros::WelsClip1;
 //
 //   * the destination is a *packed* candidate buffer — 16 bytes at an implicit
 //     stride of 4 (I4x4), 64 at 8 (chroma), 256 at 16 (I16x16). It is one of the
-//     mode-decision ping-pong halves (`svc_base_layer_md.rs:437`, `:734`,
-//     `svc_mode_decision.rs:1167`), never a picture plane, so the reference
+//     mode-decision ping-pong halves, never a picture plane, so the reference
 //     cursor's stride says nothing about it;
 //   * the reference is the reconstructed plane, read at `x = -1` and `y = -1`
 //     around the block. Those reads are in-allocation because a picture plane is
@@ -746,9 +745,9 @@ pub fn i16x16_luma_pred_dc_na(pred: &mut [u8; 256]) {
 //
 // The reads are correct because mode decision indexes `g_kiIntra4AvailMode` /
 // `g_kiIntra16AvaliMode` / `g_kiIntraChromaAvailMode` with the block's neighbour
-// mask and only offers modes whose neighbours exist (`svc_base_layer_md.rs:437`,
-// `:734`, `svc_mode_decision.rs:1167`); that correspondence is asserted offset by
-// offset in `reach_table_agrees_with_the_availability_tables`.
+// mask and only offers modes whose neighbours exist (`WelsMdI4x4Fast`, `WelsMdI16x16`);
+// that correspondence is asserted offset by offset in
+// `reach_table_agrees_with_the_availability_tables`.
 //
 // `pred` is a packed candidate buffer — 16 bytes for I4x4, 64 for chroma, 256 for
 // I16x16, at implicit strides of 4, 8 and 16, about which the cursor's own stride

@@ -262,8 +262,9 @@ impl Default for TagReadBitsCache<'_> {
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SWelsNeighAvail {
     // Field order matches `SWelsNeighAvail` in
-    // `codec/decoder/core/inc/mb_cache.h` — this struct is shared (via raw
-    // pointer casts) between the CAVLC, CABAC and slice-decode modules.
+    // `codec/decoder/core/inc/mb_cache.h` — while C++ shared this struct via raw
+    // pointer casts between the CAVLC, CABAC and slice-decode modules, Rust shares
+    // it via safe references.
     pub iTopAvail: i32,
     pub iLeftAvail: i32,
     pub iRightTopAvail: i32,

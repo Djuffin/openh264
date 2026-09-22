@@ -18,7 +18,7 @@ use crate::safe::err::ErrInfo;
 // ---------------------------------------------------------------------------
 
 /// A bitstream read position — the reading half of `SBitStringAux`
-/// (`common/wels_common_defs.rs:30-46`), with the three pointers replaced by two
+/// (C++ `codec/common/inc/wels_common_defs.h:30-46`), with the three pointers replaced by two
 /// offsets.
 ///
 /// `len` is state, not a property of the slice passed in: it marks the end of the
@@ -56,7 +56,7 @@ impl PartialEq for BsCursor {
 
 /// Peeks the top `n` bits of an MSB-aligned accumulator.
 ///
-/// Mirrors the `UBITS` macro (`dec_golomb.rs:116` / `codec/decoder/core/inc/dec_golomb.h`).
+/// Mirrors the `UBITS` macro (`codec/decoder/core/inc/dec_golomb.h`).
 #[inline]
 fn ubits(cur_bits: u32, n: i32) -> u32 {
     if n <= 0 {
@@ -70,8 +70,7 @@ fn ubits(cur_bits: u32, n: i32) -> u32 {
 
 /// Number of leading zero bits in `cur_bits`, or `-1` if it is entirely zero.
 ///
-/// Mirrors `GetLeadingZeroBits` (`dec_golomb.rs:205` /
-/// `codec/decoder/core/inc/dec_golomb.h`).
+/// Mirrors `GetLeadingZeroBits` (`codec/decoder/core/inc/dec_golomb.h`).
 #[inline]
 fn leading_zero_bits(cur_bits: u32) -> i32 {
     if cur_bits == 0 {
@@ -81,7 +80,7 @@ fn leading_zero_bits(cur_bits: u32) -> i32 {
     }
 }
 
-/// Two's-complement negation, mirroring the `NEG_NUM` macro (`dec_golomb.rs:110`).
+/// Two's-complement negation, mirroring the `NEG_NUM` macro (`codec/decoder/core/inc/dec_golomb.h`).
 #[inline]
 fn neg_num(x: i32) -> i32 {
     1 + !x
@@ -90,8 +89,7 @@ fn neg_num(x: i32) -> i32 {
 /// Number of zero bits before the `rbsp_stop_one_bit` in `byte`; an all-zero byte
 /// returns `0` rather than an error.
 ///
-/// Mirrors `BsGetTrailingBits` (`dec_golomb.rs:320` /
-/// `codec/decoder/core/inc/dec_golomb.h`).
+/// Mirrors `BsGetTrailingBits` (`codec/decoder/core/inc/dec_golomb.h`).
 #[inline]
 pub fn trailing_bits(byte: u8) -> i32 {
     let mut value = byte as u32;
@@ -108,7 +106,7 @@ pub fn trailing_bits(byte: u8) -> i32 {
 
 impl BsCursor {
     /// Starts reading an RBSP of `size_bits` bits from the front of `buf` —
-    /// `DecInitBits` (`decoder/bit_stream.rs:84`), including its initial 4-byte fill
+    /// `DecInitBits`, including its initial 4-byte fill
     /// and the `left_bits = -16` bias.
     ///
     /// `buf` should be the whole readable region — RBSP **plus** at least 3 bytes of
@@ -137,14 +135,14 @@ impl BsCursor {
     /// Re-primes the accumulator at the current position, refusing to start within
     /// `end_offset` bytes of the logical end.
     ///
-    /// Mirrors `InitReadBits` (`decoder/bit_stream.rs:57`).
+    /// Mirrors `InitReadBits`.
     pub fn init_read_bits(&mut self, buf: &[u8], end_offset: isize) -> Result<(), ErrInfo> {
         self.debug_assert_out_of_cavlc("init_read_bits");
         let end_limit = self.len as isize - end_offset;
         if self.pos as isize >= end_limit {
             return Err(ErrInfo::INVALID_ACCESS);
         }
-        // `GetValue4Bytes` (`decoder/bit_stream.rs:40`): four bytes unconditionally,
+        // `GetValue4Bytes`: four bytes unconditionally,
         // and a buffer without that much slack errors — see `get_bits`.
         let b = buf
             .get(self.pos..self.pos + 4)
@@ -213,7 +211,7 @@ impl BsCursor {
 
     /// Consumes `n` bits and refills the accumulator.
     ///
-    /// Mirrors `dump_bits_aux` (`dec_golomb.rs:128-150`), the refill under every read
+    /// Mirrors `DUMP_BITS_AUX` (`codec/decoder/core/inc/dec_golomb.h`), the refill under every read
     /// below — see [`get_bits`](Self::get_bits) for the slack contract.
     fn dump_bits(&mut self, buf: &[u8], n: i32) -> Result<(), ErrInfo> {
         self.cur_bits = self.cur_bits.wrapping_shl(n as u32);
@@ -238,8 +236,7 @@ impl BsCursor {
 
     /// Reads `n` bits (1..=32), MSB first.
     ///
-    /// Mirrors `BsGetBits` (`dec_golomb.rs:157` /
-    /// `codec/decoder/core/inc/dec_golomb.h`).
+    /// Mirrors `BsGetBits` (`codec/decoder/core/inc/dec_golomb.h`).
     ///
     /// The refill tops the accumulator up 16 bits at a time, and only once it has run
     /// below 16, so at rest it holds **at least** 16 valid bits and no more than 32: a
@@ -259,7 +256,7 @@ impl BsCursor {
         Ok(value)
     }
 
-    /// Reads one bit. Mirrors `BsGetOneBit` (`dec_golomb.rs:197`).
+    /// Reads one bit. Mirrors `BsGetOneBit`.
     #[inline]
     pub fn get_one_bit(&mut self, buf: &[u8]) -> Result<u32, ErrInfo> {
         self.get_bits(buf, 1)
@@ -267,7 +264,7 @@ impl BsCursor {
 
     /// Reads an unsigned Exp-Golomb code, `ue(v)`.
     ///
-    /// Mirrors `BsGetUe` (`dec_golomb.rs:233`), including its split refill for
+    /// Mirrors `BsGetUe`, including its split refill for
     /// prefixes longer than 16 bits and its wrapping reconstruction of the value.
     pub fn get_ue(&mut self, buf: &[u8]) -> Result<u32, ErrInfo> {
         // `get_se`, `get_te0` and `get_one_bit` reach the accumulator only through this
@@ -297,7 +294,7 @@ impl BsCursor {
 
     /// Reads a signed Exp-Golomb code, `se(v)`.
     ///
-    /// Mirrors `BsGetSe` (`dec_golomb.rs:275`).
+    /// Mirrors `BsGetSe`.
     pub fn get_se(&mut self, buf: &[u8]) -> Result<i32, ErrInfo> {
         let code_num = self.get_ue(buf)?;
         Ok(if code_num & 0x01 != 0 {
@@ -309,7 +306,7 @@ impl BsCursor {
 
     /// Reads a truncated Exp-Golomb code, `te(v)`, over `range` values.
     ///
-    /// Mirrors `BsGetTe0` (`dec_golomb.rs:296`).
+    /// Mirrors `BsGetTe0`.
     pub fn get_te0(&mut self, buf: &[u8], range: i32) -> Result<u32, ErrInfo> {
         if range == 1 {
             Ok(0)
@@ -322,7 +319,7 @@ impl BsCursor {
 
     /// Whether more RBSP data precedes `rbsp_trailing_bits()`.
     ///
-    /// Mirrors `CheckMoreRBSPData` (`dec_golomb.rs:341`).
+    /// Mirrors `CheckMoreRBSPData`.
     pub fn check_more_rbsp_data(&self) -> bool {
         self.debug_assert_out_of_cavlc("check_more_rbsp_data");
         let offset_bytes = self.pos as isize - 2;
@@ -366,7 +363,7 @@ impl BsCursor {
 
     /// Enters CAVLC mode: projects the cursor onto an absolute bit position.
     ///
-    /// `BsStartCavlc` (`parse_mb_syn_cavlc.rs:2229`). The accumulator holds
+    /// `BsStartCavlc` (`codec/decoder/core/src/parse_mb_syn_cavlc.cpp:2229`). The accumulator holds
     /// `16 - left_bits` valid bits (32 immediately after a prime, since `left_bits` is
     /// biased by −16), so the next unread bit is at `8 * pos - (16 - left_bits)`; the
     /// `16` is the CAVLC residual machinery's **16-bit half-window**, not a mistyped 32.
@@ -386,7 +383,7 @@ impl BsCursor {
 
     /// Leaves CAVLC mode: reseats the accumulator at `cavlc_bit_pos`.
     ///
-    /// `BsEndCavlc` (`parse_mb_syn_cavlc.rs:2236`). `left_bits` goes **negative on
+    /// `BsEndCavlc` (`codec/decoder/core/src/parse_mb_syn_cavlc.cpp:2236`). `left_bits` goes **negative on
     /// purpose**: `-16 + (idx & 7)` is the same −16 bias every other prime uses, offset
     /// by the sub-byte phase the 4-byte load was shifted by.
     ///
@@ -440,7 +437,7 @@ impl BsCursor {
     /// Marks the accumulator spent because the CABAC engine has taken over the
     /// position.
     ///
-    /// `InitCabacDecEngineFromBS`'s closing `iLeftBits = 0` (`cabac_decoder.rs:697`).
+    /// `InitCabacDecEngineFromBS`'s closing `iLeftBits = 0`.
     /// The engine reads from the shared buffer from here on; the cursor's accumulator
     /// is meaningless until [`restore_from_cabac`] or a re-prime.
     ///
@@ -453,7 +450,7 @@ impl BsCursor {
 
     /// Takes the position back from the CABAC engine, at byte offset `pos`.
     ///
-    /// `RestoreCabacDecEngineToBS`'s four writes (`cabac_decoder.rs:712-718`):
+    /// `RestoreCabacDecEngineToBS`'s four writes:
     /// position, a cleared accumulator, and `cavlc_bit_pos` zeroed. That last write
     /// happens *outside* any CAVLC region, so it is part of the handoff rather than a
     /// mode operation and does not assert.
@@ -507,7 +504,7 @@ impl Default for BsWriter {
 
 /// Stores `value` big-endian at `buf[pos..pos + 4]`.
 ///
-/// Mirrors `WRITE_BE_32` (`encoder/vlc_encoder.rs:342`).
+/// Mirrors `WRITE_BE_32` (`codec/encoder/core/inc/vlc_encoder.h`).
 #[inline]
 fn write_be_32(buf: &mut [u8], pos: usize, value: u32) {
     buf[pos..pos + 4].copy_from_slice(&value.to_be_bytes());
@@ -516,7 +513,7 @@ fn write_be_32(buf: &mut [u8], pos: usize, value: u32) {
 impl BsWriter {
     /// A writer positioned at the start of a buffer.
     ///
-    /// Mirrors `InitBits` (`encoder/vlc_encoder.rs:353`).
+    /// Mirrors `InitBits` (`codec/encoder/core/inc/vlc_encoder.h`).
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -555,7 +552,7 @@ impl BsWriter {
 
     /// The write position in bits.
     ///
-    /// Mirrors `BsGetBitsPos` (`encoder/vlc_encoder.rs:501`).
+    /// Mirrors `BsGetBitsPos`.
     #[inline]
     pub fn bits_pos(&self) -> i32 {
         ((self.pos as i32) << 3) + 32 - self.left_bits
@@ -563,7 +560,7 @@ impl BsWriter {
 
     /// Writes the low `n` bits of `value`, MSB first.
     ///
-    /// Mirrors `BsWriteBits` (`encoder/vlc_encoder.rs:367`).
+    /// Mirrors `BsWriteBits`.
     ///
     /// # Contract
     /// `n` in `1..=32`, and `value` must have no bits set above bit `n-1`: it is ORed
@@ -598,7 +595,7 @@ impl BsWriter {
         }
     }
 
-    /// Writes one bit. Mirrors `BsWriteOneBit` (`encoder/vlc_encoder.rs:386`).
+    /// Writes one bit. Mirrors `BsWriteOneBit`.
     #[inline]
     pub fn write_one_bit(&mut self, buf: &mut [u8], value: u32) {
         self.write_bits(buf, 1, value);
@@ -649,7 +646,7 @@ impl BsWriter {
 
     /// Writes `rbsp_stop_one_bit` and flushes to byte alignment.
     ///
-    /// Mirrors `BsRbspTrailingBits` (`encoder/vlc_encoder.rs:509`).
+    /// Mirrors `BsRbspTrailingBits`.
     #[inline]
     pub fn rbsp_trailing_bits(&mut self, buf: &mut [u8]) {
         self.write_one_bit(buf, 1);
@@ -658,7 +655,7 @@ impl BsWriter {
 
     /// Writes a truncated Exp-Golomb code, `te(v)`.
     ///
-    /// Mirrors `BsWriteTE` (`encoder/vlc_encoder.rs:489`): at `x == 1` the range is
+    /// Mirrors `BsWriteTE`: at `x == 1` the range is
     /// binary and the code is the *inverted* single bit; otherwise it is `ue(v)`.
     #[inline]
     pub fn write_te(&mut self, buf: &mut [u8], x: i32, value: u32) {
