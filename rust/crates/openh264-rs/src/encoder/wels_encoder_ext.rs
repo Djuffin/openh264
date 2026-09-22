@@ -1212,7 +1212,7 @@ pub fn ParamValidationExt(pLogCtx: SLogContext, pCodingParam: &mut SWelsSvcCodin
 
         if kiPicWidth <= 0
             || kiPicHeight <= 0
-            || kiPicWidth * kiPicHeight > (MAX_MBS_PER_FRAME << 8)
+            || (kiPicWidth as i64) * (kiPicHeight as i64) > ((MAX_MBS_PER_FRAME as i64) << 8)
         {
             return ENC_RETURN_UNSUPPORTED_PARA;
         }

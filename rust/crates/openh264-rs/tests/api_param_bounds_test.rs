@@ -286,3 +286,35 @@ fn test_encoder_rejects_mismatched_u_and_v_strides() {
         WelsDestroySVCEncoder(p_encoder);
     }
 }
+
+#[test]
+fn test_encoder_initialize_ext_rejects_geometry_overflow() {
+    // C++ test: EncoderInterfaceTest.InitializeExtRejectsGeometryOverflow
+    unsafe {
+        let mut p_encoder: *mut ISVCEncoder = std::ptr::null_mut();
+        let ret = WelsCreateSVCEncoder(&mut p_encoder);
+        assert_eq!(ret, CM_RESULT_SUCCESS);
+        assert!(!p_encoder.is_null());
+
+        let mut param = SEncParamExt::default();
+        let vtbl = (*p_encoder).lpVtbl;
+        ((*vtbl).GetDefaultParams)(p_encoder, &mut param);
+
+        // 46368 * 46368 overflows signed int32_t (46368 * 46368 = 2,149,991,424 > 2,147,483,647)
+        param.iPicWidth = 46368;
+        param.iPicHeight = 46368;
+        param.iSpatialLayerNum = 1;
+        param.iTemporalLayerNum = 1;
+        param.iTargetBitrate = 500000;
+        param.fMaxFrameRate = 30.0;
+        param.sSpatialLayers[0].iVideoWidth = param.iPicWidth;
+        param.sSpatialLayers[0].iVideoHeight = param.iPicHeight;
+        param.sSpatialLayers[0].iSpatialBitrate = param.iTargetBitrate;
+        param.sSpatialLayers[0].fFrameRate = param.fMaxFrameRate;
+
+        let init_ret = ((*vtbl).InitializeExt)(p_encoder, &param);
+        assert_ne!(init_ret, CM_RESULT_SUCCESS);
+
+        WelsDestroySVCEncoder(p_encoder);
+    }
+}
