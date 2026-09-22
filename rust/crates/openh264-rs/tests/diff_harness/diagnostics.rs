@@ -69,8 +69,8 @@ pub fn format_divergence_report(
     }
 
     // NAL-level analysis
-    let rust_nals = split_annexb_units(rust_stream);
-    let cpp_nals = split_annexb_units(cpp_stream);
+    let rust_nals: Vec<_> = split_annexb_units(rust_stream).collect();
+    let cpp_nals: Vec<_> = split_annexb_units(cpp_stream).collect();
 
     msg.push_str(&format!(
         "\nNAL Unit Breakdown: Rust = {} NALs, C++ = {} NALs\n",

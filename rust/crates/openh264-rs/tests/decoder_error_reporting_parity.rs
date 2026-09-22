@@ -281,10 +281,7 @@ fn test_avc_bitstream_type_notifies_key_frame_loss_when_ec_is_off() {
     let data = asset("BA_MW_D.264");
     // One slice NAL cut in half, deep enough into the stream that the frames around
     // it construct cleanly and so clear `bParamSetsLostFlag`.
-    let mut units: Vec<Vec<u8>> = split_annexb_units(&data)
-        .iter()
-        .map(|u| u.to_vec())
-        .collect();
+    let mut units: Vec<Vec<u8>> = split_annexb_units(&data).map(|u| u.to_vec()).collect();
     assert!(
         units.len() > 8,
         "asset is too short to corrupt a settled slice"

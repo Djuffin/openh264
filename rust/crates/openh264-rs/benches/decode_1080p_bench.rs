@@ -678,7 +678,7 @@ fn main() {
             continue;
         };
         let data = std::fs::read(&path).expect("cannot read generated stream");
-        let units = split_annexb_units(&data);
+        let units: Vec<_> = split_annexb_units(&data).collect();
         any_stream = true;
 
         println!(

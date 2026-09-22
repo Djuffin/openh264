@@ -302,7 +302,7 @@ fn test_decoder_reinit_does_not_inherit_reordering_slots() {
     let path = repo_root.join("res/CABA2_SVA_B.264");
     assert!(path.exists(), "asset missing: {:?}", path);
     let data = std::fs::read(&path).expect("read asset");
-    let units = openh264_rs::split_annexb_units(&data);
+    let units: Vec<_> = openh264_rs::split_annexb_units(&data).collect();
     assert!(units.len() > 12, "asset too short to interrupt mid-stream");
 
     unsafe {

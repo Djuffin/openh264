@@ -335,7 +335,7 @@ fn degenerate_corpus() -> Vec<Case> {
     let units = split_annexb_units(&data);
     let find = |ty: u8| -> Option<Vec<u8>> {
         units
-            .iter()
+            .clone()
             .find(|u| header_byte(u, 0).map(|h| h & 0x1F) == Some(ty))
             .map(|u| u.to_vec())
     };
@@ -889,7 +889,7 @@ fn start_code_scan_agrees_with_split_annexb_units() {
     for &name in BASE_STREAMS {
         let data = read_stream(name);
         let offsets = scan_start_codes(&data);
-        let units = split_annexb_units(&data);
+        let units: Vec<_> = split_annexb_units(&data).collect();
         assert_eq!(offsets.len(), units.len(), "{name}: unit count");
         for (i, unit) in units.iter().enumerate() {
             let end = offsets.get(i + 1).copied().unwrap_or(data.len());

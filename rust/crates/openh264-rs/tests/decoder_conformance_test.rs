@@ -107,7 +107,7 @@ fn test_single_bitstream_asset_ex(file_name: &str, expected_hash: &str, hash_con
         let units = split_annexb_units(&data);
         let mut decoded_frames = 0;
 
-        for unit in units.iter() {
+        for unit in units {
             let mut p_dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
             let mut buf_info = SBufferInfo::default();
             let dec_ret = ISVCDecoder::DecodeFrame2(

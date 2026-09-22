@@ -3427,8 +3427,8 @@ pub fn WelsDecodeBs(
             pCtx.sRawData.rewind();
         }
 
-        for unit in units.iter() {
-            let mut payload_slice = *unit;
+        for unit in units {
+            let mut payload_slice = unit;
             if payload_slice.starts_with(&[0, 0, 0, 1]) {
                 payload_slice = &payload_slice[4..];
             } else if payload_slice.starts_with(&[0, 0, 1]) {

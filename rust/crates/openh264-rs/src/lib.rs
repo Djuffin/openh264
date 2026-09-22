@@ -26,20 +26,28 @@ pub mod simd;
 
 pub use crate::api::codec_api::*;
 
-pub fn split_annexb_units(bitstream: &[u8]) -> Vec<&[u8]> {
-    let mut start_indices = Vec::new();
-    let mut i = 0;
+#[derive(Clone, Debug)]
+pub struct AnnexBUnits<'a> {
+    bitstream: &'a [u8],
+    curr: Option<(usize, usize)>,
+}
+
+impl<'a> AnnexBUnits<'a> {
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.curr.is_none()
+    }
+}
+
+#[inline]
+fn find_start_code(bitstream: &[u8], mut i: usize) -> Option<(usize, usize)> {
     let len = bitstream.len();
     while i + 2 < len {
         if bitstream[i] == 0 && bitstream[i + 1] == 0 {
             if bitstream[i + 2] == 1 {
-                start_indices.push(i);
-                i += 3;
-                continue;
+                return Some((i, i + 3));
             } else if i + 3 < len && bitstream[i + 2] == 0 && bitstream[i + 3] == 1 {
-                start_indices.push(i);
-                i += 4;
-                continue;
+                return Some((i, i + 4));
             }
         }
         if let Some(pos) = bitstream[i + 1..].iter().position(|&b| b == 0) {
@@ -48,16 +56,28 @@ pub fn split_annexb_units(bitstream: &[u8]) -> Vec<&[u8]> {
             break;
         }
     }
+    None
+}
 
-    let mut units = Vec::with_capacity(start_indices.len());
-    for idx in 0..start_indices.len() {
-        let start = start_indices[idx];
-        let end = if idx + 1 < start_indices.len() {
-            start_indices[idx + 1]
-        } else {
-            len
+impl<'a> Iterator for AnnexBUnits<'a> {
+    type Item = &'a [u8];
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let (start, scan_from) = self.curr?;
+        let next = find_start_code(self.bitstream, scan_from);
+        self.curr = next;
+        let end = match next {
+            Some((next_start, _)) => next_start,
+            None => self.bitstream.len(),
         };
-        units.push(&bitstream[start..end]);
+        Some(&self.bitstream[start..end])
     }
-    units
+}
+
+pub fn split_annexb_units(bitstream: &[u8]) -> AnnexBUnits<'_> {
+    AnnexBUnits {
+        bitstream,
+        curr: find_start_code(bitstream, 0),
+    }
 }
