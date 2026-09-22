@@ -187,6 +187,7 @@ pub use crate::decoder::slice::SPredWeightTable;
 pub use crate::decoder::slice::{SRefPicListReorderSyn, SRefPicMarking};
 
 pub use crate::decoder::bit_stream::RawDataBuffer;
+use crate::decoder::bit_stream::{READER_SLOP, RESERVED_NAL_BYTES};
 pub use crate::decoder::decoder_context::{FEEDBACK_UNKNOWN_NAL, FEEDBACK_VCL_NAL};
 pub use crate::decoder::decoder_context::{SNalUnitHeader, SNalUnitHeaderExt};
 pub use crate::decoder::slice::{SSlice, SSliceHeader, SSliceHeaderExt};
@@ -3414,6 +3415,8 @@ pub fn ConstructAccessUnit(
     iErr
 }
 
+/// Returns false if writing `[write_start, write_start + write_len)` overlaps any
+/// queued NAL's bit-reader range (`start .. start + cursor.len() + READER_SLOP`).
 pub fn raw_data_write_range_is_clean(
     pCtx: &SWelsDecoderContext,
     write_start: usize,
@@ -3430,7 +3433,11 @@ pub fn raw_data_write_range_is_clean(
     for nal in &au.nal_units[..avail.min(au.nal_units.len())] {
         let reader = &nal.sNalData.sVclNal.sSliceBitsRead;
         let is_active = !reader.cursor.is_empty() || reader.cursor.bits() > 0 || reader.start > 0;
-        if is_active && reader.start >= write_start && reader.start < write_end {
+        let read_end = reader
+            .start
+            .saturating_add(reader.cursor.len())
+            .saturating_add(READER_SLOP);
+        if is_active && reader.start < write_end && write_start < read_end {
             return false;
         }
     }
@@ -3473,10 +3480,7 @@ pub fn WelsDecodeBs(
             pCtx.sRawData.rewind();
         }
 
-        // Mirrors `decoder.cpp:794`: if the incoming bitstream buffer (+ 4 guard bytes)
-        // does not fit in the remaining tail of `sRawData`, wrap to head only if doing
-        // so will not overwrite any queued slice's bit-reader buffer.
-        let total_need = (kiBsLen as usize) + 4;
+        let total_need = (kiBsLen as usize) + RESERVED_NAL_BYTES;
         if pCtx.sRawData.remaining() < total_need {
             if !raw_data_wrap_is_clean(pCtx, total_need) {
                 pCtx.iErrorCode |= dsOutOfMemory;
@@ -3493,34 +3497,22 @@ pub fn WelsDecodeBs(
             } else if payload_slice.starts_with(&[0, 0, 1]) {
                 payload_slice = &payload_slice[3..];
             }
-            // The escaped NAL, start code included, in the three-byte start-code
-            // form. Parse-only hands this back to its caller, and it is the one thing
-            // `sRawData` cannot supply, which holds the de-escaped RBSP.
+            // Parse-only expects the escaped NAL with a 3-byte start code (`sSavedData`).
             let src_nal: &[u8] = if unit.starts_with(&[0, 0, 0, 1]) {
                 &unit[1..]
             } else {
                 unit
             };
-            // An empty NAL is still a NAL: with `iSrcRbspLen == 0` the header byte
-            // reads out of the four reserved zero bytes written at the write position
-            // before every parse, giving `nal_unit_type` 0 (`NAL_UNIT_UNSPEC_0`) and,
-            // with no SPS ahead of it, `dsNoParamSets`. Those four zeroes are written
-            // below rather than assumed: they double as the guard bytes the refill
-            // predicate may touch past an RBSP end, and `sRawData` is reused across
-            // access units, so it is not zeroed after the first rewind.
 
-            // Copy the NAL into the persistent raw-data buffer, stripping
-            // emulation-prevention bytes (00 00 03 -> 00 00).
-            let need_bytes = payload_slice.len() + 4;
-            let wrap_check_bytes = need_bytes.max(remaining_src + 4);
+            // Copy the NAL into `sRawData`, stripping emulation-prevention bytes
+            // (`00 00 03` -> `00 00`) and reserving 4 trailing zero guard bytes.
+            let need_bytes = payload_slice.len() + RESERVED_NAL_BYTES;
+            let wrap_check_bytes = need_bytes.max(remaining_src + RESERVED_NAL_BYTES);
             if pCtx.sRawData.remaining() < need_bytes {
                 if !raw_data_wrap_is_clean(pCtx, wrap_check_bytes) {
                     pCtx.iErrorCode |= dsOutOfMemory;
                     return pCtx.iErrorCode;
                 }
-                // Wrap to the buffer head; the buffer is sized for several access
-                // units, so pending NAL data near the current write position is not
-                // overwritten.
                 pCtx.sRawData.rewind();
                 if pCtx.sRawData.len() < need_bytes {
                     if pCtx.sRawData.grow(payload_slice.len()).is_err() {
@@ -3541,7 +3533,7 @@ pub fn WelsDecodeBs(
             }
             remaining_src = remaining_src.saturating_sub(unit.len());
             let (payload_start, payload_len) = pCtx.sRawData.append_ebsp_stripped(payload_slice);
-            pCtx.sRawData.zero_reserved(payload_start + payload_len);
+            pCtx.sRawData.zero_reserved();
 
             let mut consumed_bytes = 0i32;
             let mut nal_header = SNalUnitHeader::default();

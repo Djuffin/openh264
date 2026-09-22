@@ -29,6 +29,9 @@ use crate::safe::bits::BsCursor;
 /// `pEndBuf - iEndOffset`, i.e. at `len - 1` at the latest.
 pub const READER_SLOP: usize = 3;
 
+/// Zeroed guard bytes reserved after every NAL (`pDstNal += iDstIdx + 4` in `decoder.cpp`).
+pub const RESERVED_NAL_BYTES: usize = 4;
+
 /// The decoder's raw-bitstream accumulation buffer — `SDataBuffer { pHead, pEnd,
 /// pStartPos, pCurPos }`.
 ///
@@ -124,9 +127,7 @@ impl RawDataBuffer {
     /// bytes (`00 00 03` → `00 00`) as `WelsDecodeBs`'s copy loop does. Returns
     /// `(start, len)` of the stripped payload within the buffer.
     ///
-    /// The caller must ensure `remaining() >= payload.len() + 4`; the destination
-    /// slice is taken once up front, so a violated contract panics there rather than
-    /// byte-by-byte.
+    /// The caller must ensure `remaining() >= payload.len() + RESERVED_NAL_BYTES`.
     pub fn append_ebsp_stripped(&mut self, payload: &[u8]) -> (usize, usize) {
         let start = self.cur;
         let dst = &mut self.buf[start..start + payload.len()];
@@ -149,19 +150,13 @@ impl RawDataBuffer {
         (start, dst_len)
     }
 
-    /// Zeroes the four reserved bytes at `at` — `pDstNal[iDstIdx .. iDstIdx+4] = 0`,
-    /// which `WelsDecodeBs` writes before every `ParseNalHeader` call
-    /// (`decoder.cpp:874`/`:875`). They are the guard bytes a refill is allowed to load
-    /// past an RBSP end, and the bytes a zero-length NAL's header is read out of.
-    ///
-    /// The caller must ensure `remaining() >= len + 4` before appending, so
-    /// `at + 4 <= len()` holds; the clamp keeps a violated contract from panicking.
+    /// Zeroes [`RESERVED_NAL_BYTES`] guard bytes at [`cur`](Self::cur) and advances
+    /// past them (`pDstNal += iDstIdx + 4`).
     #[inline]
-    pub fn zero_reserved(&mut self, at: usize) {
-        let end = (at + 4).min(self.buf.len());
-        if at < end {
-            self.buf[at..end].fill(0);
-        }
+    pub fn zero_reserved(&mut self) {
+        let end = self.cur.saturating_add(RESERVED_NAL_BYTES).min(self.buf.len());
+        self.buf[self.cur..end].fill(0);
+        self.cur = end;
     }
 
     /// Parse-only's raw append — `sSavedData`'s half of `WelsDecodeBs`'s two-buffer
