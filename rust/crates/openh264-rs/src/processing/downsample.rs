@@ -39,16 +39,31 @@ fn DyadicBilinearDownsampler(
 ) {
     let kiDstWidth = kiSrcWidth >> 1;
     let kiDstHeight = kiSrcHeight >> 1;
+    // On x86/x86_64 with SIMD enabled, `CDownsampling::InitDownsampleFuncs` installs
+    // `DyadicBilinearDownsamplerWidthx{32,16}_ssse3`, which averages vertically first
+    // (`pavgb` across rows) and then horizontally (`pmaddubsw` + `pavgw`).
+    let vertical_first = cfg!(all(
+        any(target_arch = "x86", target_arch = "x86_64"),
+        not(feature = "scalar")
+    ));
     for j in 0..kiDstHeight {
         let dstLine = j * kiDstStride;
         let srcLine = j * (kiSrcStride << 1);
         for i in 0..kiDstWidth {
             let kiSrcX = srcLine + (i << 1);
-            let kiTempRow1 = (pSrc[kiSrcX] as i32 + pSrc[kiSrcX + 1] as i32 + 1) >> 1;
-            let kiTempRow2 =
-                (pSrc[kiSrcX + kiSrcStride] as i32 + pSrc[kiSrcX + kiSrcStride + 1] as i32 + 1)
-                    >> 1;
-            pDst[dstLine + i] = ((kiTempRow1 + kiTempRow2 + 1) >> 1) as u8;
+            let a = pSrc[kiSrcX] as i32;
+            let b = pSrc[kiSrcX + 1] as i32;
+            let c = pSrc[kiSrcX + kiSrcStride] as i32;
+            let d = pSrc[kiSrcX + kiSrcStride + 1] as i32;
+            pDst[dstLine + i] = if vertical_first {
+                let kiTempCol1 = (a + c + 1) >> 1;
+                let kiTempCol2 = (b + d + 1) >> 1;
+                ((kiTempCol1 + kiTempCol2 + 1) >> 1) as u8
+            } else {
+                let kiTempRow1 = (a + b + 1) >> 1;
+                let kiTempRow2 = (c + d + 1) >> 1;
+                ((kiTempRow1 + kiTempRow2 + 1) >> 1) as u8
+            };
         }
     }
 }
