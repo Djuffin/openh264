@@ -348,3 +348,88 @@ pub fn sum_of_16x16_block_of_frame(
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::encoder::svc_motion_estimate::{
+        LIST_SIZE_SUM_8x8, LIST_SIZE_SUM_16x16, SumOf8x8BlockOfFrame_c, SumOf16x16BlockOfFrame_c,
+        sum_of_8x8_single_block as scalar_8x8_single,
+        sum_of_16x16_single_block as scalar_16x16_single,
+    };
+
+    #[test]
+    fn sse2_me_kernels_match_scalar_over_tight_spans_and_extreme_values() {
+        for width in 1..=25i32 {
+            for height in [1i32, 2, 5] {
+                let stride8 = width + 7;
+                let exact_len8 = ((height + 6) * stride8 + width + 7) as usize;
+                let mut pic8 = vec![0u8; exact_len8];
+                for (i, b) in pic8.iter_mut().enumerate() {
+                    *b = match i % 5 {
+                        0 => 0,
+                        1 => 255,
+                        _ => ((i * 97 + 31) ^ (i >> 2)) as u8,
+                    };
+                }
+
+                let n = (width * height) as usize;
+                let (mut want_f8, mut got_f8) = (vec![0u16; n], vec![0u16; n]);
+                let (mut want_t8, mut got_t8) =
+                    (vec![0u32; LIST_SIZE_SUM_8x8], vec![0u32; LIST_SIZE_SUM_8x8]);
+                SumOf8x8BlockOfFrame_c(&pic8, width, height, stride8, &mut want_f8, &mut want_t8);
+                sum_of_8x8_block_of_frame(&pic8, width, height, stride8, &mut got_f8, &mut got_t8);
+                assert_eq!(got_f8, want_f8, "8x8 frame feat at {width}x{height}");
+                assert_eq!(got_t8, want_t8, "8x8 frame times at {width}x{height}");
+
+                let stride16 = width + 15;
+                let exact_len16 = ((height + 14) * stride16 + width + 15) as usize;
+                let mut pic16 = vec![0u8; exact_len16];
+                for (i, b) in pic16.iter_mut().enumerate() {
+                    *b = match i % 5 {
+                        0 => 255,
+                        1 => 0,
+                        _ => ((i * 151 + 17) ^ (i >> 3)) as u8,
+                    };
+                }
+
+                let (mut want_f16, mut got_f16) = (vec![0u16; n], vec![0u16; n]);
+                let (mut want_t16, mut got_t16) = (
+                    vec![0u32; LIST_SIZE_SUM_16x16],
+                    vec![0u32; LIST_SIZE_SUM_16x16],
+                );
+                SumOf16x16BlockOfFrame_c(
+                    &pic16,
+                    width,
+                    height,
+                    stride16,
+                    &mut want_f16,
+                    &mut want_t16,
+                );
+                sum_of_16x16_block_of_frame(
+                    &pic16,
+                    width,
+                    height,
+                    stride16,
+                    &mut got_f16,
+                    &mut got_t16,
+                );
+                assert_eq!(got_f16, want_f16, "16x16 frame feat at {width}x{height}");
+                assert_eq!(got_t16, want_t16, "16x16 frame times at {width}x{height}");
+            }
+        }
+
+        let mut all_ff = vec![255u8; 32 * 32];
+        let cursor_ff = RecCursor::over_owned(&mut all_ff, 0, 32);
+        assert_eq!(sum_of_8x8_single_block(&cursor_ff), 64 * 255);
+        assert_eq!(
+            sum_of_8x8_single_block(&cursor_ff),
+            scalar_8x8_single(&cursor_ff)
+        );
+        assert_eq!(sum_of_16x16_single_block(&cursor_ff), 256 * 255);
+        assert_eq!(
+            sum_of_16x16_single_block(&cursor_ff),
+            scalar_16x16_single(&cursor_ff)
+        );
+    }
+}

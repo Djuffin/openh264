@@ -314,3 +314,124 @@ pub fn sum_of_16x16_block_of_frame(
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::cpu_core::{WELS_CPU_NEON, WELS_CPU_SSE2};
+    use crate::encoder::svc_motion_estimate::{
+        LIST_SIZE_SUM_8x8, LIST_SIZE_SUM_16x16, SumOf8x8BlockOfFrame_c, SumOf16x16BlockOfFrame_c,
+        WelsInitMeFunc, sum_of_8x8_single_block as scalar_8x8_single,
+        sum_of_16x16_single_block as scalar_16x16_single,
+    };
+    use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
+
+    #[test]
+    fn neon_me_kernels_match_scalar_over_tight_spans_and_extreme_values() {
+        // Test every width 1..=25 (covering <8, ==8, ==9, ==16, ==17, ==24, ==25)
+        // and heights 1, 2, 5 with exact-fit buffers so any 1-byte over-read panics.
+        for width in 1..=25i32 {
+            for height in [1i32, 2, 5] {
+                // 8x8 exact-fit buffer: (height + 7 - 1) * stride + (width + 7)
+                let stride8 = width + 7;
+                let exact_len8 = ((height + 6) * stride8 + width + 7) as usize;
+                let mut pic8 = vec![0u8; exact_len8];
+                for (i, b) in pic8.iter_mut().enumerate() {
+                    // Alternate 0, 255, and pseudo-random values to stress max +/-255 diffs
+                    *b = match i % 5 {
+                        0 => 0,
+                        1 => 255,
+                        _ => ((i * 97 + 31) ^ (i >> 2)) as u8,
+                    };
+                }
+
+                let n = (width * height) as usize;
+                let (mut want_f8, mut got_f8) = (vec![0u16; n], vec![0u16; n]);
+                let (mut want_t8, mut got_t8) =
+                    (vec![0u32; LIST_SIZE_SUM_8x8], vec![0u32; LIST_SIZE_SUM_8x8]);
+                SumOf8x8BlockOfFrame_c(&pic8, width, height, stride8, &mut want_f8, &mut want_t8);
+                sum_of_8x8_block_of_frame(&pic8, width, height, stride8, &mut got_f8, &mut got_t8);
+                assert_eq!(got_f8, want_f8, "8x8 frame feat at {width}x{height}");
+                assert_eq!(got_t8, want_t8, "8x8 frame times at {width}x{height}");
+
+                // 16x16 exact-fit buffer: (height + 15 - 1) * stride + (width + 15)
+                let stride16 = width + 15;
+                let exact_len16 = ((height + 14) * stride16 + width + 15) as usize;
+                let mut pic16 = vec![0u8; exact_len16];
+                for (i, b) in pic16.iter_mut().enumerate() {
+                    *b = match i % 5 {
+                        0 => 255,
+                        1 => 0,
+                        _ => ((i * 151 + 17) ^ (i >> 3)) as u8,
+                    };
+                }
+
+                let (mut want_f16, mut got_f16) = (vec![0u16; n], vec![0u16; n]);
+                let (mut want_t16, mut got_t16) = (
+                    vec![0u32; LIST_SIZE_SUM_16x16],
+                    vec![0u32; LIST_SIZE_SUM_16x16],
+                );
+                SumOf16x16BlockOfFrame_c(
+                    &pic16,
+                    width,
+                    height,
+                    stride16,
+                    &mut want_f16,
+                    &mut want_t16,
+                );
+                sum_of_16x16_block_of_frame(
+                    &pic16,
+                    width,
+                    height,
+                    stride16,
+                    &mut got_f16,
+                    &mut got_t16,
+                );
+                assert_eq!(got_f16, want_f16, "16x16 frame feat at {width}x{height}");
+                assert_eq!(got_t16, want_t16, "16x16 frame times at {width}x{height}");
+            }
+        }
+
+        // All-255 and all-0 single block & frame saturation tests (max sum 16320 / 65280)
+        let mut all_ff = vec![255u8; 32 * 32];
+        let cursor_ff = RecCursor::over_owned(&mut all_ff, 0, 32);
+        assert_eq!(sum_of_8x8_single_block(&cursor_ff), 64 * 255);
+        assert_eq!(
+            sum_of_8x8_single_block(&cursor_ff),
+            scalar_8x8_single(&cursor_ff)
+        );
+        assert_eq!(sum_of_16x16_single_block(&cursor_ff), 256 * 255);
+        assert_eq!(
+            sum_of_16x16_single_block(&cursor_ff),
+            scalar_16x16_single(&cursor_ff)
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "scalar"))]
+    fn wels_init_me_func_installs_simd_kernels_when_cpu_flags_set() {
+        let mut scalar_list = SWelsFuncPtrList::default();
+        WelsInitMeFunc(&mut scalar_list, 0, true);
+
+        let mut simd_list = SWelsFuncPtrList::default();
+        WelsInitMeFunc(&mut simd_list, WELS_CPU_NEON | WELS_CPU_SSE2, true);
+
+        for i in 0..2 {
+            assert!(scalar_list.pfCalculateBlockFeatureOfFrame[i].is_some());
+            assert!(simd_list.pfCalculateBlockFeatureOfFrame[i].is_some());
+            assert_ne!(
+                simd_list.pfCalculateBlockFeatureOfFrame[i].map(|f| f as usize),
+                scalar_list.pfCalculateBlockFeatureOfFrame[i].map(|f| f as usize),
+                "pfCalculateBlockFeatureOfFrame[{i}] should switch from scalar to SIMD"
+            );
+
+            assert!(scalar_list.sMeFuncs.pfCalculateSingleBlockFeature[i].is_some());
+            assert!(simd_list.sMeFuncs.pfCalculateSingleBlockFeature[i].is_some());
+            assert_ne!(
+                simd_list.sMeFuncs.pfCalculateSingleBlockFeature[i].map(|f| f as usize),
+                scalar_list.sMeFuncs.pfCalculateSingleBlockFeature[i].map(|f| f as usize),
+                "pfCalculateSingleBlockFeature[{i}] should switch from scalar to SIMD"
+            );
+        }
+    }
+}
