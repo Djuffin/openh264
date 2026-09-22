@@ -1310,8 +1310,6 @@ pub struct sWelsEncCtx {
     pub iActiveThreadsNum: i16,
     /// One row per dependency layer. Root: [`ctx_dq_idc_map`].
     pub pDqIdcMap: Vec<SDqIdc>,
-    /// The parameter-set offset vector, held by value.
-    pub sPSOVector: SParaSetOffset,
     pub uiStartTimestamp: i64,
     pub sEncoderStatistics:
         [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics; MAX_DEPENDENCY_LAYER],
@@ -1433,10 +1431,6 @@ impl sWelsEncCtx {
             iActiveThreadsNum: 0, // set from iMultipleThreadIdc
 
             pDqIdcMap: Vec::new(),
-
-            // All-zero throughout, which is the id-strategy's state before any id has
-            // been handed out.
-            sPSOVector: SParaSetOffset::default(),
 
             // ---- statistics and timestamps ---------------------------------------
             // Timestamps are absolute and in the caller's clock, so zero is a real
@@ -2133,7 +2127,6 @@ mod tests {
             iMaxSliceCount,
             iActiveThreadsNum,
             pDqIdcMap,
-            sPSOVector,
             uiStartTimestamp,
             sEncoderStatistics,
             iStatisticsLogInterval,
@@ -2145,7 +2138,7 @@ mod tests {
         ];
         assert_eq!(
             extents.len(),
-            64,
+            63,
             "a field was added or removed without updating this list"
         );
 
@@ -2284,7 +2277,7 @@ mod tests {
         );
 
         // ---- tier 2: excluded by name and asserted by value --------------------
-        const BY_VALUE: [&str; 10] = [
+        const BY_VALUE: [&str; 9] = [
             // `Option` with a niche: `None` leaves pool::Id's generation half undefined
             "pEncPic",
             "pDecPic",
@@ -2296,20 +2289,9 @@ mod tests {
             "iSps",
             "iPps",
             // interior repr(C) padding a struct literal does not write
-            "sPSOVector",
             "sEncoderStatistics",
         ];
 
-        let paraset_is_zero = |p: &SParaSetOffset| {
-            p.sParaSetOffsetVariable.iter().all(|v| {
-                v.iParaSetIdDelta.iter().all(|&d| d == 0)
-                    && v.bUsedParaSetIdInBs.iter().all(|&b| !b)
-                    && v.uiNextParaSetIdToUseInBs == 0
-            }) && p.bPpsIdMappingIntoSubsetsps.iter().all(|&b| !b)
-                && p.iPpsIdList.iter().all(|r| r.iter().all(|&i| i == 0))
-                && (p.uiNeededSpsNum, p.uiNeededSubsetSpsNum, p.uiNeededPpsNum) == (0, 0, 0)
-                && (p.uiInUseSpsNum, p.uiInUseSubsetSpsNum, p.uiInUsePpsNum) == (0, 0, 0)
-        };
         let stats_are_zero = |s: &crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics| {
             (s.uiWidth, s.uiHeight, s.uiBitRate, s.uiAverageFrameQP) == (0, 0, 0, 0)
                 && (
@@ -2327,9 +2309,9 @@ mod tests {
                 && (s.iLastStatisticsBytes, s.iLastStatisticsFrameCount) == (0, 0)
         };
 
-        // The same ten fields from both images: `new()`'s by field access, the
+        // The same nine fields from both images: `new()`'s by field access, the
         // shell's by reading its zero bytes back as a value.
-        let pairs: [(&str, bool, bool); 10] = [
+        let pairs: [(&str, bool, bool); 9] = [
             ("pEncPic", built.pEncPic.is_none(), {
                 let v: Option<SrcPicId> = shell_field!(pEncPic);
                 v.is_none()
@@ -2369,10 +2351,6 @@ mod tests {
             ("iPps", built.iPps.is_none(), {
                 let v: Option<PpsId> = shell_field!(iPps);
                 v.is_none()
-            }),
-            ("sPSOVector", paraset_is_zero(&built.sPSOVector), {
-                let v: SParaSetOffset = shell_field!(sPSOVector);
-                paraset_is_zero(&v)
             }),
             (
                 "sEncoderStatistics",
