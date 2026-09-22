@@ -1,5 +1,4 @@
 #![deny(unsafe_code)]
-pub mod abi_guard;
 pub mod au_set;
 pub mod deblocking;
 pub mod decode_mb_aux;
