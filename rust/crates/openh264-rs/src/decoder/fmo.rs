@@ -113,7 +113,11 @@ pub fn FmoGenerateMbAllocMapType0(pFmo: &mut TagFmo, pPps: &SPps) -> i32 {
     while i < iMbNum {
         let mut uiGroup: u8 = 0;
         while (uiGroup as u32) < uiNumSliceGroups && i < iMbNum {
-            let kiRunIdx = pPps.uiRunLength[uiGroup as usize] as i32;
+            let kuiRunIdx = pPps.uiRunLength[uiGroup as usize];
+            let kiRunIdx = kuiRunIdx as i32;
+            if kiRunIdx == 0 || kiRunIdx > iMbNum || kuiRunIdx > iMbNum as u32 {
+                return ERR_INFO_INVALID_PARAM;
+            }
             let mut j: i32 = 0;
             loop {
                 if (i + j) < iMbNum {
@@ -124,11 +128,7 @@ pub fn FmoGenerateMbAllocMapType0(pFmo: &mut TagFmo, pPps: &SPps) -> i32 {
                     break;
                 }
             }
-            if kiRunIdx > 0 {
-                i += kiRunIdx;
-            } else {
-                i += j;
-            }
+            i += kiRunIdx;
             uiGroup += 1;
         }
     }
@@ -216,6 +216,9 @@ pub fn FmoGenerateSliceGroup(
     if 0 == iErr {
         pFmo.iSliceGroupCount = kpPps.uiNumSliceGroups as i32;
         pFmo.iSliceGroupType = kpPps.uiSliceGroupMapType as i32;
+    } else {
+        pFmo.pMbAllocMap = Vec::new();
+        pFmo.iCountMbNum = 0;
     }
 
     iErr
@@ -507,5 +510,40 @@ mod tests {
 
         let mut fmo_list = [fmo];
         UninitFmoList(&mut fmo_list, 1);
+    }
+
+    #[test]
+    fn test_fmo_security_rejects_oversized_and_zero_run_length() {
+        // C++ test: DecoderFmoSecurityTest.RejectsOversizedRunLengthBeforeIndexWrap
+        let mut fmo = TagFmo::default();
+        let mut pps = SPps::default();
+        pps.uiNumSliceGroups = 2;
+        pps.uiSliceGroupMapType = 0;
+        pps.uiRunLength[0] = 0xffffffff;
+        pps.uiRunLength[1] = 1;
+
+        let ret = InitFmo(Some(&mut fmo), Some(&pps), 120, 68);
+        assert_ne!(ret, ERR_NONE);
+        assert_eq!(ret, ERR_INFO_INVALID_PARAM);
+        assert!(fmo.pMbAllocMap.is_empty());
+        assert_eq!(fmo.iCountMbNum, 0);
+
+        // Test zero run length
+        pps.uiRunLength[0] = 0;
+        pps.uiRunLength[1] = 1;
+        let ret = InitFmo(Some(&mut fmo), Some(&pps), 120, 68);
+        assert_ne!(ret, ERR_NONE);
+        assert_eq!(ret, ERR_INFO_INVALID_PARAM);
+        assert!(fmo.pMbAllocMap.is_empty());
+        assert_eq!(fmo.iCountMbNum, 0);
+
+        // Test run length > iMbNum
+        pps.uiRunLength[0] = 120 * 68 + 1;
+        pps.uiRunLength[1] = 1;
+        let ret = InitFmo(Some(&mut fmo), Some(&pps), 120, 68);
+        assert_ne!(ret, ERR_NONE);
+        assert_eq!(ret, ERR_INFO_INVALID_PARAM);
+        assert!(fmo.pMbAllocMap.is_empty());
+        assert_eq!(fmo.iCountMbNum, 0);
     }
 }

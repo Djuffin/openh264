@@ -2280,6 +2280,9 @@ pub fn ParsePps(
                 if BsGetUe(buf, pBsAux, &mut uiCode) != ERR_NONE as u32 {
                     return ERR_INVALID_PARAMETERS;
                 }
+                if uiCode > MAX_MB_SIZE - 1 {
+                    return GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_SLICEGROUP);
+                }
                 pPps.uiRunLength[iTmp] = RUN_LENGTH_OFFSET + uiCode;
             }
         }
@@ -3145,5 +3148,44 @@ mod au_list_tests {
         verify(&craft(0, 63), 1);
         // The control: an ordinary level has no zero pair, so nothing is escaped.
         verify(&craft(30, 0), 0);
+    }
+
+    #[test]
+    fn parse_pps_rejects_oversized_slice_group_run_length() {
+        use crate::encoder::vlc_encoder::{BsWriteOneBit, BsWriteUE};
+
+        let mut ctx = SWelsDecoderContext::default();
+        let mut raw = [0u8; 128];
+        let mut writer = BsWriter::new();
+        let buf = &mut raw[..];
+
+        // PPS syntax:
+        // pic_parameter_set_id: ue(0)
+        BsWriteUE(buf, &mut writer, 0);
+        // seq_parameter_set_id: ue(0)
+        BsWriteUE(buf, &mut writer, 0);
+        // entropy_coding_mode_flag: 0
+        BsWriteOneBit(buf, &mut writer, 0);
+        // pic_order_present_flag: 0
+        BsWriteOneBit(buf, &mut writer, 0);
+        // num_slice_groups_minus1: ue(1) -> 2 slice groups
+        BsWriteUE(buf, &mut writer, 1);
+        // slice_group_map_type: ue(0)
+        BsWriteUE(buf, &mut writer, 0);
+        // run_length_minus1[0]: ue(MAX_MB_SIZE) -> exceeds MAX_MB_SIZE - 1
+        BsWriteUE(buf, &mut writer, MAX_MB_SIZE);
+
+        writer.flush(buf);
+        let total_bits = writer.pos() * 8;
+
+        ctx.sRawData.grow_to(128).unwrap();
+        ctx.sRawData.rewind();
+        let start = ctx.sRawData.append_raw(&raw);
+        let mut cursor = BsCursor::init(ctx.sRawData.window_from(start), total_bits as i32).unwrap();
+        let ret = ParsePps(&mut ctx, start, &mut cursor, &raw);
+        assert_eq!(
+            ret,
+            GENERATE_ERROR_NO(ERR_LEVEL_PARAM_SETS, ERR_INFO_INVALID_SLICEGROUP)
+        );
     }
 }

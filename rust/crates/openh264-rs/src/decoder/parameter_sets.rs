@@ -12,7 +12,7 @@ pub const MAX_SPS_COUNT: usize = 32;
 pub const MAX_PPS_COUNT: usize = 256;
 pub const MAX_REF_PIC_COUNT: usize = 16;
 pub const SPS_MAX_NUM_REF_FRAMES_MAX: usize = 16;
-pub const MAX_MB_SIZE: u32 = 1024;
+pub const MAX_MB_SIZE: u32 = 36864;
 
 /// H.264 Profile IDC definitions.
 pub type ProfileIdc = u8;
