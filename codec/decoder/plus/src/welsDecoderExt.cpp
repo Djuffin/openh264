@@ -720,22 +720,7 @@ DECODING_STATE CWelsDecoder::DecodeFrameNoDelay (const unsigned char* kpSrc,
       WAIT_EVENT (&m_sBufferingEvent, WELS_DEC_THREAD_WAIT_INFINITE);
       RESET_EVENT (&m_sBufferingEvent);
       RESET_EVENT (&m_sReleaseBufferEvent);
-<<<<<<< HEAD
-      WelsMutexLock (&m_csDecoder);
-      const bool bHasBSlice = m_sReoderingStatus.bHasBSlice;
-      iNumOfPicts = m_sReoderingStatus.iNumOfPicts;
-      WelsMutexUnlock (&m_csDecoder);
-      if (!bHasBSlice) {
-        if (iNumOfPicts > 1) {
-          ReleaseBufferedReadyPictureNoReorder (NULL, ppDst, pDstInfo);
-        }
-      }
-      else {
-        ReleaseBufferedReadyPictureReorder (NULL, ppDst, pDstInfo);
-      }
-=======
       ReleaseBufferedReadyPictureReorder (NULL, ppDst, pDstInfo);
->>>>>>> 5baad87a (decoder: weight both halves of 8x4/4x8 B sub-partitions, and output pictures in Annex C order)
     }
     return (DECODING_STATE)iRet;
   }
@@ -957,25 +942,11 @@ DECODING_STATE CWelsDecoder::FlushFrame (unsigned char** ppDst,
       }
     }
   }
-<<<<<<< HEAD
-  // Read the shared reorder-queue counters under m_csDecoder in
-  // threaded mode (the worker mutates them in BufferingReadyPicture()); the
-  // Release* dequeue re-locks internally, so do not hold the lock across it.
   if (m_iThreadCount >= 1) WelsMutexLock (&m_csDecoder);
   const int32_t iNumOfPicts = m_sReoderingStatus.iNumOfPicts;
-  const bool bHasBSlice = m_sReoderingStatus.bHasBSlice;
   if (m_iThreadCount >= 1) WelsMutexUnlock (&m_csDecoder);
   if (bEndOfStreamFlag && iNumOfPicts > 0) {
-    if (!bHasBSlice) {
-      ReleaseBufferedReadyPictureNoReorder (NULL, ppDst, pDstInfo);
-    }
-    else {
-      ReleaseBufferedReadyPictureReorder (NULL, ppDst, pDstInfo, true);
-    }
-=======
-  if (bEndOfStreamFlag && m_sReoderingStatus.iNumOfPicts > 0) {
     ReleaseBufferedReadyPictureReorder (NULL, ppDst, pDstInfo, true);
->>>>>>> 5baad87a (decoder: weight both halves of 8x4/4x8 B sub-partitions, and output pictures in Annex C order)
   }
   return dsErrorFree;
 }
@@ -1025,21 +996,7 @@ void CWelsDecoder::OutputStatisticsLog (SDecoderStatistics& sDecoderStatistics) 
   }
 }
 
-<<<<<<< HEAD
-void CWelsDecoder::BufferingReadyPicture (PWelsDecoderContext pCtx, unsigned char** ppDst,
-    SBufferInfo* pDstInfo) {
-  if (pDstInfo->iBufferStatus == 0) {
-    return;
-  }
-  // Publish into the shared reorder queue (m_sPictInfoList /
-  // m_sReoderingStatus) under m_csDecoder so the caller-side Release* dequeue
-  // cannot observe or mutate a half-updated slot concurrently.
-  if (m_iThreadCount >= 1) WelsMutexLock (&m_csDecoder);
-  m_bIsBaseline = pCtx->pSps->uiProfileIdc == 66 || pCtx->pSps->uiProfileIdc == 83;
-  if (!m_bIsBaseline) {
-    if (pCtx->pSliceHeader->eSliceType == B_SLICE) {
-      m_sReoderingStatus.bHasBSlice = true;
-=======
+
 /*!
  * \brief  Refreshes, from the active SPS, the three things the display layer needs
  *         to put pictures into output order: whether this stream reorders at all,
@@ -1087,7 +1044,6 @@ int32_t CWelsDecoder::GetDpbFullness (PWelsDecoderContext pCtx, PPicBuff pPicBuf
         if (!bSeen && iRefs < (int32_t) (sizeof (pRefs) / sizeof (pRefs[0])))
           pRefs[iRefs++] = pList[i];
       }
->>>>>>> 5baad87a (decoder: weight both halves of 8x4/4x8 B sub-partitions, and output pictures in Annex C order)
     }
   }
   int32_t iWaiting = 0;
