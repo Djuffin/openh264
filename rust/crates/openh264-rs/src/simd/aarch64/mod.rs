@@ -22,6 +22,7 @@ pub mod dct;
 pub mod deblock;
 pub mod intra_pred;
 pub mod mc;
+pub mod me;
 pub mod quant;
 pub mod sad;
 pub mod satd;
@@ -125,6 +126,24 @@ mod lanes {
         let mut out = [0u8; 16];
         st16(&mut out, v);
         out
+    }
+
+    /// `ld1 {v.8h}` — eight `u16` lanes.
+    #[inline]
+    #[target_feature(enable = "neon")]
+    pub(super) fn ld8_u16(r: &[u16]) -> uint16x8_t {
+        let r: &[u16; 8] = r[..8].try_into().expect("8 u16s");
+        // SAFETY: `r` is an array of exactly 8 `u16`, which is what `vld1q_u16` reads.
+        unsafe { vld1q_u16(r.as_ptr()) }
+    }
+
+    /// `st1 {v.8h}` — eight `u16` lanes.
+    #[inline]
+    #[target_feature(enable = "neon")]
+    pub(super) fn st8_u16(out: &mut [u16], v: uint16x8_t) {
+        let out: &mut [u16; 8] = (&mut out[..8]).try_into().expect("8 u16s");
+        // SAFETY: `out` is an array of exactly 8 `u16`, which is what `vst1q_u16` writes.
+        unsafe { vst1q_u16(out.as_mut_ptr(), v) }
     }
 
     /// `st1 {v.8h}`.

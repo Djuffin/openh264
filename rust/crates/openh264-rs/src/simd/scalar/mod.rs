@@ -14,6 +14,7 @@ pub mod dct;
 pub mod deblock;
 pub mod intra_pred;
 pub mod mc;
+pub mod me;
 pub mod quant;
 pub mod sad;
 pub mod satd;

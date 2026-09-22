@@ -50,6 +50,7 @@ pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::svc_encode_slice::SSlice;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 use crate::safe::mvd_cost::MvdCostCursor;
+use crate::simd::kernels;
 
 // ============================================================================
 // Constants, Limits, and Enums
@@ -416,7 +417,7 @@ pub fn GetCurrentSliceNum(pCurDq: &SDqLayer) -> i32 {
 // ============================================================================
 
 /// Populates motion estimation function pointer table based on CPU capabilities and content type.
-pub fn WelsInitMeFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32, bScreenContent: bool) {
+pub fn WelsInitMeFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32, bScreenContent: bool) {
     {
         pFuncList.pfUpdateFMESwitch = Some(UpdateFMESwitchNull);
 
@@ -440,6 +441,17 @@ pub fn WelsInitMeFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32, bScreen
             pFuncList.pfCalculateBlockFeatureOfFrame[1] = Some(SumOf16x16BlockOfFrame_c);
             pFuncList.sMeFuncs.pfCalculateSingleBlockFeature[0] = Some(sum_of_8x8_single_block);
             pFuncList.sMeFuncs.pfCalculateSingleBlockFeature[1] = Some(sum_of_16x16_single_block);
+
+            if (uiCpuFlag & (WELS_CPU_NEON | WELS_CPU_SSE2)) != 0 {
+                pFuncList.pfCalculateBlockFeatureOfFrame[0] =
+                    Some(kernels::me::sum_of_8x8_block_of_frame);
+                pFuncList.pfCalculateBlockFeatureOfFrame[1] =
+                    Some(kernels::me::sum_of_16x16_block_of_frame);
+                pFuncList.sMeFuncs.pfCalculateSingleBlockFeature[0] =
+                    Some(kernels::me::sum_of_8x8_single_block);
+                pFuncList.sMeFuncs.pfCalculateSingleBlockFeature[1] =
+                    Some(kernels::me::sum_of_16x16_single_block);
+            }
         }
     }
 }
@@ -950,26 +962,59 @@ pub fn LineFullSearch_c(
         pMvdCost = pMvdTable.offset((iMinMv as i32 * 4) - pMe.sMvp.iMvX as i32);
     }
 
+    if iMinPos >= iMaxPos {
+        return;
+    }
+
     let mut uiBestCost: u32 = 0xFFFF_FFFF;
     let mut iBestPos: i32 = 0;
 
-    for iTargetPos in iMinPos..iMaxPos {
-        let d = (iTargetPos - iCurMeBlockPix) as isize;
-        let cRef = if bVerticalSearch {
-            pRefPlane.cursor(kiX, kiY + d)
-        } else {
-            pRefPlane.cursor(kiX + d, kiY)
-        };
-        let mut uiSadCost: u32 = 0;
+    if bVerticalSearch {
+        let mut cRef = pRefPlane.cursor(kiX, iMinPos as isize);
         if let Some(sad_fn) = pSad {
-            uiSadCost = sad_fn(&cEnc, &cRef) as u32;
+            for iTargetPos in iMinPos..iMaxPos {
+                let uiSadCost =
+                    (sad_fn(&cEnc, &cRef) as u32) + (iFixedMvd + pMvdCost.at(0) as i32) as u32;
+                if uiSadCost < uiBestCost {
+                    uiBestCost = uiSadCost;
+                    iBestPos = iTargetPos;
+                }
+                pMvdCost = pMvdCost.offset(4);
+                cRef = cRef.advance(0, 1);
+            }
+        } else {
+            for iTargetPos in iMinPos..iMaxPos {
+                let uiSadCost = (iFixedMvd + pMvdCost.at(0) as i32) as u32;
+                if uiSadCost < uiBestCost {
+                    uiBestCost = uiSadCost;
+                    iBestPos = iTargetPos;
+                }
+                pMvdCost = pMvdCost.offset(4);
+            }
         }
-        uiSadCost += (iFixedMvd + pMvdCost.at(0) as i32) as u32;
-        if uiSadCost < uiBestCost {
-            uiBestCost = uiSadCost;
-            iBestPos = iTargetPos;
+    } else {
+        let mut cRef = pRefPlane.cursor(iMinPos as isize, kiY);
+        if let Some(sad_fn) = pSad {
+            for iTargetPos in iMinPos..iMaxPos {
+                let uiSadCost =
+                    (sad_fn(&cEnc, &cRef) as u32) + (iFixedMvd + pMvdCost.at(0) as i32) as u32;
+                if uiSadCost < uiBestCost {
+                    uiBestCost = uiSadCost;
+                    iBestPos = iTargetPos;
+                }
+                pMvdCost = pMvdCost.offset(4);
+                cRef = cRef.advance(1, 0);
+            }
+        } else {
+            for iTargetPos in iMinPos..iMaxPos {
+                let uiSadCost = (iFixedMvd + pMvdCost.at(0) as i32) as u32;
+                if uiSadCost < uiBestCost {
+                    uiBestCost = uiSadCost;
+                    iBestPos = iTargetPos;
+                }
+                pMvdCost = pMvdCost.offset(4);
+            }
         }
-        pMvdCost = pMvdCost.offset(4);
     }
 
     if uiBestCost < pMe.uiSadCost {
@@ -1174,6 +1219,73 @@ pub fn SumOf16x16SingleBlock_c(kpRef: &[u8], kiRefStride: i32) -> i32 {
     iSum
 }
 
+#[inline]
+fn sum_of_block_of_frame_sliding<const B: usize>(
+    kpRefPicture: &[u8],
+    kiWidth: i32,
+    kiHeight: i32,
+    kiRefStride: i32,
+    pFeatureOfBlock: &mut [u16],
+    pTimesOfFeatureValue: &mut [u32],
+) {
+    if kiWidth <= 0 || kiHeight <= 0 {
+        return;
+    }
+    let width = kiWidth as usize;
+    let height = kiHeight as usize;
+    let stride = kiRefStride as usize;
+
+    // Row y = 0: compute initial B x B sum at x = 0 and slide horizontally across 1..width.
+    {
+        let row0_feat = &mut pFeatureOfBlock[..width];
+        let mut sum = 0i32;
+        for r in 0..B {
+            let row = &kpRefPicture[r * stride..r * stride + B];
+            for &b in row {
+                sum += b as i32;
+            }
+        }
+        let s0 = sum as u16;
+        row0_feat[0] = s0;
+        pTimesOfFeatureValue[s0 as usize] += 1;
+
+        for x in 1..width {
+            for r in 0..B {
+                let row = &kpRefPicture[r * stride..];
+                sum += row[x + B - 1] as i32 - row[x - 1] as i32;
+            }
+            let s = sum as u16;
+            row0_feat[x] = s;
+            pTimesOfFeatureValue[s as usize] += 1;
+        }
+    }
+
+    // Rows y = 1..height: vertical sliding window + horizontal sliding difference (`O(1)` per pixel).
+    for y in 1..height {
+        let (prev_part, cur_part) = pFeatureOfBlock.split_at_mut(y * width);
+        let prev_row = &prev_part[(y - 1) * width..y * width];
+        let cur_row = &mut cur_part[..width];
+        let top_row = &kpRefPicture[(y - 1) * stride..(y - 1) * stride + width + B - 1];
+        let bot_row = &kpRefPicture[(y + B - 1) * stride..(y + B - 1) * stride + width + B - 1];
+
+        let mut diff_sum = 0i32;
+        for c in 0..B {
+            diff_sum += bot_row[c] as i32 - top_row[c] as i32;
+        }
+        let s0 = (prev_row[0] as i32 + diff_sum) as u16;
+        cur_row[0] = s0;
+        pTimesOfFeatureValue[s0 as usize] += 1;
+
+        for x in 1..width {
+            diff_sum += (bot_row[x + B - 1] as i32 - top_row[x + B - 1] as i32)
+                - (bot_row[x - 1] as i32 - top_row[x - 1] as i32);
+            let s = (prev_row[x] as i32 + diff_sum) as u16;
+            cur_row[x] = s;
+            pTimesOfFeatureValue[s as usize] += 1;
+        }
+    }
+}
+
 pub fn SumOf8x8BlockOfFrame_c(
     kpRefPicture: &[u8],
     kiWidth: i32,
@@ -1182,15 +1294,14 @@ pub fn SumOf8x8BlockOfFrame_c(
     pFeatureOfBlock: &mut [u16],
     pTimesOfFeatureValue: &mut [u32],
 ) {
-    for y in 0..kiHeight {
-        let row = (kiWidth * y) as usize;
-        let kiRowBase = (kiRefStride * y) as usize;
-        for x in 0..kiWidth {
-            let iSum = SumOf8x8SingleBlock_c(&kpRefPicture[kiRowBase + x as usize..], kiRefStride);
-            pFeatureOfBlock[row + x as usize] = iSum as u16;
-            pTimesOfFeatureValue[iSum as usize] += 1;
-        }
-    }
+    sum_of_block_of_frame_sliding::<8>(
+        kpRefPicture,
+        kiWidth,
+        kiHeight,
+        kiRefStride,
+        pFeatureOfBlock,
+        pTimesOfFeatureValue,
+    );
 }
 
 pub fn SumOf16x16BlockOfFrame_c(
@@ -1201,16 +1312,14 @@ pub fn SumOf16x16BlockOfFrame_c(
     pFeatureOfBlock: &mut [u16],
     pTimesOfFeatureValue: &mut [u32],
 ) {
-    for y in 0..kiHeight {
-        let row = (kiWidth * y) as usize;
-        let kiRowBase = (kiRefStride * y) as usize;
-        for x in 0..kiWidth {
-            let iSum =
-                SumOf16x16SingleBlock_c(&kpRefPicture[kiRowBase + x as usize..], kiRefStride);
-            pFeatureOfBlock[row + x as usize] = iSum as u16;
-            pTimesOfFeatureValue[iSum as usize] += 1;
-        }
-    }
+    sum_of_block_of_frame_sliding::<16>(
+        kpRefPicture,
+        kiWidth,
+        kiHeight,
+        kiRefStride,
+        pFeatureOfBlock,
+        pTimesOfFeatureValue,
+    );
 }
 
 pub fn InitializeHashforFeature_c(
@@ -1237,21 +1346,25 @@ pub fn FillQpelLocationByFeatureValue_c(
     pLocationPointer: &mut [u16],
     pFeatureValuePointerList: &mut [usize],
 ) {
+    if kiWidth <= 0 || kiHeight <= 0 {
+        return;
+    }
+    let width = kiWidth as usize;
+    let height = kiHeight as usize;
     // Each value's cursor starts at its group base (`InitializeHashforFeature_c`)
     // and is advanced once per position carrying that value, so the writes exactly
     // fill `2 * times[value]` slots.
-    let mut pSrcPointer = 0usize;
-    let mut iQpelY = 0i32;
-    for _ in 0..kiHeight {
-        for x in 0..kiWidth {
-            let uiFeature = pFeatureOfBlock[pSrcPointer + x as usize] as usize;
+    let mut iQpelY = 0u16;
+    for row in pFeatureOfBlock[..width * height].chunks_exact(width) {
+        for (x, &uiFeature) in row.iter().enumerate() {
+            let uiFeature = uiFeature as usize;
             let target = pFeatureValuePointerList[uiFeature];
-            pLocationPointer[target] = (x << 2) as u16;
-            pLocationPointer[target + 1] = iQpelY as u16;
+            let pair = &mut pLocationPointer[target..target + 2];
+            pair[0] = (x << 2) as u16;
+            pair[1] = iQpelY;
             pFeatureValuePointerList[uiFeature] = target + 2;
         }
-        iQpelY += 4;
-        pSrcPointer += kiWidth as usize;
+        iQpelY = iQpelY.wrapping_add(4);
     }
 }
 
@@ -1457,6 +1570,12 @@ pub fn FeatureSearchOne(
         return true;
     }
 
+    let times = sFeatureSearchIn.pTimesOfFeature[iFeatureOfRef as usize];
+    let iSearchTimes = times.min(kuiExpectedSearchTimes) as i32;
+    if iSearchTimes <= 0 {
+        return false;
+    }
+
     let pSad = sFeatureSearchIn.pSad;
     let pEncPlane = sFeatureSearchIn
         .pEncPlane
@@ -1471,76 +1590,67 @@ pub fn FeatureSearchOne(
     let iCurPixXQpel = sFeatureSearchIn.iCurPixXQpel;
     let iCurPixYQpel = sFeatureSearchIn.iCurPixYQpel;
     let cEnc = pEncPlane.cursor(iCurPixX as isize, iCurPixY as isize);
+    let cRefOrigin = pRefPlane.cursor(0, 0);
 
     let iMinQpelX = sFeatureSearchIn.iMinQpelX;
     let iMinQpelY = sFeatureSearchIn.iMinQpelY;
     let iMaxQpelX = sFeatureSearchIn.iMaxQpelX;
     let iMaxQpelY = sFeatureSearchIn.iMaxQpelY;
 
-    {
-        // `times` is the histogram entry for this feature value; `pQpelPosition` the
-        // group's offset in the arena, which the walk below adds to.
-        let times = sFeatureSearchIn.pTimesOfFeature[iFeatureOfRef as usize];
-        let iSearchTimes = times.min(kuiExpectedSearchTimes) as i32;
-        let iSearchTimesx2 = iSearchTimes << 1;
-        let pQpelPosition = sFeatureSearchIn.pQpelLocationOfFeature[iFeatureOfRef as usize];
-        let arena = sFeatureSearchIn.pLocationPointer;
+    let iSearchTimesx2 = (iSearchTimes as usize) << 1;
+    let pQpelPosition = sFeatureSearchIn.pQpelLocationOfFeature[iFeatureOfRef as usize];
+    let arena = &sFeatureSearchIn.pLocationPointer[pQpelPosition..pQpelPosition + iSearchTimesx2];
 
-        let mut sBestMv = pFeatureSearchOut.sBestMv;
-        let mut uiBestCost = pFeatureSearchOut.uiBestSadCost;
+    let mut sBestMv = pFeatureSearchOut.sBestMv;
+    let mut uiBestCost = pFeatureSearchOut.uiBestSadCost;
 
-        let mut i = 0i32;
-        while i < iSearchTimesx2 {
-            let iQpelX = arena[pQpelPosition + i as usize] as i32;
-            let iQpelY = arena[pQpelPosition + (i + 1) as usize] as i32;
+    let mut i = 0usize;
+    while i < iSearchTimesx2 {
+        let iQpelX = arena[i] as i32;
+        let iQpelY = arena[i + 1] as i32;
 
-            if (iQpelX > iMaxQpelX)
-                || (iQpelX < iMinQpelX)
-                || (iQpelY > iMaxQpelY)
-                || (iQpelY < iMinQpelY)
-                || (iQpelX == iCurPixXQpel)
-                || (iQpelY == iCurPixYQpel)
-            {
-                i += 2;
-                continue;
-            }
-
-            let mut uiTmpCost = (sFeatureSearchIn.pMvdCostX.at(iQpelX) as u32)
-                + (sFeatureSearchIn.pMvdCostY.at(iQpelY) as u32);
-            if uiTmpCost.wrapping_add(iFeatureDifference as u32) >= uiBestCost {
-                i += 2;
-                continue;
-            }
-
-            let iIntepelX = (iQpelX >> 2) - iCurPixX;
-            let iIntepelY = (iQpelY >> 2) - iCurPixY;
-
-            if let Some(sad_fn) = pSad {
-                uiTmpCost += sad_fn(
-                    &cEnc,
-                    &pRefPlane.cursor(
-                        (iCurPixX + iIntepelX) as isize,
-                        (iCurPixY + iIntepelY) as isize,
-                    ),
-                ) as u32;
-            }
-
-            if uiTmpCost < uiBestCost {
-                sBestMv.iMvX = iIntepelX as i16;
-                sBestMv.iMvY = iIntepelY as i16;
-                uiBestCost = uiTmpCost;
-
-                if uiBestCost < uiSadCostThresh {
-                    break;
-                }
-            }
-
+        if (iQpelX > iMaxQpelX)
+            || (iQpelX < iMinQpelX)
+            || (iQpelY > iMaxQpelY)
+            || (iQpelY < iMinQpelY)
+            || (iQpelX == iCurPixXQpel)
+            || (iQpelY == iCurPixYQpel)
+        {
             i += 2;
+            continue;
         }
 
-        SaveFeatureSearchOut(sBestMv, uiBestCost, pFeatureSearchOut);
-        i < iSearchTimesx2
+        let mut uiTmpCost = (sFeatureSearchIn.pMvdCostX.at(iQpelX) as u32)
+            + (sFeatureSearchIn.pMvdCostY.at(iQpelY) as u32);
+        if uiTmpCost.wrapping_add(iFeatureDifference as u32) >= uiBestCost {
+            i += 2;
+            continue;
+        }
+
+        let iRefX = iQpelX >> 2;
+        let iRefY = iQpelY >> 2;
+        let iIntepelX = iRefX - iCurPixX;
+        let iIntepelY = iRefY - iCurPixY;
+
+        if let Some(sad_fn) = pSad {
+            uiTmpCost += sad_fn(&cEnc, &cRefOrigin.advance(iRefX as isize, iRefY as isize)) as u32;
+        }
+
+        if uiTmpCost < uiBestCost {
+            sBestMv.iMvX = iIntepelX as i16;
+            sBestMv.iMvY = iIntepelY as i16;
+            uiBestCost = uiTmpCost;
+
+            if uiBestCost < uiSadCostThresh {
+                break;
+            }
+        }
+
+        i += 2;
     }
+
+    SaveFeatureSearchOut(sBestMv, uiBestCost, pFeatureSearchOut);
+    i < iSearchTimesx2
 }
 
 pub fn MotionEstimateFeatureFullSearch(
@@ -2019,5 +2129,167 @@ mod tests {
                 .uiFMEGoodFrameCount,
             3
         );
+    }
+
+    fn naive_sum_of_block_of_frame<const B: usize>(
+        pic: &[u8],
+        width: i32,
+        height: i32,
+        stride: i32,
+        feature_of_block: &mut [u16],
+        times_of_feature: &mut [u32],
+    ) {
+        let w = width as usize;
+        let h = height as usize;
+        let s = stride as usize;
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = 0u16;
+                for r in 0..B {
+                    for c in 0..B {
+                        sum += pic[(y + r) * s + x + c] as u16;
+                    }
+                }
+                feature_of_block[y * w + x] = sum;
+                times_of_feature[sum as usize] += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn block_feature_of_frame_8x8_and_16x16_match_naive_reference() {
+        for &(width, height, stride_extra) in &[(5, 4, 3), (8, 8, 0), (19, 13, 7), (64, 64, 16)] {
+            // 8x8
+            {
+                let stride = width + 8 + stride_extra;
+                let total_h = height + 8 + 4;
+                let mut pic = vec![0u8; (stride * total_h) as usize];
+                for (i, b) in pic.iter_mut().enumerate() {
+                    *b = ((i * 73 + 19) ^ (i >> 3)) as u8;
+                }
+                let n = (width * height) as usize;
+                let mut ref_feat = vec![0u16; n];
+                let mut ref_times = vec![0u32; LIST_SIZE_SUM_8x8];
+                naive_sum_of_block_of_frame::<8>(
+                    &pic,
+                    width,
+                    height,
+                    stride,
+                    &mut ref_feat,
+                    &mut ref_times,
+                );
+
+                let mut c_feat = vec![0u16; n];
+                let mut c_times = vec![0u32; LIST_SIZE_SUM_8x8];
+                SumOf8x8BlockOfFrame_c(&pic, width, height, stride, &mut c_feat, &mut c_times);
+                assert_eq!(
+                    c_feat, ref_feat,
+                    "8x8 scalar feat mismatch at {width}x{height}"
+                );
+                assert_eq!(
+                    c_times, ref_times,
+                    "8x8 scalar times mismatch at {width}x{height}"
+                );
+
+                let mut simd_feat = vec![0u16; n];
+                let mut simd_times = vec![0u32; LIST_SIZE_SUM_8x8];
+                kernels::me::sum_of_8x8_block_of_frame(
+                    &pic,
+                    width,
+                    height,
+                    stride,
+                    &mut simd_feat,
+                    &mut simd_times,
+                );
+                assert_eq!(
+                    simd_feat, ref_feat,
+                    "8x8 simd feat mismatch at {width}x{height}"
+                );
+                assert_eq!(
+                    simd_times, ref_times,
+                    "8x8 simd times mismatch at {width}x{height}"
+                );
+
+                let mut owned = pic.clone();
+                for y in [0, (height - 1) as usize] {
+                    for x in [0, (width - 1) as usize] {
+                        let cursor = RecCursor::over_owned(
+                            &mut owned,
+                            y * stride as usize + x,
+                            stride as usize,
+                        );
+                        let expected = ref_feat[y * width as usize + x] as i32;
+                        assert_eq!(sum_of_8x8_single_block(&cursor), expected);
+                        assert_eq!(kernels::me::sum_of_8x8_single_block(&cursor), expected);
+                    }
+                }
+            }
+
+            // 16x16
+            {
+                let stride = width + 16 + stride_extra;
+                let total_h = height + 16 + 4;
+                let mut pic = vec![0u8; (stride * total_h) as usize];
+                for (i, b) in pic.iter_mut().enumerate() {
+                    *b = ((i * 131 + 43) ^ (i >> 2)) as u8;
+                }
+                let n = (width * height) as usize;
+                let mut ref_feat = vec![0u16; n];
+                let mut ref_times = vec![0u32; LIST_SIZE_SUM_16x16];
+                naive_sum_of_block_of_frame::<16>(
+                    &pic,
+                    width,
+                    height,
+                    stride,
+                    &mut ref_feat,
+                    &mut ref_times,
+                );
+
+                let mut c_feat = vec![0u16; n];
+                let mut c_times = vec![0u32; LIST_SIZE_SUM_16x16];
+                SumOf16x16BlockOfFrame_c(&pic, width, height, stride, &mut c_feat, &mut c_times);
+                assert_eq!(
+                    c_feat, ref_feat,
+                    "16x16 scalar feat mismatch at {width}x{height}"
+                );
+                assert_eq!(
+                    c_times, ref_times,
+                    "16x16 scalar times mismatch at {width}x{height}"
+                );
+
+                let mut simd_feat = vec![0u16; n];
+                let mut simd_times = vec![0u32; LIST_SIZE_SUM_16x16];
+                kernels::me::sum_of_16x16_block_of_frame(
+                    &pic,
+                    width,
+                    height,
+                    stride,
+                    &mut simd_feat,
+                    &mut simd_times,
+                );
+                assert_eq!(
+                    simd_feat, ref_feat,
+                    "16x16 simd feat mismatch at {width}x{height}"
+                );
+                assert_eq!(
+                    simd_times, ref_times,
+                    "16x16 simd times mismatch at {width}x{height}"
+                );
+
+                let mut owned = pic.clone();
+                for y in [0, (height - 1) as usize] {
+                    for x in [0, (width - 1) as usize] {
+                        let cursor = RecCursor::over_owned(
+                            &mut owned,
+                            y * stride as usize + x,
+                            stride as usize,
+                        );
+                        let expected = ref_feat[y * width as usize + x] as i32;
+                        assert_eq!(sum_of_16x16_single_block(&cursor), expected);
+                        assert_eq!(kernels::me::sum_of_16x16_single_block(&cursor), expected);
+                    }
+                }
+            }
+        }
     }
 }
