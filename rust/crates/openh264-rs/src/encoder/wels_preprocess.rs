@@ -2012,10 +2012,10 @@ impl CWelsPreProcess {
         let bDstVPresent = !pv.is_empty();
 
         if !pSrcY.is_null() {
-            if iSrcWidth <= 0
-                || iSrcHeight <= 0
-                || (iSrcWidth * iSrcHeight > (MAX_MBS_PER_FRAME << 8))
-            {
+            if iSrcWidth <= 0 || iSrcHeight <= 0 {
+                return ENC_RETURN_INVALIDINPUT;
+            }
+            if iSrcWidth > pDstPic.iWidthInPixel || iSrcHeight > pDstPic.iHeightInPixel {
                 return ENC_RETURN_INVALIDINPUT;
             }
             if kiSrcTopOffsetY >= iSrcHeight
@@ -2028,10 +2028,10 @@ impl CWelsPreProcess {
             }
         }
         if bDstYPresent {
-            if kiTargetWidth <= 0
-                || kiTargetHeight <= 0
-                || (kiTargetWidth * kiTargetHeight > (MAX_MBS_PER_FRAME << 8))
-            {
+            if kiTargetWidth <= 0 || kiTargetHeight <= 0 {
+                return ENC_RETURN_INVALIDINPUT;
+            }
+            if kiTargetWidth > pDstPic.iWidthInPixel || kiTargetHeight > pDstPic.iHeightInPixel {
                 return ENC_RETURN_INVALIDINPUT;
             }
             if kiTargetWidth > kiDstStrideY

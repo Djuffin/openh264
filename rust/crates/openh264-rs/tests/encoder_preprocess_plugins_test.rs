@@ -419,3 +419,116 @@ fn screen_content_scrolling_source_codes_smaller_than_camera() {
         camera.len()
     );
 }
+
+/// A source picture is allowed to exceed the per-frame macroblock limit as long
+/// as the spatial layer it is coded into does not: the preprocessor downsamples
+/// the input before it is encoded. MAX_MBS_PER_FRAME bounds the coded frame, not
+/// the picture handed to EncodeFrame, and callers rely on that to encode a large
+/// capture into a smaller stream while leaving iPicWidth/iPicHeight at the
+/// capture size.
+#[test]
+fn source_larger_than_max_mbs_per_frame() {
+    let max_pixels_per_frame = 36864 * 256;
+    let (src_w, src_h) = (4096, 2560);
+    let (layer_w, layer_h) = (2048, 1280);
+
+    assert!(src_w * src_h > max_pixels_per_frame);
+    assert!(layer_w * layer_h <= max_pixels_per_frame);
+
+    unsafe {
+        let mut enc: *mut ISVCEncoder = std::ptr::null_mut();
+        assert_eq!(WelsCreateSVCEncoder(&mut enc), CM_RESULT_SUCCESS);
+        let mut p = SEncParamExt::default();
+        assert_eq!(
+            ISVCEncoder::GetDefaultParams(enc, &mut p as *mut SEncParamExt),
+            CM_RESULT_SUCCESS
+        );
+        p.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
+        p.iPicWidth = src_w;
+        p.iPicHeight = src_h;
+        p.fMaxFrameRate = 30.0;
+        p.iSpatialLayerNum = 1;
+        p.iRCMode = RC_MODES::RC_OFF_MODE;
+        p.sSpatialLayers[0].iVideoWidth = layer_w;
+        p.sSpatialLayers[0].iVideoHeight = layer_h;
+        p.sSpatialLayers[0].fFrameRate = p.fMaxFrameRate;
+        p.sSpatialLayers[0].sSliceArgument.uiSliceMode = SliceModeEnum::SM_SINGLE_SLICE;
+        p.sSpatialLayers[0].iDLayerQp = 26;
+
+        let rv = ISVCEncoder::InitializeExt(enc, &p as *const SEncParamExt);
+        assert_eq!(rv, CM_RESULT_SUCCESS);
+
+        let stride_y = src_w as usize;
+        let stride_uv = stride_y / 2;
+        let mut buf_y = vec![128u8; stride_y * src_h as usize];
+        let mut buf_u = vec![128u8; stride_uv * (src_h as usize / 2)];
+        let mut buf_v = vec![128u8; stride_uv * (src_h as usize / 2)];
+
+        let mut pic = SSourcePicture::default();
+        pic.iPicWidth = src_w;
+        pic.iPicHeight = src_h;
+        pic.iColorFormat = EVideoFormatType::videoFormatI420 as i32;
+        pic.iStride[0] = stride_y as i32;
+        pic.iStride[1] = stride_uv as i32;
+        pic.iStride[2] = stride_uv as i32;
+        pic.pData[0] = buf_y.as_mut_ptr();
+        pic.pData[1] = buf_u.as_mut_ptr();
+        pic.pData[2] = buf_v.as_mut_ptr();
+
+        let mut info = SFrameBSInfo::default();
+        let rv = ISVCEncoder::EncodeFrame(enc, &pic as *const SSourcePicture, &mut info);
+        assert_eq!(rv, CM_RESULT_SUCCESS);
+        assert_eq!(info.eFrameType, EVideoFrameType::videoFrameTypeIDR);
+
+        let mut len = 0;
+        for i in 0..info.iLayerNum as usize {
+            let layer = &info.sLayerInfo[i];
+            for j in 0..layer.iNalCount as usize {
+                len += *layer.pNalLengthInByte.add(j);
+            }
+        }
+        assert!(len > 0);
+
+        // The coded frame must carry the layer geometry, not the source geometry.
+        let mut dec: *mut ISVCDecoder = std::ptr::null_mut();
+        assert_eq!(WelsCreateDecoder(&mut dec), CM_RESULT_SUCCESS as i64);
+        assert!(!dec.is_null());
+
+        let mut dec_param = SDecodingParam::default();
+        dec_param.uiTargetDqLayer = u8::MAX;
+        dec_param.eEcActiveIdc = ERROR_CON_IDC::ERROR_CON_SLICE_COPY;
+        dec_param.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_TYPE::VIDEO_BITSTREAM_AVC;
+        let rv = ISVCDecoder::Initialize(dec, &dec_param as *const SDecodingParam);
+        assert_eq!(rv, CM_RESULT_SUCCESS as i64);
+
+        let mut dst: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+        let mut dst_buf_info = SBufferInfo::default();
+        let rv = ISVCDecoder::DecodeFrame2(
+            dec,
+            info.sLayerInfo[0].pBsBuf,
+            len,
+            dst.as_mut_ptr(),
+            &mut dst_buf_info,
+        );
+        assert_eq!(rv, DECODING_STATE::dsErrorFree);
+        if dst_buf_info.iBufferStatus == 0 {
+            let rv = ISVCDecoder::DecodeFrame2(
+                dec,
+                std::ptr::null(),
+                0,
+                dst.as_mut_ptr(),
+                &mut dst_buf_info,
+            );
+            assert_eq!(rv, DECODING_STATE::dsErrorFree);
+        }
+        assert_eq!(dst_buf_info.iBufferStatus, 1);
+        let sys_buf = dst_buf_info.UsrData.sSystemBuffer;
+        assert_eq!(sys_buf.iWidth, layer_w);
+        assert_eq!(sys_buf.iHeight, layer_h);
+
+        WelsDestroyDecoder(dec);
+        ISVCEncoder::Uninitialize(enc);
+        WelsDestroySVCEncoder(enc);
+    }
+}
+
