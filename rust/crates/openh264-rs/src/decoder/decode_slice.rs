@@ -2460,15 +2460,16 @@ fn DecodeMbCavlcPcm(
 
         // step 1: locate the bit-stream position (must align to an integer byte).
         let pcm_start = pBs.pos() as isize - iIndex as isize;
-        let iPcmStart = pcm_start as usize;
-        pBs.set_pos(iPcmStart);
 
         // bounds check: I_PCM copies I_PCM_MB_SIZE_IN_BYTE (256 luma + 128 chroma) bytes
         // directly from the bitstream buffer; reject when fewer bytes remain to avoid
         // an out-of-bounds read (mirrors ParseIPCMInfoCabac).
-        if pcm_start < 0 || (pBs.len() as isize - iPcmStart as isize) < I_PCM_MB_SIZE_IN_BYTE as isize {
+        if pcm_start < 0 || (pBs.len() as isize - pcm_start) < I_PCM_MB_SIZE_IN_BYTE as isize {
             return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_BS_INCOMPLETE);
         }
+
+        let iPcmStart = pcm_start as usize;
+        pBs.set_pos(iPcmStart);
 
         // step 2: copy pixels from the bit-stream into the decoded picture.
         let bParseOnly = pCtx.bParseOnly;

@@ -230,14 +230,12 @@ impl BsCursor {
             }
             let mut word = 0u32;
             if self.pos < self.len {
-                if let Some(&b0) = buf.get(self.pos) {
-                    word = (b0 as u32) << 8;
-                }
+                let b0 = *buf.get(self.pos).ok_or(ErrInfo::READ_OVERFLOW)? as u32;
+                word = b0 << 8;
             }
             if self.pos + 1 < self.len {
-                if let Some(&b1) = buf.get(self.pos + 1) {
-                    word |= b1 as u32;
-                }
+                let b1 = *buf.get(self.pos + 1).ok_or(ErrInfo::READ_OVERFLOW)? as u32;
+                word |= b1;
             }
             let shift = self.left_bits as u32;
             if shift < 32 {

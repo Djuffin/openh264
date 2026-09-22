@@ -3414,10 +3414,11 @@ pub fn ConstructAccessUnit(
     iErr
 }
 
-/// Returns false if wrapping `sRawData` to head would overwrite bytes still referenced
-/// by a queued NAL's slice bit-reader, indicating the wrap is unsafe.
-/// Matches `RawDataWrapIsClean` in `decoder.cpp`.
-pub fn raw_data_wrap_is_clean(pCtx: &SWelsDecoderContext, new_bytes: usize) -> bool {
+pub fn raw_data_write_range_is_clean(
+    pCtx: &SWelsDecoderContext,
+    write_start: usize,
+    write_len: usize,
+) -> bool {
     let Some(au) = pCtx.access_unit.as_deref() else {
         return true;
     };
@@ -3425,14 +3426,22 @@ pub fn raw_data_wrap_is_clean(pCtx: &SWelsDecoderContext, new_bytes: usize) -> b
     if avail == 0 {
         return true;
     }
+    let write_end = write_start.saturating_add(write_len);
     for nal in &au.nal_units[..avail.min(au.nal_units.len())] {
         let reader = &nal.sNalData.sVclNal.sSliceBitsRead;
         let is_active = !reader.cursor.is_empty() || reader.cursor.bits() > 0 || reader.start > 0;
-        if is_active && reader.start < new_bytes {
+        if is_active && reader.start >= write_start && reader.start < write_end {
             return false;
         }
     }
     true
+}
+
+/// Returns false if wrapping `sRawData` to head would overwrite bytes still referenced
+/// by a queued NAL's slice bit-reader, indicating the wrap is unsafe.
+/// Matches `RawDataWrapIsClean` in `decoder.cpp`.
+pub fn raw_data_wrap_is_clean(pCtx: &SWelsDecoderContext, new_bytes: usize) -> bool {
+    raw_data_write_range_is_clean(pCtx, 0, new_bytes)
 }
 
 /// Core decoding loop: demultiplexes Annex B NAL units and decodes them into an
@@ -3464,6 +3473,19 @@ pub fn WelsDecodeBs(
             pCtx.sRawData.rewind();
         }
 
+        // Mirrors `decoder.cpp:794`: if the incoming bitstream buffer (+ 4 guard bytes)
+        // does not fit in the remaining tail of `sRawData`, wrap to head only if doing
+        // so will not overwrite any queued slice's bit-reader buffer.
+        let total_need = (kiBsLen as usize) + 4;
+        if pCtx.sRawData.remaining() < total_need {
+            if !raw_data_wrap_is_clean(pCtx, total_need) {
+                pCtx.iErrorCode |= dsOutOfMemory;
+                return pCtx.iErrorCode;
+            }
+            pCtx.sRawData.rewind();
+        }
+
+        let mut remaining_src = input_slice.len();
         for unit in units {
             let mut payload_slice = unit;
             if payload_slice.starts_with(&[0, 0, 0, 1]) {
@@ -3490,8 +3512,9 @@ pub fn WelsDecodeBs(
             // Copy the NAL into the persistent raw-data buffer, stripping
             // emulation-prevention bytes (00 00 03 -> 00 00).
             let need_bytes = payload_slice.len() + 4;
+            let wrap_check_bytes = need_bytes.max(remaining_src + 4);
             if pCtx.sRawData.remaining() < need_bytes {
-                if !raw_data_wrap_is_clean(pCtx, need_bytes) {
+                if !raw_data_wrap_is_clean(pCtx, wrap_check_bytes) {
                     pCtx.iErrorCode |= dsOutOfMemory;
                     return pCtx.iErrorCode;
                 }
@@ -3512,7 +3535,11 @@ pub fn WelsDecodeBs(
                     }
                     pCtx.sRawData.rewind();
                 }
+            } else if !raw_data_write_range_is_clean(pCtx, pCtx.sRawData.cur(), need_bytes) {
+                pCtx.iErrorCode |= dsOutOfMemory;
+                return pCtx.iErrorCode;
             }
+            remaining_src = remaining_src.saturating_sub(unit.len());
             let (payload_start, payload_len) = pCtx.sRawData.append_ebsp_stripped(payload_slice);
             pCtx.sRawData.zero_reserved(payload_start + payload_len);
 
@@ -4841,7 +4868,7 @@ mod tests {
 
         let mut au = SAccessUnit::with_nodes(4);
         let buf = [0x42u8; 16];
-        au.nal_units[0].sNalData.sVclNal.sSliceBitsRead.start = 2;
+        au.nal_units[0].sNalData.sVclNal.sSliceBitsRead.start = 8;
         au.nal_units[0].sNalData.sVclNal.sSliceBitsRead.cursor =
             BsCursor::init(&buf, 128).unwrap();
         au.uiAvailUnitsNum = 1;
@@ -4849,7 +4876,8 @@ mod tests {
 
         // Position write cursor near the buffer end to force a wrap
         let mut raw = RawDataBuffer::try_new_zeroed(64).unwrap();
-        let filler = [0u8; 62];
+        let mut filler = [0u8; 62];
+        filler[8..16].copy_from_slice(&[0x5a; 8]);
         raw.append_raw(&filler);
         ctx.sRawData = raw;
 
@@ -4866,9 +4894,10 @@ mod tests {
         );
 
         assert_ne!(ret & dsOutOfMemory, 0);
-        // The queued slice reader start offset was not overwritten
+        // The queued slice reader start offset and its bytes in sRawData were not overwritten
         let au = ctx.access_unit.as_ref().unwrap();
-        assert_eq!(au.nal_units[0].sNalData.sVclNal.sSliceBitsRead.start, 2);
+        assert_eq!(au.nal_units[0].sNalData.sVclNal.sSliceBitsRead.start, 8);
+        assert_eq!(&ctx.sRawData.window_from(8)[..8], &[0x5a; 8]);
     }
 
     #[test]

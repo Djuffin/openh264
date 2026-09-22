@@ -420,7 +420,7 @@ pub use crate::api::codec_api::{SBufferInfo, SSysMEMBuffer};
 pub const PICT_INFO_LIST_SIZE: usize = 2 * MAX_DPB_COUNT;
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 pub struct SPictInfo {
     pub sBufferInfo: SBufferInfo,
     pub iPOC: i32,
@@ -429,8 +429,20 @@ pub struct SPictInfo {
     pub iSeqNum: i32,
 }
 
+impl Default for SPictInfo {
+    fn default() -> Self {
+        Self {
+            sBufferInfo: SBufferInfo::default(),
+            iPOC: IMinInt32,
+            iPicBuffIdx: -1,
+            uiDecodingTimeStamp: 0,
+            iSeqNum: 0,
+        }
+    }
+}
+
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 pub struct SPictReoderingStatus {
     pub iPictInfoIndex: i32,
     pub iMinSeqNum: i32,
@@ -455,6 +467,25 @@ pub struct SPictReoderingStatus {
     /// VUI `max_num_reorder_frames`, or -1 when the VUI carries no bitstream
     /// restriction.
     pub iMaxNumReorderFrames: i32,
+}
+
+impl Default for SPictReoderingStatus {
+    fn default() -> Self {
+        Self {
+            iPictInfoIndex: 0,
+            iMinSeqNum: 0,
+            iMinPOC: IMinInt32,
+            iNumOfPicts: 0,
+            iLastWrittenSeqNum: 0,
+            iLastWrittenPOC: IMinInt32,
+            iLargestBufferedPicIndex: 0,
+            iOutputSeqNum: 0,
+            iPrevCoreSeqNum: IMinInt32,
+            bReorderPictures: false,
+            iDpbSize: 0,
+            iMaxNumReorderFrames: -1,
+        }
+    }
 }
 
 /// The parse-only output buffers, owned.
