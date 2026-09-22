@@ -1740,14 +1740,15 @@ pub fn WelsISliceMdEnc(
 
         pMbs.cur_mut().uiSliceIdc = kiSliceIdx as u16;
 
+        let kpRecView = layer_rec_view_expect(pCurLayer);
         let pMbCache = &mut pSlice.sMbCacheInfo;
         {
             (func_list.pfMdBackgroundInfoUpdate)(
-                pEncCtx,
-                pCurLayer,
+                kpRecView,
                 pMbs.cur_mut(),
                 pMbCache.bCollocatedPredFlag,
                 I_SLICE,
+                0,
             );
             func_list.pfRc.WelsRcMbInfoUpdate(
                 pEncCtx,
@@ -2074,7 +2075,7 @@ fn WelsMdWriteMbWithReencoding<'a, const DYNAMIC: bool>(
     pCtxOutBs: &mut Option<&mut BsWriter>,
     sDss: &mut SDynamicSlicingStack<'_>,
     func_list: &SWelsFuncPtrList,
-    pCurLayer: &SDqLayer,
+    _pCurLayer: &SDqLayer,
     kpRecView: &RecPicView,
     pMvdCostTable: MvdCostCursor<'a>,
     kiMvdInterTableStride: i32,
@@ -2100,11 +2101,11 @@ fn WelsMdWriteMbWithReencoding<'a, const DYNAMIC: bool>(
                 kpRecView, pCurMb, pMd,
             );
             (func_list.pfMdBackgroundInfoUpdate)(
-                pEncCtx,
-                pCurLayer,
+                kpRecView,
                 pCurMb,
                 bCollocatedPredFlag,
                 kiCtxRefPicType,
+                pMd.mbi.ref_qp,
             );
             mb_dump(&*pCurMb, pMd, pSlice);
             //step (5): update cache
@@ -2448,10 +2449,14 @@ pub fn WelsPSliceMdEnc(
     // borrows it through `SWelsMD::sc`. The C++ binds `pRefPic` at the top of
     // `WelsMdInterMbLoop`.
     let kpRefView = current_layer_ref(pEncCtx).and_then(|l| layer_ref_view(pEncCtx, l));
+    let kpRefOriView = current_layer_ref(pEncCtx)
+        .and_then(|l| l.pRefOri[0])
+        .and_then(|r| ctx_pic_ref(pEncCtx, r))
+        .map(crate::encoder::rec_view::RoPicView::build);
     // Fully zeroed; every field is assigned before it is read.
     let mut sMd = SWelsMD::default();
-    sMd.sctx =
-        current_layer_ref(pEncCtx).map(|l| MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref()));
+    sMd.sctx = current_layer_ref(pEncCtx)
+        .map(|l| MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref(), kpRefOriView.as_ref()));
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
     // `svc_encode_slice.cpp:698`.
     sMd.bMdUsingSad =
@@ -2484,9 +2489,13 @@ pub fn WelsPSliceMdEncDynamic(
     let kiSliceFirstMbXY = kpShExt.sSliceHeader.iFirstMbInSlice;
     // As `WelsPSliceMdEnc`: the reference view is owned here for the slice's scope.
     let kpRefView = current_layer_ref(pEncCtx).and_then(|l| layer_ref_view(pEncCtx, l));
+    let kpRefOriView = current_layer_ref(pEncCtx)
+        .and_then(|l| l.pRefOri[0])
+        .and_then(|r| ctx_pic_ref(pEncCtx, r))
+        .map(crate::encoder::rec_view::RoPicView::build);
     let mut sMd = SWelsMD::default();
-    sMd.sctx =
-        current_layer_ref(pEncCtx).map(|l| MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref()));
+    sMd.sctx = current_layer_ref(pEncCtx)
+        .map(|l| MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref(), kpRefOriView.as_ref()));
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
     // `svc_encode_slice.cpp:715`.
     sMd.bMdUsingSad =

@@ -162,6 +162,9 @@ pub struct MdSliceCtx<'a> {
     /// caller that owns it. `None` where no reference picture is bound, which on a P
     /// slice does not happen and on the shared helpers may.
     pub refv: Option<&'a crate::encoder::rec_view::RoPicView>,
+    /// `pLayer.pRefOri[0]`, built once for the slice when present (`JudgeStaticSkip` /
+    /// `JudgeScrollSkip`).
+    pub ref_ori_v: Option<&'a crate::encoder::rec_view::RoPicView>,
     /// The reference picture itself — `pRefMbQp`, `uiRefMbType`, `pMbSkipSad`,
     /// `iPictureType`. `None` exactly where [`refv`](Self::refv) is.
     pub ref_pic: Option<&'a SPicture>,
@@ -264,6 +267,7 @@ impl<'a> MdSliceCtx<'a> {
         pCtx: &'a sWelsEncCtx,
         pLayer: &'a SDqLayer,
         ref_view: Option<&'a crate::encoder::rec_view::RoPicView>,
+        ref_ori_view: Option<&'a crate::encoder::rec_view::RoPicView>,
     ) -> Self {
         use crate::encoder::svc_encode_slice as ses;
         use crate::encoder::svc_mode_decision::BLOCK_16x16;
@@ -276,6 +280,7 @@ impl<'a> MdSliceCtx<'a> {
             enc: layer_enc_view_expect(pLayer),
             rec: ses::layer_rec_view_expect(pLayer),
             refv: ref_view,
+            ref_ori_v: ref_ori_view,
             ref_pic: ses::layer_ref_pic(pCtx, pLayer),
             vaa,
             vaa_cur: vaa.pCurView.as_ref(),
@@ -302,6 +307,13 @@ impl<'a> MdSliceCtx<'a> {
     pub fn ref_pic(&self) -> &'a SPicture {
         self.ref_pic
             .expect("the layer's reference picture is bound")
+    }
+
+    /// The reference picture's shared read-only view, built once per slice.
+    #[inline]
+    pub fn refv(&self) -> &'a crate::encoder::rec_view::RoPicView {
+        self.refv
+            .expect("the layer's reference view is built for this frame")
     }
 }
 
@@ -775,9 +787,7 @@ pub use crate::encoder::encoder_context::SPicData;
 pub use crate::encoder::encoder_context::sWelsEncCtx;
 use crate::encoder::rec_view::{RecCursor, RecPicView, SharedMbArray};
 pub use crate::encoder::svc_encode_slice::SDqLayer;
-use crate::encoder::svc_encode_slice::{
-    current_layer_expect, layer_enc_view_expect, layer_ref_view_expect,
-};
+use crate::encoder::svc_encode_slice::layer_enc_view_expect;
 pub use crate::encoder::svc_motion_estimate::PSample4SadCostFunc;
 pub use crate::encoder::wels_func_ptr_def::SWelsFuncPtrList;
 use crate::safe::plane::{PlaneCursor, PlaneCursorMut};
@@ -1436,7 +1446,7 @@ pub fn MeRefineQuarPixel(
 /// `kiMemPredInterOff`, the destination of the final copy, is a `usize` offset into
 /// `sMemPredMb`.
 pub extern "C" fn MeRefineFracPixel(
-    pEncCtx: &sWelsEncCtx,
+    sc: &MdSliceCtx<'_>,
     kiMemPredInterOff: usize,
     pMe: &mut SWelsME<'_>,
     pMeRefine: &mut SMeRefinePointer,
@@ -1444,21 +1454,20 @@ pub extern "C" fn MeRefineFracPixel(
     iWidth: i32,
     iHeight: i32,
 ) {
-    let pFunc = pEncCtx.func_list();
+    let pFunc = sc.func;
+    let pCurDqLayer = sc.layer;
     let iMvx = pMe.sMv.iMvX;
     let iMvy = pMe.sMv.iMvY;
 
     let mut iHalfMvx = iMvx;
     let mut iHalfMvy = iMvy;
-    let pCurDqLayer = current_layer_expect(pEncCtx);
-
     // The two blocks, by coordinate. `sMv` is quarter-pel here and the integer search
     // left `pRefMb` at its whole-sample part, so `>> 2` is the displacement.
     let kiBlockX = pMe.iCurMeBlockPixX as isize;
     let kiBlockY = pMe.iCurMeBlockPixY as isize;
-    let pEncPicture = layer_enc_view_expect(pCurDqLayer);
+    let pEncPicture = sc.enc;
     let cEnc = pEncPicture.plane(0).cursor(kiBlockX, kiBlockY);
-    let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
+    let pRefPicture = sc.refv();
     let cRef = pRefPicture.plane(0).cursor(
         kiBlockX + ((iMvx as isize) >> 2),
         kiBlockY + ((iMvy as isize) >> 2),

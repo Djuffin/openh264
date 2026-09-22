@@ -164,10 +164,26 @@ pub fn copy_8x16(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     copy_block::<8, 16>(dst, src);
 }
 
-/// C++: `WelsCopy8x8_mmx`, `codec/common/x86/mb_copy.asm:311`.
-#[inline(always)]
+/// C++: `WelsCopy8x8_sse2` (`codec/common/x86/mb_copy.asm:126`).
+#[inline]
 pub fn copy_8x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     copy_block::<8, 8>(dst, src);
+}
+
+#[inline]
+pub fn copy_16x16_slice(dst: &RecCursor<'_>, src: &[u8], src_stride: usize) {
+    let s = &src[..15 * src_stride + 16];
+    let d = dst.block_span(0, 0, 16, 16);
+    // SAFETY: `s` and `d` cover 16 rows at their respective strides.
+    unsafe { copy_rows16::<16>(d.as_ptr() as *mut u8, dst.stride(), s.as_ptr(), src_stride) }
+}
+
+#[inline]
+pub fn copy_8x8_slice(dst: &RecCursor<'_>, src: &[u8], src_stride: usize) {
+    let s = &src[..7 * src_stride + 8];
+    let d = dst.block_span(0, 0, 8, 8);
+    // SAFETY: `s` and `d` cover 8 rows at their respective strides.
+    unsafe { copy_rows8::<8>(d.as_ptr() as *mut u8, dst.stride(), s.as_ptr(), src_stride) }
 }
 
 // ============================================================================

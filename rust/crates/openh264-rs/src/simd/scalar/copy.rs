@@ -24,3 +24,21 @@ pub fn copy_8x16(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
 pub fn copy_8x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     WelsCopy8x8_c(dst, src)
 }
+
+#[inline(always)]
+pub fn copy_16x16_slice(dst: &RecCursor<'_>, src: &[u8], src_stride: usize) {
+    let s = &src[..15 * src_stride + 16];
+    for y in 0..16 {
+        let row: &[u8; 16] = s[y * src_stride..][..16].try_into().expect("16 bytes");
+        dst.write_row::<16>(y as isize, 0, row);
+    }
+}
+
+#[inline(always)]
+pub fn copy_8x8_slice(dst: &RecCursor<'_>, src: &[u8], src_stride: usize) {
+    let s = &src[..7 * src_stride + 8];
+    for y in 0..8 {
+        let row: &[u8; 8] = s[y * src_stride..][..8].try_into().expect("8 bytes");
+        dst.write_row::<8>(y as isize, 0, row);
+    }
+}

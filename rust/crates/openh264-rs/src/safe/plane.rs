@@ -367,6 +367,9 @@ pub trait BlockRows {
     fn window<const W: usize>(&self, y: usize, h: usize) -> Self
     where
         Self: Sized;
+
+    /// Raw pointer to the start of the validated span and its row stride in bytes.
+    fn as_ptr_and_stride(&self) -> (*const u8, usize);
 }
 
 pub trait RefSamples {
@@ -702,7 +705,7 @@ impl<'a> PlaneSpan<'a> {
     ///
     /// # Panics
     /// If the block leaves `buf`.
-    #[inline]
+    #[inline(always)]
     fn cut(buf: &'a [u8], start: usize, stride: usize, w: usize, h: usize) -> Self {
         debug_assert!(stride <= u32::MAX as usize, "cursor stride bound violated");
         let stride = stride as u32;
@@ -719,7 +722,7 @@ impl<'a> PlaneSpan<'a> {
 }
 
 impl BlockRows for PlaneSpan<'_> {
-    #[inline]
+    #[inline(always)]
     fn row<const W: usize>(&self, y: usize, x: usize) -> [u8; W] {
         let r: &[u8; W] = self.buf[y * self.stride as usize + x..][..W]
             .try_into()
@@ -727,7 +730,7 @@ impl BlockRows for PlaneSpan<'_> {
         *r
     }
 
-    #[inline]
+    #[inline(always)]
     fn window<const W: usize>(&self, y: usize, h: usize) -> Self {
         let stride = self.stride as usize;
         let len = if h == 0 { 0 } else { (h - 1) * stride + W };
@@ -735,6 +738,11 @@ impl BlockRows for PlaneSpan<'_> {
             buf: &self.buf[y * stride..][..len],
             stride: self.stride,
         }
+    }
+
+    #[inline(always)]
+    fn as_ptr_and_stride(&self) -> (*const u8, usize) {
+        (self.buf.as_ptr(), self.stride as usize)
     }
 }
 
@@ -768,7 +776,7 @@ impl<'a> PlaneSpanMut<'a> {
     ///
     /// # Panics
     /// If the block leaves `buf`.
-    #[inline]
+    #[inline(always)]
     fn cut(buf: &'a mut [u8], start: usize, stride: usize, w: usize, h: usize) -> Self {
         debug_assert!(stride <= u32::MAX as usize, "cursor stride bound violated");
         let stride = stride as u32;
@@ -783,12 +791,18 @@ impl<'a> PlaneSpanMut<'a> {
         }
     }
 
+    /// Raw mutable pointer to the start of the validated span and its row stride in bytes.
+    #[inline(always)]
+    pub fn as_mut_ptr_and_stride(&mut self) -> (*mut u8, usize) {
+        (self.buf.as_mut_ptr(), self.stride as usize)
+    }
+
     /// `W` writable samples of row `y` starting at column `x` of the span.
     ///
     /// # Panics
     /// If `y * stride + x + W` leaves the span — which a caller writing the block the
     /// span was cut for cannot reach.
-    #[inline]
+    #[inline(always)]
     pub fn row_mut<const W: usize>(&mut self, y: usize, x: usize) -> &mut [u8; W] {
         (&mut self.buf[y * self.stride as usize + x..][..W])
             .try_into()

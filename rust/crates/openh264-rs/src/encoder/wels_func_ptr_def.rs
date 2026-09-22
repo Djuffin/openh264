@@ -33,7 +33,7 @@ use crate::encoder::rc::SWelsRcFunc;
 use crate::encoder::rec_view::RecCursor;
 use crate::encoder::set_mb_syn_cabac::SCabacCtx;
 use crate::encoder::svc_encode_mb::{PDeQuantization4x4Func, PDeQuantizationFunc};
-use crate::encoder::svc_encode_slice::{BsWriter, SDqLayer, SDynamicSlicingStack, SSlice};
+use crate::encoder::svc_encode_slice::{BsWriter, SDynamicSlicingStack, SSlice};
 use crate::encoder::svc_mode_decision::{
     WelsMdInterJudgeBGDPskipFalse, WelsMdInterJudgeSCDPskipFalse, WelsMdUpdateBGDInfoNULL,
 };
@@ -96,11 +96,11 @@ pub type PInterMdBackgroundDecisionFunc = fn(
 
 /// `wels_func_ptr_def.h:118`
 pub type PMdBackgroundInfoUpdateFunc = extern "C" fn(
-    pEncCtx: &sWelsEncCtx,
-    pCurLayer: &SDqLayer,
+    kpRecView: &crate::encoder::rec_view::RecPicView,
     pCurMb: &mut SMB,
     bFlag: bool,
     kiRefPictureType: i32,
+    uiRefMbQp: u8,
 );
 
 pub type PInterMdScrollingPSkipDecisionFunc = fn(

@@ -28,11 +28,10 @@ pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::svc_encode_slice::SSlice;
 use crate::encoder::svc_encode_slice::{
-    CLIP3_QP_0_51, WelsIMbChromaEncode, WelsPMbChromaEncode, ctx_pic_ref, g_kuiChromaQpTable,
-    layer_ref_feature_storage, layer_ref_pic,
+    CLIP3_QP_0_51, WelsIMbChromaEncode, WelsPMbChromaEncode, g_kuiChromaQpTable,
 };
 use crate::encoder::svc_encode_slice::{
-    current_layer_expect, layer_ref_pic_expect, layer_ref_view_expect,
+    current_layer_expect,
 };
 use crate::encoder::svc_encode_slice::{layer_enc_view_expect, layer_rec_view_expect};
 pub use crate::encoder::svc_motion_estimate::SWelsME;
@@ -464,53 +463,20 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
     // nine because `pWelsMd` is written further down. The four the body reads are
     // taken by field, and the reconstruction cursors are read from their own borrows
     // where they are used.
-    let (cEncLuma, cRefLuma, cRefCb, cRefCr) = {
+    let (cEncLuma, cRefLuma, cRefCb, cRefCr, cRecLuma, cRecCb, cRecCr) = {
         let mbc = pWelsMd.mbc();
-        (mbc.enc_y, mbc.ref_y, mbc.ref_cb, mbc.ref_cr)
+        (
+            mbc.enc_y,
+            mbc.ref_y,
+            mbc.ref_cb,
+            mbc.ref_cr,
+            mbc.rec_y,
+            mbc.rec_cb,
+            mbc.rec_cr,
+        )
     };
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let sMvp = SMVUnitXY::default();
-
-    // The destination is one of two disjoint cache regions, chosen by `bSkipMbFlag`:
-    // `sSkipMb`'s three panes when the macroblock will be coded as a background skip,
-    // `sMemPredMb`'s luma/chroma halves when it falls through to the 16x16 inter
-    // encode. Both are plain arrays on `SMbCache`, and the halves' offsets are
-    // `md.rs`'s `mem_pred_*_off`.
-
-    // MC
-    {
-        let mut cDstLuma = if bSkipMbFlag {
-            let pSkipMb = &mut pMbCache.sSkipMb;
-            PlaneCursorMut::new(&mut pSkipMb[..256], 0, 16)
-        } else {
-            let kiOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
-            let pMemPredMb = &mut pMbCache.sMemPredMb;
-            PlaneCursorMut::new(&mut pMemPredMb[kiOff..kiOff + 256], 0, 16)
-        };
-        mc_luma(&cRefLuma, &mut cDstLuma, 0, 0, 16, 16);
-    }
-    {
-        let mut cDstCb = if bSkipMbFlag {
-            let pSkipMb = &mut pMbCache.sSkipMb;
-            PlaneCursorMut::new(&mut pSkipMb[256..320], 0, 8)
-        } else {
-            let kiOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
-            let pMemPredMb = &mut pMbCache.sMemPredMb;
-            PlaneCursorMut::new(&mut pMemPredMb[kiOff..kiOff + 64], 0, 8)
-        };
-        mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cb
-    }
-    {
-        let mut cDstCr = if bSkipMbFlag {
-            let pSkipMb = &mut pMbCache.sSkipMb;
-            PlaneCursorMut::new(&mut pSkipMb[320..384], 0, 8)
-        } else {
-            let kiOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf) + 64;
-            let pMemPredMb = &mut pMbCache.sMemPredMb;
-            PlaneCursorMut::new(&mut pMemPredMb[kiOff..kiOff + 64], 0, 8)
-        };
-        mc_chroma(&cRefCr, &mut cDstCr, sMvp.iMvX, sMvp.iMvY, 8, 8); // Cr
-    }
 
     pCurMb.uiCbp = 0;
     pMbCache.bCollocatedPredFlag = true;
@@ -532,9 +498,30 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
         pCurMb.uiChromaQp =
             g_kuiChromaQpTable[CLIP3_QP_0_51(pCurMb.uiLumaQp as i32 + sc.chroma_qp_offset)];
 
-        WelsRecPskip(pWelsMd.mbc(), pCurMb, &mut *pMbCache);
+        kernels::copy::copy_16x16(&cRecLuma, &cRefLuma);
+        kernels::copy::copy_8x8(&cRecCb, &cRefCb);
+        kernels::copy::copy_8x8(&cRecCr, &cRefCr);
+        pCurMb.iNonZeroCount = [0; MB_LUMA_CHROMA_BLOCK4x4_NUM];
         VaaBackgroundMbDataUpdate(&sc, pCurMb);
         return;
+    }
+
+    // Fallthrough to 16x16 inter encode: stage the (0, 0) reference into `sMemPredMb`.
+    {
+        let kiOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
+        let mut cDstLuma =
+            PlaneCursorMut::new(&mut pMbCache.sMemPredMb[kiOff..kiOff + 256], 0, 16);
+        mc_luma(&cRefLuma, &mut cDstLuma, 0, 0, 16, 16);
+    }
+    {
+        let kiOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
+        let mut cDstCb = PlaneCursorMut::new(&mut pMbCache.sMemPredMb[kiOff..kiOff + 64], 0, 8);
+        mc_chroma(&cRefCb, &mut cDstCb, 0, 0, 8, 8);
+    }
+    {
+        let kiOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf) + 64;
+        let mut cDstCr = PlaneCursorMut::new(&mut pMbCache.sMemPredMb[kiOff..kiOff + 64], 0, 8);
+        mc_chroma(&cRefCr, &mut cDstCr, 0, 0, 8, 8);
     }
 
     pCurMb.uiMbType = MB_TYPE_16x16;
@@ -1080,25 +1067,28 @@ pub(crate) fn InitMe<'a>(
 }
 
 pub fn WelsMdP16x16<'a>(
-    pEncCtx: &'a sWelsEncCtx,
+    _pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
-    pCurLayer: &'a SDqLayer,
+    _pCurLayer: &'a SDqLayer,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
     mbs: &mut MbSplit<'_, SMB>,
 ) -> i32 {
+    let sc = *pWelsMd.sc();
+    let mbi = pWelsMd.mbi;
+    let pRefPic = sc.ref_pic();
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let pMe16x16 = &mut pWelsMd.sMe.sMe16x16;
     let uiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
-    let kiMbWidth: i32 = pCurLayer.iMbWidth as i32;
-    let kiMbHeight: i32 = pCurLayer.iMbHeight as i32;
+    let kiMbWidth: i32 = sc.mb_width;
+    let kiMbHeight: i32 = sc.mb_height;
     // `svc_base_layer_md.cpp:983`.
     InitMe(
         pWelsMd.iMbPixX,
         pWelsMd.iMbPixY,
         pWelsMd.pMvdCost,
         BLOCK_16x16 as i32,
-        layer_ref_feature_storage(pEncCtx, pCurLayer),
+        pRefPic.pScreenBlockFeatureStorage.as_deref(),
         pMe16x16,
     );
     //not putting the line below into InitMe to avoid judging mode in InitMe
@@ -1117,17 +1107,15 @@ pub fn WelsMdP16x16<'a>(
         pSlice.uiMvcNum += 1;
     }
 
-    if layer_ref_pic(pEncCtx, pCurLayer).is_some_and(|p| p.iPictureType == P_SLICE) {
+    if mbi.ref_is_p {
         if (mbs.cur().iMbX as i32) < kiMbWidth - 1 {
-            let sTempMv =
-                layer_ref_pic_expect(pEncCtx, pCurLayer).sMvList[(mbs.cur().iMbXY + 1) as usize];
+            let sTempMv = pRefPic.sMvList[(mbs.cur().iMbXY + 1) as usize];
             pSlice.sMvc[pSlice.uiMvcNum as usize].iMvX = sTempMv.iMvX >> pSlice.sScaleShift;
             pSlice.sMvc[pSlice.uiMvcNum as usize].iMvY = sTempMv.iMvY >> pSlice.sScaleShift;
             pSlice.uiMvcNum += 1;
         }
         if (mbs.cur().iMbY as i32) < kiMbHeight - 1 {
-            let sTempMv = layer_ref_pic_expect(pEncCtx, pCurLayer).sMvList
-                [(mbs.cur().iMbXY + kiMbWidth) as usize];
+            let sTempMv = pRefPic.sMvList[(mbs.cur().iMbXY + kiMbWidth) as usize];
             pSlice.sMvc[pSlice.uiMvcNum as usize].iMvX = sTempMv.iMvX >> pSlice.sScaleShift;
             pSlice.sMvc[pSlice.uiMvcNum as usize].iMvY = sTempMv.iMvY >> pSlice.sScaleShift;
             pSlice.uiMvcNum += 1;
@@ -1137,22 +1125,20 @@ pub fn WelsMdP16x16<'a>(
     PredMv(&pMbCache.sMvComponents, 0, 4, 0, &mut pMe16x16.sMvp);
 
     if let Some(search_fn) = pFunc.pfMotionSearch[0] {
-        let pEncPicture = layer_enc_view_expect(pCurLayer);
-        let pRefPicture = layer_ref_view_expect(pEncCtx, pCurLayer);
         search_fn(
             &pFunc.sMeFuncs,
             &pFunc.sSampleDealingFuncs,
             pMe16x16,
             &mut *pSlice,
-            pEncPicture.plane(0),
-            pRefPicture.plane(0),
+            sc.enc.plane(0),
+            sc.refv().plane(0),
         );
     }
 
     mbs.cur_mut().sP16x16Mv = pMe16x16.sMv;
     // A picture built without `bNeedMbInfo` carries no MV list at all, so the
     // emptiness test stands in for the null test.
-    let sMvList = layer_rec_view_expect(pCurLayer).mv_list();
+    let sMvList = sc.rec.mv_list();
     if !sMvList.is_empty() {
         sMvList.set(mbs.cur().iMbXY as usize, pMe16x16.sMv);
     }
@@ -1161,12 +1147,16 @@ pub fn WelsMdP16x16<'a>(
 }
 
 pub extern "C" fn WelsMdP8x8<'a>(
-    pEncCtx: &'a sWelsEncCtx,
+    _pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
-    pCurDqLayer: &'a SDqLayer,
+    _pCurDqLayer: &'a SDqLayer,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
 ) -> i32 {
+    let sc = *pWelsMd.sc();
+    let pEncPlane = sc.enc.plane(0);
+    let pRefPlane = sc.refv().plane(0);
+    let pRefFeatureStorage = sc.ref_pic().pScreenBlockFeatureStorage.as_deref();
     let mut iCostP8x8 = 0i32;
     for i in 0..4 {
         let pMbCache = &mut pSlice.sMbCacheInfo;
@@ -1182,7 +1172,7 @@ pub extern "C" fn WelsMdP8x8<'a>(
             pWelsMd.iMbPixY,
             pWelsMd.pMvdCost,
             BLOCK_8x8 as i32,
-            layer_ref_feature_storage(pEncCtx, pCurDqLayer),
+            pRefFeatureStorage,
             sMe8x8,
         );
         //not putting these three lines below into InitMe to avoid judging mode in InitMe
@@ -1201,22 +1191,18 @@ pub extern "C" fn WelsMdP8x8<'a>(
             &mut sMe8x8.sMvp,
         );
 
-        {
-            // The index is read here because `SetBlockStaticIdcToMd` stamps the
-            // four indices before the static/scrolled skip tests, and P8x8 reads
-            // them only after those tests have failed.
-            let pEncPicture = layer_enc_view_expect(pCurDqLayer);
-            let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
-            pFunc.pfMotionSearch[pWelsMd.iBlock8x8StaticIdc[i as usize] as usize]
-                .expect("pfMotionSearch unset")(
-                &pFunc.sMeFuncs,
-                &pFunc.sSampleDealingFuncs,
-                sMe8x8,
-                &mut *pSlice,
-                pEncPicture.plane(0),
-                pRefPicture.plane(0),
-            );
-        }
+        // The index is read here because `SetBlockStaticIdcToMd` stamps the
+        // four indices before the static/scrolled skip tests, and P8x8 reads
+        // them only after those tests have failed.
+        pFunc.pfMotionSearch[pWelsMd.iBlock8x8StaticIdc[i as usize] as usize]
+            .expect("pfMotionSearch unset")(
+            &pFunc.sMeFuncs,
+            &pFunc.sSampleDealingFuncs,
+            sMe8x8,
+            &mut *pSlice,
+            pEncPlane,
+            pRefPlane,
+        );
         let pMbCache = &mut pSlice.sMbCacheInfo;
         UpdateP8x8Motion2Cache(
             &mut pMbCache.sMvComponents,
@@ -1549,22 +1535,20 @@ pub fn WelsMdInterJudgeBGDPskipFalse(
 }
 
 pub extern "C" fn WelsMdUpdateBGDInfo(
-    pEncCtx: &sWelsEncCtx,
-    pCurLayer: &SDqLayer,
+    kpRecView: &crate::encoder::rec_view::RecPicView,
     pCurMb: &mut SMB,
     bCollocatedPredFlag: bool,
     iRefPictureType: i32,
+    uiRefMbQp: u8,
 ) {
     let kiMbXY = pCurMb.iMbXY as usize;
 
     let uiQp = if pCurMb.uiCbp != 0 || iRefPictureType == I_SLICE || !bCollocatedPredFlag {
         pCurMb.uiLumaQp
     } else {
-        (&layer_ref_pic_expect(pEncCtx, pCurLayer).pRefMbQp)[kiMbXY]
+        uiRefMbQp
     };
-    layer_rec_view_expect(pCurLayer)
-        .ref_mb_qp()
-        .set(kiMbXY, uiQp);
+    kpRecView.ref_mb_qp().set(kiMbXY, uiQp);
 
     if pCurMb.uiMbType == MB_TYPE_BACKGROUND {
         pCurMb.uiMbType = MB_TYPE_SKIP;
@@ -1572,18 +1556,18 @@ pub extern "C" fn WelsMdUpdateBGDInfo(
 }
 
 pub extern "C" fn WelsMdUpdateBGDInfoNULL(
-    pEncCtx: &sWelsEncCtx,
-    pCurLayer: &SDqLayer,
+    kpRecView: &crate::encoder::rec_view::RecPicView,
     pCurMb: &mut SMB,
     bCollocatedPredFlag: bool,
     iRefPictureType: i32,
+    uiRefMbQp: u8,
 ) {
     WelsMdUpdateBGDInfo(
-        pEncCtx,
-        pCurLayer,
+        kpRecView,
         pCurMb,
         bCollocatedPredFlag,
         iRefPictureType,
+        uiRefMbQp,
     );
 }
 
@@ -1636,37 +1620,28 @@ pub fn CheckBorder(
 }
 
 pub extern "C" fn JudgeStaticSkip(
-    pEncCtx: &sWelsEncCtx,
+    _pEncCtx: &sWelsEncCtx,
     pCurMb: &mut SMB,
     _pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD<'_>,
 ) -> bool {
-    let pCurDqLayer = current_layer_expect(pEncCtx);
     let kiMbX = pCurMb.iMbX as i32;
     let kiMbY = pCurMb.iMbY as i32;
 
     let mut bTryStaticSkip = IsMbCollocatedStatic(&pWelsMd.iBlock8x8StaticIdc);
     if bTryStaticSkip {
-        let sdf = &pEncCtx.func_list().sSampleDealingFuncs;
-        let pRefOriPic = pCurDqLayer.pRefOri[0]
-            .and_then(|r| ctx_pic_ref(pEncCtx, r))
-            .map(crate::encoder::rec_view::RoPicView::build);
-        if let Some(pRefOriPic) = pRefOriPic {
-            let pEncPicture = layer_enc_view_expect(pCurDqLayer);
+        let sc = pWelsMd.sc();
+        let sdf = &sc.func.sSampleDealingFuncs;
+        if let Some(pRefOriPic) = sc.ref_ori_v {
+            let mbc = pWelsMd.mbc();
             let kiCx = (kiMbX as isize) << 3;
             let kiCy = (kiMbY as isize) << 3;
 
-            let iSadCostCb = CalUVSadCost(
-                sdf,
-                &pEncPicture.plane(1).cursor(kiCx, kiCy),
-                &pRefOriPic.plane(1).cursor(kiCx, kiCy),
-            );
+            let iSadCostCb =
+                CalUVSadCost(sdf, &mbc.enc_cb, &pRefOriPic.plane(1).cursor(kiCx, kiCy));
             if iSadCostCb == 0 {
-                let iSadCostCr = CalUVSadCost(
-                    sdf,
-                    &pEncPicture.plane(2).cursor(kiCx, kiCy),
-                    &pRefOriPic.plane(2).cursor(kiCx, kiCy),
-                );
+                let iSadCostCr =
+                    CalUVSadCost(sdf, &mbc.enc_cr, &pRefOriPic.plane(2).cursor(kiCx, kiCy));
                 bTryStaticSkip = iSadCostCr == 0;
             } else {
                 bTryStaticSkip = false;
@@ -1684,11 +1659,6 @@ pub extern "C" fn JudgeScrollSkip(
     _pMbCache: &mut SMbCache,
     pWelsMd: &mut SWelsMD<'_>,
 ) -> bool {
-    let pCurDqLayer = current_layer_expect(pEncCtx);
-    let kiMbX = pCurMb.iMbX as i32;
-    let kiMbY = pCurMb.iMbY as i32;
-    let kiMbWidth: i32 = pCurDqLayer.iMbWidth as i32;
-    let kiMbHeight: i32 = pCurDqLayer.iMbHeight as i32;
     // `None` for camera content (no extension exists there), taking the same exit as
     // the `bScrollDetectFlag == false` arm below.
     let Some(pVaaExt) = pEncCtx.vaa_ext_ref() else {
@@ -1703,33 +1673,34 @@ pub extern "C" fn JudgeScrollSkip(
     }
 
     if bTryScrollSkip {
-        let sdf = &pEncCtx.func_list().sSampleDealingFuncs;
-        let pRefOriPic = pCurDqLayer.pRefOri[0]
-            .and_then(|r| ctx_pic_ref(pEncCtx, r))
-            .map(crate::encoder::rec_view::RoPicView::build);
-        if let Some(pRefOriPic) = pRefOriPic {
+        let sc = pWelsMd.sc();
+        let sdf = &sc.func.sSampleDealingFuncs;
+        if let Some(pRefOriPic) = sc.ref_ori_v {
+            let kiMbX = pCurMb.iMbX as i32;
+            let kiMbY = pCurMb.iMbY as i32;
             let iScrollMvX = pVaaExt.sScrollDetectInfo.iScrollMvX;
             let iScrollMvY = pVaaExt.sScrollDetectInfo.iScrollMvY;
-            if CheckBorder(kiMbX, kiMbY, iScrollMvX, iScrollMvY, kiMbWidth, kiMbHeight) {
+            if CheckBorder(
+                kiMbX,
+                kiMbY,
+                iScrollMvX,
+                iScrollMvY,
+                sc.mb_width,
+                sc.mb_height,
+            ) {
                 bTryScrollSkip = false;
             } else {
-                let pEncPicture = layer_enc_view_expect(pCurDqLayer);
+                let mbc = pWelsMd.mbc();
                 let kiCx = (kiMbX as isize) << 3;
                 let kiCy = (kiMbY as isize) << 3;
                 let kiRx = kiCx + (iScrollMvX >> 1) as isize;
                 let kiRy = kiCy + (iScrollMvY >> 1) as isize;
 
-                let iSadCostCb = CalUVSadCost(
-                    sdf,
-                    &pEncPicture.plane(1).cursor(kiCx, kiCy),
-                    &pRefOriPic.plane(1).cursor(kiRx, kiRy),
-                );
+                let iSadCostCb =
+                    CalUVSadCost(sdf, &mbc.enc_cb, &pRefOriPic.plane(1).cursor(kiRx, kiRy));
                 if iSadCostCb == 0 {
-                    let iSadCostCr = CalUVSadCost(
-                        sdf,
-                        &pEncPicture.plane(2).cursor(kiCx, kiCy),
-                        &pRefOriPic.plane(2).cursor(kiRx, kiRy),
-                    );
+                    let iSadCostCr =
+                        CalUVSadCost(sdf, &mbc.enc_cr, &pRefOriPic.plane(2).cursor(kiRx, kiRy));
                     bTryScrollSkip = iSadCostCr == 0;
                 } else {
                     bTryScrollSkip = false;
@@ -1750,9 +1721,14 @@ pub extern "C" fn SvcMdSCDMbEnc(
     sCurMbMv: &[SMVUnitXY; 2],
     eSkipMode: ESkipModes,
 ) {
+    let sc = *pWelsMd.sc();
+    let pRefView = sc.refv();
+    let pFunc = sc.func;
+    let (cEncLuma, cRecLuma, cRecCb, cRecCr) = {
+        let mbc = pWelsMd.mbc();
+        (mbc.enc_y, mbc.rec_y, mbc.rec_cb, mbc.rec_cr)
+    };
     let pMbCache = &mut pSlice.sMbCacheInfo;
-    let pCurDqLayer = current_layer_expect(pEncCtx);
-    let pFunc = pEncCtx.func_list();
     let skip_idx = eSkipMode as usize;
     let sCandidateMv = sCurMbMv[skip_idx];
 
@@ -1761,15 +1737,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
         iMvY: sCandidateMv.iMvY,
     };
 
-    // Note the third line: plane 2 takes stride index 1, which is what
-    // `WelsMdInterInit`'s single `kiCurStrideUV` applied to both chroma planes.
-    let pRefPic = layer_ref_pic_expect(pEncCtx, pCurDqLayer);
     let pd = &pMbCache.SPicData;
-
-    // The anchors: `mb_offset(stride, 0)` is `(iMbX << 4) + (iMbY << 4) * stride`,
-    // and `iOffsetY` adds `(mvX >> 2) + (mvY >> 2) * stride` — together a cursor at
-    // `(iMbX*16 + mvX>>2, iMbY*16 + mvY>>2)`. Chroma is the same at `<< 3` and
-    // `>> 3`, and plane 2 keeps stride index 1.
     let (lx, ly) = pd.luma_origin();
     let (cx, cy) = pd.chroma_origin();
     let (dx_l, dy_l) = (
@@ -1784,63 +1752,54 @@ pub extern "C" fn SvcMdSCDMbEnc(
     let luma_off = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
     let chroma_off = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
 
-    // Motion Compensation
-    {
-        let cRef = pRefPic.plane(0).cursor(lx + dx_l, ly + dy_l);
-        let mut cDst = if to_pred {
-            let p = &mut pMbCache.sMemPredMb;
-            PlaneCursorMut::new(&mut p[luma_off..luma_off + 256], 0, 16)
-        } else {
-            let p = &mut pMbCache.sSkipMb;
-            PlaneCursorMut::new(&mut p[..256], 0, 16)
-        };
-        mc_luma(&cRef, &mut cDst, 0, 0, 16, 16);
-    }
-    for (plane, base_skip, extra) in [(1usize, 256usize, 0usize), (2, 320, 64)] {
-        let cRef = pRefPic.plane(plane).cursor(cx + dx_c, cy + dy_c);
-        let mut cDst = if to_pred {
-            let o = chroma_off + extra;
-            let p = &mut pMbCache.sMemPredMb;
-            PlaneCursorMut::new(&mut p[o..o + 64], 0, 8)
-        } else {
-            let p = &mut pMbCache.sSkipMb;
-            PlaneCursorMut::new(&mut p[base_skip..base_skip + 64], 0, 8)
-        };
-        mc_chroma(&cRef, &mut cDst, sMvp.iMvX, sMvp.iMvY, 8, 8);
-    }
+    let cRefLuma = pRefView.plane(0).cursor(lx + dx_l, ly + dy_l);
+    let cRefCb = pRefView.plane(1).cursor(cx + dx_c, cy + dy_c);
+    let cRefCr = pRefView.plane(2).cursor(cx + dx_c, cy + dy_c);
 
     pCurMb.uiCbp = 0;
     pWelsMd.iCostLuma = 0;
 
-    let sad_16x16 = pFunc.sSampleDealingFuncs.pfSampleSad[BLOCK_16x16].unwrap();
-    let kiMbXLuma = (pMbCache.SPicData.iMbX as isize) << 4;
-    let kiMbYLuma = (pMbCache.SPicData.iMbY as isize) << 4;
-    let sad_cost = {
-        let pEncPicture = layer_enc_view_expect(pCurDqLayer);
-        let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
-        sad_16x16(
-            &pEncPicture.plane(0).cursor(kiMbXLuma, kiMbYLuma),
-            &pRefPicture.plane(0).cursor(
-                kiMbXLuma + ((sCandidateMv.iMvX as isize) >> 2),
-                kiMbYLuma + ((sCandidateMv.iMvY as isize) >> 2),
-            ),
-        )
-    };
+    let sad_cost = (sc.sad16)(&cEncLuma, &cRefLuma);
     pCurMb.iSadCost = sad_cost;
     pWelsMd.iCostSkipMb = sad_cost;
 
     pCurMb.sP16x16Mv = sCandidateMv;
-    layer_rec_view_expect(pCurDqLayer)
-        .mv_list()
-        .set(pCurMb.iMbXY as usize, sCandidateMv);
+    sc.rec.mv_list().set(pCurMb.iMbXY as usize, sCandidateMv);
 
-    if bQpSimilarFlag && bMbSkipFlag {
+    if !to_pred {
         pCurMb.iRefIndex = [0; MB_BLOCK8x8_NUM];
         (pFunc.pfUpdateMbMv)(&mut pCurMb.sMv, sMvp);
         pCurMb.uiMbType = MB_TYPE_SKIP;
-        WelsRecPskip(pWelsMd.mbc(), pCurMb, &mut *pMbCache);
-        WelsMdInterUpdatePskip(pWelsMd.sc().chroma_qp_offset, &mut *pSlice, pCurMb);
+        kernels::copy::copy_16x16(&cRecLuma, &cRefLuma);
+        if ((sMvp.iMvX | sMvp.iMvY) & 0x07) == 0 {
+            kernels::copy::copy_8x8(&cRecCb, &cRefCb);
+            kernels::copy::copy_8x8(&cRecCr, &cRefCr);
+        } else {
+            {
+                let mut cDstCb = PlaneCursorMut::new(&mut pMbCache.sSkipMb[256..320], 0, 8);
+                mc_chroma(&cRefCb, &mut cDstCb, sMvp.iMvX, sMvp.iMvY, 8, 8);
+            }
+            {
+                let mut cDstCr = PlaneCursorMut::new(&mut pMbCache.sSkipMb[320..384], 0, 8);
+                mc_chroma(&cRefCr, &mut cDstCr, sMvp.iMvX, sMvp.iMvY, 8, 8);
+            }
+            copy_block_to_view::<8, 8>(&pMbCache.sSkipMb[256..320], &cRecCb);
+            copy_block_to_view::<8, 8>(&pMbCache.sSkipMb[320..384], &cRecCr);
+        }
+        pCurMb.iNonZeroCount = [0; MB_LUMA_CHROMA_BLOCK4x4_NUM];
+        WelsMdInterUpdatePskip(sc.chroma_qp_offset, &mut *pSlice, pCurMb);
         return;
+    }
+
+    // Motion Compensation into `sMemPredMb`
+    {
+        let mut cDst = PlaneCursorMut::new(&mut pMbCache.sMemPredMb[luma_off..luma_off + 256], 0, 16);
+        mc_luma(&cRefLuma, &mut cDst, 0, 0, 16, 16);
+    }
+    for (cRef, extra) in [(&cRefCb, 0usize), (&cRefCr, 64)] {
+        let o = chroma_off + extra;
+        let mut cDst = PlaneCursorMut::new(&mut pMbCache.sMemPredMb[o..o + 64], 0, 8);
+        mc_chroma(cRef, &mut cDst, sMvp.iMvX, sMvp.iMvY, 8, 8);
     }
 
     pCurMb.uiMbType = MB_TYPE_16x16;
@@ -1873,7 +1832,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
 
     let pMbCache = &mut pSlice.sMbCacheInfo;
     // The chroma cursors both resolve at stride index 1 — `mb_offset`'s rule.
-    let recView = layer_rec_view_expect(pCurDqLayer);
+    let recView = sc.rec;
     let luma_off = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
     let chroma_off = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
     (pFunc.pfCopy16x16Aligned)(
@@ -1904,10 +1863,8 @@ pub extern "C" fn MdInterSCDPskipProcess(
     let Some(pVaaExt) = pEncCtx.vaa_ext_ref() else {
         return false;
     };
-    let pCurDqLayer = current_layer_expect(pEncCtx);
 
-    let kiRefMbQp =
-        (&layer_ref_pic_expect(pEncCtx, pCurDqLayer).pRefMbQp)[pCurMb.iMbXY as usize] as i32;
+    let kiRefMbQp = pWelsMd.mbi.ref_qp as i32;
     let kiCurMbQp = pCurMb.uiLumaQp as i32;
 
     let pJudgeSkip: [pJudgeSkipFun; 2] = [JudgeStaticSkip, JudgeScrollSkip];

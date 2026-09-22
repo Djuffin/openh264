@@ -27,13 +27,9 @@ use crate::encoder::md::{mem_pred_chroma_off, mem_pred_luma_off};
 use crate::encoder::rec_view::{RecCursor, RecPicView, copy_block_to_view};
 use crate::encoder::svc_encode_mb::WelsEncRecI16x16Y;
 use crate::encoder::svc_encode_mb::{WelsDctMb, WelsEncRecI4x4Y, WelsTryPUVskip, WelsTryPYskip};
-use crate::encoder::svc_encode_slice::{SDqLayer, SSlice};
 use crate::encoder::svc_encode_slice::{
-    WelsIMbChromaEncode, WelsPMbChromaEncode, current_layer_ref, layer_enc_view_expect,
-    layer_ref_feature_storage,
-};
-use crate::encoder::svc_encode_slice::{
-    current_layer_expect, layer_rec_view_expect, layer_ref_view_expect,
+    SDqLayer, SSlice, WelsIMbChromaEncode, WelsPMbChromaEncode, current_layer_expect,
+    current_layer_ref, layer_enc_view_expect, layer_rec_view_expect,
 };
 use crate::encoder::svc_mode_decision::{
     BLOCK_4x4, BLOCK_8x8, BLOCK_8x16, BLOCK_16x8, BLOCK_16x16, IS_SKIP, InitMe, PredInter8x16Mv,
@@ -1045,12 +1041,17 @@ pub fn WelsMdInterInit(
 
 /// Scores the two 16x8 partitions.
 pub extern "C" fn WelsMdP16x8<'a>(
-    pEncCtx: &'a sWelsEncCtx,
+    _pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
-    pCurDqLayer: &'a SDqLayer,
+    _pCurDqLayer: &'a SDqLayer,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
 ) -> i32 {
+    let sc = *pWelsMd.sc();
+    let pEncPlane = sc.enc.plane(0);
+    let pRefPlane = sc.refv().plane(0);
+    let pRefFeatureStorage = sc.ref_pic().pScreenBlockFeatureStorage.as_deref();
+    let search_fn = pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset");
     let mut iCostP16x8 = 0i32;
     for i in 0..2i32 {
         let pMbCache = &mut pSlice.sMbCacheInfo;
@@ -1061,7 +1062,7 @@ pub extern "C" fn WelsMdP16x8<'a>(
             pWelsMd.iMbPixY,
             pWelsMd.pMvdCost,
             BLOCK_16x8 as i32,
-            layer_ref_feature_storage(pEncCtx, pCurDqLayer),
+            pRefFeatureStorage,
             sMe16x8,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -1072,18 +1073,14 @@ pub extern "C" fn WelsMdP16x8<'a>(
         pSlice.uiMvcNum = 1;
 
         PredInter16x8Mv(&pMbCache.sMvComponents, i << 3, 0, &mut sMe16x8.sMvp);
-        {
-            let pEncPicture = layer_enc_view_expect(pCurDqLayer);
-            let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
-            pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
-                &pFunc.sMeFuncs,
-                &pFunc.sSampleDealingFuncs,
-                sMe16x8,
-                &mut *pSlice,
-                pEncPicture.plane(0),
-                pRefPicture.plane(0),
-            );
-        }
+        search_fn(
+            &pFunc.sMeFuncs,
+            &pFunc.sSampleDealingFuncs,
+            sMe16x8,
+            &mut *pSlice,
+            pEncPlane,
+            pRefPlane,
+        );
         let pMbCache = &mut pSlice.sMbCacheInfo;
         UpdateP16x8Motion2Cache(
             &mut pMbCache.sMvComponents,
@@ -1098,12 +1095,17 @@ pub extern "C" fn WelsMdP16x8<'a>(
 
 /// Scores the two 8x16 partitions.
 pub extern "C" fn WelsMdP8x16<'a>(
-    pEncCtx: &'a sWelsEncCtx,
+    _pEncCtx: &'a sWelsEncCtx,
     pFunc: &SWelsFuncPtrList,
-    pCurLayer: &'a SDqLayer,
+    _pCurLayer: &'a SDqLayer,
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
 ) -> i32 {
+    let sc = *pWelsMd.sc();
+    let pEncPlane = sc.enc.plane(0);
+    let pRefPlane = sc.refv().plane(0);
+    let pRefFeatureStorage = sc.ref_pic().pScreenBlockFeatureStorage.as_deref();
+    let search_fn = pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset");
     let mut iCostP8x16 = 0i32;
     for i in 0..2i32 {
         let pMbCache = &mut pSlice.sMbCacheInfo;
@@ -1114,7 +1116,7 @@ pub extern "C" fn WelsMdP8x16<'a>(
             pWelsMd.iMbPixY,
             pWelsMd.pMvdCost,
             BLOCK_8x16 as i32,
-            layer_ref_feature_storage(pEncCtx, pCurLayer),
+            pRefFeatureStorage,
             sMe8x16,
         );
         //not putting the lines below into InitMe to avoid judging mode in InitMe
@@ -1125,18 +1127,14 @@ pub extern "C" fn WelsMdP8x16<'a>(
         pSlice.uiMvcNum = 1;
 
         PredInter8x16Mv(&pMbCache.sMvComponents, i << 2, 0, &mut sMe8x16.sMvp);
-        {
-            let pEncPicture = layer_enc_view_expect(pCurLayer);
-            let pRefPicture = layer_ref_view_expect(pEncCtx, pCurLayer);
-            pFunc.pfMotionSearch[0].expect("pfMotionSearch[0] unset")(
-                &pFunc.sMeFuncs,
-                &pFunc.sSampleDealingFuncs,
-                sMe8x16,
-                &mut *pSlice,
-                pEncPicture.plane(0),
-                pRefPicture.plane(0),
-            );
-        }
+        search_fn(
+            &pFunc.sMeFuncs,
+            &pFunc.sSampleDealingFuncs,
+            sMe8x16,
+            &mut *pSlice,
+            pEncPlane,
+            pRefPlane,
+        );
         let pMbCache = &mut pSlice.sMbCacheInfo;
         UpdateP8x16Motion2Cache(
             &mut pMbCache.sMvComponents,
@@ -1441,15 +1439,15 @@ fn AcceptPskip(
 /// Quarter-pel refinement of whichever partitioning the integer search chose, plus the
 /// chroma motion compensation for each partition.
 pub fn WelsMdInterMbRefinement(
-    pEncCtx: &sWelsEncCtx,
+    _pEncCtx: &sWelsEncCtx,
     pWelsMd: &mut SWelsMD<'_>,
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
-    let pCurDqLayer = current_layer_expect(pEncCtx);
-    let pFunc = pEncCtx.func_list();
-    let pRefPicture = layer_ref_view_expect(pEncCtx, pCurDqLayer);
-    let pEncPicture = layer_enc_view_expect(pCurDqLayer);
+    let sc = *pWelsMd.sc();
+    let pFunc = sc.func;
+    let pRefPicture = sc.refv();
+    let pEncPicture = sc.enc;
     let mut iBestSadCost = 0i32;
     let mut iBestSatdCost = 0i32;
     let mut sMeRefine = SMeRefinePointer::default();
@@ -1487,7 +1485,7 @@ pub fn WelsMdInterMbRefinement(
             InitMeRefinePointer(&mut sMeRefine, 0);
             sMeRefine.pfCopyBlockByMode = Some(|a, b| copy_16x16(a, b));
             MeRefineFracPixel(
-                pEncCtx,
+                &sc,
                 kiOffLuma,
                 &mut pWelsMd.sMe.sMe16x16,
                 &mut sMeRefine,
@@ -1548,7 +1546,7 @@ pub fn WelsMdInterMbRefinement(
                     &mut pWelsMd.sMe.sMe16x8[i].sMvp,
                 );
                 MeRefineFracPixel(
-                    pEncCtx,
+                    &sc,
                     kiOffLuma + g_kuiSmb4AddrIn256[iIdx as usize] as usize,
                     &mut pWelsMd.sMe.sMe16x8[i],
                     &mut sMeRefine,
@@ -1595,7 +1593,7 @@ pub fn WelsMdInterMbRefinement(
                     &mut pWelsMd.sMe.sMe8x16[i].sMvp,
                 );
                 MeRefineFracPixel(
-                    pEncCtx,
+                    &sc,
                     kiOffLuma + g_kuiSmb4AddrIn256[iIdx as usize] as usize,
                     &mut pWelsMd.sMe.sMe8x16[i],
                     &mut sMeRefine,
@@ -1647,7 +1645,7 @@ pub fn WelsMdInterMbRefinement(
                             &mut pWelsMd.sMe.sMe8x8[i].sMvp,
                         );
                         MeRefineFracPixel(
-                            pEncCtx,
+                            &sc,
                             kiOffLuma + g_kuiSmb4AddrIn256[iBlk8Idx as usize] as usize,
                             &mut pWelsMd.sMe.sMe8x8[i],
                             &mut sMeRefine,

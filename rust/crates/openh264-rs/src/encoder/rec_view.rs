@@ -428,6 +428,11 @@ impl crate::safe::plane::BlockRows for CellSpan<'_> {
             stride: self.stride,
         }
     }
+
+    #[inline]
+    fn as_ptr_and_stride(&self) -> (*const u8, usize) {
+        (self.cells.as_ptr() as *const u8, self.stride as usize)
+    }
 }
 
 impl crate::safe::plane::PlaneSamples for RecCursor<'_> {
@@ -561,13 +566,19 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
 /// geometry bugs in the caller.
 #[inline]
 pub fn copy_block_to_view<const W: usize, const H: usize>(src: &[u8], dst: &RecCursor<'_>) {
-    use crate::safe::plane::RefSamples;
-    let block = &src[..W * H];
-    let cells = dst.span::<W, H>(0, 0);
-    for y in 0..H {
-        let row: &[u8; W] = block[y * W..][..W].try_into().expect("W bytes");
-        for (c, &v) in cells.row_cells::<W>(y).iter().zip(row.iter()) {
-            c.set(v);
+    match (W, H) {
+        (16, 16) => crate::simd::kernels::copy::copy_16x16_slice(dst, src, 16),
+        (8, 8) => crate::simd::kernels::copy::copy_8x8_slice(dst, src, 8),
+        _ => {
+            use crate::safe::plane::RefSamples;
+            let block = &src[..W * H];
+            let cells = dst.span::<W, H>(0, 0);
+            for y in 0..H {
+                let row: &[u8; W] = block[y * W..][..W].try_into().expect("W bytes");
+                for (c, &v) in cells.row_cells::<W>(y).iter().zip(row.iter()) {
+                    c.set(v);
+                }
+            }
         }
     }
 }

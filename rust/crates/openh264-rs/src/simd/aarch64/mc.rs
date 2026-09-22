@@ -805,79 +805,125 @@ fn avg_any<A: RefSamples, B: RefSamples>(
     for dy in 0..height as isize {
         let out = dst.row_mut(dy, 0, width);
         for (j, o) in out.iter_mut().enumerate() {
-            *o = ((a.at(j as isize, dy) as u32 + b.at(j as isize, dy) as u32 + 1) >> 1) as u8;
+        *o = ((a.at(j as isize, dy) as u32 + b.at(j as isize, dy) as u32 + 1) >> 1) as u8;
         }
     }
 }
 
 /// `McChromaWidthEq8_AArch64_neon`: `umull`/`umlal` by the four byte weights, the
 /// bottom row of one output row being the top row of the next.
-#[inline]
-#[target_feature(enable = "neon")]
-fn chroma8_block<S: RefSamples + Copy, const H: usize, const SH: usize>(
+#[inline(always)]
+unsafe fn chroma8_block<S: RefSamples + Copy, const H: usize, const SH: usize>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     w: &[u8; 4],
 ) {
-    let (wa, wb, wc, wd) = (
-        vdup_n_u8(w[0]),
-        vdup_n_u8(w[1]),
-        vdup_n_u8(w[2]),
-        vdup_n_u8(w[3]),
-    );
     let s = src.span::<9, SH>(0, 0);
     let mut d = dst.span_mut::<8, H>(0, 0);
-    // A one-row window per row, so the two overlapping eight-byte loads come
-    // straight out of the plane or the cell view — see [`taps16`].
-    let r = s.window::<9>(0, 1);
-    let (mut a, mut b) = (ld8(&r.row::<8>(0, 0)), ld8(&r.row::<8>(0, 1)));
-    for y in 0..H {
-        let r = s.window::<9>(y + 1, 1);
-        let (c, e) = (ld8(&r.row::<8>(0, 0)), ld8(&r.row::<8>(0, 1)));
-        let t = vmull_u8(a, wa);
-        let t = vmlal_u8(t, b, wb);
-        let t = vmlal_u8(t, c, wc);
-        let t = vmlal_u8(t, e, wd);
-        st8(d.row_mut::<8>(y, 0), vrshrn_n_u16::<6>(t));
-        a = c;
-        b = e;
+    let (s_ptr, s_stride) = s.as_ptr_and_stride();
+    let (d_ptr, d_stride) = d.as_mut_ptr_and_stride();
+    // SAFETY: `s` and `d` were bounds-checked to `9 x SH` (`SH = H + 1`) and `8 x H`.
+    unsafe {
+        let (wa, wb, wc, wd) = (
+            vdup_n_u8(w[0]),
+            vdup_n_u8(w[1]),
+            vdup_n_u8(w[2]),
+            vdup_n_u8(w[3]),
+        );
+        let (mut a, mut b) = (vld1_u8(s_ptr), vld1_u8(s_ptr.add(1)));
+        for y in 0..H {
+            let row_ptr = s_ptr.add((y + 1) * s_stride);
+            let (c, e) = (vld1_u8(row_ptr), vld1_u8(row_ptr.add(1)));
+            let t = vaddq_u16(
+                vmlal_u8(vmull_u8(a, wa), b, wb),
+                vmlal_u8(vmull_u8(c, wc), e, wd),
+            );
+            vst1_u8(d_ptr.add(y * d_stride), vrshrn_n_u16::<6>(t));
+            a = c;
+            b = e;
+        }
     }
 }
 
-/// `McChromaWidthEq4_AArch64_neon`, one row per register.
-#[inline]
-#[target_feature(enable = "neon")]
-fn chroma4_block<S: RefSamples + Copy, const H: usize, const SH: usize>(
+/// `McChromaWidthEq4_AArch64_neon`, two 4-byte rows packed per 8-lane register.
+#[inline(always)]
+unsafe fn chroma4_block<S: RefSamples + Copy, const H: usize, const SH: usize>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
     w: &[u8; 4],
 ) {
-    let (wa, wb, wc, wd) = (
-        vdup_n_u8(w[0]),
-        vdup_n_u8(w[1]),
-        vdup_n_u8(w[2]),
-        vdup_n_u8(w[3]),
-    );
     let s = src.span::<5, SH>(0, 0);
     let mut d = dst.span_mut::<4, H>(0, 0);
-    let r = s.window::<5>(0, 1);
-    let (mut a, mut b) = (ld4(&r.row::<4>(0, 0)), ld4(&r.row::<4>(0, 1)));
-    for y in 0..H {
-        let r = s.window::<5>(y + 1, 1);
-        let (c, e) = (ld4(&r.row::<4>(0, 0)), ld4(&r.row::<4>(0, 1)));
-        let t = vmull_u8(a, wa);
-        let t = vmlal_u8(t, b, wb);
-        let t = vmlal_u8(t, c, wc);
-        let t = vmlal_u8(t, e, wd);
-        st4(d.row_mut::<4>(y, 0), vrshrn_n_u16::<6>(t));
-        a = c;
-        b = e;
+    let (s_ptr, s_stride) = s.as_ptr_and_stride();
+    let (d_ptr, d_stride) = d.as_mut_ptr_and_stride();
+    // SAFETY: `s` and `d` were bounds-checked to `5 x SH` (`SH = H + 1`) and `4 x H`.
+    unsafe {
+        let (wa, wb, wc, wd) = (
+            vdup_n_u8(w[0]),
+            vdup_n_u8(w[1]),
+            vdup_n_u8(w[2]),
+            vdup_n_u8(w[3]),
+        );
+        let (mut r0a, mut r0b) = (
+            core::ptr::read_unaligned(s_ptr as *const u32),
+            core::ptr::read_unaligned(s_ptr.add(1) as *const u32),
+        );
+        let mut y = 0;
+        while y + 2 <= H {
+            let p1 = s_ptr.add((y + 1) * s_stride);
+            let p2 = s_ptr.add((y + 2) * s_stride);
+            let (r1a, r1b) = (
+                core::ptr::read_unaligned(p1 as *const u32),
+                core::ptr::read_unaligned(p1.add(1) as *const u32),
+            );
+            let (r2a, r2b) = (
+                core::ptr::read_unaligned(p2 as *const u32),
+                core::ptr::read_unaligned(p2.add(1) as *const u32),
+            );
+            let a = vreinterpret_u8_u64(vcreate_u64((r0a as u64) | ((r1a as u64) << 32)));
+            let b = vreinterpret_u8_u64(vcreate_u64((r0b as u64) | ((r1b as u64) << 32)));
+            let c = vreinterpret_u8_u64(vcreate_u64((r1a as u64) | ((r2a as u64) << 32)));
+            let e = vreinterpret_u8_u64(vcreate_u64((r1b as u64) | ((r2b as u64) << 32)));
+            let t = vaddq_u16(
+                vmlal_u8(vmull_u8(a, wa), b, wb),
+                vmlal_u8(vmull_u8(c, wc), e, wd),
+            );
+            let out = vget_lane_u64::<0>(vreinterpret_u64_u8(vrshrn_n_u16::<6>(t)));
+            core::ptr::write_unaligned(d_ptr.add(y * d_stride) as *mut u32, out as u32);
+            core::ptr::write_unaligned(
+                d_ptr.add((y + 1) * d_stride) as *mut u32,
+                (out >> 32) as u32,
+            );
+            r0a = r2a;
+            r0b = r2b;
+            y += 2;
+        }
+        while y < H {
+            let p1 = s_ptr.add((y + 1) * s_stride);
+            let (r1a, r1b) = (
+                core::ptr::read_unaligned(p1 as *const u32),
+                core::ptr::read_unaligned(p1.add(1) as *const u32),
+            );
+            let a = vreinterpret_u8_u64(vcreate_u64(r0a as u64));
+            let b = vreinterpret_u8_u64(vcreate_u64(r0b as u64));
+            let c = vreinterpret_u8_u64(vcreate_u64(r1a as u64));
+            let e = vreinterpret_u8_u64(vcreate_u64(r1b as u64));
+            let t = vaddq_u16(
+                vmlal_u8(vmull_u8(a, wa), b, wb),
+                vmlal_u8(vmull_u8(c, wc), e, wd),
+            );
+            let out = vget_lane_u32::<0>(vreinterpret_u32_u8(vrshrn_n_u16::<6>(t)));
+            core::ptr::write_unaligned(d_ptr.add(y * d_stride) as *mut u32, out);
+            r0a = r1a;
+            r0b = r1b;
+            y += 1;
+        }
     }
 }
 
 /// The 2-wide chroma block, which upstream has no NEON routine for: the scalar over
 /// the same two spans.
-#[inline]
+#[inline(always)]
 fn chroma_odd_block<
     S: RefSamples + Copy,
     const W: usize,
@@ -908,7 +954,7 @@ fn chroma_odd_block<
 
 /// The bilinear chroma filter at a const shape: the width picks the kernel, and the
 /// `match` folds because `W` is a constant.
-#[inline]
+#[inline(always)]
 fn chroma_block<
     S: RefSamples + Copy,
     const W: usize,
@@ -1091,9 +1137,52 @@ pub fn pixel_avg<A: RefSamples, B: RefSamples>(
     avg_shaped::<NeonLeaves, A, B>(dst, a, b, width, height)
 }
 
+#[inline(always)]
+fn neon_copy_block<const W: usize, const H: usize, S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+) {
+    let s = src.span::<W, H>(0, 0);
+    let mut d = dst.span_mut::<W, H>(0, 0);
+    let (s_ptr, s_stride) = s.as_ptr_and_stride();
+    let (d_ptr, d_stride) = d.as_mut_ptr_and_stride();
+    // SAFETY: `s` and `d` were bounds-checked to `W x H`.
+    unsafe {
+        for y in 0..H {
+            match W {
+                16 => vst1q_u8(d_ptr.add(y * d_stride), vld1q_u8(s_ptr.add(y * s_stride))),
+                8 => vst1_u8(d_ptr.add(y * d_stride), vld1_u8(s_ptr.add(y * s_stride))),
+                4 => core::ptr::write_unaligned(
+                    d_ptr.add(y * d_stride) as *mut u32,
+                    core::ptr::read_unaligned(s_ptr.add(y * s_stride) as *const u32),
+                ),
+                _ => core::ptr::write_unaligned(
+                    d_ptr.add(y * d_stride) as *mut u16,
+                    core::ptr::read_unaligned(s_ptr.add(y * s_stride) as *const u16),
+                ),
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn neon_copy_rows<const W: usize, S: RefSamples + Copy>(
+    src: &S,
+    dst: &mut PlaneCursorMut<'_>,
+    height: usize,
+) {
+    match height {
+        16 => neon_copy_block::<W, 16, _>(src, dst),
+        8 => neon_copy_block::<W, 8, _>(src, dst),
+        4 => neon_copy_block::<W, 4, _>(src, dst),
+        2 => neon_copy_block::<W, 2, _>(src, dst),
+        _ => mc_copy(src, dst, W, height),
+    }
+}
+
 /// `McChroma_AArch64_neon`: the copy path on a whole-sample vector, else the
 /// bilinear kernels.
-#[inline]
+#[inline(always)]
 pub fn mc_chroma<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,
@@ -1102,18 +1191,21 @@ pub fn mc_chroma<S: RefSamples + Copy>(
     width: usize,
     height: usize,
 ) {
-    if (mv_x & 0x07) == 0 && (mv_y & 0x07) == 0 {
-        mc_copy(src, dst, width, height);
+    if ((mv_x | mv_y) & 0x07) == 0 {
+        match width {
+            16 => neon_copy_rows::<16, _>(src, dst, height),
+            8 => neon_copy_rows::<8, _>(src, dst, height),
+            4 => neon_copy_rows::<4, _>(src, dst, height),
+            _ => neon_copy_rows::<2, _>(src, dst, height),
+        }
         return;
     }
     mc_chroma_frac(src, dst, mv_x, mv_y, width, height)
 }
 
-/// The fractional half of [`mc_chroma`], out of line so the entry point stays small
-/// enough to inline. The whole-sample vector is the common chroma case and a block copy;
-/// with the bilinear dispatch in the same body, `mc_copy` lost its constant width and
-/// height at that call site.
-#[inline(never)]
+/// The fractional half of [`mc_chroma`]. Inlined so constant `width` and `height` at
+/// the call site fold the shape `match` in [`chroma_shaped`], matching `mc_chroma_c`.
+#[inline(always)]
 fn mc_chroma_frac<S: RefSamples + Copy>(
     src: &S,
     dst: &mut PlaneCursorMut<'_>,

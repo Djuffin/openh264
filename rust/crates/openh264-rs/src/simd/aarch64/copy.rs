@@ -112,6 +112,38 @@ pub fn copy_8x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
     copy_block::<8>(dst, src, 8);
 }
 
+/// Copies a 16x16 block from a byte slice with stride `src_stride` into `dst`.
+#[inline]
+pub fn copy_16x16_slice(dst: &RecCursor<'_>, src: &[u8], src_stride: usize) {
+    let s = &src[..15 * src_stride + 16];
+    let d = dst.block_span(0, 0, 16, 16);
+    // SAFETY: `s` covers 16 rows at `src_stride` and `d` covers 16 rows at `dst.stride()`.
+    unsafe {
+        let sp = s.as_ptr();
+        let dp = d.as_ptr() as *mut u8;
+        let ds = dst.stride();
+        for y in 0..16 {
+            vst1q_u8(dp.add(y * ds), vld1q_u8(sp.add(y * src_stride)));
+        }
+    }
+}
+
+/// Copies an 8x8 block from a byte slice with stride `src_stride` into `dst`.
+#[inline]
+pub fn copy_8x8_slice(dst: &RecCursor<'_>, src: &[u8], src_stride: usize) {
+    let s = &src[..7 * src_stride + 8];
+    let d = dst.block_span(0, 0, 8, 8);
+    // SAFETY: `s` covers 8 rows at `src_stride` and `d` covers 8 rows at `dst.stride()`.
+    unsafe {
+        let sp = s.as_ptr();
+        let dp = d.as_ptr() as *mut u8;
+        let ds = dst.stride();
+        for y in 0..8 {
+            vst1_u8(dp.add(y * ds), vld1_u8(sp.add(y * src_stride)));
+        }
+    }
+}
+
 // ============================================================================
 // Unit Tests
 // ============================================================================
