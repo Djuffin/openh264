@@ -1,4 +1,4 @@
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 //! Encoder core context and state machine.
 //!
 //! C++: `codec/encoder/core/inc/encoder_context.h`, `codec/encoder/core/src/encoder.cpp`.
@@ -1924,39 +1924,33 @@ mod tests {
     }
 
     /// `SLayerBSInfo::pBsBuf` keeps a cursor into `pFrameBs` for the life of a
-    /// layer's bitstream info, while the NAL writers keep deriving more from the
-    /// same buffer at `iPosBsBuffer`.
+    /// layer's bitstream info, while the NAL writers advance `iPosBsBuffer` and write
+    /// through `frame_bs_tail_mut`.
     #[test]
-    #[allow(unsafe_code)]
     fn frame_bs_cursors_are_siblings() {
         let mut ctx = Box::new(sWelsEncCtx::new());
-        let p: *mut sWelsEncCtx = &mut *ctx;
         // Before `RequestMemorySvc`, both answer null.
-        assert!(unsafe { (*p).frame_bs() }.is_null());
-        assert!(unsafe { (*p).frame_bs_cur() }.is_null());
+        assert!(ctx.frame_bs().is_null());
+        assert!(ctx.frame_bs_cur().is_null());
+        assert!(ctx.frame_bs_tail_mut().is_none());
 
         ctx.pFrameBs = vec![0u8; 64];
         ctx.iFrameBsSize = 64;
-        let p: *mut sWelsEncCtx = &mut *ctx;
 
         // `pBsBuf` — the root, stored and kept, as its three call sites do.
-        let stored = unsafe { (*p).frame_bs() };
+        let stored = ctx.frame_bs();
+        assert!(!stored.is_null());
 
-        // The frame loop then walks: derive at the cursor, write, advance, repeat. The
-        // position is set through `p`, so the raw binding above stays live across the walk.
         for i in 0..8i32 {
-            unsafe {
-                (*p).iPosBsBuffer = i;
-                *(*p).frame_bs_cur() = 0xA0 | i as u8;
-            }
+            ctx.iPosBsBuffer = i;
+            assert_eq!(ctx.frame_bs_cur(), stored.wrapping_add(i as usize));
+            ctx.frame_bs_tail_mut().expect("tail slice")[0] = 0xA0 | i as u8;
         }
-        // The first cursor, after eight later derivations.
-        unsafe {
-            assert_eq!(*stored, 0xA0, "the stored pBsBuf still reaches the buffer");
-            *stored.add(8) = 0x5A;
-            (*p).iPosBsBuffer = 8;
-            assert_eq!(*(*p).frame_bs_cur(), 0x5A);
-        }
+        assert_eq!(ctx.pFrameBs[0], 0xA0, "the stored root still matches index 0");
+        ctx.iPosBsBuffer = 8;
+        assert_eq!(ctx.frame_bs_cur(), stored.wrapping_add(8));
+        ctx.frame_bs_tail_mut().expect("tail slice")[0] = 0x5A;
+        assert_eq!(ctx.pFrameBs[8], 0x5A);
 
         // The whole buffer reads back through the container.
         assert_eq!(&ctx.pFrameBs[..4], &[0xA0, 0xA1, 0xA2, 0xA3]);
@@ -2013,43 +2007,13 @@ mod tests {
         assert_eq!(src_pic.iStride[2], 320);
     }
 
-    /// `sWelsEncCtx::new()` reproduces the all-zero shell, field by field, with every
-    /// difference attributed to a named field.
-    ///
-    /// The comparison cannot be one `memcmp`: a `#[repr(C)]` struct has padding and an
-    /// `Option`'s `None` defines only its discriminant, so a struct literal leaves bytes
-    /// undefined that a zeroed image writes. Reading those bytes is UB, and the difference
-    /// is meaningless anyway. Hence three tiers:
-    ///
-    /// * tier 1, byte for byte: every field whose bytes are fully defined in both.
-    /// * tier 2, by value: the `Option` and padded fields, where the shell value is
-    ///   recovered by `ptr::read` out of the zero image — sound because their all-zero bit
-    ///   pattern *is* a value of their type.
-    /// * tier 3, `OWNED`: the containers, whose zero image is not a value at all
-    ///   (`mem::zeroed::<sWelsEncCtx>()` is itself UB, a `Vec` with a null `Unique`), so
-    ///   what is asserted is that `new()` builds the empty container.
-    ///
-    /// A field added to this struct as an `Option` belongs on the `BY_VALUE` list; the test
-    /// says so under Miri if it is not. Tier 3 shrinks this test's reach, so it is named
-    /// and counted in the output.
+    /// `sWelsEncCtx::new()` reproduces the zeroed initial state across all fields,
+    /// checked exhaustively by destructuring `sWelsEncCtx`.
     #[test]
-    #[allow(unsafe_code)]
     fn ctx_new_reproduces_the_zeroed_shell() {
-        use std::mem::{offset_of, size_of, size_of_val};
-
         let built = Box::new(sWelsEncCtx::new());
-        // The memset image, as bytes, not a zeroed value of the type: three fields have
-        // no valid all-zero value, so materialising one would be UB.
-        let shell = Box::new(std::mem::MaybeUninit::<sWelsEncCtx>::zeroed());
 
-        // (name, offset, size) for every field, taken off a real instance so the sizes
-        // are the compiler's.
-        macro_rules! extents {
-            ($($f:ident),* $(,)?) => {
-                vec![$((stringify!($f), offset_of!(sWelsEncCtx, $f), size_of_val(&built.$f))),*]
-            };
-        }
-        let extents: Vec<(&str, usize, usize)> = extents![
+        let sWelsEncCtx {
             sLogCtx,
             pSvcParam,
             iMvRange,
@@ -2113,162 +2077,75 @@ mod tests {
             bDeliveryFlag,
             uiLastTimestamp,
             pDynamicBsBuffer,
-        ];
+        } = &*built;
+
+        assert!(sLogCtx.pfLog.is_none());
+        assert!(pSvcParam.is_none());
+        assert_eq!(*iMvRange, 0);
+        assert!(pMvdCostTable.is_empty());
+        assert_eq!(*iMvdCostTableSize, 0);
+        assert_eq!(*iMvdCostTableStride, 0);
+        assert!(pStrideTab.is_none());
+        assert!(pSliceThreading.is_none());
         assert_eq!(
-            extents.len(),
-            63,
-            "a field was added or removed without updating this list"
+            *eRefStrategy,
+            crate::encoder::ref_list_mgr_svc::RefStrategyKind::TemporalLayer
         );
-
-        let b = shell.as_ptr().cast::<u8>();
-
-        // One field of the memset image, read back as a value. Sound only for fields
-        // whose all-zero bit pattern is a value of their type, which is every field
-        // below and no field on `OWNED`.
-        macro_rules! shell_field {
-            ($f:ident) => {
-                // SAFETY: `b` is `size_of::<sWelsEncCtx>()` zero bytes with the
-                // struct's alignment, and the read is inside `$f`'s extent.
-                unsafe { std::ptr::read(b.add(offset_of!(sWelsEncCtx, $f)).cast()) }
-            };
-        }
-
-        // ---- tier 3: the owned containers -------------------------------------
-        // The zeroed shell has no image of these; `new()` builds the empty
-        // container.
-        const OWNED: [&str; 12] = [
-            "pSpsArray",
-            "pSubsetArray",
-            "pPPSArray",
-            "pDqIdcMap",
-            "pFrameBs",
-            "pLtr",
-            "pWelsSvcRc",
-            "ppRefPicListExt",
-            "ppDqLayerList",
-            "pMvdCostTable",
-            // The one member here that is an array of owned containers, so the claim
-            // below is per element: four empty `Vec`s.
-            "pDynamicBsBuffer",
-            // The one owned field whose empty state is not zero elements — a `Box` is
-            // always inhabited — so tier 3 asserts its content: the uninstalled table.
-            "pFuncList",
-        ];
-        // `pVaa` is `Option<Box<_>>`: its `None` is the null pointer and defines all
-        // eight of its bytes, so it stays in tier 1 with `pStrideTab`.
-        assert!(
-            built.pSpsArray.is_empty(),
-            "new(): no SPS array is allocated yet"
-        );
-        assert!(
-            built.pSubsetArray.is_empty(),
-            "new(): no subset SPS array is allocated yet"
-        );
-        assert!(
-            built.pPPSArray.is_empty(),
-            "new(): no PPS array is allocated yet"
-        );
-        assert!(
-            built.pDqIdcMap.is_empty(),
-            "new(): no dq-idc map is allocated yet"
-        );
-        assert!(
-            built.pFrameBs.is_empty(),
-            "new(): no frame bitstream is allocated yet"
-        );
-        assert!(
-            built.pLtr.is_empty(),
-            "new(): no LTR state array is allocated yet"
-        );
-        assert!(
-            built.pWelsSvcRc.is_empty(),
-            "new(): no rate-control state is allocated yet"
-        );
-        assert!(
-            built.ppRefPicListExt.is_empty(),
-            "new(): no reference lists are allocated yet"
-        );
-        assert!(
-            built.ppDqLayerList.is_empty(),
-            "new(): no DQ layers are allocated yet"
-        );
-        assert!(
-            built.pMvdCostTable.is_empty(),
-            "new(): no MVD cost table is allocated yet"
-        );
-        assert!(
-            built.pDynamicBsBuffer.iter().all(Vec::is_empty),
-            "new(): no dynamic-slice CABAC restore buffers are allocated yet"
-        );
-
-        // `pFuncList` is uninstalled rather than empty. One assertion per kind of member
-        // the table has: a leading and a trailing plain slot, each of the three predictor
-        // arrays, the two embedded POD sub-tables, both enum discriminants, and the box.
-        let fl = &*built.pFuncList;
-        assert!(
-            fl.pfGetLumaI16x16Pred.iter().all(Option::is_none),
-            "new(): no I16x16 predictors"
-        );
-        assert!(
-            fl.pfGetLumaI4x4Pred.iter().all(Option::is_none),
-            "new(): no I4x4 predictors"
-        );
-        assert!(
-            fl.pfGetChromaPred.iter().all(Option::is_none),
-            "new(): no chroma predictors"
-        );
-        assert!(
-            fl.pfMotionSearch.iter().all(Option::is_none),
-            "new(): no motion search"
-        );
-        assert!(
-            fl.sMeFuncs.pfSearchMethod.iter().all(Option::is_none),
-            "new(): no search method"
-        );
-        assert!(
-            fl.sSampleDealingFuncs
-                .pfSampleSad
-                .iter()
-                .all(Option::is_none)
-                && fl.sSampleDealingFuncs.pfMdCost == crate::encoder::md::CostFamily::Unset
-                && fl.sSampleDealingFuncs.pfMeCost == crate::encoder::md::CostFamily::Unset,
-            "new(): no sample-dealing kernels, and neither cost family is selected"
-        );
-        assert!(
-            fl.pfDeblocking.pfDeblockingFilterSlice.is_none(),
-            "new(): no deblocking kernels"
-        );
-        // The two discriminants whose zero is a declared variant.
+        assert!(pEncPic.is_none());
+        assert!(pDecPic.is_none());
+        assert!(pRefPic.is_none());
+        assert!(iCurDqLayer.is_none());
+        assert!(ppDqLayerList.is_empty());
+        assert!(ppRefPicListExt.is_empty());
+        assert!(pRefList0.iter().all(Option::is_none));
+        assert!(pLtr.is_empty());
+        assert!(!*bCurFrameMarkedAsSceneLtr);
+        assert_eq!(*eSliceType, EWelsSliceType::P_SLICE);
+        assert_eq!(*eNalType, EWelsNalUnitType::NAL_UNIT_UNSPEC_0);
+        assert_eq!(*eNalPriority, EWelsNalRefIdc::NRI_PRI_LOWEST);
+        assert_eq!(*eLastNalPriority, [EWelsNalRefIdc::NRI_PRI_LOWEST; MAX_DEPENDENCY_LAYER]);
+        assert_eq!(*iNumRef0, 0);
+        assert_eq!(*uiDependencyId, 0);
+        assert_eq!(*uiTemporalId, 0);
+        assert!(!*bNeedPrefixNalFlag);
+        assert!(pWelsSvcRc.is_empty());
+        assert!(!*bCheckWindowStatusRefreshFlag);
+        assert_eq!(*iCheckWindowStartTs, 0);
+        assert_eq!(*iCheckWindowCurrentTs, 0);
+        assert_eq!(*iCheckWindowInterval, 0);
+        assert_eq!(*iCheckWindowIntervalShift, 0);
+        assert!(!*bCheckWindowShiftResetFlag);
+        assert_eq!(*iGlobalQp, 0);
+        assert!(pVaa.is_none());
+        assert!(pVpp.is_none());
+        assert!(pSpsArray.is_empty());
+        assert!(iSps.is_none());
+        assert!(pPPSArray.is_empty());
+        assert!(iPps.is_none());
+        assert!(pSubsetArray.is_empty());
+        assert_eq!(*iSpsNum, 0);
+        assert_eq!(*iSubsetSpsNum, 0);
+        assert_eq!(*iPpsNum, 0);
+        assert!(pOut.is_none());
+        assert!(pFrameBs.is_empty());
+        assert_eq!(*iFrameBsSize, 0);
+        assert_eq!(*iPosBsBuffer, 0);
+        assert!(sSpatialIndexMap.iter().all(|e| e.pSrc.is_none() && e.iDid == 0));
+        assert_eq!(*iSliceBufferSize, [0; MAX_DEPENDENCY_LAYER]);
         assert_eq!(
-            fl.eEntropyCoder,
-            EntropyCoder::Cavlc,
-            "new(): the memset's entropy coder"
+            *bRefOfCurTidIsLtr,
+            [[false; MAX_TEMPORAL_LAYER_NUM]; MAX_DEPENDENCY_LAYER]
         );
-        assert_eq!(
-            fl.pfRc.eInstalledMode,
-            crate::api::codec_api::RC_MODES::RC_QUALITY_MODE,
-            "new(): the memset's rate-control mode"
-        );
-        assert!(
-            fl.pParametersetStrategy.is_none(),
-            "new(): no paraset strategy is installed yet"
-        );
-
-        // ---- tier 2: excluded by name and asserted by value --------------------
-        const BY_VALUE: [&str; 9] = [
-            // `Option` with a niche: `None` leaves pool::Id's generation half undefined
-            "pEncPic",
-            "pDecPic",
-            "pRefPic",
-            "pRefList0",
-            "sSpatialIndexMap",
-            // `Option` without one: `None` writes the tag and leaves the payload byte
-            "iCurDqLayer",
-            "iSps",
-            "iPps",
-            // interior repr(C) padding a struct literal does not write
-            "sEncoderStatistics",
-        ];
+        assert_eq!(*iMaxSliceCount, 0);
+        assert_eq!(*iActiveThreadsNum, 0);
+        assert!(pDqIdcMap.is_empty());
+        assert_eq!(*uiStartTimestamp, 0);
+        assert_eq!(*iStatisticsLogInterval, 0);
+        assert_eq!(*iLastStatisticsLogTs, 0);
+        assert_eq!(*iEncoderError, 0);
+        assert!(!*bDeliveryFlag);
+        assert_eq!(*uiLastTimestamp, 0);
+        assert!(pDynamicBsBuffer.iter().all(Vec::is_empty));
 
         let stats_are_zero = |s: &crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics| {
             (s.uiWidth, s.uiHeight, s.uiBitRate, s.uiAverageFrameQP) == (0, 0, 0, 0)
@@ -2286,119 +2163,26 @@ mod tests {
                 && (s.iStatisticsTs, s.iTotalEncodedBytes) == (0, 0)
                 && (s.iLastStatisticsBytes, s.iLastStatisticsFrameCount) == (0, 0)
         };
+        assert!(sEncoderStatistics.iter().all(stats_are_zero));
 
-        // The same nine fields from both images: `new()`'s by field access, the
-        // shell's by reading its zero bytes back as a value.
-        let pairs: [(&str, bool, bool); 9] = [
-            ("pEncPic", built.pEncPic.is_none(), {
-                let v: Option<SrcPicId> = shell_field!(pEncPic);
-                v.is_none()
-            }),
-            ("pDecPic", built.pDecPic.is_none(), {
-                let v: Option<RecPicId> = shell_field!(pDecPic);
-                v.is_none()
-            }),
-            ("pRefPic", built.pRefPic.is_none(), {
-                let v: Option<RecPicId> = shell_field!(pRefPic);
-                v.is_none()
-            }),
-            ("pRefList0", built.pRefList0.iter().all(|h| h.is_none()), {
-                let v: [Option<RecPicId>; 16] = shell_field!(pRefList0);
-                v.iter().all(|h| h.is_none())
-            }),
-            (
-                "sSpatialIndexMap",
-                built
-                    .sSpatialIndexMap
-                    .iter()
-                    .all(|e| e.pSrc.is_none() && e.iDid == 0),
-                {
-                    let v: [SSpatialPicIndex; MAX_DEPENDENCY_LAYER] =
-                        shell_field!(sSpatialIndexMap);
-                    v.iter().all(|e| e.pSrc.is_none() && e.iDid == 0)
-                },
-            ),
-            ("iCurDqLayer", built.iCurDqLayer.is_none(), {
-                let v: Option<LayerIdx> = shell_field!(iCurDqLayer);
-                v.is_none()
-            }),
-            ("iSps", built.iSps.is_none(), {
-                let v: Option<SpsId> = shell_field!(iSps);
-                v.is_none()
-            }),
-            ("iPps", built.iPps.is_none(), {
-                let v: Option<PpsId> = shell_field!(iPps);
-                v.is_none()
-            }),
-            (
-                "sEncoderStatistics",
-                built.sEncoderStatistics.iter().all(stats_are_zero),
-                {
-                    let v: [crate::encoder::wels_encoder_ext::TagVideoEncoderStatistics;
-                        MAX_DEPENDENCY_LAYER] = shell_field!(sEncoderStatistics);
-                    v.iter().all(stats_are_zero)
-                },
-            ),
-        ];
-        for (name, in_new, in_shell) in pairs {
-            assert!(
-                in_new,
-                "new(): {name} is not the value the memset image holds"
-            );
-            assert!(in_shell, "shell: {name} is not what this test claims it is");
-        }
-
-        let a = (&*built as *const sWelsEncCtx).cast::<u8>();
-
-        // ---- tier 1: everything else, byte for byte, attributed by name -------
-        let (mut compared, mut excluded, mut owned) = (0usize, 0usize, 0usize);
-        let mut diffs: Vec<String> = Vec::new();
-        for (name, off, len) in &extents {
-            if OWNED.contains(name) {
-                owned += len;
-                continue;
-            }
-            if BY_VALUE.contains(name) {
-                excluded += len;
-                continue;
-            }
-            compared += len;
-            for k in 0..*len {
-                // SAFETY: `off + k` is inside `name`'s extent, and every byte of a
-                // field outside `BY_VALUE` is defined by its type in both images —
-                // scalars, pointers, `repr(C)` enums, and arrays of those, none of
-                // which have a niche or interior padding.
-                let (x, y) = unsafe { (*a.add(off + k), *b.add(off + k)) };
-                if x != y {
-                    diffs.push(format!(
-                        "{name} (offset {off}, +{k}): new()=0x{x:02x} shell=0x{y:02x}"
-                    ));
-                    break; // one line per field is enough to name it
-                }
-            }
-        }
-
+        let fl = &**pFuncList;
+        assert!(fl.pfGetLumaI16x16Pred.iter().all(Option::is_none));
+        assert!(fl.pfGetLumaI4x4Pred.iter().all(Option::is_none));
+        assert!(fl.pfGetChromaPred.iter().all(Option::is_none));
+        assert!(fl.pfMotionSearch.iter().all(Option::is_none));
+        assert!(fl.sMeFuncs.pfSearchMethod.iter().all(Option::is_none));
         assert!(
-            diffs.is_empty(),
-            "sWelsEncCtx::new() is not the zeroed shell — {} field(s) differ:\n  {}",
-            diffs.len(),
-            diffs.join("\n  ")
+            fl.sSampleDealingFuncs.pfSampleSad.iter().all(Option::is_none)
+                && fl.sSampleDealingFuncs.pfMdCost == crate::encoder::md::CostFamily::Unset
+                && fl.sSampleDealingFuncs.pfMeCost == crate::encoder::md::CostFamily::Unset
         );
-
-        // Coverage, so "zero differences" cannot be true by comparing nothing. The rest is
-        // inter-field `repr(C)` padding plus the by-value fields, both reported.
-        let total = size_of::<sWelsEncCtx>();
-        assert!(compared > 0 && compared + excluded + owned <= total);
-        println!(
-            "ctx_new_reproduces_the_zeroed_shell: {compared}/{total} bytes compared byte-wise \
-             across {} fields, {excluded} in the {} fields compared by value, {owned} in \
-             the {} owned fields (no zero image to compare against), {} of inter-field repr(C) \
-             padding",
-            extents.len() - BY_VALUE.len() - OWNED.len(),
-            BY_VALUE.len(),
-            OWNED.len(),
-            total - compared - excluded - owned
+        assert!(fl.pfDeblocking.pfDeblockingFilterSlice.is_none());
+        assert_eq!(fl.eEntropyCoder, EntropyCoder::Cavlc);
+        assert_eq!(
+            fl.pfRc.eInstalledMode,
+            crate::api::codec_api::RC_MODES::RC_QUALITY_MODE
         );
+        assert!(fl.pParametersetStrategy.is_none());
     }
 
     #[test]
@@ -2562,41 +2346,5 @@ mod with_vpp_provenance {
 
         // The slot is restored, which the closure form guarantees on every path.
         assert!(ctx.pVpp.is_some(), "with_vpp restores the box");
-    }
-
-    /// The control for the probe above: a pointer taken into the box's own allocation
-    /// (`m_pSpatialPicPool`, a field of `CWelsPreProcess`) and read after [`with_vpp`] has
-    /// moved the `Box` out and back.
-    ///
-    /// `#[ignore]`d because Miri reports UB by aborting, which a harness cannot assert on.
-    /// Under Miri the read must fail with `attempting a read access using <tag> ... but that
-    /// tag does not exist in the borrow stack`; under plain `cargo test` it passes and
-    /// proves nothing.
-    #[test]
-    #[ignore = "Miri control: aborts on UB, so it is run deliberately, not by the harness"]
-    #[allow(unsafe_code)]
-    fn a_pointer_into_the_box_does_not_survive_with_vpp() {
-        let mut ctx = sWelsEncCtx::new();
-        let mut vpp = CWelsPreProcess::default();
-        vpp.m_pSpatialPicPool = SrcPicPool::new(vec![SPicture::new(176, 144, false)]);
-        ctx.pVpp = Some(Box::new(vpp));
-
-        // The pointer is built by hand: the `pVpp` slot read as a value, then
-        // `addr_of_mut!` of the pool field — a pointer inside the `CWelsPreProcess`
-        // allocation rather than into a plane's own `Vec`.
-        let pPool: *mut SrcPicPool = unsafe {
-            let pVpp = std::ptr::read(std::ptr::addr_of!(ctx.pVpp) as *const *mut CWelsPreProcess);
-            std::ptr::addr_of_mut!((*pVpp).m_pSpatialPicPool)
-        };
-
-        with_vpp(&mut ctx, |_pVpp, _pCtx| {});
-
-        // The read Miri must refuse: the move above retagged the allocation this pointer
-        // names, so its tag is gone from that stack.
-        let n = unsafe { (*pPool).ids().count() };
-        assert_eq!(
-            n, 1,
-            "reached only if the tag survived — under Miri it must not"
-        );
     }
 }

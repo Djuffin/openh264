@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! OpenH264 Public API Architecture (`codec_api.h`).
 //!
 //! Facade module re-exporting all items from:

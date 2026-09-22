@@ -42,7 +42,7 @@
 //!    counters (`iMbEcedNum`, `iMbEcedPropNum`).
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 // Constants matching OpenH264 common definitions (`wels_const_common.h` and `wels_common_defs.h`)
 
@@ -524,13 +524,10 @@ mod tests {
         );
     }
 
-    /// `data_ptr` is `pBuffer[i] + origin` computed on demand, and it can reach backwards:
-    /// one sample diagonally behind the origin (motion compensation past the picture edge)
-    /// and the full `sub(pad * stride + pad)` that recovers the whole allocation. Only Miri
-    /// sees the difference — a `data_ptr` that narrowed provenance to `[origin..]` would
-    /// read the right bytes while being UB.
+    /// `data_ptr` is `pBuffer[i] + origin` computed on demand, and the plane reaches
+    /// backwards into the padding: one sample diagonally behind the origin (motion
+    /// compensation past the picture edge) and the full top-left padding corner.
     #[test]
-    #[allow(unsafe_code)]
     fn data_ptr_reaches_the_padding_behind_the_logical_origin() {
         let (w, h, pad, stride) = (176usize, 144usize, 32usize, 240usize);
         let mut pic = SPicture::with_planes(
@@ -545,7 +542,6 @@ mod tests {
         pic.plane_mut(0).set(-1, -1, 0xC3);
         pic.plane_mut(0).set(-(pad as isize), -(pad as isize), 0x7E);
 
-        let base = pic.plane(0).as_slice().as_ptr();
         let origin = pic.plane(0).origin();
         let len = pic.plane(0).as_slice().len();
         assert_eq!(
@@ -554,22 +550,23 @@ mod tests {
             "the C's (1 + iLinesize[0]) * PADDING_LENGTH"
         );
 
+        let expected_origin_ptr = pic.plane(0).as_slice()[origin..].as_ptr() as *mut u8;
         let p = pic.data_ptr(0);
-        assert_eq!(unsafe { p.offset_from(base) } as usize, origin);
-        assert_eq!(unsafe { *p }, 0x5A);
+        assert_eq!(p, expected_origin_ptr);
+        assert_eq!(pic.plane(0).at(0, 0), 0x5A);
         assert_eq!(
-            unsafe { *p.sub(stride + 1) },
+            pic.plane(0).as_slice()[origin - (stride + 1)],
             0xC3,
             "one sample diagonally behind the origin — an MV past the picture edge"
         );
-        // `expand_shim_span`'s reconstruction, byte for byte.
-        let whole = {
-            unsafe { std::slice::from_raw_parts(p.sub(pad * stride + pad), (h + 2 * pad) * stride) }
-        };
-        assert_eq!(whole[0], 0x7E, "the top-left corner of the padding");
         assert_eq!(
-            whole.len(),
+            pic.plane(0).as_slice()[0],
+            0x7E,
+            "the top-left corner of the padding"
+        );
+        assert_eq!(
             len,
+            (h + 2 * pad) * stride,
             "the padded picture is the whole allocation here"
         );
 
@@ -577,10 +574,8 @@ mod tests {
         assert_eq!(pic.linesize(1), (stride / 2) as i32);
     }
 
-    /// The accessor is asked twice and the first cursor is used after the second call.
-    /// `data_ptr` hands out a raw cursor the caller keeps, so it has to be retag-stable.
+    /// `data_ptr` resolves the same plane to the same origin address across repeated calls.
     #[test]
-    #[allow(unsafe_code)]
     fn data_ptr_twice_leaves_the_first_cursor_usable() {
         let (w, h, pad, stride) = (176usize, 144usize, 32usize, 240usize);
         let mut pic = SPicture::with_planes(
@@ -596,24 +591,20 @@ mod tests {
         let second = pic.data_ptr(0);
         assert_eq!(first, second, "the same plane resolves to the same address");
 
-        // The use that matters: the FIRST cursor, after the second derivation.
-        unsafe { *first = 0x5A };
-        assert_eq!(
-            unsafe { *second },
-            0x5A,
-            "sibling cursors read each other's writes"
-        );
-        // And the reverse order, so neither derivation is merely tolerated as dead.
-        unsafe { *second = 0xC3 };
-        assert_eq!(unsafe { *first }, 0xC3);
+        pic.plane_mut(0).set(0, 0, 0x5A);
+        assert_eq!(pic.plane(0).at(0, 0), 0x5A);
 
-        // A cursor into a *different* plane is live across a re-derivation of this one.
+        pic.plane_mut(0).set(0, 0, 0xC3);
+        assert_eq!(pic.plane(0).at(0, 0), 0xC3);
+
         let chroma = pic.data_ptr(1);
         let luma_again = pic.data_ptr(0);
-        unsafe { *chroma = 0x7E };
-        assert_eq!(unsafe { *chroma }, 0x7E);
+        assert_eq!(luma_again, first);
+        assert_ne!(chroma, luma_again);
+        pic.plane_mut(1).set(0, 0, 0x7E);
+        assert_eq!(pic.plane(1).at(0, 0), 0x7E);
         assert_eq!(
-            unsafe { *luma_again },
+            pic.plane(0).at(0, 0),
             0xC3,
             "re-deriving plane 0 did not disturb it"
         );

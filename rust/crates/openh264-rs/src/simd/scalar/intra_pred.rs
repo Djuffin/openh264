@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Scalar forwards for the `intra_pred` kernels — see the module header.
 
 use crate::decoder::get_intra_predictor::{

@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Scalar forwards for the `mc` kernels — see the module header.
 
 use crate::common::mc::{

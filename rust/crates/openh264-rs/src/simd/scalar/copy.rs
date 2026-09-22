@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Scalar forwards for the `copy` kernels — see the module header.
 
 use crate::encoder::encode_mb_aux::{

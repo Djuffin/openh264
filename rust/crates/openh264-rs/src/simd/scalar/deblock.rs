@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Scalar forwards for the `deblock` kernels — see the module header.
 
 use crate::common::deblocking_common::{

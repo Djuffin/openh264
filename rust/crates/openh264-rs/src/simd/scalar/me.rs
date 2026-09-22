@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Scalar forwards for the motion-estimation feature kernels.
 
 use crate::encoder::rec_view::RecCursor;

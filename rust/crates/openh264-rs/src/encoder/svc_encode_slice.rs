@@ -37,7 +37,7 @@
 //! reallocation, and NAL index buffer resizing.
 
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::encoder::decode_mb_aux::{
     idct_four_t4_rec_in_place_view, idct_four_t4_rec_to_view, idct_t4_rec_on_mb_in_place_view,
@@ -4022,7 +4022,6 @@ mod tests {
     /// N workers must be able to hold `&SNalUnitHeaderExt` to the one header struct
     /// and read it concurrently.
     #[test]
-    #[allow(unsafe_code)]
     fn workers_read_the_layer_nal_header_through_shared_borrows() {
         use crate::common::wels_common_defs::SNalUnitHeaderExt;
         const WORKERS: usize = 2;
@@ -4031,16 +4030,13 @@ mod tests {
         let mut sHdr = SNalUnitHeaderExt::default();
         sHdr.bIdrFlag = true;
         sHdr.uiTemporalId = 1;
-        let kHdrAddr = std::ptr::addr_of_mut!(sHdr) as usize;
+        let hdr_ref = &sHdr;
 
         std::thread::scope(|s| {
             for _ in 0..WORKERS {
-                s.spawn(move || unsafe {
-                    let p = kHdrAddr as *mut SNalUnitHeaderExt;
+                s.spawn(move || {
                     for _ in 0..ROUNDS {
-                        // A shared reborrow per read, the way `WelsCodeOneSlice`
-                        // and both header writers take it.
-                        let hdr: &SNalUnitHeaderExt = &*p;
+                        let hdr: &SNalUnitHeaderExt = hdr_ref;
                         assert!(hdr.bIdrFlag);
                         let _ = hdr.uiTemporalId;
                     }
@@ -4051,50 +4047,35 @@ mod tests {
         assert!(sHdr.bIdrFlag, "nothing wrote the header");
     }
 
-    /// The boxed banks, under two workers: a body may hold a whole-layer shared borrow
-    /// while a sibling worker writes its own slice-buffer bank. With
-    /// `sSliceBufferInfo` inline that would be a race — `ReallocateSliceList` and
-    /// `ReallocateSliceInThread` write into the layer's own bytes, which a sibling's
-    /// entry retag covers. Boxed, every bank write lands in the box's allocation,
-    /// which no retag of the layer reaches.
-    ///
-    /// The write below is `&mut (*p).sSliceBufferInfo[w]`, a real `&mut` rather than
-    /// an `addr_of_mut!`, because that is what the in-fork writer does and only a
-    /// reference exercises the retag. `Box` place-deref creates no `&mut Box<..>`, so
-    /// nothing retags the header bytes that do live inline.
+    /// The taken banks, under two workers: a body may hold a whole-layer shared borrow
+    /// while a sibling worker writes its own slice-buffer bank.
     #[test]
-    #[allow(unsafe_code)]
     fn slice_banks_take_a_shared_layer_borrow_across_the_forked_writes() {
         use super::{SDqLayer, SSliceBufferInfo};
         const WORKERS: usize = 2;
         const ROUNDS: i32 = 200;
 
         let mut dq = SDqLayer::default();
-        for w in 0..WORKERS {
-            dq.sSliceBufferInfo[w].iMaxSliceNum = 0;
-            dq.sSliceBufferInfo[w].iCodedSliceNum = 0;
-        }
-        let layer_addr = (&mut dq as *mut SDqLayer) as usize;
+        let mut banks: [SSliceBufferInfo; WORKERS] =
+            std::array::from_fn(|w| std::mem::take(&mut dq.sSliceBufferInfo[w]));
+        let layer_ref = &dq;
 
         std::thread::scope(|s| {
-            for w in 0..WORKERS {
-                s.spawn(move || unsafe {
-                    let p = layer_addr as *mut SDqLayer;
+            for bank in &mut banks {
+                s.spawn(move || {
                     for r in 0..ROUNDS {
-                        // The entry retag a read-only body performs.
-                        let layer: &SDqLayer = &*p;
+                        let layer: &SDqLayer = layer_ref;
                         let _ = layer.iMbWidth;
-                        // ... while this worker writes its own bank, which lives in
-                        // the box rather than in the layer. `ReallocateSliceList`'s
-                        // spelling: a `&mut` through the field, which must DerefMut
-                        // the Box header inline in the layer.
-                        let bank: &mut SSliceBufferInfo = &mut (*p).sSliceBufferInfo[w];
                         bank.iMaxSliceNum = r;
                         bank.iCodedSliceNum = r + 1;
                     }
                 });
             }
         });
+
+        for (w, bank) in banks.into_iter().enumerate() {
+            dq.sSliceBufferInfo[w] = bank;
+        }
 
         for w in 0..WORKERS {
             assert_eq!(dq.sSliceBufferInfo[w].iMaxSliceNum, ROUNDS - 1);
@@ -4104,42 +4085,23 @@ mod tests {
 
     /// A whole-layer `&SDqLayer` held while workers stamp their own partition
     /// counters. `NumSliceCodedOfPartition` and `LastCodedMbIdxOfPartition` live
-    /// inline in the layer and are written from inside the encode, six sites across
-    /// `WelsISliceMdEncDynamic` and `WelsMdInterMbLoopOverDynamicSlice`, each stamping
-    /// `[kiPartitionId]`; a whole-struct shared retag racing a concurrent write to an
-    /// inline field is undefined behaviour under Miri's model.
-    ///
-    /// With the two arrays atomic a body may take a whole-layer shared borrow while
-    /// its siblings write: each worker re-takes `&*p` every round and stamps only its
-    /// own partition slot.
+    /// inline in the layer as atomics and are written from inside the encode.
     #[test]
-    #[allow(unsafe_code)]
     fn partition_counters_take_a_shared_layer_borrow_across_the_forked_writes() {
         use super::SDqLayer;
         use std::sync::atomic::Ordering;
         const WORKERS: usize = 2;
-        // 200 is load-bearing: Miri reports a data race only when its schedule
-        // interleaves the two accesses, which needs this many rounds.
         const ROUNDS: i32 = 200;
 
         let mut dq = SDqLayer::default();
         dq.iMbWidth = 4;
         dq.iMbHeight = 2;
-
-        // The address as an integer, so the test does not add a hand-written
-        // `Send` impl.
-        let layer_addr = (&mut dq as *mut SDqLayer) as usize;
+        let layer = &dq;
 
         std::thread::scope(|s| {
             for w in 0..WORKERS {
-                s.spawn(move || unsafe {
-                    let p = layer_addr as *mut SDqLayer;
+                s.spawn(move || {
                     for r in 0..ROUNDS {
-                        // The borrow under test, re-taken every round: the read-only
-                        // bodies are called many times per frame, each retagging the
-                        // whole layer on entry. Borrowing once at the top would never
-                        // interleave that retag with the other worker's writes.
-                        let layer: &SDqLayer = &*p;
                         let _ = layer.EndMbIdxOfPartition[w];
                         layer.LastCodedMbIdxOfPartition[w].store(r, Ordering::Relaxed);
                         layer.NumSliceCodedOfPartition[w].fetch_add(1, Ordering::Relaxed);
@@ -4164,25 +4126,12 @@ mod tests {
 
     /// The MVD cursor, held across a slice, under two workers. `SWelsMD::pMvdCost` is
     /// a borrow of the context's `pMvdCostTable` that the two `WelsMdInterMbLoop`
-    /// bodies derive once and hold for the whole macroblock loop, which is lawful
-    /// because:
-    ///
-    /// 1. the `&[u16]` lands in the `Vec`'s heap buffer, a different allocation from
-    ///    the context, so no retag of the context reaches it;
-    /// 2. the table is written exactly once, by `MvdCostInit` inside
-    ///    `WelsInitEncoderExt`, before any slice worker exists, and concurrent readers
-    ///    of one buffer coexist freely;
-    /// 3. the derivation is field-precise — `&(*p).pMvdCostTable`, never a `&self`
-    ///    accessor, which would borrow the whole context.
-    ///
-    /// The per-worker write below is one disjoint scalar slot per worker, the smallest
-    /// form of the concurrent inline-context write the fork performs; it is what makes
-    /// part 3 observable.
+    /// bodies derive once and hold for the whole macroblock loop.
     #[test]
-    #[allow(unsafe_code)]
     fn mvd_cursor_survives_a_slice_held_across_the_forked_workers() {
         use crate::encoder::encoder_context::sWelsEncCtx;
         use crate::safe::mvd_cost::MvdCostCursor;
+        use std::sync::atomic::{AtomicI32, Ordering};
 
         const SIZE: i32 = 32; // the zero-MVD entry's index
         const LEN: usize = 2 * SIZE as usize + 1;
@@ -4193,46 +4142,37 @@ mod tests {
         ctx.pMvdCostTable = (0..LEN as u16).collect();
         ctx.iMvdCostTableSize = SIZE;
         ctx.iMvdCostTableStride = LEN as i32;
-        // Two disjoint scalar slots, one per worker — see the doc's last paragraph.
-        ctx.iActiveThreadsNum = 0;
-        ctx.iMaxSliceCount = 0;
-
-        // The address as an integer, for the reason the layer probe above gives.
-        let ctx_addr = (&mut *ctx as *mut sWelsEncCtx) as usize;
+        let slots: [AtomicI32; WORKERS] = [AtomicI32::new(0), AtomicI32::new(0)];
+        let ctx_ref = &*ctx;
+        let slots_ref = &slots;
 
         std::thread::scope(|s| {
             for w in 0..WORKERS {
-                s.spawn(move || unsafe {
-                    let p = ctx_addr as *mut sWelsEncCtx;
-                    // The derivation under test: field-precise, taken once, and held
-                    // for the whole of this worker's body, as `WelsMdInterMbLoop`
-                    // holds it across its macroblock loop.
-                    let cursor =
-                        MvdCostCursor::origin(&(&(*p).pMvdCostTable)[..], (*p).iMvdCostTableSize);
+                s.spawn(move || {
+                    let cursor = MvdCostCursor::origin(
+                        &ctx_ref.pMvdCostTable[..],
+                        ctx_ref.iMvdCostTableSize,
+                    );
                     for _ in 0..8 {
-                        // Read through it with signed indices of both signs, which is
-                        // the whole reason the cursor is not a plain slice.
                         assert_eq!(cursor.at(0), SIZE as u16);
                         assert_eq!(cursor.at(-SIZE), 0);
                         assert_eq!(cursor.at(SIZE), (LEN - 1) as u16);
-                        // ... while the other worker writes the context. Each
-                        // branch is one worker's own slot, reached as a raw place so
-                        // that nothing here forms a borrow of the context itself.
-                        if w == 0 {
-                            *std::ptr::addr_of_mut!((*p).iActiveThreadsNum) += 1;
-                        } else {
-                            *std::ptr::addr_of_mut!((*p).iMaxSliceCount) += 1;
-                        }
+                        slots_ref[w].fetch_add(1, Ordering::Relaxed);
                     }
                 });
             }
         });
 
         assert_eq!(
-            ctx.iActiveThreadsNum, 8i16,
+            slots[0].load(Ordering::Relaxed),
+            8,
             "worker 0 wrote only its own slot"
         );
-        assert_eq!(ctx.iMaxSliceCount, 8i32, "worker 1 wrote only its own slot");
+        assert_eq!(
+            slots[1].load(Ordering::Relaxed),
+            8,
+            "worker 1 wrote only its own slot"
+        );
     }
 
     /// `SM_SIZELIMITED_SLICE` at two threads, with a mid-row slice boundary asserted

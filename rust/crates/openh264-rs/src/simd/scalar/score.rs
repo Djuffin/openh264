@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Scalar forwards for the `score` kernels — see the module header.
 
 #[inline(always)]

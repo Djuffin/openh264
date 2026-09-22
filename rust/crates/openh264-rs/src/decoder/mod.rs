@@ -1,6 +1,6 @@
 //! The decoder's module tree.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 pub mod bit_stream;
 pub mod cabac_decoder;

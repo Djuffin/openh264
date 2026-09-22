@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Scalar forwards for the `quant` kernels — see the module header.
 
 #[inline(always)]

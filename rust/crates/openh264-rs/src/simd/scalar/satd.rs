@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Scalar forwards for the `satd` kernels — see the module header.
 
 use crate::safe::plane::RefSamples;

@@ -10,7 +10,7 @@
 //! methods `METHOD_SCROLL_DETECTION`,
 //! `METHOD_SCENE_CHANGE_DETECTION_SCREEN` and `METHOD_COMPLEXITY_ANALYSIS_SCREEN`.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 pub mod adaptive_quantization;
 pub mod background_detection;
