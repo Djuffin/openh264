@@ -549,7 +549,17 @@ pub fn IncreasePicBuff(
     }
     pool.slots.grow(extra);
 
-    ResetPoolPictureFlags(pool);
+    // only initialize new slots; old slots must preserve iRefCount pinned by output buffering
+    for i in (kiOldSize as usize)..pool.slots.len() {
+        let id = pool.slots.id(i);
+        if let Some(pic) = pool.slots.get_mut(id).as_deref_mut() {
+            pic.bUsedAsRef = false;
+            pic.bIsLongRef = false;
+            pic.iRefCount = 0;
+            pic.pSetUnRef = None;
+            pic.bIsComplete = false;
+        }
+    }
     ERR_NONE
 }
 
@@ -649,9 +659,8 @@ pub fn DecreasePicBuff(
     ERR_NONE
 }
 
-/// The five per-picture fields both resize paths reset over the whole new pool — the
-/// pictures that were kept as well as the ones just allocated (`decoder.cpp:150-157`
-/// and `:240-246`).
+/// The five per-picture fields `DecreasePicBuff` resets over the whole pool
+/// (`decoder.cpp:240-246`). `IncreasePicBuff` only initializes newly appended slots.
 fn ResetPoolPictureFlags(pool: &mut PicPool) {
     for id in pool.slots.ids().collect::<Vec<_>>() {
         if let Some(pic) = pool.slots.get_mut(id).as_deref_mut() {
@@ -984,5 +993,46 @@ mod tests {
 
             DestroyPicBuff(&mut ctx, Some(pool));
         }
+    }
+
+    #[test]
+    fn test_increase_pic_buff_preserves_old_slot_ref_count_and_flags() {
+        let mut pool = CreatePicBuff(false, 3, 64, 64).expect("pool");
+        assert_eq!(pool.capacity(), 3);
+
+        // Pin slot 0 with iRefCount and bUsedAsRef
+        let id0 = pool.id(0);
+        let pic0 = pool.slot_mut(id0).unwrap();
+        pic0.iRefCount = 2;
+        pic0.bUsedAsRef = true;
+        pic0.bIsLongRef = true;
+        pic0.bIsComplete = true;
+
+        // Increase pool from 3 to 5 slots
+        let ret = IncreasePicBuff(&mut pool, false, 3, 64, 64, 5);
+        assert_eq!(ret, ERR_NONE);
+        assert_eq!(pool.capacity(), 5);
+
+        // Slot 0 must preserve its reference count and flags
+        let pic0_after = pool.slot(id0).unwrap();
+        assert_eq!(pic0_after.iRefCount, 2);
+        assert!(pic0_after.bUsedAsRef);
+        assert!(pic0_after.bIsLongRef);
+        assert!(pic0_after.bIsComplete);
+
+        // Newly added slots (3 and 4) must be initialized with zero ref count and false flags
+        let id3 = pool.id(3);
+        let pic3 = pool.slot(id3).unwrap();
+        assert_eq!(pic3.iRefCount, 0);
+        assert!(!pic3.bUsedAsRef);
+        assert!(!pic3.bIsLongRef);
+        assert!(!pic3.bIsComplete);
+
+        let id4 = pool.id(4);
+        let pic4 = pool.slot(id4).unwrap();
+        assert_eq!(pic4.iRefCount, 0);
+        assert!(!pic4.bUsedAsRef);
+        assert!(!pic4.bIsLongRef);
+        assert!(!pic4.bIsComplete);
     }
 }
