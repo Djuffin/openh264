@@ -3935,14 +3935,16 @@ pub fn DecodeCurrentAccessUnit(
                             bAllRefComplete = false;
                             let h = nal_hdr(pCtx, pNalCur).copied();
                             HandleReferenceLost(pCtx, h.as_ref());
-                            WelsLog(
-                                pCtx.sLogCtx,
-                                WELS_LOG_DEBUG,
-                                &format!(
-                                    "reference picture introduced by this frame is lost during transmission! uiTId: {}",
-                                    h.map_or(0, |hdr| hdr.uiTemporalId)
-                                ),
-                            );
+                            if pCtx.sLogCtx.is_enabled(WELS_LOG_DEBUG) {
+                                WelsLog(
+                                    pCtx.sLogCtx,
+                                    WELS_LOG_DEBUG,
+                                    &format!(
+                                        "reference picture introduced by this frame is lost during transmission! uiTId: {}",
+                                        h.map_or(0, |hdr| hdr.uiTemporalId)
+                                    ),
+                                );
+                            }
                             if pCtx.pParam.eEcActiveIdc == ERROR_CON_DISABLE {
                                 if pCtx.iTotalNumMbRec == 0 {
                                     pCtx.pDec = None;

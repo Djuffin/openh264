@@ -2479,15 +2479,17 @@ impl CWelsPreProcess {
         };
 
         // `wels_preprocess.cpp:1247-1248`.
-        let kiCodingIndex = pCtx.param().sDependencyLayers[0].iCodingIndex;
-        WelsLog(
-            pCtx.sLogCtx,
-            WELS_LOG_DEBUG,
-            &format!(
-                "iVaaFrameSceneChangeIdc = {},codingIdx = {}",
-                iVaaFrameSceneChangeIdc as i32, kiCodingIndex
-            ),
-        );
+        if pCtx.sLogCtx.is_enabled(WELS_LOG_DEBUG) {
+            let kiCodingIndex = pCtx.param().sDependencyLayers[0].iCodingIndex;
+            WelsLog(
+                pCtx.sLogCtx,
+                WELS_LOG_DEBUG,
+                &format!(
+                    "iVaaFrameSceneChangeIdc = {},codingIdx = {}",
+                    iVaaFrameSceneChangeIdc as i32, kiCodingIndex
+                ),
+            );
+        }
 
         self.SaveBestRefToVaa(
             &sLtrSaved,

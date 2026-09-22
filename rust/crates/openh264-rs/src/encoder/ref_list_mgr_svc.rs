@@ -1459,35 +1459,37 @@ pub fn WelsBuildRefListScreen(pCtx: &mut sWelsEncCtx, iPOC: i32, _iBestLtrRefIdx
                     pCtx.pRefList0[num0] = Some(idRefPic);
                     pCtx.iNumRef0 += 1;
                     // `ref_list_mgr_svc.cpp:829-834`.
-                    let (kiRefFrameNum, kuiRefTid, kbRefIsSceneLtr) = {
-                        let pRefPic = pCtx
+                    if pCtx.sLogCtx.is_enabled(common::wels_trace::WELS_LOG_DEBUG) {
+                        let (kiRefFrameNum, kuiRefTid, kbRefIsSceneLtr) = {
+                            let p = pCtx
+                                .ref_list(uiDid)
+                                .expect("the dependency layer's reference list")
+                                .pic(idRefPic);
+                            (p.iFrameNum, p.uiTemporalId, p.bIsSceneLTR)
+                        };
+                        let kuiLongRefCount = pCtx
                             .ref_list(uiDid)
                             .expect("the dependency layer's reference list")
-                            .pic(idRefPic);
-                        (pRefPic.iFrameNum, pRefPic.uiTemporalId, pRefPic.bIsSceneLTR)
-                    };
-                    let kuiLongRefCount = pCtx
-                        .ref_list(uiDid)
-                        .expect("the dependency layer's reference list")
-                        .uiLongRefCount;
-                    // `pParamD->iFrameNum` — the *parameter* layer's frame number
-                    // (`ref_list_mgr_svc.cpp:815`), not the DQ layer's.
-                    let kiCurFrameNum = pCtx.param().sDependencyLayers[uiDid].iFrameNum;
-                    let kuiTid = pCtx.uiTemporalId;
-                    common::wels_trace::WelsLog(
-                        pCtx.sLogCtx,
-                        common::wels_trace::WELS_LOG_DEBUG,
-                        &format!(
-                            "WelsBuildRefListScreen(), current iFrameNum = {}, current Tid = {}, ref iFrameNum = {}, ref uiTemporalId = {}, ref is Scene LTR = {}, LTR count = {},iNumRef = {}",
-                            kiCurFrameNum,
-                            kuiTid,
-                            kiRefFrameNum,
-                            kuiRefTid,
-                            kbRefIsSceneLtr as i32,
-                            kuiLongRefCount,
-                            iNumRef
-                        ),
-                    );
+                            .uiLongRefCount;
+                        // `pParamD->iFrameNum` — the *parameter* layer's frame number
+                        // (`ref_list_mgr_svc.cpp:815`), not the DQ layer's.
+                        let kiCurFrameNum = pCtx.param().sDependencyLayers[uiDid].iFrameNum;
+                        let kuiTid = pCtx.uiTemporalId;
+                        common::wels_trace::WelsLog(
+                            pCtx.sLogCtx,
+                            common::wels_trace::WELS_LOG_DEBUG,
+                            &format!(
+                                "WelsBuildRefListScreen(), current iFrameNum = {}, current Tid = {}, ref iFrameNum = {}, ref uiTemporalId = {}, ref is Scene LTR = {}, LTR count = {},iNumRef = {}",
+                                kiCurFrameNum,
+                                kuiTid,
+                                kiRefFrameNum,
+                                kuiRefTid,
+                                kbRefIsSceneLtr as i32,
+                                kuiLongRefCount,
+                                iNumRef
+                            ),
+                        );
+                    }
                 }
             } else {
                 let mut i = iNumRef;
@@ -1512,24 +1514,26 @@ pub fn WelsBuildRefListScreen(pCtx: &mut sWelsEncCtx, iPOC: i32, _iBestLtrRefIdx
                         pCtx.iNumRef0 += 1;
                         // `ref_list_mgr_svc.cpp:845-848` — the slot just pushed is
                         // `idLong`.
-                        let kiRefFrameNum = pCtx
-                            .ref_list(uiDid)
-                            .expect("the dependency layer's reference list")
-                            .pic(idLong)
-                            .iFrameNum;
-                        let kuiLongRefCount = pCtx
-                            .ref_list(uiDid)
-                            .expect("the dependency layer's reference list")
-                            .uiLongRefCount;
-                        let kiCurFrameNum = pCtx.param().sDependencyLayers[uiDid].iFrameNum;
-                        common::wels_trace::WelsLog(
-                            pCtx.sLogCtx,
-                            common::wels_trace::WELS_LOG_DEBUG,
-                            &format!(
-                                "WelsBuildRefListScreen(), ref !current iFrameNum = {}, ref iFrameNum = {},LTR number = {}",
-                                kiCurFrameNum, kiRefFrameNum, kuiLongRefCount
-                            ),
-                        );
+                        if pCtx.sLogCtx.is_enabled(common::wels_trace::WELS_LOG_DEBUG) {
+                            let kiRefFrameNum = pCtx
+                                .ref_list(uiDid)
+                                .expect("the dependency layer's reference list")
+                                .pic(idLong)
+                                .iFrameNum;
+                            let kuiLongRefCount = pCtx
+                                .ref_list(uiDid)
+                                .expect("the dependency layer's reference list")
+                                .uiLongRefCount;
+                            let kiCurFrameNum = pCtx.param().sDependencyLayers[uiDid].iFrameNum;
+                            common::wels_trace::WelsLog(
+                                pCtx.sLogCtx,
+                                common::wels_trace::WELS_LOG_DEBUG,
+                                &format!(
+                                    "WelsBuildRefListScreen(), ref !current iFrameNum = {}, ref iFrameNum = {},LTR number = {}",
+                                    kiCurFrameNum, kiRefFrameNum, kuiLongRefCount
+                                ),
+                            );
+                        }
                         break;
                     }
                     i -= 1;
@@ -1539,43 +1543,49 @@ pub fn WelsBuildRefListScreen(pCtx: &mut sWelsEncCtx, iPOC: i32, _iBestLtrRefIdx
 
         // `ref_list_mgr_svc.cpp:853-875` — the reference-list dump, inside the non-I
         // arm.
-        common::wels_trace::WelsLog(
-            pCtx.sLogCtx,
-            common::wels_trace::WELS_LOG_DEBUG,
-            &format!(
-                "WelsBuildRefListScreen(), CurrentFramePoc={}, isLTR={}",
-                iPOC, pCtx.bCurFrameMarkedAsSceneLtr as i32
-            ),
-        );
-        for j in 0..iNumRef {
-            let pARefPicture = pCtx
-                .ref_list(uiDid)
-                .expect("the dependency layer's reference list")
-                .pLongRefList[j as usize];
-            let line = match pARefPicture {
-                Some(idA) => {
-                    let a = pCtx
-                        .ref_list(uiDid)
-                        .expect("the dependency layer's reference list")
-                        .pic(idA);
-                    format!(
-                        "WelsBuildRefListScreen()\tRefLot[{}]: iPoc={}, iPictureType={}, bUsedAsRef={}, bIsLongRef={}, bIsSceneLTR={}, uiTemporalId={}, iFrameNum={}, iMarkFrameNum={}, iLongTermPicNum={}, uiRecieveConfirmed={}",
-                        j,
-                        a.iFramePoc,
-                        a.iPictureType,
-                        a.bUsedAsRef as i32,
-                        a.bIsLongRef as i32,
-                        a.bIsSceneLTR as i32,
-                        a.uiTemporalId,
-                        a.iFrameNum,
-                        a.iMarkFrameNum,
-                        a.iLongTermPicNum,
-                        a.uiRecieveConfirmed
-                    )
-                }
-                None => format!("WelsBuildRefListScreen()\tRefLot[{}]: NULL", j),
-            };
-            common::wels_trace::WelsLog(pCtx.sLogCtx, common::wels_trace::WELS_LOG_DEBUG, &line);
+        if pCtx.sLogCtx.is_enabled(common::wels_trace::WELS_LOG_DEBUG) {
+            common::wels_trace::WelsLog(
+                pCtx.sLogCtx,
+                common::wels_trace::WELS_LOG_DEBUG,
+                &format!(
+                    "WelsBuildRefListScreen(), CurrentFramePoc={}, isLTR={}",
+                    iPOC, pCtx.bCurFrameMarkedAsSceneLtr as i32
+                ),
+            );
+            for j in 0..iNumRef {
+                let pARefPicture = pCtx
+                    .ref_list(uiDid)
+                    .expect("the dependency layer's reference list")
+                    .pLongRefList[j as usize];
+                let line = match pARefPicture {
+                    Some(idA) => {
+                        let a = pCtx
+                            .ref_list(uiDid)
+                            .expect("the dependency layer's reference list")
+                            .pic(idA);
+                        format!(
+                            "WelsBuildRefListScreen()\tRefLot[{}]: iPoc={}, iPictureType={}, bUsedAsRef={}, bIsLongRef={}, bIsSceneLTR={}, uiTemporalId={}, iFrameNum={}, iMarkFrameNum={}, iLongTermPicNum={}, uiRecieveConfirmed={}",
+                            j,
+                            a.iFramePoc,
+                            a.iPictureType,
+                            a.bUsedAsRef as i32,
+                            a.bIsLongRef as i32,
+                            a.bIsSceneLTR as i32,
+                            a.uiTemporalId,
+                            a.iFrameNum,
+                            a.iMarkFrameNum,
+                            a.iLongTermPicNum,
+                            a.uiRecieveConfirmed
+                        )
+                    }
+                    None => format!("WelsBuildRefListScreen()\tRefLot[{}]: NULL", j),
+                };
+                common::wels_trace::WelsLog(
+                    pCtx.sLogCtx,
+                    common::wels_trace::WELS_LOG_DEBUG,
+                    &line,
+                );
+            }
         }
     } else {
         WelsResetRefList(pCtx);

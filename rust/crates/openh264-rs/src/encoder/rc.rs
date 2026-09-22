@@ -1826,24 +1826,26 @@ pub fn RcUpdateFrameComplexity(pEncCtx: &mut sWelsEncCtx) {
         pTOverRc[kiTl].iLinearCmplx,
         pTOverRc[kiTl].iFrameCmplxMean,
     );
-    let kiQStepRc = pEncCtx.rc_at(did).iQStep;
     let kLogCtx = pEncCtx.sLogCtx;
-    WelsLog(
-        kLogCtx,
-        WELS_LOG_DEBUG,
-        &format!(
-            "RcUpdateFrameComplexity iFrameDqBits = {},iQStep= {},pWelsSvcRc->iQStep= {},pTOverRc->iLinearCmplx = {}",
-            kiFrameDqBitsLog, iQStep, kiQStepRc, kiLinearCmplx
-        ),
-    );
-    WelsLog(
-        kLogCtx,
-        WELS_LOG_DEBUG,
-        &format!(
-            "iFrameCmplxMean = {},iFrameComplexity = {}",
-            kiFrameCmplxMean, iFrameComplexity
-        ),
-    );
+    if kLogCtx.is_enabled(WELS_LOG_DEBUG) {
+        let kiQStepRc = pEncCtx.rc_at(did).iQStep;
+        WelsLog(
+            kLogCtx,
+            WELS_LOG_DEBUG,
+            &format!(
+                "RcUpdateFrameComplexity iFrameDqBits = {},iQStep= {},pWelsSvcRc->iQStep= {},pTOverRc->iLinearCmplx = {}",
+                kiFrameDqBitsLog, iQStep, kiQStepRc, kiLinearCmplx
+            ),
+        );
+        WelsLog(
+            kLogCtx,
+            WELS_LOG_DEBUG,
+            &format!(
+                "iFrameCmplxMean = {},iFrameComplexity = {}",
+                kiFrameCmplxMean, iFrameComplexity
+            ),
+        );
+    }
 }
 
 /// Derives cascaded temporal layer QPs when rate control is disabled (`RC_OFF_MODE`).

@@ -85,6 +85,13 @@ impl Default for SLogContext {
     }
 }
 
+impl SLogContext {
+    #[inline]
+    pub const fn is_enabled(&self, iLevel: i32) -> bool {
+        self.pfLog.is_some() && self.iTraceLevel >= iLevel
+    }
+}
+
 /// `void WelsLog (SLogContext*, int32_t iLevel, const char* kpFmt, ...)` —
 /// `utils.cpp:51`, with `welsCodecTrace::CodecTrace`'s level filter folded in.
 ///
@@ -92,10 +99,16 @@ impl Default for SLogContext {
 /// the `[OpenH264rs] this = …` tag are both applied here, and the caller's callback is
 /// invoked once per delivered message.
 pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
+    if !ctx.is_enabled(iLevel) {
+        return;
+    }
+    WelsLogFmt(ctx, iLevel, format_args!("{msg}"));
+}
+
+pub fn WelsLogFmt(ctx: SLogContext, iLevel: i32, args: std::fmt::Arguments<'_>) {
     let Some(pfLog) = ctx.pfLog else {
         return;
     };
-    // `welsCodecTrace::CodecTrace`, first statement.
     if ctx.iTraceLevel < iLevel {
         return;
     }
@@ -106,7 +119,10 @@ pub fn WelsLog(ctx: SLogContext, iLevel: i32, msg: &str) {
         WELS_LOG_DEBUG => "Debug:",
         _ => "Detail:",
     };
-    let mut line = format!("[OpenH264rs] this = 0x{:x}, {tag}{msg}", ctx.pCodecInstance);
+    let mut line = format!(
+        "[OpenH264rs] this = 0x{:x}, {tag}{args}",
+        ctx.pCodecInstance
+    );
     // The whole line is bounded at `MAX_LOG_SIZE`, which is the same guarantee for a
     // caller whose buffer is that size.
     if line.len() >= MAX_LOG_SIZE {
