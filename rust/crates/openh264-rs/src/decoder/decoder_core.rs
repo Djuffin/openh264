@@ -3398,6 +3398,27 @@ pub fn ConstructAccessUnit(
     iErr
 }
 
+/// Returns false if wrapping `sRawData` to head would overwrite bytes still referenced
+/// by a queued NAL's slice bit-reader, indicating the wrap is unsafe.
+/// Matches `RawDataWrapIsClean` in `decoder.cpp`.
+pub fn raw_data_wrap_is_clean(pCtx: &SWelsDecoderContext, new_bytes: usize) -> bool {
+    let Some(au) = pCtx.access_unit.as_deref() else {
+        return true;
+    };
+    let avail = au.uiAvailUnitsNum as usize;
+    if avail == 0 {
+        return true;
+    }
+    for nal in &au.nal_units[..avail.min(au.nal_units.len())] {
+        let reader = &nal.sNalData.sVclNal.sSliceBitsRead;
+        let is_active = !reader.cursor.is_empty() || reader.cursor.bits() > 0 || reader.start > 0;
+        if is_active && reader.start < new_bytes {
+            return false;
+        }
+    }
+    true
+}
+
 /// Core decoding loop: demultiplexes Annex B NAL units and decodes them into an
 /// access unit. `WelsDecodeBs` in `decoder.cpp`.
 pub fn WelsDecodeBs(
@@ -3452,12 +3473,17 @@ pub fn WelsDecodeBs(
 
             // Copy the NAL into the persistent raw-data buffer, stripping
             // emulation-prevention bytes (00 00 03 -> 00 00).
-            if pCtx.sRawData.remaining() < payload_slice.len() + 4 {
+            let need_bytes = payload_slice.len() + 4;
+            if pCtx.sRawData.remaining() < need_bytes {
+                if !raw_data_wrap_is_clean(pCtx, need_bytes) {
+                    pCtx.iErrorCode |= dsOutOfMemory;
+                    return pCtx.iErrorCode;
+                }
                 // Wrap to the buffer head; the buffer is sized for several access
                 // units, so pending NAL data near the current write position is not
                 // overwritten.
                 pCtx.sRawData.rewind();
-                if pCtx.sRawData.len() < payload_slice.len() + 4 {
+                if pCtx.sRawData.len() < need_bytes {
                     if pCtx.sRawData.grow(payload_slice.len()).is_err() {
                         pCtx.iErrorCode |= dsOutOfMemory;
                         return pCtx.iErrorCode;
@@ -4764,5 +4790,68 @@ mod tests {
                 assert_eq!(res, ERR_INFO_INVALID_PTR);
             }
         }
+    }
+
+    #[test]
+    fn test_raw_data_wrap_is_clean() {
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        assert!(raw_data_wrap_is_clean(&ctx, 64), "no access unit is clean");
+
+        let mut au = SAccessUnit::with_nodes(4);
+        au.uiAvailUnitsNum = 0;
+        ctx.access_unit = Some(au);
+        assert!(raw_data_wrap_is_clean(&ctx, 64), "0 avail units is clean");
+
+        let au = ctx.access_unit.as_mut().unwrap();
+        au.uiAvailUnitsNum = 1;
+        let buf = [0xffu8; 32];
+        au.nal_units[0].sNalData.sVclNal.sSliceBitsRead.start = 8;
+        au.nal_units[0].sNalData.sVclNal.sSliceBitsRead.cursor =
+            BsCursor::init(&buf, 128).unwrap();
+
+        // Wrap would overwrite bytes [0..16], which includes start = 8: dirty
+        assert!(!raw_data_wrap_is_clean(&ctx, 16));
+        // Wrap with new_bytes <= 8: start = 8 is not overwritten: clean
+        assert!(raw_data_wrap_is_clean(&ctx, 8));
+        assert!(raw_data_wrap_is_clean(&ctx, 4));
+    }
+
+    #[test]
+    fn test_wels_decode_bs_rejects_wrap_into_queued_slice() {
+        // C++ test: DecoderParseSyntaxTest.WelsDecodeBsRejectsWrapIntoQueuedSlice
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        WelsInitStaticMemory(&mut ctx);
+        assert_eq!(WelsOpenDecoder(&mut ctx), ERR_NONE);
+
+        let mut au = SAccessUnit::with_nodes(4);
+        let buf = [0x42u8; 16];
+        au.nal_units[0].sNalData.sVclNal.sSliceBitsRead.start = 2;
+        au.nal_units[0].sNalData.sVclNal.sSliceBitsRead.cursor =
+            BsCursor::init(&buf, 128).unwrap();
+        au.uiAvailUnitsNum = 1;
+        ctx.access_unit = Some(au);
+
+        // Position write cursor near the buffer end to force a wrap
+        let mut raw = RawDataBuffer::try_new_zeroed(64).unwrap();
+        let filler = [0u8; 62];
+        raw.append_raw(&filler);
+        ctx.sRawData = raw;
+
+        let k_filler: [u8; 16] = [0, 0, 0, 1, 0x0c, 0x80, 0, 0, 0, 1, 0x0c, 0x80, 0, 0, 0, 1];
+        let mut dst = [std::ptr::null_mut(); 3];
+        let mut dst_info = SBufferInfo::default();
+        let ret = WelsDecodeBs(
+            &mut ctx,
+            &k_filler,
+            k_filler.len() as i32,
+            &mut dst,
+            &mut dst_info,
+            std::ptr::null_mut(),
+        );
+
+        assert_ne!(ret & dsOutOfMemory, 0);
+        // The queued slice reader start offset was not overwritten
+        let au = ctx.access_unit.as_ref().unwrap();
+        assert_eq!(au.nal_units[0].sNalData.sVclNal.sSliceBitsRead.start, 2);
     }
 }
