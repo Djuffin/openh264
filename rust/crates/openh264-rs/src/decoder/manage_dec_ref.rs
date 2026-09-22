@@ -738,6 +738,9 @@ pub fn MMCOProcess(
         }
         MMCO_RESET => {
             WelsResetRefPic(pCtx);
+            if bTmpRefSet {
+                pCtx.sTmpRefPic = pCtx.sRefPic;
+            }
             {
                 let last = &mut pCtx.pLastDecPicInfo;
                 last.bLastHasMmco5 = true;
@@ -1615,5 +1618,35 @@ mod tests {
         assert_eq!(pCtx.sRefPic.pRefList[LIST_0][1], s1);
         assert_eq!(pCtx.sRefPic.pRefList[LIST_1][0], s1);
         assert_eq!(pCtx.sRefPic.pRefList[LIST_1][1], s0);
+    }
+
+    #[test]
+    fn test_mmco5_reset_resyncs_threaded_snapshot() {
+        // C++ test: ManageDecRefMmco5Test.Mmco5ResetInvalidatesThreadedSnapshot
+        let mut pic = SPicture::default();
+        pic.iFrameNum = 999;
+        pic.eSliceType = I_SLICE;
+
+        let pool = crate::decoder::pic_queue::PicPool::over(vec![Some(Box::new(pic))]);
+        let s = Some(pool.id(0));
+        let mut ctx = SWelsDecoderContext::new_boxed();
+        ctx.pPicBuff = Some(pool);
+        let pCtx = &mut *ctx;
+
+        AddShortTermToList(pCtx, false, s);
+        assert_eq!(pCtx.sRefPic.uiShortRefCount[LIST_0], 1);
+        pCtx.sTmpRefPic = pCtx.sRefPic; // snapshot for threaded handoff
+
+        // Process MMCO_RESET with bTmpRefSet = true
+        let ret = MMCOProcess(pCtx, true, MMCO_RESET, 0, 0, 0, 0);
+        assert_eq!(ret, ERR_NONE);
+
+        // sRefPic must be cleared by WelsResetRefPic
+        assert_eq!(pCtx.sRefPic.uiShortRefCount[LIST_0], 0);
+        assert_eq!(pCtx.sRefPic.pShortRefList[LIST_0][0], None);
+
+        // sTmpRefPic must also be re-synced to sRefPic (cleared of stale refs)
+        assert_eq!(pCtx.sTmpRefPic.uiShortRefCount[LIST_0], 0);
+        assert_eq!(pCtx.sTmpRefPic.pShortRefList[LIST_0][0], None);
     }
 }
