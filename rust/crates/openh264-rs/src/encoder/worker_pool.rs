@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![deny(unsafe_code)]
 // Copyright (c) 2013, Cisco Systems
 // All rights reserved.
 //
@@ -522,6 +522,7 @@ impl<'scope, 'env> Scope<'scope, 'env> {
         // `scope` waits for `ScopeData::running` to reach zero on both its return
         // and its unwind path, and the wrapper above decrements only after `f` has
         // been consumed and its result handed over. See the module header.
+        #[allow(unsafe_code)]
         let job: Job = unsafe { std::mem::transmute::<ScopedJob<'scope>, Job>(boxed) };
         self.shared.push(job);
 

@@ -4,7 +4,7 @@
 //!
 //! C++: `codec/encoder/core/{inc/ref_list_mgr_svc.h,src/ref_list_mgr_svc.cpp}`.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::encoder::picture::{PicRef, SrcPicId};
 use crate::*;
@@ -1892,14 +1892,10 @@ mod tests {
         }
     }
 
-    /// `sWelsEncCtx` is `mem::zeroed()`-constructed, so the zero discriminant has to be
-    /// `TemporalLayer`.
+    /// The zero discriminant has to be `TemporalLayer`.
     #[test]
-    #[allow(unsafe_code)]
     fn ref_strategy_zero_is_the_default_arm() {
         assert_eq!(RefStrategyKind::default(), RefStrategyKind::TemporalLayer);
         assert_eq!(RefStrategyKind::TemporalLayer as u8, 0);
-        let zeroed: RefStrategyKind = unsafe { std::mem::zeroed() };
-        assert_eq!(zeroed, RefStrategyKind::TemporalLayer);
     }
 }

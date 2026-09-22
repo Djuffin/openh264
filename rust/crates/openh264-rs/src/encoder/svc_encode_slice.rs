@@ -518,25 +518,8 @@ pub fn layer_subset_sps_ref<'a>(
     }
 }
 
-/// The context's active SPS, resolved from its position. Null before
-/// `WelsInitEncoderExt` names one, and before the array exists.
-#[inline]
-pub fn ctx_sps(pCtx: &sWelsEncCtx) -> *mut SWelsSPS {
-    let Some(id) = pCtx.iSps else {
-        return std::ptr::null_mut();
-    };
-    let arr = pCtx.sps_array();
-    if arr.is_empty() {
-        return std::ptr::null_mut();
-    }
-    debug_assert!((id.get() as i32) < pCtx.iSpsNum.max(1), "iSps past iSpsNum");
-    // `wrapping_add` avoids the in-bounds claim `.add` would make; the
-    // `debug_assert` above makes it instead.
-    arr.as_ptr().cast_mut().wrapping_add(id.get())
-}
-
 /// The context's active SPS as a shared reference. `None` in the two cases
-/// [`ctx_sps`] returns null.
+/// where the SPS array is empty or the ID is invalid.
 #[inline]
 pub fn ctx_sps_ref(pCtx: &sWelsEncCtx) -> Option<&SWelsSPS> {
     pCtx.sps_array().get(pCtx.iSps?.get())
@@ -546,20 +529,6 @@ pub fn ctx_sps_ref(pCtx: &sWelsEncCtx) -> Option<&SWelsSPS> {
 #[inline]
 pub fn ctx_pps_ref(pCtx: &sWelsEncCtx) -> Option<&SWelsPPS> {
     pCtx.pps_array().get(pCtx.iPps?.get())
-}
-
-/// The context's active PPS, resolved from its position — see [`ctx_sps`].
-#[inline]
-pub fn ctx_pps(pCtx: &sWelsEncCtx) -> *mut SWelsPPS {
-    let Some(id) = pCtx.iPps else {
-        return std::ptr::null_mut();
-    };
-    let arr = pCtx.pps_array();
-    if arr.is_empty() {
-        return std::ptr::null_mut();
-    }
-    debug_assert!((id.get() as i32) < pCtx.iPpsNum.max(1), "iPps past iPpsNum");
-    arr.as_ptr().cast_mut().wrapping_add(id.get())
 }
 
 /// The context's current reference picture, resolved through the current dependency

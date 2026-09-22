@@ -3,7 +3,7 @@
 //! Encoder picture buffers and reference-picture state —
 //! `codec/encoder/core/inc/picture.h`.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::encoder::encoder_context::{BLOCK_SIZE_ALL, SMVUnitXY};
 use crate::encoder::svc_motion_estimate::{
@@ -246,50 +246,14 @@ impl SPicture {
         }
     }
 
-    /// Plane `i`'s **root-derived** cursor at its logical origin — the raw `pData[i]`
-    /// every per-macroblock consumer still walks.
-    ///
-    /// The pointer is derived from the allocation root and then offset, so its
-    /// provenance covers the whole plane including the top and left border — intra
-    /// prediction reads `pRef[-iLineSize]` on the top macroblock row, and
-    /// `ExpandReferencingPicture` writes the whole frame. Slicing `[origin..]` first
-    /// would narrow provenance to that tail and make those reads Undefined Behaviour.
-    ///
-    /// The root itself is read out of the `Vec` header ([`PaddedPlane::root_ptr`])
-    /// rather than through `&mut self.buf`, whose `Unique` retag would pop the pointer
-    /// a previous call handed out; the encoder holds two such cursors into one plane
-    /// within a frame, so repeated calls must be siblings rather than a stack.
-    #[inline]
-    pub fn data_ptr(&mut self, i: usize) -> *mut u8 {
-        let plane = &mut self.planes[i];
-        if plane.is_empty() {
-            return std::ptr::null_mut();
-        }
-        let origin = plane.origin();
-        plane.root_ptr().wrapping_add(origin)
-    }
-
-    /// [`data_ptr`](Self::data_ptr) through `&self` ([`PaddedPlane::root_ptr_shared`]):
-    /// same address, same whole-plane provenance, null when the plane is unallocated.
-    #[inline]
-    pub fn data_ptr_shared(&self, i: usize) -> *mut u8 {
-        let plane = &self.planes[i];
-        if plane.is_empty() {
-            return std::ptr::null_mut();
-        }
-        let origin = plane.origin();
-        plane.root_ptr_shared().wrapping_add(origin)
-    }
-
     /// Plane `i`'s stride — the C++'s `iLineSize[i]`.
     #[inline]
     pub fn stride(&self, i: usize) -> i32 {
         self.planes[i].stride() as i32
     }
 
-    /// Plane `i`'s samples from the logical origin, as the borrow they are —
-    /// [`data_ptr_shared`](Self::data_ptr_shared)'s reach as a slice. Empty where
-    /// that answered null.
+    /// Plane `i`'s samples from the logical origin, as the borrow they are.
+    /// Empty when the plane is unallocated.
     #[inline]
     pub fn plane_tail(&self, i: usize) -> &[u8] {
         let plane = &self.planes[i];
@@ -300,8 +264,7 @@ impl SPicture {
         &plane.as_slice()[origin..]
     }
 
-    /// [`plane_tail`](Self::plane_tail)'s write half — [`data_ptr`](Self::data_ptr)'s
-    /// reach as a slice.
+    /// [`plane_tail`](Self::plane_tail)'s write half.
     #[inline]
     pub fn plane_tail_mut(&mut self, i: usize) -> &mut [u8] {
         let plane = &mut self.planes[i];
@@ -387,15 +350,10 @@ impl SPicture {
         }
     }
 
-    /// The picture's plane roots, strides and visible geometry, copied out.
-    ///
-    /// Preprocessing and analysis resolve a picture once, take this, and then work
-    /// through raw cursors instead of holding an `&SPicture` across the calls that
-    /// resolve the other picture they need.
+    /// The picture's strides and visible geometry, copied out.
     #[inline]
-    pub fn planes(&mut self) -> PicPlanes {
+    pub fn planes(&self) -> PicPlanes {
         PicPlanes {
-            pData: [self.data_ptr(0), self.data_ptr(1), self.data_ptr(2)],
             iLineSize: [self.stride(0), self.stride(1), self.stride(2)],
             iWidthInPixel: self.iWidthInPixel,
             iHeightInPixel: self.iHeightInPixel,
@@ -421,22 +379,17 @@ impl SPicture {
     }
 }
 
-/// A picture's plane roots and geometry, copied out of it — see [`SPicture::planes`].
+/// A picture's strides and geometry, copied out of it — see [`SPicture::planes`].
 #[derive(Clone, Copy, Debug)]
 pub struct PicPlanes {
-    /// Null on a `Default` — no picture bound.
-    pub pData: [*mut u8; 3],
     pub iLineSize: [i32; 3],
     pub iWidthInPixel: i32,
     pub iHeightInPixel: i32,
 }
 
 impl Default for PicPlanes {
-    /// No picture bound: three null roots and zero geometry — the state `SDqLayer`'s
-    /// stamped views hold on an I-slice, where no reader reaches them.
     fn default() -> Self {
         Self {
-            pData: [std::ptr::null_mut(); 3],
             iLineSize: [0; 3],
             iWidthInPixel: 0,
             iHeightInPixel: 0,
@@ -566,14 +519,10 @@ pic_pool!(RecPicId, RecPicPool, "reconstruction");
 mod tests {
     use super::*;
 
-    /// [`SPicture::data_ptr`]'s provenance covers the whole plane, not `[origin..]`:
-    /// both backward reaches the encoder performs stay in bounds — one sample
-    /// diagonally behind the origin (intra prediction's `pRef[-iLineSize - 1]`) and
-    /// the whole `pad * stride + pad` walk back to the allocation base
-    /// (`ExpandReferencingPicture`).
+    /// [`SPicture::plane`] and [`SPicture::plane_tail`] cover the padding behind the
+    /// logical origin and the aligned stride layout.
     #[test]
-    #[allow(unsafe_code)]
-    fn data_ptr_reaches_the_padding_behind_the_logical_origin() {
+    fn plane_reaches_the_padding_behind_the_logical_origin() {
         // 176x144 QCIF as `SPicture::new` lays it out.
         let mut pic = SPicture::new(176, 144, false);
         let pad = PADDING_LENGTH;
@@ -593,25 +542,18 @@ mod tests {
         pic.plane_mut(0).set(-1, -1, 0xC3);
         pic.plane_mut(0).set(-(pad as isize), -(pad as isize), 0x7E);
 
-        let base = pic.plane(0).as_slice().as_ptr();
-        let len = pic.plane(0).as_slice().len();
         let origin = pic.plane(0).origin();
-
-        let p = pic.data_ptr(0);
-        assert_eq!(unsafe { p.offset_from(base) } as usize, origin);
-        assert_eq!(unsafe { *p }, 0x5A);
+        assert_eq!(pic.plane_tail(0)[0], 0x5A);
         assert_eq!(
-            unsafe { *p.sub(stride + 1) },
+            pic.plane(0).as_slice()[origin - (stride + 1)],
             0xC3,
             "one sample diagonally behind the origin — intra prediction's top-left read"
         );
-        // `ExpandReferencingPicture`'s reach: the whole padded plane from `pData[i]`.
-        let whole = unsafe { std::slice::from_raw_parts(p.sub(pad * stride + pad), len) };
-        assert_eq!(whole[0], 0x7E, "the top-left corner of the padding");
-
-        // And forward, to the last byte of the bottom-right padding.
-        let tail = len - (pad * stride + pad) - 1;
-        assert_eq!(unsafe { *p.add(tail) }, 0);
+        assert_eq!(
+            pic.plane(0).as_slice()[0],
+            0x7E,
+            "the top-left corner of the padding"
+        );
 
         // Chroma keeps half the padding and its own aligned stride.
         assert_eq!(
@@ -620,49 +562,6 @@ mod tests {
         );
         assert_eq!(pic.stride(1), pic.stride(2));
         assert_eq!(pic.plane(1).pad(), PADDING_LENGTH / 2);
-    }
-
-    /// [`SPicture::data_ptr_shared`] reaches the padding behind the origin, repeated
-    /// mints are siblings so an earlier pointer survives a later call, and an earlier
-    /// `data_ptr` stamp stays usable alongside them — the shared read sees the write
-    /// made through it.
-    #[test]
-    #[allow(unsafe_code)]
-    fn data_ptr_shared_reaches_the_padding_and_survives_sibling_mints() {
-        let mut pic = SPicture::new(176, 144, false);
-        let pad = PADDING_LENGTH;
-        let stride = pic.plane(0).stride();
-
-        pic.plane_mut(0).set(0, 0, 0x5A);
-        pic.plane_mut(0).set(-1, -1, 0xC3);
-
-        // One exclusive stamp first, then shared per-call mints.
-        let p_stamp = pic.data_ptr(0);
-        let p1 = pic.data_ptr_shared(0);
-        let p2 = pic.data_ptr_shared(0);
-        assert_eq!(p1, p2);
-        assert_eq!(p1, p_stamp, "the shared mint is the same origin address");
-
-        assert_eq!(unsafe { *p1 }, 0x5A);
-        assert_eq!(
-            unsafe { *p1.sub(stride + 1) },
-            0xC3,
-            "one sample diagonally behind the origin, in the top-left padding"
-        );
-        // Forward, to the last byte of the bottom-right padding.
-        let len = pic.plane(0).as_slice().len();
-        let tail = len - (pad * stride + pad) - 1;
-        assert_eq!(unsafe { *p1.add(tail) }, 0);
-
-        // The first mint is used after the second call — and after an
-        // exclusive write through the stamp, which the shared read observes.
-        unsafe { *p_stamp = 0x11 };
-        let _p3 = pic.data_ptr_shared(0);
-        assert_eq!(
-            unsafe { *p1 },
-            0x11,
-            "a later mint or write popped the first"
-        );
     }
 
     /// The four per-macroblock side arrays exist exactly when `bNeedMbInfo` says so,
@@ -697,24 +596,18 @@ mod tests {
         assert_eq!(pic.iLongTermPicNum, -1);
         assert_eq!(pic.iMarkFrameNum, -1);
     }
-    /// [`SPicture::copy_planes_from`] against `WelsMoveMemory_c` on identical picture
-    /// pairs, comparing the **whole allocation** of each destination — so a copy into
-    /// the wrong rows, or over a padding byte, fails here. Most cases give source and
-    /// destination different luma strides.
-    #[test]
-    #[allow(unsafe_code)]
-    fn copy_planes_from_matches_the_raw_primitive_it_replaced() {
-        use crate::encoder::wels_preprocess::WelsMoveMemory_c;
 
+    /// [`SPicture::copy_planes_from`] copies the requested sub-rectangle across
+    /// each plane at its own stride without disturbing padding bytes.
+    #[test]
+    fn copy_planes_from_copies_subrectangle_and_preserves_padding() {
         for &(sw, sh, dw, dh, w, h) in &[
-            (176, 144, 176, 144, 176, 144), // same geometry, the arm's own case
+            (176, 144, 176, 144, 176, 144), // same geometry
             (176, 144, 160, 128, 160, 128), // destination narrower: strides differ
             (320, 240, 176, 144, 176, 144),
             (176, 144, 176, 144, 32, 16), // a sub-rectangle of both
         ] {
             let mut src = SPicture::new(sw, sh, false);
-            // A pattern that is different in every plane and every row, so a
-            // stride slip or a plane swap cannot survive it.
             for i in 0..3 {
                 let stride = src.planes[i].stride();
                 let origin = src.planes[i].origin();
@@ -725,49 +618,33 @@ mod tests {
                 }
             }
 
-            let mut dst_raw = SPicture::new(dw, dh, false);
-            let mut dst_safe = SPicture::new(dw, dh, false);
+            let mut dst = SPicture::new(dw, dh, false);
             for i in 0..3 {
-                dst_raw.planes[i].as_mut_slice().fill(0xA5);
-                dst_safe.planes[i].as_mut_slice().fill(0xA5);
+                dst.planes[i].as_mut_slice().fill(0xA5);
             }
 
-            // The raw primitive, exactly as `DownsamplePadding` called it.
-            let ksrc = src.planes();
-            let kdst = dst_raw.planes();
-            unsafe {
-                WelsMoveMemory_c(
-                    kdst.pData[0],
-                    kdst.pData[1],
-                    kdst.pData[2],
-                    kdst.iLineSize[0],
-                    kdst.iLineSize[1],
-                    kdst.iLineSize[2],
-                    ksrc.pData[0],
-                    ksrc.pData[1],
-                    ksrc.pData[2],
-                    ksrc.iLineSize[0],
-                    ksrc.iLineSize[1],
-                    ksrc.iLineSize[2],
-                    w,
-                    h,
-                );
-            }
-
-            dst_safe.copy_planes_from(&src, w, h);
+            dst.copy_planes_from(&src, w, h);
 
             for i in 0..3 {
-                assert_eq!(
-                    dst_safe.planes[i].as_slice(),
-                    dst_raw.planes[i].as_slice(),
-                    "plane {i} differs for src {sw}x{sh} -> dst {dw}x{dh}, copying {w}x{h}"
+                let (rw, rh) = if i == 0 {
+                    (w as usize, h as usize)
+                } else {
+                    ((w >> 1) as usize, (h >> 1) as usize)
+                };
+                for y in 0..rh {
+                    assert_eq!(
+                        dst.plane(i).row(y as isize, 0, rw),
+                        src.plane(i).row(y as isize, 0, rw),
+                        "plane {i} row {y} differs for src {sw}x{sh} -> dst {dw}x{dh}"
+                    );
+                }
+                // Leading padding stays untouched.
+                let origin = dst.plane(i).origin();
+                assert!(
+                    dst.plane(i).as_slice()[..origin].iter().all(|&b| b == 0xA5),
+                    "plane {i} padding overwritten"
                 );
             }
-            // And the copy actually happened.
-            assert!(
-                dst_safe.planes[0].as_slice().iter().any(|&b| b != 0xA5),
-                "nothing was written for {w}x{h}"
-            );
         }
     }
 }

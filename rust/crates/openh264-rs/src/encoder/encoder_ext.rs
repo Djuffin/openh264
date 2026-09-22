@@ -7,7 +7,7 @@
 //! `RequestMemorySvc`, `GetMultipleThreadIdc`, `WelsInitEncoderExt` and
 //! `WelsEncoderEncodeExt`.
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 use crate::encoder::md::CostFamily;
 use crate::encoder::picture::{RecPicId, RecPicPool, SPicture};
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -3643,11 +3643,11 @@ mod tests {
     use crate::encoder::encoder_context::InitFunctionPointers;
     use crate::encoder::encoder_context::dq_layer_ref;
     use crate::encoder::param_svc::NewCodingParam;
-    use crate::encoder::svc_encode_slice::{ctx_pps, ctx_sps};
+    use crate::encoder::svc_encode_slice::{ctx_pps_ref, ctx_sps_ref};
 
     /// Builds the context up to and including `RequestMemorySvc`, which is everything
     /// `WelsInitEncoderExt` does before the preprocessor.
-    fn build_gate_context() -> *mut sWelsEncCtx {
+    fn build_gate_context() -> Box<sWelsEncCtx> {
         // Drive the same path the public API does: build an SEncParamExt and let
         // ParamTranscode fill sDependencyLayers, which ParamValidationExt then checks.
         // Setting SWelsSvcCodingParam's fields directly leaves the internal
@@ -3713,91 +3713,91 @@ mod tests {
         ctxBox.iMaxSliceCount = iSliceNum as i32;
 
         assert_eq!(RequestMemorySvc(&mut ctxBox, None), 0, "RequestMemorySvc");
-        Box::into_raw(ctxBox)
+        ctxBox
     }
 
     /// The parameter-set arrays are allocated and populated.
     #[test]
-    #[allow(unsafe_code)]
     fn request_memory_svc_builds_the_parameter_sets() {
-        unsafe {
-            let pCtx = build_gate_context();
+        let pCtx = build_gate_context();
 
-            assert!(!(*pCtx).pSpsArray.is_empty(), "pSpsArray still unallocated");
-            assert!(!(*pCtx).pPPSArray.is_empty(), "pPPSArray still unallocated");
-            // The configuration needs no subset SPS.
-            assert!(
-                (*pCtx).pSubsetArray.is_empty(),
-                "pSubsetArray was not needed"
-            );
-            assert!((*pCtx).subset_array().is_empty());
-            assert_eq!((*pCtx).iSpsNum, 1);
-            assert_eq!((*pCtx).iPpsNum, 1);
-            assert_eq!((*pCtx).iSubsetSpsNum, 0);
-            assert_eq!(ctx_sps(&*pCtx), (*pCtx).sps_array().as_ptr().cast_mut());
-            assert_eq!(ctx_pps(&*pCtx), (*pCtx).pps_array().as_ptr().cast_mut());
+        assert!(!pCtx.pSpsArray.is_empty(), "pSpsArray still unallocated");
+        assert!(!pCtx.pPPSArray.is_empty(), "pPPSArray still unallocated");
+        // The configuration needs no subset SPS.
+        assert!(
+            pCtx.pSubsetArray.is_empty(),
+            "pSubsetArray was not needed"
+        );
+        assert!(pCtx.subset_array().is_empty());
+        assert_eq!(pCtx.iSpsNum, 1);
+        assert_eq!(pCtx.iPpsNum, 1);
+        assert_eq!(pCtx.iSubsetSpsNum, 0);
+        assert!(std::ptr::eq(
+            ctx_sps_ref(&pCtx).expect("active SPS"),
+            &pCtx.sps_array()[0]
+        ));
+        assert!(std::ptr::eq(
+            ctx_pps_ref(&pCtx).expect("active PPS"),
+            &pCtx.pps_array()[0]
+        ));
 
-            let sps = &(*pCtx).sps_array()[0];
-            assert_eq!(sps.iMbWidth, 10);
-            assert_eq!(sps.iMbHeight, 6);
-            assert_eq!(sps.uiLog2MaxFrameNum, 15);
-            assert_eq!(sps.uiPocType, 2);
-            assert_eq!(sps.iLevelIdc, 13);
+        let sps = &pCtx.sps_array()[0];
+        assert_eq!(sps.iMbWidth, 10);
+        assert_eq!(sps.iMbHeight, 6);
+        assert_eq!(sps.uiLog2MaxFrameNum, 15);
+        assert_eq!(sps.uiPocType, 2);
+        assert_eq!(sps.iLevelIdc, 13);
 
-            let pps = &(*pCtx).pps_array()[0];
-            assert_eq!(pps.iPicInitQp, 26);
-            assert!(pps.bDeblockingFilterControlPresentFlag);
+        let pps = &pCtx.pps_array()[0];
+        assert_eq!(pps.iPicInitQp, 26);
+        assert!(pps.bDeblockingFilterControlPresentFlag);
 
-            WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
-        }
+        WelsUninitEncoderExt(Some(pCtx));
     }
 
     /// The DQ layers, reference lists and macroblock list exist.
     #[test]
-    #[allow(unsafe_code)]
     fn request_memory_svc_builds_the_dq_layers() {
-        unsafe {
-            let pCtx = build_gate_context();
+        let pCtx = build_gate_context();
 
-            let pDq = dq_layer_ref(&*pCtx, 0).expect("RequestMemorySvc built layer 0");
-            assert_eq!(pDq.iMbWidth, 10);
-            assert_eq!(pDq.iMbHeight, 6);
-            assert_eq!(pDq.sSliceEncCtx.iMbNumInFrame, 60);
-            assert_eq!(pDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed), 1);
-            assert_eq!(pDq.sSliceEncCtx.pOverallMbMap.len(), 60);
-            assert_eq!(pDq.sMbDataP.dims().count(), 60);
+        let pDq = dq_layer_ref(&pCtx, 0).expect("RequestMemorySvc built layer 0");
+        assert_eq!(pDq.iMbWidth, 10);
+        assert_eq!(pDq.iMbHeight, 6);
+        assert_eq!(pDq.sSliceEncCtx.iMbNumInFrame, 60);
+        assert_eq!(pDq.sSliceEncCtx.iSliceNumInFrame.load(Ordering::Relaxed), 1);
+        assert_eq!(pDq.sSliceEncCtx.pOverallMbMap.len(), 60);
+        assert_eq!(pDq.sMbDataP.dims().count(), 60);
 
-            // InitMbInfo wired every macroblock to its slot in the context arrays.
-            let pMb = pDq.sMbDataP.get(0);
-            assert_eq!(pMb.iMbXY, 0);
-            assert_eq!(pMb.iMbX, 0);
-            assert_eq!(pMb.iMbY, 0);
-            // MB 0 has no left/top neighbour.
-            assert_eq!(pMb.uiNeighborAvail, 0);
-            let pMb11 = pDq.sMbDataP.get(11); // row 1, column 1: all four neighbours present
-            assert_eq!(pMb11.iMbX, 1);
-            assert_eq!(pMb11.iMbY, 1);
-            assert_eq!(
-                pMb11.uiNeighborAvail,
-                LEFT_MB_POS | TOP_MB_POS | TOPLEFT_MB_POS | TOPRIGHT_MB_POS
-            );
+        // InitMbInfo wired every macroblock to its slot in the context arrays.
+        let pMb = pDq.sMbDataP.get(0);
+        assert_eq!(pMb.iMbXY, 0);
+        assert_eq!(pMb.iMbX, 0);
+        assert_eq!(pMb.iMbY, 0);
+        // MB 0 has no left/top neighbour.
+        assert_eq!(pMb.uiNeighborAvail, 0);
+        let pMb11 = pDq.sMbDataP.get(11); // row 1, column 1: all four neighbours present
+        assert_eq!(pMb11.iMbX, 1);
+        assert_eq!(pMb11.iMbY, 1);
+        assert_eq!(
+            pMb11.uiNeighborAvail,
+            LEFT_MB_POS | TOP_MB_POS | TOPLEFT_MB_POS | TOPRIGHT_MB_POS
+        );
 
-            assert!((*pCtx).ref_list(0).is_some());
-            assert!(!(*pCtx).ref_list(0).expect("just checked").pRef.is_empty());
-            assert_eq!(
-                (*pCtx).pDecPic,
-                Some((*pCtx).ref_list(0).expect("just checked").pRef.at(0))
-            );
+        assert!(pCtx.ref_list(0).is_some());
+        assert!(!pCtx.ref_list(0).expect("just checked").pRef.is_empty());
+        assert_eq!(
+            pCtx.pDecPic,
+            Some(pCtx.ref_list(0).expect("just checked").pRef.at(0))
+        );
 
-            assert!((*pCtx).pStrideTab.is_some());
-            assert!(!(*pCtx).mvd_cost_table().is_empty());
-            assert_eq!(
-                (*pCtx).eRefStrategy,
-                RefStrategyKind::TemporalLayer,
-                "camera content without LTR selects the temporal-layer strategy"
-            );
+        assert!(pCtx.pStrideTab.is_some());
+        assert!(!pCtx.mvd_cost_table().is_empty());
+        assert_eq!(
+            pCtx.eRefStrategy,
+            RefStrategyKind::TemporalLayer,
+            "camera content without LTR selects the temporal-layer strategy"
+        );
 
-            WelsUninitEncoderExt(Some(Box::from_raw(pCtx)));
-        }
+        WelsUninitEncoderExt(Some(pCtx));
     }
 }

@@ -5,7 +5,7 @@
 //! C++: `codec/encoder/core/inc/svc_mode_decision.h`,
 //! `codec/encoder/core/src/svc_mode_decision.cpp`.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use crate::common::mc::{mc_chroma, mc_luma};
 pub use crate::encoder::encoder_context::EWelsSliceType;
@@ -2358,115 +2358,101 @@ mod tests {
     }
 
     #[test]
-    #[allow(unsafe_code)]
     fn test_wels_md_i16x16_cost() {
-        unsafe {
-            // The function-pointer tables are populated the way the real caller does
-            // it: WelsInitIntraPredFuncs installs pfGetLumaI16x16Pred and
-            // WelsInitSampleSadFunc installs pfSampleSad, which SetFastCodingFunc then
-            // selects via pfMdCost.
-            let mut func_list = SWelsFuncPtrList::default();
-            crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(&mut func_list, 0);
-            crate::encoder::sample::WelsInitSampleSadFunc(&mut func_list, 0);
-            func_list.sSampleDealingFuncs.pfMdCost = crate::encoder::md::CostFamily::Sad;
+        // The function-pointer tables are populated the way the real caller does
+        // it: WelsInitIntraPredFuncs installs pfGetLumaI16x16Pred and
+        // WelsInitSampleSadFunc installs pfSampleSad, which SetFastCodingFunc then
+        // selects via pfMdCost.
+        let mut func_list = SWelsFuncPtrList::default();
+        crate::encoder::get_intra_predictor::WelsInitIntraPredFuncs(&mut func_list, 0);
+        crate::encoder::sample::WelsInitSampleSadFunc(&mut func_list, 0);
+        func_list.sSampleDealingFuncs.pfMdCost = crate::encoder::md::CostFamily::Sad;
 
-            // The fixture needs a real border, because the V/H/DC predictors read
-            // `(x, -1)` and `(-1, y)`.
-            const STRIDE: usize = 48;
-            let mut rec_pic = SPicture::new(160, 160, false);
-            {
-                let plane = rec_pic.plane_mut(0);
-                let (w, h) = (plane.width() as isize, plane.height() as isize);
-                for y in -1..h {
-                    plane.row_mut(y, -1, (w + 2) as usize).fill(128);
-                }
+        // The fixture needs a real border, because the V/H/DC predictors read
+        // `(x, -1)` and `(-1, y)`.
+        const STRIDE: usize = 48;
+        let mut rec_pic = SPicture::new(160, 160, false);
+        {
+            let plane = rec_pic.plane_mut(0);
+            let (w, h) = (plane.width() as isize, plane.height() as isize);
+            for y in -1..h {
+                plane.row_mut(y, -1, (w + 2) as usize).fill(128);
             }
-
-            // The macroblock under test is (1, 1) and its 16x16 luma block is set 10
-            // above the neighbours, which is what makes the SAD a known number.
-            const MB_X: i32 = 1;
-            const MB_Y: i32 = 1;
-            let mut src_pic = SPicture::new(160, 160, false);
-            {
-                let plane = src_pic.plane_mut(0);
-                let (w, h) = (plane.width() as isize, plane.height() as isize);
-                for y in -1..h {
-                    plane.row_mut(y, -1, (w + 2) as usize).fill(128);
-                }
-                for y in 0..16 {
-                    plane
-                        .row_mut((MB_Y as isize) * 16 + y, (MB_X as isize) * 16, 16)
-                        .fill(138);
-                }
-            }
-            let src_pool = crate::encoder::picture::SrcPicPool::new(vec![src_pic]);
-            let src_id = src_pool.at(0);
-            // The prediction ping-pong is `SMbCache::sMemPredMb`, `[u8; 2 * 256 + 16]`;
-            // the `+ 16` covers the raw 16x16 SAD's one-past-the-row pointer.
-            let mut mb_cache = SMbCache {
-                SPicData: SPicData {
-                    iMbX: MB_X,
-                    iMbY: MB_Y,
-                },
-                uiNeighborIntra: 0x07, // left + top + top-left available
-                ..Default::default()
-            };
-
-            let mut dq_layer = SDqLayer {
-                iMbWidth: 10,
-                iMbHeight: 10,
-                iEncStride: [STRIDE as i32; 3],
-                iCsStride: [STRIDE as i32; 3],
-                sLayerInfo: SLayerInfo::default(),
-                pEncPic: Some(src_id),
-                pRecView: Some(crate::encoder::rec_view::RecPicView::build(&mut rec_pic)),
-                // `WelsInitCurrentLayer` builds this beside `pRecView` for every real
-                // frame.
-                pEncView: Some(crate::encoder::rec_view::RoPicView::build(
-                    src_pool.get(src_id),
-                )),
-                ..Default::default()
-            };
-
-            let iLambda = 10;
-            let cost = WelsMdI16x16FromLayer(
-                &func_list,
-                (&mut dq_layer as *mut SDqLayer).as_ref(),
-                &mut mb_cache,
-                iLambda,
-            );
-
-            // Every neighbour sample is 128 and every source sample is 138, so V, H and
-            // DC all predict 128 and all score SAD = 256 * 10 = 2560. The tie is broken
-            // by the first candidate, g_kiIntra16AvaliMode[7][0] = I16_PRED_V, whose
-            // mode-signalling cost is iLambda * BsSizeUE(g_kiMapModeI16x16[V]=0) = 10.
-            assert_eq!(mb_cache.uiLumaI16x16Mode, I16_PRED_V as u8);
-            assert_eq!(cost, 2560 + iLambda);
-
-            // The winning prediction lands in the luma half and the scratch half is
-            // handed to the chroma search — one selector bit, two halves of one array.
-            //
-            // Order matters: each accessor call retags the whole `SMbCache`, so a
-            // pointer derived from `sMemPredMb` before the calls is popped by them and
-            // reading through it afterwards is UB. The accessor answers are taken
-            // first and the expectation derived last, so the tag that reads the buffer
-            // is on top.
-            assert_eq!(mb_cache.uiMemPredLumaHalf, 0);
-            let pLuma = std::ptr::addr_of_mut!(mb_cache.sMemPredMb)
-                .cast::<u8>()
-                .add(mem_pred_luma_off(mb_cache.uiMemPredLumaHalf));
-            let pChroma = std::ptr::addr_of_mut!(mb_cache.sMemPredMb)
-                .cast::<u8>()
-                .add(mem_pred_chroma_off(mb_cache.uiMemPredLumaHalf));
-            let pPredBuf = std::ptr::addr_of_mut!(mb_cache.sMemPredMb).cast::<u8>();
-            assert_eq!(pLuma, pPredBuf);
-            assert_eq!(pChroma, pPredBuf.add(256));
-            assert!(
-                std::slice::from_raw_parts(pPredBuf, 256)
-                    .iter()
-                    .all(|&b| b == 128)
-            );
         }
+
+        // The macroblock under test is (1, 1) and its 16x16 luma block is set 10
+        // above the neighbours, which is what makes the SAD a known number.
+        const MB_X: i32 = 1;
+        const MB_Y: i32 = 1;
+        let mut src_pic = SPicture::new(160, 160, false);
+        {
+            let plane = src_pic.plane_mut(0);
+            let (w, h) = (plane.width() as isize, plane.height() as isize);
+            for y in -1..h {
+                plane.row_mut(y, -1, (w + 2) as usize).fill(128);
+            }
+            for y in 0..16 {
+                plane
+                    .row_mut((MB_Y as isize) * 16 + y, (MB_X as isize) * 16, 16)
+                    .fill(138);
+            }
+        }
+        let src_pool = crate::encoder::picture::SrcPicPool::new(vec![src_pic]);
+        let src_id = src_pool.at(0);
+        // The prediction ping-pong is `SMbCache::sMemPredMb`, `[u8; 2 * 256 + 16]`;
+        // the `+ 16` covers the raw 16x16 SAD's one-past-the-row pointer.
+        let mut mb_cache = SMbCache {
+            SPicData: SPicData {
+                iMbX: MB_X,
+                iMbY: MB_Y,
+            },
+            uiNeighborIntra: 0x07, // left + top + top-left available
+            ..Default::default()
+        };
+
+        let dq_layer = SDqLayer {
+            iMbWidth: 10,
+            iMbHeight: 10,
+            iEncStride: [STRIDE as i32; 3],
+            iCsStride: [STRIDE as i32; 3],
+            sLayerInfo: SLayerInfo::default(),
+            pEncPic: Some(src_id),
+            pRecView: Some(crate::encoder::rec_view::RecPicView::build(&mut rec_pic)),
+            // `WelsInitCurrentLayer` builds this beside `pRecView` for every real
+            // frame.
+            pEncView: Some(crate::encoder::rec_view::RoPicView::build(
+                src_pool.get(src_id),
+            )),
+            ..Default::default()
+        };
+
+        let iLambda = 10;
+        let cost = WelsMdI16x16FromLayer(
+            &func_list,
+            Some(&dq_layer),
+            &mut mb_cache,
+            iLambda,
+        );
+
+        // Every neighbour sample is 128 and every source sample is 138, so V, H and
+        // DC all predict 128 and all score SAD = 256 * 10 = 2560. The tie is broken
+        // by the first candidate, g_kiIntra16AvaliMode[7][0] = I16_PRED_V, whose
+        // mode-signalling cost is iLambda * BsSizeUE(g_kiMapModeI16x16[V]=0) = 10.
+        assert_eq!(mb_cache.uiLumaI16x16Mode, I16_PRED_V as u8);
+        assert_eq!(cost, 2560 + iLambda);
+
+        // The winning prediction lands in the luma half and the scratch half is
+        // handed to the chroma search — one selector bit, two halves of one array.
+        assert_eq!(mb_cache.uiMemPredLumaHalf, 0);
+        let luma_off = mem_pred_luma_off(mb_cache.uiMemPredLumaHalf);
+        let chroma_off = mem_pred_chroma_off(mb_cache.uiMemPredLumaHalf);
+        assert_eq!(luma_off, 0);
+        assert_eq!(chroma_off, 256);
+        assert!(
+            mb_cache.sMemPredMb[luma_off..luma_off + 256]
+                .iter()
+                .all(|&b| b == 128)
+        );
     }
 
     #[test]

@@ -12,7 +12,6 @@
 #![allow(unsafe_code)]
 
 use core::arch::aarch64::*;
-use core::cell::Cell;
 
 use crate::encoder::rec_view::RecCursor;
 
@@ -29,60 +28,91 @@ use crate::encoder::rec_view::RecCursor;
 /// of it is written back.
 #[inline]
 #[target_feature(enable = "neon")]
-unsafe fn copy_rows16(
-    dst: &[Cell<u8>],
+unsafe fn copy_rows16<const H: usize>(
+    mut d: *mut u8,
     dst_stride: usize,
-    src: &[Cell<u8>],
+    mut s: *const u8,
     src_stride: usize,
-    h: usize,
 ) {
-    // `&[Cell<u8>]` is a shared reference to `UnsafeCell` contents, so writing
-    // through a pointer derived from it is sound, with the slice's provenance
-    // covering a 16-byte store.
-    let s = src.as_ptr() as *const u8;
-    let d = dst.as_ptr() as *mut u8;
-    for y in 0..h {
-        // SAFETY: the caller's span contract puts row `y`'s 16 bytes inside both slices.
+    let mut y = 0;
+    while y + 4 <= H {
+        // SAFETY: the caller's span contract puts rows `y..y+4`'s 16 bytes inside both slices.
         unsafe {
-            let v = vld1q_u8(s.add(y * src_stride));
-            vst1q_u8(d.add(y * dst_stride), v);
+            let v0 = vld1q_u8(s);
+            let v1 = vld1q_u8(s.add(src_stride));
+            let v2 = vld1q_u8(s.add(src_stride * 2));
+            let v3 = vld1q_u8(s.add(src_stride * 3));
+            vst1q_u8(d, v0);
+            vst1q_u8(d.add(dst_stride), v1);
+            vst1q_u8(d.add(dst_stride * 2), v2);
+            vst1q_u8(d.add(dst_stride * 3), v3);
+            s = s.add(src_stride * 4);
+            d = d.add(dst_stride * 4);
         }
+        y += 4;
+    }
+    while y < H {
+        unsafe {
+            let v = vld1q_u8(s);
+            vst1q_u8(d, v);
+            s = s.add(src_stride);
+            d = d.add(dst_stride);
+        }
+        y += 1;
     }
 }
 
 /// The 8-wide form of [`copy_rows16`]; same contract with `8` for `16`.
 #[inline]
 #[target_feature(enable = "neon")]
-unsafe fn copy_rows8(
-    dst: &[Cell<u8>],
+unsafe fn copy_rows8<const H: usize>(
+    mut d: *mut u8,
     dst_stride: usize,
-    src: &[Cell<u8>],
+    mut s: *const u8,
     src_stride: usize,
-    h: usize,
 ) {
-    let s = src.as_ptr() as *const u8;
-    let d = dst.as_ptr() as *mut u8;
-    for y in 0..h {
-        // SAFETY: the caller's span contract puts row `y`'s 8 bytes inside both slices.
+    let mut y = 0;
+    while y + 4 <= H {
+        // SAFETY: the caller's span contract puts rows `y..y+4`'s 8 bytes inside both slices.
         unsafe {
-            let v = vld1_u8(s.add(y * src_stride));
-            vst1_u8(d.add(y * dst_stride), v);
+            let v0 = vld1_u8(s);
+            let v1 = vld1_u8(s.add(src_stride));
+            let v2 = vld1_u8(s.add(src_stride * 2));
+            let v3 = vld1_u8(s.add(src_stride * 3));
+            vst1_u8(d, v0);
+            vst1_u8(d.add(dst_stride), v1);
+            vst1_u8(d.add(dst_stride * 2), v2);
+            vst1_u8(d.add(dst_stride * 3), v3);
+            s = s.add(src_stride * 4);
+            d = d.add(dst_stride * 4);
         }
+        y += 4;
+    }
+    while y < H {
+        unsafe {
+            let v = vld1_u8(s);
+            vst1_u8(d, v);
+            s = s.add(src_stride);
+            d = d.add(dst_stride);
+        }
+        y += 1;
     }
 }
 
-/// `W` bytes of each of `h` rows, from one shared cursor to another.
+/// `W` bytes of each of `H` rows, from one shared cursor to another.
 ///
 /// Panics through `block_span` if either block leaves its buffer, before any pointer
 /// is formed, so the kernels above are `unsafe` only over a validated span.
 #[inline(always)]
-fn copy_block<const W: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>, h: usize) {
-    let s = src.block_span(0, 0, W, h);
-    let d = dst.block_span(0, 0, W, h);
-    // SAFETY: both spans were just sized to `(h - 1) * stride + W` by `block_span`.
+fn copy_block<const W: usize, const H: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
+    let s = src.block_span(0, 0, W, H);
+    let d = dst.block_span(0, 0, W, H);
+    let s_ptr = s.as_ptr() as *const u8;
+    let d_ptr = d.as_ptr() as *mut u8;
+    // SAFETY: both spans were just sized to `(H - 1) * stride + W` by `block_span`.
     match W {
-        16 => unsafe { copy_rows16(d, dst.stride(), s, src.stride(), h) },
-        8 => unsafe { copy_rows8(d, dst.stride(), s, src.stride(), h) },
+        16 => unsafe { copy_rows16::<H>(d_ptr, dst.stride(), s_ptr, src.stride()) },
+        8 => unsafe { copy_rows8::<H>(d_ptr, dst.stride(), s_ptr, src.stride()) },
         _ => unreachable!("only the 8- and 16-wide rows have kernels"),
     }
 }
@@ -91,25 +121,25 @@ fn copy_block<const W: usize>(dst: &RecCursor<'_>, src: &RecCursor<'_>, h: usize
 /// the module header for why one kernel serves both.
 #[inline]
 pub fn copy_16x16(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
-    copy_block::<16>(dst, src, 16);
+    copy_block::<16, 16>(dst, src);
 }
 
 /// `WelsCopy16x8NotAligned_AArch64_neon`.
 #[inline]
 pub fn copy_16x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
-    copy_block::<16>(dst, src, 8);
+    copy_block::<16, 8>(dst, src);
 }
 
 /// `WelsCopy8x16_AArch64_neon`.
 #[inline]
 pub fn copy_8x16(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
-    copy_block::<8>(dst, src, 16);
+    copy_block::<8, 16>(dst, src);
 }
 
 /// `WelsCopy8x8_AArch64_neon`.
 #[inline]
 pub fn copy_8x8(dst: &RecCursor<'_>, src: &RecCursor<'_>) {
-    copy_block::<8>(dst, src, 8);
+    copy_block::<8, 8>(dst, src);
 }
 
 /// Copies a 16x16 block from a byte slice with stride `src_stride` into `dst`.
@@ -118,14 +148,7 @@ pub fn copy_16x16_slice(dst: &RecCursor<'_>, src: &[u8], src_stride: usize) {
     let s = &src[..15 * src_stride + 16];
     let d = dst.block_span(0, 0, 16, 16);
     // SAFETY: `s` covers 16 rows at `src_stride` and `d` covers 16 rows at `dst.stride()`.
-    unsafe {
-        let sp = s.as_ptr();
-        let dp = d.as_ptr() as *mut u8;
-        let ds = dst.stride();
-        for y in 0..16 {
-            vst1q_u8(dp.add(y * ds), vld1q_u8(sp.add(y * src_stride)));
-        }
-    }
+    unsafe { copy_rows16::<16>(d.as_ptr() as *mut u8, dst.stride(), s.as_ptr(), src_stride) }
 }
 
 /// Copies an 8x8 block from a byte slice with stride `src_stride` into `dst`.
@@ -134,14 +157,7 @@ pub fn copy_8x8_slice(dst: &RecCursor<'_>, src: &[u8], src_stride: usize) {
     let s = &src[..7 * src_stride + 8];
     let d = dst.block_span(0, 0, 8, 8);
     // SAFETY: `s` covers 8 rows at `src_stride` and `d` covers 8 rows at `dst.stride()`.
-    unsafe {
-        let sp = s.as_ptr();
-        let dp = d.as_ptr() as *mut u8;
-        let ds = dst.stride();
-        for y in 0..8 {
-            vst1_u8(dp.add(y * ds), vld1_u8(sp.add(y * src_stride)));
-        }
-    }
+    unsafe { copy_rows8::<8>(d.as_ptr() as *mut u8, dst.stride(), s.as_ptr(), src_stride) }
 }
 
 // ============================================================================

@@ -1135,17 +1135,6 @@ impl sWelsEncCtx {
         self.vaa_mut().expect("the frame's video-analysis block")
     }
 
-    /// [`vaa`](Self::vaa) as a raw pointer, null when the block is absent.
-    ///
-    /// Its one caller hands it to `SWelsFuncPtrList::pfSetScrollingMv`, whose type
-    /// (`PSetScrollingMv`, `wels_func_ptr_def.rs:131`) takes `*mut SVAAFrameInfo`.
-    #[inline]
-    pub fn vaa_ptr(&self) -> *mut SVAAFrameInfo {
-        match self.vaa() {
-            Some(v) => v as *const SVAAFrameInfo as *mut SVAAFrameInfo,
-            None => std::ptr::null_mut(),
-        }
-    }
 
     /// The screen-content frame complexity.
     ///
@@ -1906,7 +1895,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(unsafe_code)]
     fn every_container_accessor_hands_out_sibling_cursors() {
         let mut ctx = Box::new(sWelsEncCtx::new());
 
@@ -1924,25 +1912,15 @@ mod tests {
         ctx.ppRefPicListExt = vec![Some(SRefList::new())];
         ctx.ppDqLayerList = vec![Some(Box::new(SDqLayer::default()))];
 
-        let p: *mut sWelsEncCtx = &mut *ctx;
-
-        unsafe {
-            let rc = (*p).rc_at_mut(0);
+        {
+            let rc = ctx.rc_at_mut(0);
             rc.iGomSize = 4;
             crate::encoder::rc::RcInitLayerMemory(rc, 2);
         }
-        // The whole set once more, interleaved: every cursor taken first, then every one
-        // used, which is the frame loop's shape.
-        let held: Vec<*mut u8> = unsafe { vec![(*p).vaa_ptr().cast(), (*p).frame_bs().cast()] };
+        assert!(ctx.vaa().is_some());
         // `frame_bs` is null here — no bitstream in this fixture — which asserts that an
-        // empty buffer still answers null. It is the last entry, and the counts below are
-        // derived from the vector.
-        let last = held.len() - 1;
-        assert!(held[last].is_null(), "no frame bitstream was installed");
-        for (i, q) in held.iter().enumerate().take(last) {
-            assert!(!q.is_null(), "held cursor {i} went null");
-            unsafe { assert_eq!(*q.cast::<u8>(), *q.cast::<u8>()) };
-        }
+        // empty buffer still answers null.
+        assert!(ctx.frame_bs().is_null(), "no frame bitstream was installed");
     }
 
     /// `SLayerBSInfo::pBsBuf` keeps a cursor into `pFrameBs` for the life of a

@@ -236,8 +236,6 @@ pub struct SRect {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SPixMap {
-    /// `void*` in `IWelsVP.h`; the three planes are bytes at every writer and reader.
-    pub pPixel: [*mut u8; 3],
     pub iSizeInBits: i32,
     pub iStride: [i32; 3],
     pub sRect: SRect,
@@ -248,7 +246,6 @@ pub struct SPixMap {
 impl Default for SPixMap {
     fn default() -> Self {
         Self {
-            pPixel: [std::ptr::null_mut(); 3],
             iSizeInBits: g_kiPixMapSizeInBits,
             iStride: [0; 3],
             sRect: SRect::default(),
@@ -711,53 +708,6 @@ pub fn ClearEndOfLinePadding(pData: &mut [u8], iStride: i32, iWidth: i32, iHeigh
         for i in 0..iHeight {
             let at = (i * iStride + iWidth) as usize;
             pData[at..at + diff].fill(0);
-        }
-    }
-}
-
-/// Row-by-row planar memory copy for I420 YUV buffers — the ingest primitive. The
-/// source pointers are the application's plane buffers.
-///
-/// # Safety
-/// Every pointer must address a live plane of at least `iWidth x iHeight`
-/// (halved for chroma) bytes at its stride, and the source and destination
-/// planes must not overlap.
-#[inline]
-#[allow(unsafe_code)]
-pub unsafe fn WelsMoveMemory_c(
-    mut pDstY: *mut u8,
-    mut pDstU: *mut u8,
-    mut pDstV: *mut u8,
-    iDstStrideY: i32,
-    iDstStrideU: i32,
-    iDstStrideV: i32,
-    mut pSrcY: *mut u8,
-    mut pSrcU: *mut u8,
-    mut pSrcV: *mut u8,
-    iSrcStrideY: i32,
-    iSrcStrideU: i32,
-    iSrcStrideV: i32,
-    iWidth: i32,
-    iHeight: i32,
-) {
-    unsafe {
-        let iWidth2 = (iWidth >> 1) as usize;
-        let iHeight2 = iHeight >> 1;
-        let iWidthY = iWidth as usize;
-
-        for _ in 0..iHeight {
-            std::ptr::copy_nonoverlapping(pSrcY, pDstY, iWidthY);
-            pDstY = pDstY.offset(iDstStrideY as isize);
-            pSrcY = pSrcY.offset(iSrcStrideY as isize);
-        }
-
-        for _ in 0..iHeight2 {
-            std::ptr::copy_nonoverlapping(pSrcU, pDstU, iWidth2);
-            std::ptr::copy_nonoverlapping(pSrcV, pDstV, iWidth2);
-            pDstU = pDstU.offset(iDstStrideU as isize);
-            pDstV = pDstV.offset(iDstStrideV as isize);
-            pSrcU = pSrcU.offset(iSrcStrideU as isize);
-            pSrcV = pSrcV.offset(iSrcStrideV as isize);
         }
     }
 }
@@ -2053,12 +2003,13 @@ impl CWelsPreProcess {
         let kiSrcStrideU = kpSrc.iStride[1];
         let kiSrcStrideV = kpSrc.iStride[2];
 
-        let pDstY = pDstPic.pData[0];
-        let pDstU = pDstPic.pData[1];
-        let pDstV = pDstPic.pData[2];
         let kiDstStrideY = pDstPic.iLineSize[0];
         let kiDstStrideU = pDstPic.iLineSize[1];
         let kiDstStrideV = pDstPic.iLineSize[2];
+        let [py, pu, pv] = self.src_mut(pDstRef).planes_mut3();
+        let bDstYPresent = !py.is_empty();
+        let bDstUPresent = !pu.is_empty();
+        let bDstVPresent = !pv.is_empty();
 
         if !pSrcY.is_null() {
             if iSrcWidth <= 0
@@ -2076,7 +2027,7 @@ impl CWelsPreProcess {
                 return ENC_RETURN_INVALIDINPUT;
             }
         }
-        if !pDstY.is_null() {
+        if bDstYPresent {
             if kiTargetWidth <= 0
                 || kiTargetHeight <= 0
                 || (kiTargetWidth * kiTargetHeight > (MAX_MBS_PER_FRAME << 8))
@@ -2094,46 +2045,66 @@ impl CWelsPreProcess {
         if pSrcY.is_null()
             || pSrcU.is_null()
             || pSrcV.is_null()
-            || pDstY.is_null()
-            || pDstU.is_null()
-            || pDstV.is_null()
+            || !bDstYPresent
+            || !bDstUPresent
+            || !bDstVPresent
             || (iSrcWidth & 1) != 0
             || (iSrcHeight & 1) != 0
         {
             return ENC_RETURN_INVALIDINPUT;
         }
 
+        let (oy, ou, ov) = (py.origin(), pu.origin(), pv.origin());
+        let dst_y = &mut py.as_mut_slice()[oy..];
+        let dst_u = &mut pu.as_mut_slice()[ou..];
+        let dst_v = &mut pv.as_mut_slice()[ov..];
+        let width_y = iSrcWidth as usize;
+        let height_y = iSrcHeight as usize;
+        let width_uv = (iSrcWidth >> 1) as usize;
+        let height_uv = (iSrcHeight >> 1) as usize;
+        let src_stride_y = kiSrcStrideY as usize;
+        let src_stride_u = kiSrcStrideU as usize;
+        let src_stride_v = kiSrcStrideV as usize;
+        let dst_stride_y = kiDstStrideY as usize;
+        let dst_stride_u = kiDstStrideU as usize;
+        let dst_stride_v = kiDstStrideV as usize;
+
+        assert!(width_y <= dst_stride_y && width_uv <= dst_stride_u && width_uv <= dst_stride_v);
+
         // The guards above have checked the null/size/stride contract; what remains —
         // that the application's pointers address what its strides promise — is the
-        // API's contract, stated on the callee.
-        #[allow(unsafe_code)]
-        unsafe {
-            WelsMoveMemory_c(
-                pDstY,
-                pDstU,
-                pDstV,
-                kiDstStrideY,
-                kiDstStrideU,
-                kiDstStrideV,
-                pSrcY,
-                pSrcU,
-                pSrcV,
-                kiSrcStrideY,
-                kiSrcStrideU,
-                kiSrcStrideV,
-                iSrcWidth,
-                iSrcHeight,
-            );
+        // API's contract.
+        for (y, row) in dst_y
+            .chunks_exact_mut(dst_stride_y)
+            .take(height_y)
+            .enumerate()
+        {
+            #[allow(unsafe_code)]
+            let src_row =
+                unsafe { std::slice::from_raw_parts(pSrcY.add(y * src_stride_y), width_y) };
+            row[..width_y].copy_from_slice(src_row);
+        }
+        for (y, (row_u, row_v)) in dst_u
+            .chunks_exact_mut(dst_stride_u)
+            .zip(dst_v.chunks_exact_mut(dst_stride_v))
+            .take(height_uv)
+            .enumerate()
+        {
+            #[allow(unsafe_code)]
+            let src_u_row =
+                unsafe { std::slice::from_raw_parts(pSrcU.add(y * src_stride_u), width_uv) };
+            #[allow(unsafe_code)]
+            let src_v_row =
+                unsafe { std::slice::from_raw_parts(pSrcV.add(y * src_stride_v), width_uv) };
+            row_u[..width_uv].copy_from_slice(src_u_row);
+            row_v[..width_uv].copy_from_slice(src_v_row);
         }
 
         if kiTargetWidth > iSrcWidth || kiTargetHeight > iSrcHeight {
-            // The destination re-derived as planes, after the copy above.
-            let [py, pu, pv] = self.src_mut(pDstRef).planes_mut3();
-            let (oy, ou, ov) = (py.origin(), pu.origin(), pv.origin());
             Self::Padding(
-                &mut py.as_mut_slice()[oy..],
-                &mut pu.as_mut_slice()[ou..],
-                &mut pv.as_mut_slice()[ov..],
+                dst_y,
+                dst_u,
+                dst_v,
                 kiDstStrideY,
                 kiDstStrideU,
                 iSrcWidth,
@@ -2525,9 +2496,6 @@ impl CWelsPreProcess {
 
     fn InitPixMap(pPicture: &PicPlanes, pPixMap: &mut SPixMap) {
         {
-            pPixMap.pPixel[0] = pPicture.pData[0];
-            pPixMap.pPixel[1] = pPicture.pData[1];
-            pPixMap.pPixel[2] = pPicture.pData[2];
             pPixMap.iSizeInBits = size_of::<u8>() as i32;
             pPixMap.iStride[0] = pPicture.iLineSize[0];
             pPixMap.iStride[1] = pPicture.iLineSize[1];
@@ -2832,7 +2800,6 @@ impl CWelsPreProcess {
             let mut sSrcPixMap = SPixMap::default();
             let mut sRefPixMap = SPixMap::default();
 
-            sSrcPixMap.pPixel[0] = sCur.pData[0];
             sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
             sSrcPixMap.iStride[0] = sCur.iLineSize[0];
             sSrcPixMap.sRect.iRectWidth = sCur.iWidthInPixel;
@@ -2842,7 +2809,6 @@ impl CWelsPreProcess {
             // The map is built only when there is a reference.
             let bHasRef = sRefPic.is_some();
             if bHasRef {
-                sRefPixMap.pPixel[0] = sRef.pData[0];
                 sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
                 sRefPixMap.iStride[0] = sRef.iLineSize[0];
                 sRefPixMap.sRect.iRectWidth = sRef.iWidthInPixel;
@@ -2956,7 +2922,6 @@ impl CWelsPreProcess {
             let mut sSrcPixMap = SPixMap::default();
             let mut sRefPixMap = SPixMap::default();
 
-            sSrcPixMap.pPixel[0] = sCur.pData[0];
             sSrcPixMap.iSizeInBits = g_kiPixMapSizeInBits;
             sSrcPixMap.iStride[0] = sCur.iLineSize[0];
             sSrcPixMap.sRect.iRectWidth = sCur.iWidthInPixel;
@@ -2964,7 +2929,6 @@ impl CWelsPreProcess {
             sSrcPixMap.eFormat = VideoFormat::videoFormatI420;
 
             if sRefPic.is_some() {
-                sRefPixMap.pPixel[0] = sRef.pData[0];
                 sRefPixMap.iSizeInBits = g_kiPixMapSizeInBits;
                 sRefPixMap.iStride[0] = sRef.iLineSize[0];
                 sRefPixMap.sRect.iRectWidth = sRef.iWidthInPixel;
