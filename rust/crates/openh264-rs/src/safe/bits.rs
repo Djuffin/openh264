@@ -139,15 +139,22 @@ impl BsCursor {
     pub fn init_read_bits(&mut self, buf: &[u8], end_offset: isize) -> Result<(), ErrInfo> {
         self.debug_assert_out_of_cavlc("init_read_bits");
         let end_limit = self.len as isize - end_offset;
-        if self.pos as isize >= end_limit {
+        let kiRemainBytes = end_limit - self.pos as isize;
+        if kiRemainBytes <= 0 {
             return Err(ErrInfo::INVALID_ACCESS);
         }
-        // `GetValue4Bytes`: four bytes unconditionally,
-        // and a buffer without that much slack errors — see `get_bits`.
-        let b = buf
-            .get(self.pos..self.pos + 4)
-            .ok_or(ErrInfo::READ_OVERFLOW)?;
-        self.cur_bits = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+        let kiSeedBytes = (kiRemainBytes as usize).min(4);
+        if buf.len() < self.pos + kiSeedBytes {
+            return Err(ErrInfo::READ_OVERFLOW);
+        }
+        let mut cur_bits = 0u32;
+        for i in 0..4 {
+            cur_bits <<= 8;
+            if i < kiSeedBytes {
+                cur_bits |= buf[self.pos + i] as u32;
+            }
+        }
+        self.cur_bits = cur_bits;
         self.pos += 4;
         self.left_bits = -16;
         Ok(())
@@ -221,9 +228,17 @@ impl BsCursor {
             if self.pos > self.len + 1 {
                 return Err(ErrInfo::READ_OVERFLOW);
             }
-            let b0 = *buf.get(self.pos).ok_or(ErrInfo::READ_OVERFLOW)? as u32;
-            let b1 = *buf.get(self.pos + 1).ok_or(ErrInfo::READ_OVERFLOW)? as u32;
-            let word = (b0 << 8) | b1;
+            let mut word = 0u32;
+            if self.pos < self.len {
+                if let Some(&b0) = buf.get(self.pos) {
+                    word = (b0 as u32) << 8;
+                }
+            }
+            if self.pos + 1 < self.len {
+                if let Some(&b1) = buf.get(self.pos + 1) {
+                    word |= b1 as u32;
+                }
+            }
             let shift = self.left_bits as u32;
             if shift < 32 {
                 self.cur_bits |= word.wrapping_shl(shift);
@@ -742,6 +757,33 @@ mod tests {
         c.pos = 0;
         assert_eq!(c.init_read_bits(&buf, 1), Err(ErrInfo::INVALID_ACCESS));
         assert_eq!(c.init_read_bits(&buf, 0), Ok(()));
+
+        // Short 1-byte buffer without slack initializes safely via GetValue4BytesSafe
+        let c_no_slack = BsCursor::init(&[0x80], 8).unwrap();
+        assert_eq!(c_no_slack.cur_bits(), 0x80000000);
+    }
+
+    #[test]
+    fn dec_init_bits_handles_short_seed_bytes_safely() {
+        // C++ test: DecoderBitStreamBoundsTest.DecInitBitsHandlesShortSeedBytesSafely
+        let buf = [0xff, 0xff, 0xff];
+        let mut c = BsCursor::init(&buf, 24).unwrap();
+
+        assert_eq!(c.get_bits(&buf, 16), Ok(0xffff));
+        assert_eq!(c.get_bits(&buf, 16), Ok(0xff00));
+        assert_eq!(c.get_bits(&buf, 16), Err(ErrInfo::READ_OVERFLOW));
+    }
+
+    #[test]
+    fn bs_get_bits_stops_on_two_byte_overread() {
+        // C++ test: DecoderBitStreamBoundsTest.BsGetBitsStopsOnTwoByteOverread
+        let buf = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        let mut c = BsCursor::init(&buf, 48).unwrap();
+
+        assert_eq!(c.get_bits(&buf, 16), Ok(0xffff));
+        assert_eq!(c.get_bits(&buf, 16), Ok(0xffff));
+        assert_eq!(c.get_bits(&buf, 16), Ok(0xffff));
+        assert_eq!(c.get_bits(&buf, 16), Err(ErrInfo::READ_OVERFLOW));
     }
 
     #[test]
@@ -805,18 +847,21 @@ mod tests {
 
     #[test]
     fn a_buffer_without_slack_errors_instead_of_reading_past_it() {
-        // Same payload, no slack: the reads error instead of running past the end.
+        // A 2-byte payload without slack initializes safely via GetValue4BytesSafe,
+        // and reads error with READ_OVERFLOW instead of running past the end.
         let buf = [0xFFu8, 0xFF];
-        let mut c = BsCursor::init(&buf, 16);
-        assert_eq!(
-            c,
-            Err(ErrInfo::READ_OVERFLOW),
-            "the 4-byte prime needs slack"
-        );
+        let mut c = BsCursor::init(&buf, 16).unwrap();
+        let mut err = None;
+        for _ in 0..64 {
+            if let Err(e) = c.get_bits(&buf, 8) {
+                err = Some(e);
+                break;
+            }
+        }
+        assert_eq!(err, Some(ErrInfo::READ_OVERFLOW));
 
         let buf = [0xFFu8, 0xFF, 0xFF, 0xFF];
-        c = BsCursor::init(&buf, 16);
-        let mut c = c.unwrap();
+        let mut c = BsCursor::init(&buf, 16).unwrap();
         let mut err = None;
         for _ in 0..64 {
             if let Err(e) = c.get_bits(&buf, 8) {
