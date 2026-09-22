@@ -64,6 +64,7 @@ pub const MB_TYPE_8x8: u32 = 0x00000040;
 pub const MB_TYPE_8x8_REF0: u32 = 0x00000080;
 pub const MB_TYPE_SKIP: u32 = 0x00000100;
 pub const MB_TYPE_INTRA_PCM: u32 = 0x00000200;
+pub const I_PCM_MB_SIZE_IN_BYTE: usize = 16 * 16 + 2 * (8 * 8);
 pub const MB_TYPE_INTRA_BL: u32 = 0x00000400;
 pub const MB_TYPE_DIRECT: u32 = 0x00000800;
 pub const MB_TYPE_P0L0: u32 = 0x00001000;
@@ -2458,17 +2459,18 @@ fn DecodeMbCavlcPcm(
         *pDec.pMbType.get_mut(iMbXy) = MB_TYPE_INTRA_PCM;
 
         // step 1: locate the bit-stream position (must align to an integer byte).
-        // `pos` is `usize`, so an underflow of `pos - iIndex` is reported by the slice
-        // index below.
-        let iPcmStart = (pBs.pos() as isize - iIndex as isize) as usize;
+        let pcm_start = pBs.pos() as isize - iIndex as isize;
+        let iPcmStart = pcm_start as usize;
         pBs.set_pos(iPcmStart);
 
+        // bounds check: I_PCM copies I_PCM_MB_SIZE_IN_BYTE (256 luma + 128 chroma) bytes
+        // directly from the bitstream buffer; reject when fewer bytes remain to avoid
+        // an out-of-bounds read (mirrors ParseIPCMInfoCabac).
+        if pcm_start < 0 || (pBs.len() as isize - iPcmStart as isize) < I_PCM_MB_SIZE_IN_BYTE as isize {
+            return GENERATE_ERROR_NO(ERR_LEVEL_MB_DATA, ERR_INFO_BS_INCOMPLETE);
+        }
+
         // step 2: copy pixels from the bit-stream into the decoded picture.
-        //
-        // The 384 bytes are taken as one window: a PCM macroblock announced within
-        // `iIndex` of the end of the RBSP has no window, and the copy does not run.
-        // The reported error is unchanged either way, because `InitReadBits` below is
-        // handed `iPcmStart + 384` and fails on that arithmetic.
         let bParseOnly = pCtx.bParseOnly;
         if !bParseOnly {
             if let Some(pcm) = buf.get(iPcmStart..iPcmStart + 384) {
@@ -5579,5 +5581,21 @@ mod tests {
             );
             assert_eq!(dims, Some((64, 64)));
         }
+    }
+
+    #[test]
+    fn test_cavlc_ipcm_truncated_fails_closed() {
+        // C++ test: DecoderParseSyntaxTest.TestIPcmCavlcTruncated
+        // Truncate CVPCMNL1_SVA_C.264 by 384 bytes so that the final I_PCM macroblock
+        // is short of a full 384-byte payload. The decoder must fail closed rather than
+        // crashing or reading out of bounds.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../res/CVPCMNL1_SVA_C.264");
+        let data = std::fs::read(path).expect("failed to read CVPCMNL1_SVA_C.264");
+        assert!(data.len() > 384);
+        let truncated = &data[..data.len() - 384];
+        let (_frames, _dims, states) = drive_decoder_over(truncated);
+        // Truncated I_PCM must not be reported as a clean decode.
+        assert_ne!(states, 0, "truncated I_PCM must report error states");
     }
 }
