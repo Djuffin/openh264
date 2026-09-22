@@ -158,3 +158,68 @@ fn force_intra_frame_with_ltr_gives_an_idr_every_time() {
         }
     }
 }
+
+#[test]
+fn test_high_bitrate_idr_target_bits() {
+    // C++ test: EncoderInterfaceTest.HighBitrateIdrTargetBits
+    unsafe {
+        let mut enc: *mut ISVCEncoder = std::ptr::null_mut();
+        assert_eq!(WelsCreateSVCEncoder(&mut enc), CM_RESULT_SUCCESS);
+
+        let mut param = SEncParamExt::default();
+        assert_eq!(
+            ISVCEncoder::GetDefaultParams(enc, &mut param as *mut SEncParamExt),
+            CM_RESULT_SUCCESS
+        );
+        param.iUsageType = EUsageType::CAMERA_VIDEO_REAL_TIME;
+        param.iPicWidth = 1280;
+        param.iPicHeight = 720;
+        param.iTargetBitrate = 200_000_000;
+        param.fMaxFrameRate = 30.0;
+        param.iRCMode = RC_MODES::RC_BITRATE_MODE;
+        param.iSpatialLayerNum = 1;
+        param.sSpatialLayers[0].iVideoWidth = param.iPicWidth;
+        param.sSpatialLayers[0].iVideoHeight = param.iPicHeight;
+        param.sSpatialLayers[0].iSpatialBitrate = param.iTargetBitrate;
+        param.sSpatialLayers[0].fFrameRate = param.fMaxFrameRate;
+
+        assert_eq!(
+            ISVCEncoder::InitializeExt(enc, &param as *const SEncParamExt),
+            CM_RESULT_SUCCESS
+        );
+
+        let mut y = vec![128u8; 1280 * 720];
+        let mut u = vec![128u8; 640 * 360];
+        let mut v = vec![128u8; 640 * 360];
+        let mut src = SSourcePicture {
+            iColorFormat: EVideoFormatType::videoFormatI420 as i32,
+            iStride: [1280, 640, 640, 0],
+            pData: [
+                y.as_mut_ptr(),
+                u.as_mut_ptr(),
+                v.as_mut_ptr(),
+                std::ptr::null_mut(),
+            ],
+            iPicWidth: 1280,
+            iPicHeight: 720,
+            uiTimeStamp: 0,
+            ..SSourcePicture::default()
+        };
+        let mut bs = SFrameBSInfo::default();
+        assert_eq!(
+            ISVCEncoder::EncodeFrame(enc, &src as *const SSourcePicture, &mut bs),
+            CM_RESULT_SUCCESS
+        );
+
+        // Force subsequent IDR frame so that iIdrNum != 0 and RcDecideTargetBits uses iIdrBitrateRatio
+        assert_eq!(ISVCEncoder::ForceIntraFrame(enc, true), CM_RESULT_SUCCESS);
+        src.uiTimeStamp += 33;
+        assert_eq!(
+            ISVCEncoder::EncodeFrame(enc, &src as *const SSourcePicture, &mut bs),
+            CM_RESULT_SUCCESS
+        );
+
+        ISVCEncoder::Uninitialize(enc);
+        WelsDestroySVCEncoder(enc);
+    }
+}

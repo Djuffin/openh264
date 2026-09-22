@@ -1139,9 +1139,11 @@ pub fn RcDecideTargetBits(pEncCtx: &mut sWelsEncCtx) {
 
     if eSliceType as i32 == I_SLICE {
         if pWelsSvcRc.iIdrNum != 0 {
-            pWelsSvcRc.iTargetBits = pWelsSvcRc.iBitsPerFrame * iIdrBitrateRatio / 100;
+            pWelsSvcRc.iTargetBits =
+                ((pWelsSvcRc.iBitsPerFrame as i64 * iIdrBitrateRatio as i64) / 100) as i32;
         } else {
-            pWelsSvcRc.iTargetBits = pWelsSvcRc.iBitsPerFrame * IDR_BITRATE_RATIO;
+            pWelsSvcRc.iTargetBits =
+                (pWelsSvcRc.iBitsPerFrame as i64 * IDR_BITRATE_RATIO as i64) as i32;
         }
     } else {
         if pWelsSvcRc.iRemainingWeights > sTOverRc.iTlayerWeight
