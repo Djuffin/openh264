@@ -9,7 +9,7 @@
 //! probes at span rows `j` and `j + 2` of column 1, the left and right at row `j + 1`
 //! of columns 0 and 2. Per group rather than once per block because only a constant
 //! row offset inside a span folds; `G` is sized so the group's walk unrolls.
-#![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
+#![allow(unsafe_code)]
 
 use crate::safe::plane::{BlockRows, RefSamples};
 #[cfg(target_arch = "x86_64")]
@@ -144,31 +144,38 @@ unsafe fn sample_sad_four_16x_avx2<S: RefSamples, const H: usize, const HW: usiz
     let mut acc2 = _mm256_setzero_si256();
     let mut acc3 = _mm256_setzero_si256();
 
-    let mut v2_r0 = _mm_loadu_si128(p2.add(1) as *const __m128i);
-    let mut v2_r1 = _mm_loadu_si128(p2.add(stride2 + 1) as *const __m128i);
+    let (mut v2_r0, mut v2_r1) = unsafe {
+        (
+            _mm_loadu_si128(p2.add(1) as *const __m128i),
+            _mm_loadu_si128(p2.add(stride2 + 1) as *const __m128i),
+        )
+    };
 
     let mut y = 0usize;
     while y < H {
-        let v1_0 = _mm_loadu_si128(p1.add(y * stride1) as *const __m128i);
-        let v1_1 = _mm_loadu_si128(p1.add((y + 1) * stride1) as *const __m128i);
+        let (v1_0, v1_1, v2_r2, v2_r3, v2_lt_0, v2_lt_1, v2_rt_0, v2_rt_1) = unsafe {
+            let v1_0 = _mm_loadu_si128(p1.add(y * stride1) as *const __m128i);
+            let v1_1 = _mm_loadu_si128(p1.add((y + 1) * stride1) as *const __m128i);
+
+            let p2_r1 = p2.add((y + 1) * stride2);
+            let p2_r2 = p2.add((y + 2) * stride2);
+            let p2_r3 = p2.add((y + 3) * stride2);
+
+            let v2_r2 = _mm_loadu_si128(p2_r2.add(1) as *const __m128i);
+            let v2_r3 = _mm_loadu_si128(p2_r3.add(1) as *const __m128i);
+
+            let v2_lt_0 = _mm_loadu_si128(p2_r1 as *const __m128i);
+            let v2_lt_1 = _mm_loadu_si128(p2_r2 as *const __m128i);
+
+            let v2_rt_0 = _mm_loadu_si128(p2_r1.add(2) as *const __m128i);
+            let v2_rt_1 = _mm_loadu_si128(p2_r2.add(2) as *const __m128i);
+            (v1_0, v1_1, v2_r2, v2_r3, v2_lt_0, v2_lt_1, v2_rt_0, v2_rt_1)
+        };
+
         let v1 = _mm256_set_m128i(v1_1, v1_0);
-
-        let p2_r1 = p2.add((y + 1) * stride2);
-        let p2_r2 = p2.add((y + 2) * stride2);
-        let p2_r3 = p2.add((y + 3) * stride2);
-
-        let v2_r2 = _mm_loadu_si128(p2_r2.add(1) as *const __m128i);
-        let v2_r3 = _mm_loadu_si128(p2_r3.add(1) as *const __m128i);
-
         let v2_up = _mm256_set_m128i(v2_r1, v2_r0);
         let v2_dn = _mm256_set_m128i(v2_r3, v2_r2);
-
-        let v2_lt_0 = _mm_loadu_si128(p2_r1 as *const __m128i);
-        let v2_lt_1 = _mm_loadu_si128(p2_r2 as *const __m128i);
         let v2_lt = _mm256_set_m128i(v2_lt_1, v2_lt_0);
-
-        let v2_rt_0 = _mm_loadu_si128(p2_r1.add(2) as *const __m128i);
-        let v2_rt_1 = _mm_loadu_si128(p2_r2.add(2) as *const __m128i);
         let v2_rt = _mm256_set_m128i(v2_rt_1, v2_rt_0);
 
         acc0 = _mm256_add_epi64(acc0, _mm256_sad_epu8(v1, v2_up));
@@ -181,8 +188,9 @@ unsafe fn sample_sad_four_16x_avx2<S: RefSamples, const H: usize, const HW: usiz
         y += 2;
     }
 
-    #[inline(always)]
-    unsafe fn reduce256(acc: __m256i) -> i32 {
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    fn reduce256(acc: __m256i) -> i32 {
         let lo = _mm256_castsi256_si128(acc);
         let hi = _mm256_extracti128_si256(acc, 1);
         let sum128 = _mm_add_epi64(lo, hi);
@@ -198,7 +206,12 @@ unsafe fn sample_sad_four_16x_avx2<S: RefSamples, const H: usize, const HW: usiz
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-pub unsafe fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
+pub unsafe fn sample_sad_four_16x<
+    S: RefSamples,
+    const H: usize,
+    const HW: usize,
+    const G: usize,
+>(
     sample1: &S,
     sample2: &S,
     sad: &mut [i32; 4],
@@ -245,9 +258,11 @@ pub unsafe fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize
         }
         #[inline(always)]
         unsafe fn reduce16(acc: __m128i) -> i32 {
-            let hi = _mm_srli_si128(acc, 8);
-            let sum = _mm_add_epi32(acc, hi);
-            _mm_cvtsi128_si32(sum)
+            unsafe {
+                let hi = _mm_srli_si128(acc, 8);
+                let sum = _mm_add_epi32(acc, hi);
+                _mm_cvtsi128_si32(sum)
+            }
         }
 
         sad[0] = reduce16(acc0);
@@ -338,7 +353,8 @@ pub unsafe fn sample_sad_four_4x<S: RefSamples, const H: usize, const HW: usize,
         for y in 0..H {
             let v1 = _mm_cvtsi32_si128((p1.add(y * stride1) as *const i32).read_unaligned());
             let p2_mid = p2.add((y + 1) * stride2);
-            let v2_dn = _mm_cvtsi32_si128((p2.add((y + 2) * stride2 + 1) as *const i32).read_unaligned());
+            let v2_dn =
+                _mm_cvtsi32_si128((p2.add((y + 2) * stride2 + 1) as *const i32).read_unaligned());
             let v2_lt = _mm_cvtsi32_si128((p2_mid as *const i32).read_unaligned());
             let v2_rt = _mm_cvtsi32_si128((p2_mid.add(2) as *const i32).read_unaligned());
 

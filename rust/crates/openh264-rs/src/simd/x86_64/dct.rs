@@ -1,5 +1,5 @@
 //! SSE4.1 and SSE2 implementations of Forward 4x4 DCT and Inverse DCT (IDCT) with Prediction Addition.
-#![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
+#![allow(unsafe_code)]
 
 use crate::encoder::rec_view::RecCursor;
 use crate::safe::plane::{BlockRows, PlaneCursor, PlaneCursorMut, RefSamples, SampleCursor};
@@ -28,17 +28,19 @@ unsafe fn dct_pass(
     d2: __m128i,
     d3: __m128i,
 ) -> (__m128i, __m128i, __m128i, __m128i) {
-    let s0 = _mm_add_epi16(d0, d3);
-    let s3 = _mm_sub_epi16(d0, d3);
-    let s1 = _mm_add_epi16(d1, d2);
-    let s2 = _mm_sub_epi16(d1, d2);
+    unsafe {
+        let s0 = _mm_add_epi16(d0, d3);
+        let s3 = _mm_sub_epi16(d0, d3);
+        let s1 = _mm_add_epi16(d1, d2);
+        let s2 = _mm_sub_epi16(d1, d2);
 
-    let y0 = _mm_add_epi16(s0, s1);
-    let y1 = _mm_add_epi16(_mm_slli_epi16(s3, 1), s2);
-    let y2 = _mm_sub_epi16(s0, s1);
-    let y3 = _mm_sub_epi16(s3, _mm_slli_epi16(s2, 1));
+        let y0 = _mm_add_epi16(s0, s1);
+        let y1 = _mm_add_epi16(_mm_slli_epi16(s3, 1), s2);
+        let y2 = _mm_sub_epi16(s0, s1);
+        let y3 = _mm_sub_epi16(s3, _mm_slli_epi16(s2, 1));
 
-    (y0, y1, y2, y3)
+        (y0, y1, y2, y3)
+    }
 }
 
 /// In-register transpose of a 4x4 matrix of 16-bit integers stored in the lower 64 bits of 4 registers.
@@ -49,17 +51,19 @@ unsafe fn transpose4(
     v2: __m128i,
     v3: __m128i,
 ) -> (__m128i, __m128i, __m128i, __m128i) {
-    let t0 = _mm_unpacklo_epi16(v0, v1);
-    let t1 = _mm_unpacklo_epi16(v2, v3);
-    let u0 = _mm_unpacklo_epi32(t0, t1);
-    let u1 = _mm_unpackhi_epi32(t0, t1);
+    unsafe {
+        let t0 = _mm_unpacklo_epi16(v0, v1);
+        let t1 = _mm_unpacklo_epi16(v2, v3);
+        let u0 = _mm_unpacklo_epi32(t0, t1);
+        let u1 = _mm_unpackhi_epi32(t0, t1);
 
-    let c0 = u0;
-    let c1 = _mm_srli_si128(u0, 8);
-    let c2 = u1;
-    let c3 = _mm_srli_si128(u1, 8);
+        let c0 = u0;
+        let c1 = _mm_srli_si128(u0, 8);
+        let c2 = u1;
+        let c3 = _mm_srli_si128(u1, 8);
 
-    (c0, c1, c2, c3)
+        (c0, c1, c2, c3)
+    }
 }
 
 /// 4x4 Forward Integer DCT of the pixel difference `(pix1 - pix2)` using SSE2.
@@ -127,22 +131,24 @@ unsafe fn transpose8(
     v2: __m128i,
     v3: __m128i,
 ) -> (__m128i, __m128i, __m128i, __m128i) {
-    let t0 = _mm_unpacklo_epi16(v0, v1);
-    let t1 = _mm_unpackhi_epi16(v0, v1);
-    let t2 = _mm_unpacklo_epi16(v2, v3);
-    let t3 = _mm_unpackhi_epi16(v2, v3);
+    unsafe {
+        let t0 = _mm_unpacklo_epi16(v0, v1);
+        let t1 = _mm_unpackhi_epi16(v0, v1);
+        let t2 = _mm_unpacklo_epi16(v2, v3);
+        let t3 = _mm_unpackhi_epi16(v2, v3);
 
-    let u0 = _mm_unpacklo_epi32(t0, t2);
-    let u1 = _mm_unpackhi_epi32(t0, t2);
-    let u2 = _mm_unpacklo_epi32(t1, t3);
-    let u3 = _mm_unpackhi_epi32(t1, t3);
+        let u0 = _mm_unpacklo_epi32(t0, t2);
+        let u1 = _mm_unpackhi_epi32(t0, t2);
+        let u2 = _mm_unpacklo_epi32(t1, t3);
+        let u3 = _mm_unpackhi_epi32(t1, t3);
 
-    let c0 = _mm_unpacklo_epi64(u0, u2);
-    let c1 = _mm_unpackhi_epi64(u0, u2);
-    let c2 = _mm_unpacklo_epi64(u1, u3);
-    let c3 = _mm_unpackhi_epi64(u1, u3);
+        let c0 = _mm_unpacklo_epi64(u0, u2);
+        let c1 = _mm_unpackhi_epi64(u0, u2);
+        let c2 = _mm_unpacklo_epi64(u1, u3);
+        let c3 = _mm_unpackhi_epi64(u1, u3);
 
-    (c0, c1, c2, c3)
+        (c0, c1, c2, c3)
+    }
 }
 
 /// Transforms two horizontally adjacent 4x4 blocks side-by-side using 8-wide SSE2 SIMD
@@ -231,20 +237,24 @@ pub fn dct_four_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 64], pix1:
 
 #[inline(always)]
 unsafe fn add_res_and_clip(pred_4bytes: [u8; 4], res: __m128i) -> [u8; 4] {
-    let p_vec = _mm_cvtsi32_si128(i32::from_ne_bytes(pred_4bytes));
-    let p_unp = _mm_unpacklo_epi8(p_vec, _mm_setzero_si128());
-    let sum = _mm_add_epi16(p_unp, res);
-    let packed = _mm_packus_epi16(sum, sum);
-    _mm_cvtsi128_si32(packed).to_ne_bytes()
+    unsafe {
+        let p_vec = _mm_cvtsi32_si128(i32::from_ne_bytes(pred_4bytes));
+        let p_unp = _mm_unpacklo_epi8(p_vec, _mm_setzero_si128());
+        let sum = _mm_add_epi16(p_unp, res);
+        let packed = _mm_packus_epi16(sum, sum);
+        _mm_cvtsi128_si32(packed).to_ne_bytes()
+    }
 }
 
 #[inline(always)]
 unsafe fn add_res_and_clip8(pred_8bytes: [u8; 8], res: __m128i) -> [u8; 8] {
-    let p_vec = _mm_cvtsi64_si128(i64::from_ne_bytes(pred_8bytes));
-    let p_unp = _mm_unpacklo_epi8(p_vec, _mm_setzero_si128());
-    let sum = _mm_add_epi16(p_unp, res);
-    let packed = _mm_packus_epi16(sum, sum);
-    _mm_cvtsi128_si64(packed).to_ne_bytes()
+    unsafe {
+        let p_vec = _mm_cvtsi64_si128(i64::from_ne_bytes(pred_8bytes));
+        let p_unp = _mm_unpacklo_epi8(p_vec, _mm_setzero_si128());
+        let sum = _mm_add_epi16(p_unp, res);
+        let packed = _mm_packus_epi16(sum, sum);
+        _mm_cvtsi128_si64(packed).to_ne_bytes()
+    }
 }
 
 #[inline(always)]
@@ -254,17 +264,19 @@ unsafe fn idct_col_butterfly_i32(
     s8_32: __m128i,
     s12_32: __m128i,
 ) -> (__m128i, __m128i, __m128i, __m128i) {
-    let c32 = _mm_set1_epi32(32);
-    let t1_a = _mm_add_epi32(s0_32, s8_32);
-    let t2_a = _mm_add_epi32(s4_32, _mm_srai_epi32(s12_32, 1));
-    let res0 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_a, t2_a), c32), 6);
-    let res3 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_a, t2_a), c32), 6);
+    unsafe {
+        let c32 = _mm_set1_epi32(32);
+        let t1_a = _mm_add_epi32(s0_32, s8_32);
+        let t2_a = _mm_add_epi32(s4_32, _mm_srai_epi32(s12_32, 1));
+        let res0 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_a, t2_a), c32), 6);
+        let res3 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_a, t2_a), c32), 6);
 
-    let t1_b = _mm_sub_epi32(s0_32, s8_32);
-    let t2_b = _mm_sub_epi32(_mm_srai_epi32(s4_32, 1), s12_32);
-    let res1 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_b, t2_b), c32), 6);
-    let res2 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_b, t2_b), c32), 6);
-    (res0, res1, res2, res3)
+        let t1_b = _mm_sub_epi32(s0_32, s8_32);
+        let t2_b = _mm_sub_epi32(_mm_srai_epi32(s4_32, 1), s12_32);
+        let res1 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_b, t2_b), c32), 6);
+        let res2 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_b, t2_b), c32), 6);
+        (res0, res1, res2, res3)
+    }
 }
 
 /// Computes the 4x4 IDCT residual vectors for 4 rows using baseline SSE2.

@@ -3,7 +3,7 @@
 //! The 4x4 block every shape is built from cuts each operand once into a
 //! `RefSamples::span` and indexes its four rows inside it: one bounds cut per operand
 //! rather than two checks per row. See `RefSamples::span`.
-#![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
+#![allow(unsafe_code)]
 
 use crate::safe::plane::{BlockRows, RefSamples};
 #[cfg(target_arch = "x86_64")]
@@ -138,16 +138,18 @@ const HSUM_SUB_DB1_128X2: [i8; 32] = [
 
 #[inline(always)]
 unsafe fn sum_w_horizon_avx2(acc: __m256i) -> i32 {
-    let ones = _mm256_set1_epi16(1);
-    let dwords = _mm256_madd_epi16(acc, ones);
-    let lo128 = _mm256_castsi256_si128(dwords);
-    let hi128 = _mm256_extracti128_si256(dwords, 1);
-    let sum128 = _mm_add_epi32(lo128, hi128);
-    let hi64 = _mm_unpackhi_epi64(sum128, sum128);
-    let sum64 = _mm_add_epi32(sum128, hi64);
-    let hi32 = _mm_srli_si128(sum64, 4);
-    let total = _mm_add_epi32(sum64, hi32);
-    _mm_cvtsi128_si32(total)
+    unsafe {
+        let ones = _mm256_set1_epi16(1);
+        let dwords = _mm256_madd_epi16(acc, ones);
+        let lo128 = _mm256_castsi256_si128(dwords);
+        let hi128 = _mm256_extracti128_si256(dwords, 1);
+        let sum128 = _mm_add_epi32(lo128, hi128);
+        let hi64 = _mm_unpackhi_epi64(sum128, sum128);
+        let sum64 = _mm_add_epi32(sum128, hi64);
+        let hi32 = _mm_srli_si128(sum64, 4);
+        let total = _mm_add_epi32(sum64, hi32);
+        _mm_cvtsi128_si32(total)
+    }
 }
 
 #[inline(always)]
@@ -158,65 +160,67 @@ unsafe fn satd_16x4_step(
     stride2: usize,
     hsum_const: __m256i,
 ) -> __m256i {
-    let x1_0 = _mm_loadu_si128(p1 as *const __m128i);
-    let x2_0 = _mm_loadu_si128(p2 as *const __m128i);
-    let y1_0 = _mm256_broadcastsi128_si256(x1_0);
-    let y2_0 = _mm256_broadcastsi128_si256(x2_0);
-    let d0 = _mm256_sub_epi16(
-        _mm256_maddubs_epi16(y1_0, hsum_const),
-        _mm256_maddubs_epi16(y2_0, hsum_const),
-    );
+    unsafe {
+        let x1_0 = _mm_loadu_si128(p1 as *const __m128i);
+        let x2_0 = _mm_loadu_si128(p2 as *const __m128i);
+        let y1_0 = _mm256_broadcastsi128_si256(x1_0);
+        let y2_0 = _mm256_broadcastsi128_si256(x2_0);
+        let d0 = _mm256_sub_epi16(
+            _mm256_maddubs_epi16(y1_0, hsum_const),
+            _mm256_maddubs_epi16(y2_0, hsum_const),
+        );
 
-    let x1_1 = _mm_loadu_si128(p1.add(stride1) as *const __m128i);
-    let x2_1 = _mm_loadu_si128(p2.add(stride2) as *const __m128i);
-    let y1_1 = _mm256_broadcastsi128_si256(x1_1);
-    let y2_1 = _mm256_broadcastsi128_si256(x2_1);
-    let d1 = _mm256_sub_epi16(
-        _mm256_maddubs_epi16(y1_1, hsum_const),
-        _mm256_maddubs_epi16(y2_1, hsum_const),
-    );
+        let x1_1 = _mm_loadu_si128(p1.add(stride1) as *const __m128i);
+        let x2_1 = _mm_loadu_si128(p2.add(stride2) as *const __m128i);
+        let y1_1 = _mm256_broadcastsi128_si256(x1_1);
+        let y2_1 = _mm256_broadcastsi128_si256(x2_1);
+        let d1 = _mm256_sub_epi16(
+            _mm256_maddubs_epi16(y1_1, hsum_const),
+            _mm256_maddubs_epi16(y2_1, hsum_const),
+        );
 
-    let x1_2 = _mm_loadu_si128(p1.add(2 * stride1) as *const __m128i);
-    let x2_2 = _mm_loadu_si128(p2.add(2 * stride2) as *const __m128i);
-    let y1_2 = _mm256_broadcastsi128_si256(x1_2);
-    let y2_2 = _mm256_broadcastsi128_si256(x2_2);
-    let d2 = _mm256_sub_epi16(
-        _mm256_maddubs_epi16(y1_2, hsum_const),
-        _mm256_maddubs_epi16(y2_2, hsum_const),
-    );
+        let x1_2 = _mm_loadu_si128(p1.add(2 * stride1) as *const __m128i);
+        let x2_2 = _mm_loadu_si128(p2.add(2 * stride2) as *const __m128i);
+        let y1_2 = _mm256_broadcastsi128_si256(x1_2);
+        let y2_2 = _mm256_broadcastsi128_si256(x2_2);
+        let d2 = _mm256_sub_epi16(
+            _mm256_maddubs_epi16(y1_2, hsum_const),
+            _mm256_maddubs_epi16(y2_2, hsum_const),
+        );
 
-    let x1_3 = _mm_loadu_si128(p1.add(3 * stride1) as *const __m128i);
-    let x2_3 = _mm_loadu_si128(p2.add(3 * stride2) as *const __m128i);
-    let y1_3 = _mm256_broadcastsi128_si256(x1_3);
-    let y2_3 = _mm256_broadcastsi128_si256(x2_3);
-    let d3 = _mm256_sub_epi16(
-        _mm256_maddubs_epi16(y1_3, hsum_const),
-        _mm256_maddubs_epi16(y2_3, hsum_const),
-    );
+        let x1_3 = _mm_loadu_si128(p1.add(3 * stride1) as *const __m128i);
+        let x2_3 = _mm_loadu_si128(p2.add(3 * stride2) as *const __m128i);
+        let y1_3 = _mm256_broadcastsi128_si256(x1_3);
+        let y2_3 = _mm256_broadcastsi128_si256(x2_3);
+        let d3 = _mm256_sub_epi16(
+            _mm256_maddubs_epi16(y1_3, hsum_const),
+            _mm256_maddubs_epi16(y2_3, hsum_const),
+        );
 
-    let s3 = _mm256_sub_epi16(d0, d3);
-    let s0 = _mm256_add_epi16(d0, d3);
-    let s2 = _mm256_sub_epi16(d1, d2);
-    let s1 = _mm256_add_epi16(d1, d2);
+        let s3 = _mm256_sub_epi16(d0, d3);
+        let s0 = _mm256_add_epi16(d0, d3);
+        let s2 = _mm256_sub_epi16(d1, d2);
+        let s1 = _mm256_add_epi16(d1, d2);
 
-    let y0 = _mm256_abs_epi16(_mm256_add_epi16(s0, s1));
-    let y2 = _mm256_abs_epi16(_mm256_sub_epi16(s0, s1));
-    let y1 = _mm256_abs_epi16(_mm256_add_epi16(s3, s2));
-    let y3 = _mm256_abs_epi16(_mm256_sub_epi16(s3, s2));
+        let y0 = _mm256_abs_epi16(_mm256_add_epi16(s0, s1));
+        let y2 = _mm256_abs_epi16(_mm256_sub_epi16(s0, s1));
+        let y1 = _mm256_abs_epi16(_mm256_add_epi16(s3, s2));
+        let y3 = _mm256_abs_epi16(_mm256_sub_epi16(s3, s2));
 
-    let t1 = _mm256_blend_epi16(y0, y1, 0xAA);
-    let shifted_y1 = _mm256_slli_epi32(y1, 16);
-    let shifted_y0 = _mm256_srli_epi32(y0, 16);
-    let ored1 = _mm256_or_si256(shifted_y1, shifted_y0);
-    let max1 = _mm256_max_epu16(ored1, t1);
+        let t1 = _mm256_blend_epi16(y0, y1, 0xAA);
+        let shifted_y1 = _mm256_slli_epi32(y1, 16);
+        let shifted_y0 = _mm256_srli_epi32(y0, 16);
+        let ored1 = _mm256_or_si256(shifted_y1, shifted_y0);
+        let max1 = _mm256_max_epu16(ored1, t1);
 
-    let t2 = _mm256_blend_epi16(y2, y3, 0xAA);
-    let shifted_y3 = _mm256_slli_epi32(y3, 16);
-    let shifted_y2 = _mm256_srli_epi32(y2, 16);
-    let ored2 = _mm256_or_si256(shifted_y3, shifted_y2);
-    let max2 = _mm256_max_epu16(t2, ored2);
+        let t2 = _mm256_blend_epi16(y2, y3, 0xAA);
+        let shifted_y3 = _mm256_slli_epi32(y3, 16);
+        let shifted_y2 = _mm256_srli_epi32(y2, 16);
+        let ored2 = _mm256_or_si256(shifted_y3, shifted_y2);
+        let max2 = _mm256_max_epu16(t2, ored2);
 
-    _mm256_add_epi16(max1, max2)
+        _mm256_add_epi16(max1, max2)
+    }
 }
 
 #[target_feature(enable = "avx2")]
@@ -224,21 +228,41 @@ unsafe fn satd_16x16_avx2_impl<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &
     let (s1, s2) = (c1.span::<16, 16>(0, 0), c2.span::<16, 16>(0, 0));
     let (p1, stride1) = s1.as_ptr_and_stride();
     let (p2, stride2) = s2.as_ptr_and_stride();
-    let hsum_const = _mm256_loadu_si256(HSUM_SUB_DB1_256.as_ptr() as *const __m256i);
-    let mut acc = satd_16x4_step(p1, stride1, p2, stride2, hsum_const);
-    acc = _mm256_add_epi16(
-        acc,
-        satd_16x4_step(p1.add(4 * stride1), stride1, p2.add(4 * stride2), stride2, hsum_const),
-    );
-    acc = _mm256_add_epi16(
-        acc,
-        satd_16x4_step(p1.add(8 * stride1), stride1, p2.add(8 * stride2), stride2, hsum_const),
-    );
-    acc = _mm256_add_epi16(
-        acc,
-        satd_16x4_step(p1.add(12 * stride1), stride1, p2.add(12 * stride2), stride2, hsum_const),
-    );
-    sum_w_horizon_avx2(acc)
+    unsafe {
+        let hsum_const = _mm256_loadu_si256(HSUM_SUB_DB1_256.as_ptr() as *const __m256i);
+        let mut acc = satd_16x4_step(p1, stride1, p2, stride2, hsum_const);
+        acc = _mm256_add_epi16(
+            acc,
+            satd_16x4_step(
+                p1.add(4 * stride1),
+                stride1,
+                p2.add(4 * stride2),
+                stride2,
+                hsum_const,
+            ),
+        );
+        acc = _mm256_add_epi16(
+            acc,
+            satd_16x4_step(
+                p1.add(8 * stride1),
+                stride1,
+                p2.add(8 * stride2),
+                stride2,
+                hsum_const,
+            ),
+        );
+        acc = _mm256_add_epi16(
+            acc,
+            satd_16x4_step(
+                p1.add(12 * stride1),
+                stride1,
+                p2.add(12 * stride2),
+                stride2,
+                hsum_const,
+            ),
+        );
+        sum_w_horizon_avx2(acc)
+    }
 }
 
 #[target_feature(enable = "avx2")]
@@ -246,13 +270,21 @@ unsafe fn satd_16x8_avx2_impl<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A
     let (s1, s2) = (c1.span::<16, 8>(0, 0), c2.span::<16, 8>(0, 0));
     let (p1, stride1) = s1.as_ptr_and_stride();
     let (p2, stride2) = s2.as_ptr_and_stride();
-    let hsum_const = _mm256_loadu_si256(HSUM_SUB_DB1_256.as_ptr() as *const __m256i);
-    let mut acc = satd_16x4_step(p1, stride1, p2, stride2, hsum_const);
-    acc = _mm256_add_epi16(
-        acc,
-        satd_16x4_step(p1.add(4 * stride1), stride1, p2.add(4 * stride2), stride2, hsum_const),
-    );
-    sum_w_horizon_avx2(acc)
+    unsafe {
+        let hsum_const = _mm256_loadu_si256(HSUM_SUB_DB1_256.as_ptr() as *const __m256i);
+        let mut acc = satd_16x4_step(p1, stride1, p2, stride2, hsum_const);
+        acc = _mm256_add_epi16(
+            acc,
+            satd_16x4_step(
+                p1.add(4 * stride1),
+                stride1,
+                p2.add(4 * stride2),
+                stride2,
+                hsum_const,
+            ),
+        );
+        sum_w_horizon_avx2(acc)
+    }
 }
 
 #[inline(always)]
@@ -263,81 +295,83 @@ unsafe fn satd_8x8_step(
     stride2: usize,
     hsum_const: __m256i,
 ) -> __m256i {
-    let r1_0 = (p1 as *const i64).read_unaligned();
-    let r1_4 = (p1.add(4 * stride1) as *const i64).read_unaligned();
-    let v1_04 = _mm256_set_epi64x(r1_4, r1_4, r1_0, r1_0);
+    unsafe {
+        let r1_0 = (p1 as *const i64).read_unaligned();
+        let r1_4 = (p1.add(4 * stride1) as *const i64).read_unaligned();
+        let v1_04 = _mm256_set_epi64x(r1_4, r1_4, r1_0, r1_0);
 
-    let r2_0 = (p2 as *const i64).read_unaligned();
-    let r2_4 = (p2.add(4 * stride2) as *const i64).read_unaligned();
-    let v2_04 = _mm256_set_epi64x(r2_4, r2_4, r2_0, r2_0);
+        let r2_0 = (p2 as *const i64).read_unaligned();
+        let r2_4 = (p2.add(4 * stride2) as *const i64).read_unaligned();
+        let v2_04 = _mm256_set_epi64x(r2_4, r2_4, r2_0, r2_0);
 
-    let d04 = _mm256_sub_epi16(
-        _mm256_maddubs_epi16(v1_04, hsum_const),
-        _mm256_maddubs_epi16(v2_04, hsum_const),
-    );
+        let d04 = _mm256_sub_epi16(
+            _mm256_maddubs_epi16(v1_04, hsum_const),
+            _mm256_maddubs_epi16(v2_04, hsum_const),
+        );
 
-    let r1_1 = (p1.add(stride1) as *const i64).read_unaligned();
-    let r1_5 = (p1.add(5 * stride1) as *const i64).read_unaligned();
-    let v1_15 = _mm256_set_epi64x(r1_5, r1_5, r1_1, r1_1);
+        let r1_1 = (p1.add(stride1) as *const i64).read_unaligned();
+        let r1_5 = (p1.add(5 * stride1) as *const i64).read_unaligned();
+        let v1_15 = _mm256_set_epi64x(r1_5, r1_5, r1_1, r1_1);
 
-    let r2_1 = (p2.add(stride2) as *const i64).read_unaligned();
-    let r2_5 = (p2.add(5 * stride2) as *const i64).read_unaligned();
-    let v2_15 = _mm256_set_epi64x(r2_5, r2_5, r2_1, r2_1);
+        let r2_1 = (p2.add(stride2) as *const i64).read_unaligned();
+        let r2_5 = (p2.add(5 * stride2) as *const i64).read_unaligned();
+        let v2_15 = _mm256_set_epi64x(r2_5, r2_5, r2_1, r2_1);
 
-    let d15 = _mm256_sub_epi16(
-        _mm256_maddubs_epi16(v1_15, hsum_const),
-        _mm256_maddubs_epi16(v2_15, hsum_const),
-    );
+        let d15 = _mm256_sub_epi16(
+            _mm256_maddubs_epi16(v1_15, hsum_const),
+            _mm256_maddubs_epi16(v2_15, hsum_const),
+        );
 
-    let r1_2 = (p1.add(2 * stride1) as *const i64).read_unaligned();
-    let r1_6 = (p1.add(6 * stride1) as *const i64).read_unaligned();
-    let v1_26 = _mm256_set_epi64x(r1_6, r1_6, r1_2, r1_2);
+        let r1_2 = (p1.add(2 * stride1) as *const i64).read_unaligned();
+        let r1_6 = (p1.add(6 * stride1) as *const i64).read_unaligned();
+        let v1_26 = _mm256_set_epi64x(r1_6, r1_6, r1_2, r1_2);
 
-    let r2_2 = (p2.add(2 * stride2) as *const i64).read_unaligned();
-    let r2_6 = (p2.add(6 * stride2) as *const i64).read_unaligned();
-    let v2_26 = _mm256_set_epi64x(r2_6, r2_6, r2_2, r2_2);
+        let r2_2 = (p2.add(2 * stride2) as *const i64).read_unaligned();
+        let r2_6 = (p2.add(6 * stride2) as *const i64).read_unaligned();
+        let v2_26 = _mm256_set_epi64x(r2_6, r2_6, r2_2, r2_2);
 
-    let d26 = _mm256_sub_epi16(
-        _mm256_maddubs_epi16(v1_26, hsum_const),
-        _mm256_maddubs_epi16(v2_26, hsum_const),
-    );
+        let d26 = _mm256_sub_epi16(
+            _mm256_maddubs_epi16(v1_26, hsum_const),
+            _mm256_maddubs_epi16(v2_26, hsum_const),
+        );
 
-    let r1_3 = (p1.add(3 * stride1) as *const i64).read_unaligned();
-    let r1_7 = (p1.add(7 * stride1) as *const i64).read_unaligned();
-    let v1_37 = _mm256_set_epi64x(r1_7, r1_7, r1_3, r1_3);
+        let r1_3 = (p1.add(3 * stride1) as *const i64).read_unaligned();
+        let r1_7 = (p1.add(7 * stride1) as *const i64).read_unaligned();
+        let v1_37 = _mm256_set_epi64x(r1_7, r1_7, r1_3, r1_3);
 
-    let r2_3 = (p2.add(3 * stride2) as *const i64).read_unaligned();
-    let r2_7 = (p2.add(7 * stride2) as *const i64).read_unaligned();
-    let v2_37 = _mm256_set_epi64x(r2_7, r2_7, r2_3, r2_3);
+        let r2_3 = (p2.add(3 * stride2) as *const i64).read_unaligned();
+        let r2_7 = (p2.add(7 * stride2) as *const i64).read_unaligned();
+        let v2_37 = _mm256_set_epi64x(r2_7, r2_7, r2_3, r2_3);
 
-    let d37 = _mm256_sub_epi16(
-        _mm256_maddubs_epi16(v1_37, hsum_const),
-        _mm256_maddubs_epi16(v2_37, hsum_const),
-    );
+        let d37 = _mm256_sub_epi16(
+            _mm256_maddubs_epi16(v1_37, hsum_const),
+            _mm256_maddubs_epi16(v2_37, hsum_const),
+        );
 
-    let s3 = _mm256_sub_epi16(d04, d37);
-    let s0 = _mm256_add_epi16(d04, d37);
-    let s2 = _mm256_sub_epi16(d15, d26);
-    let s1 = _mm256_add_epi16(d15, d26);
+        let s3 = _mm256_sub_epi16(d04, d37);
+        let s0 = _mm256_add_epi16(d04, d37);
+        let s2 = _mm256_sub_epi16(d15, d26);
+        let s1 = _mm256_add_epi16(d15, d26);
 
-    let y0 = _mm256_abs_epi16(_mm256_add_epi16(s0, s1));
-    let y2 = _mm256_abs_epi16(_mm256_sub_epi16(s0, s1));
-    let y1 = _mm256_abs_epi16(_mm256_add_epi16(s3, s2));
-    let y3 = _mm256_abs_epi16(_mm256_sub_epi16(s3, s2));
+        let y0 = _mm256_abs_epi16(_mm256_add_epi16(s0, s1));
+        let y2 = _mm256_abs_epi16(_mm256_sub_epi16(s0, s1));
+        let y1 = _mm256_abs_epi16(_mm256_add_epi16(s3, s2));
+        let y3 = _mm256_abs_epi16(_mm256_sub_epi16(s3, s2));
 
-    let t1 = _mm256_blend_epi16(y0, y1, 0xAA);
-    let shifted_y1 = _mm256_slli_epi32(y1, 16);
-    let shifted_y0 = _mm256_srli_epi32(y0, 16);
-    let ored1 = _mm256_or_si256(shifted_y1, shifted_y0);
-    let max1 = _mm256_max_epu16(ored1, t1);
+        let t1 = _mm256_blend_epi16(y0, y1, 0xAA);
+        let shifted_y1 = _mm256_slli_epi32(y1, 16);
+        let shifted_y0 = _mm256_srli_epi32(y0, 16);
+        let ored1 = _mm256_or_si256(shifted_y1, shifted_y0);
+        let max1 = _mm256_max_epu16(ored1, t1);
 
-    let t2 = _mm256_blend_epi16(y2, y3, 0xAA);
-    let shifted_y3 = _mm256_slli_epi32(y3, 16);
-    let shifted_y2 = _mm256_srli_epi32(y2, 16);
-    let ored2 = _mm256_or_si256(shifted_y3, shifted_y2);
-    let max2 = _mm256_max_epu16(t2, ored2);
+        let t2 = _mm256_blend_epi16(y2, y3, 0xAA);
+        let shifted_y3 = _mm256_slli_epi32(y3, 16);
+        let shifted_y2 = _mm256_srli_epi32(y2, 16);
+        let ored2 = _mm256_or_si256(shifted_y3, shifted_y2);
+        let max2 = _mm256_max_epu16(t2, ored2);
 
-    _mm256_add_epi16(max1, max2)
+        _mm256_add_epi16(max1, max2)
+    }
 }
 
 #[target_feature(enable = "avx2")]
@@ -345,9 +379,11 @@ unsafe fn satd_8x8_avx2_impl<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A,
     let (s1, s2) = (c1.span::<8, 8>(0, 0), c2.span::<8, 8>(0, 0));
     let (p1, stride1) = s1.as_ptr_and_stride();
     let (p2, stride2) = s2.as_ptr_and_stride();
-    let hsum_const = _mm256_loadu_si256(HSUM_SUB_DB1_128X2.as_ptr() as *const __m256i);
-    let sum = satd_8x8_step(p1, stride1, p2, stride2, hsum_const);
-    sum_w_horizon_avx2(sum)
+    unsafe {
+        let hsum_const = _mm256_loadu_si256(HSUM_SUB_DB1_128X2.as_ptr() as *const __m256i);
+        let sum = satd_8x8_step(p1, stride1, p2, stride2, hsum_const);
+        sum_w_horizon_avx2(sum)
+    }
 }
 
 #[target_feature(enable = "avx2")]
@@ -355,16 +391,18 @@ unsafe fn satd_8x16_avx2_impl<A: RefSamples + Copy, B: RefSamples + Copy>(c1: &A
     let (s1, s2) = (c1.span::<8, 16>(0, 0), c2.span::<8, 16>(0, 0));
     let (p1, stride1) = s1.as_ptr_and_stride();
     let (p2, stride2) = s2.as_ptr_and_stride();
-    let hsum_const = _mm256_loadu_si256(HSUM_SUB_DB1_128X2.as_ptr() as *const __m256i);
-    let top = satd_8x8_step(p1, stride1, p2, stride2, hsum_const);
-    let bot = satd_8x8_step(
-        p1.add(8 * stride1),
-        stride1,
-        p2.add(8 * stride2),
-        stride2,
-        hsum_const,
-    );
-    sum_w_horizon_avx2(_mm256_add_epi16(top, bot))
+    unsafe {
+        let hsum_const = _mm256_loadu_si256(HSUM_SUB_DB1_128X2.as_ptr() as *const __m256i);
+        let top = satd_8x8_step(p1, stride1, p2, stride2, hsum_const);
+        let bot = satd_8x8_step(
+            p1.add(8 * stride1),
+            stride1,
+            p2.add(8 * stride2),
+            stride2,
+            hsum_const,
+        );
+        sum_w_horizon_avx2(_mm256_add_epi16(top, bot))
+    }
 }
 
 // ============================================================================

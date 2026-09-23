@@ -3,7 +3,7 @@
 //! Accelerated implementations for Luma (Lt4 / Eq4) and Chroma (Lt4 / Eq4, on two
 //! planes or on one) boundary filters for both horizontal and vertical edges.
 
-#![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
+#![allow(unsafe_code)]
 
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
@@ -32,90 +32,92 @@ unsafe fn deblock_luma_lt4_half8(
     beta_vec: __m128i,
     tc0_vec: __m128i,
 ) {
-    let zero = _mm_setzero_si128();
-    let one = _mm_set1_epi16(1);
-    let four = _mm_set1_epi16(4);
-    let max_u8 = _mm_set1_epi16(255);
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let one = _mm_set1_epi16(1);
+        let four = _mm_set1_epi16(4);
+        let max_u8 = _mm_set1_epi16(255);
 
-    let mask_tc0_ge_0 = _mm_cmpgt_epi16(tc0_vec, _mm_set1_epi16(-1));
-    let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
-    let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
+        let mask_tc0_ge_0 = _mm_cmpgt_epi16(tc0_vec, _mm_set1_epi16(-1));
+        let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
+        let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
 
-    let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(*p1_16, *p0_16), _mm_sub_epi16(*p0_16, *p1_16));
-    let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
+        let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(*p1_16, *p0_16), _mm_sub_epi16(*p0_16, *p1_16));
+        let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
 
-    let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(*q1_16, *q0_16), _mm_sub_epi16(*q0_16, *q1_16));
-    let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
+        let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(*q1_16, *q0_16), _mm_sub_epi16(*q0_16, *q1_16));
+        let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
 
-    let mask_filter = _mm_and_si128(
-        mask_tc0_ge_0,
-        _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0)),
-    );
+        let mask_filter = _mm_and_si128(
+            mask_tc0_ge_0,
+            _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0)),
+        );
 
-    if _mm_movemask_epi8(mask_filter) == 0 {
-        return;
+        if _mm_movemask_epi8(mask_filter) == 0 {
+            return;
+        }
+
+        let diff_p2p0 = _mm_max_epi16(_mm_sub_epi16(p2_16, *p0_16), _mm_sub_epi16(*p0_16, p2_16));
+        let cond_p2p0 = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_p2p0, beta_vec));
+
+        let diff_q2q0 = _mm_max_epi16(_mm_sub_epi16(q2_16, *q0_16), _mm_sub_epi16(*q0_16, q2_16));
+        let cond_q2q0 = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_q2q0, beta_vec));
+
+        let avg_p0q0 = _mm_srai_epi16(_mm_add_epi16(_mm_add_epi16(*p0_16, *q0_16), one), 1);
+
+        let t_p1 = _mm_srai_epi16(
+            _mm_sub_epi16(_mm_add_epi16(p2_16, avg_p0q0), _mm_slli_epi16(*p1_16, 1)),
+            1,
+        );
+        let neg_tc0 = _mm_sub_epi16(zero, tc0_vec);
+        let clip_p1 = _mm_min_epi16(_mm_max_epi16(t_p1, neg_tc0), tc0_vec);
+        let new_p1_val = _mm_and_si128(_mm_add_epi16(*p1_16, clip_p1), _mm_set1_epi16(0x00FF));
+        let p1_out = _mm_or_si128(
+            _mm_and_si128(cond_p2p0, new_p1_val),
+            _mm_andnot_si128(cond_p2p0, *p1_16),
+        );
+
+        let t_q1 = _mm_srai_epi16(
+            _mm_sub_epi16(_mm_add_epi16(q2_16, avg_p0q0), _mm_slli_epi16(*q1_16, 1)),
+            1,
+        );
+        let clip_q1 = _mm_min_epi16(_mm_max_epi16(t_q1, neg_tc0), tc0_vec);
+        let new_q1_val = _mm_and_si128(_mm_add_epi16(*q1_16, clip_q1), _mm_set1_epi16(0x00FF));
+        let q1_out = _mm_or_si128(
+            _mm_and_si128(cond_q2q0, new_q1_val),
+            _mm_andnot_si128(cond_q2q0, *q1_16),
+        );
+
+        let tc_i = _mm_sub_epi16(_mm_sub_epi16(tc0_vec, cond_p2p0), cond_q2q0);
+        let neg_tc_i = _mm_sub_epi16(zero, tc_i);
+
+        let diff_q0p0_x4 = _mm_slli_epi16(_mm_sub_epi16(*q0_16, *p0_16), 2);
+        let diff_p1q1 = _mm_sub_epi16(*p1_16, *q1_16);
+        let t_deta = _mm_srai_epi16(
+            _mm_add_epi16(_mm_add_epi16(diff_q0p0_x4, diff_p1q1), four),
+            3,
+        );
+        let deta = _mm_min_epi16(_mm_max_epi16(t_deta, neg_tc_i), tc_i);
+
+        let p0_cand = _mm_max_epi16(_mm_min_epi16(_mm_add_epi16(*p0_16, deta), max_u8), zero);
+        *p0_16 = _mm_or_si128(
+            _mm_and_si128(mask_filter, p0_cand),
+            _mm_andnot_si128(mask_filter, *p0_16),
+        );
+
+        let q0_cand = _mm_max_epi16(_mm_min_epi16(_mm_sub_epi16(*q0_16, deta), max_u8), zero);
+        *q0_16 = _mm_or_si128(
+            _mm_and_si128(mask_filter, q0_cand),
+            _mm_andnot_si128(mask_filter, *q0_16),
+        );
+        *p1_16 = p1_out;
+        *q1_16 = q1_out;
     }
-
-    let diff_p2p0 = _mm_max_epi16(_mm_sub_epi16(p2_16, *p0_16), _mm_sub_epi16(*p0_16, p2_16));
-    let cond_p2p0 = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_p2p0, beta_vec));
-
-    let diff_q2q0 = _mm_max_epi16(_mm_sub_epi16(q2_16, *q0_16), _mm_sub_epi16(*q0_16, q2_16));
-    let cond_q2q0 = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_q2q0, beta_vec));
-
-    let avg_p0q0 = _mm_srai_epi16(_mm_add_epi16(_mm_add_epi16(*p0_16, *q0_16), one), 1);
-
-    let t_p1 = _mm_srai_epi16(
-        _mm_sub_epi16(_mm_add_epi16(p2_16, avg_p0q0), _mm_slli_epi16(*p1_16, 1)),
-        1,
-    );
-    let neg_tc0 = _mm_sub_epi16(zero, tc0_vec);
-    let clip_p1 = _mm_min_epi16(_mm_max_epi16(t_p1, neg_tc0), tc0_vec);
-    let new_p1_val = _mm_and_si128(_mm_add_epi16(*p1_16, clip_p1), _mm_set1_epi16(0x00FF));
-    let p1_out = _mm_or_si128(
-        _mm_and_si128(cond_p2p0, new_p1_val),
-        _mm_andnot_si128(cond_p2p0, *p1_16),
-    );
-
-    let t_q1 = _mm_srai_epi16(
-        _mm_sub_epi16(_mm_add_epi16(q2_16, avg_p0q0), _mm_slli_epi16(*q1_16, 1)),
-        1,
-    );
-    let clip_q1 = _mm_min_epi16(_mm_max_epi16(t_q1, neg_tc0), tc0_vec);
-    let new_q1_val = _mm_and_si128(_mm_add_epi16(*q1_16, clip_q1), _mm_set1_epi16(0x00FF));
-    let q1_out = _mm_or_si128(
-        _mm_and_si128(cond_q2q0, new_q1_val),
-        _mm_andnot_si128(cond_q2q0, *q1_16),
-    );
-
-    let tc_i = _mm_sub_epi16(_mm_sub_epi16(tc0_vec, cond_p2p0), cond_q2q0);
-    let neg_tc_i = _mm_sub_epi16(zero, tc_i);
-
-    let diff_q0p0_x4 = _mm_slli_epi16(_mm_sub_epi16(*q0_16, *p0_16), 2);
-    let diff_p1q1 = _mm_sub_epi16(*p1_16, *q1_16);
-    let t_deta = _mm_srai_epi16(
-        _mm_add_epi16(_mm_add_epi16(diff_q0p0_x4, diff_p1q1), four),
-        3,
-    );
-    let deta = _mm_min_epi16(_mm_max_epi16(t_deta, neg_tc_i), tc_i);
-
-    let p0_cand = _mm_max_epi16(_mm_min_epi16(_mm_add_epi16(*p0_16, deta), max_u8), zero);
-    *p0_16 = _mm_or_si128(
-        _mm_and_si128(mask_filter, p0_cand),
-        _mm_andnot_si128(mask_filter, *p0_16),
-    );
-
-    let q0_cand = _mm_max_epi16(_mm_min_epi16(_mm_sub_epi16(*q0_16, deta), max_u8), zero);
-    *q0_16 = _mm_or_si128(
-        _mm_and_si128(mask_filter, q0_cand),
-        _mm_andnot_si128(mask_filter, *q0_16),
-    );
-    *p1_16 = p1_out;
-    *q1_16 = q1_out;
 }
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-pub unsafe fn deblock_luma_lt4_vec(
+unsafe fn deblock_luma_lt4_vec(
     p2: __m128i,
     p1: &mut __m128i,
     p0: &mut __m128i,
@@ -126,67 +128,69 @@ pub unsafe fn deblock_luma_lt4_vec(
     beta: i32,
     tc: &[i8; 4],
 ) {
-    let zero = _mm_setzero_si128();
-    let alpha_vec = _mm_set1_epi16(alpha as i16);
-    let beta_vec = _mm_set1_epi16(beta as i16);
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let alpha_vec = _mm_set1_epi16(alpha as i16);
+        let beta_vec = _mm_set1_epi16(beta as i16);
 
-    let tc_lo = _mm_setr_epi16(
-        tc[0] as i16,
-        tc[0] as i16,
-        tc[0] as i16,
-        tc[0] as i16,
-        tc[1] as i16,
-        tc[1] as i16,
-        tc[1] as i16,
-        tc[1] as i16,
-    );
-    let tc_hi = _mm_setr_epi16(
-        tc[2] as i16,
-        tc[2] as i16,
-        tc[2] as i16,
-        tc[2] as i16,
-        tc[3] as i16,
-        tc[3] as i16,
-        tc[3] as i16,
-        tc[3] as i16,
-    );
+        let tc_lo = _mm_setr_epi16(
+            tc[0] as i16,
+            tc[0] as i16,
+            tc[0] as i16,
+            tc[0] as i16,
+            tc[1] as i16,
+            tc[1] as i16,
+            tc[1] as i16,
+            tc[1] as i16,
+        );
+        let tc_hi = _mm_setr_epi16(
+            tc[2] as i16,
+            tc[2] as i16,
+            tc[2] as i16,
+            tc[2] as i16,
+            tc[3] as i16,
+            tc[3] as i16,
+            tc[3] as i16,
+            tc[3] as i16,
+        );
 
-    let mut p1_lo = _mm_unpacklo_epi8(*p1, zero);
-    let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
-    let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
-    let mut q1_lo = _mm_unpacklo_epi8(*q1, zero);
-    deblock_luma_lt4_half8(
-        _mm_unpacklo_epi8(p2, zero),
-        &mut p1_lo,
-        &mut p0_lo,
-        &mut q0_lo,
-        &mut q1_lo,
-        _mm_unpacklo_epi8(q2, zero),
-        alpha_vec,
-        beta_vec,
-        tc_lo,
-    );
+        let mut p1_lo = _mm_unpacklo_epi8(*p1, zero);
+        let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
+        let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
+        let mut q1_lo = _mm_unpacklo_epi8(*q1, zero);
+        deblock_luma_lt4_half8(
+            _mm_unpacklo_epi8(p2, zero),
+            &mut p1_lo,
+            &mut p0_lo,
+            &mut q0_lo,
+            &mut q1_lo,
+            _mm_unpacklo_epi8(q2, zero),
+            alpha_vec,
+            beta_vec,
+            tc_lo,
+        );
 
-    let mut p1_hi = _mm_unpackhi_epi8(*p1, zero);
-    let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
-    let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
-    let mut q1_hi = _mm_unpackhi_epi8(*q1, zero);
-    deblock_luma_lt4_half8(
-        _mm_unpackhi_epi8(p2, zero),
-        &mut p1_hi,
-        &mut p0_hi,
-        &mut q0_hi,
-        &mut q1_hi,
-        _mm_unpackhi_epi8(q2, zero),
-        alpha_vec,
-        beta_vec,
-        tc_hi,
-    );
+        let mut p1_hi = _mm_unpackhi_epi8(*p1, zero);
+        let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
+        let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
+        let mut q1_hi = _mm_unpackhi_epi8(*q1, zero);
+        deblock_luma_lt4_half8(
+            _mm_unpackhi_epi8(p2, zero),
+            &mut p1_hi,
+            &mut p0_hi,
+            &mut q0_hi,
+            &mut q1_hi,
+            _mm_unpackhi_epi8(q2, zero),
+            alpha_vec,
+            beta_vec,
+            tc_hi,
+        );
 
-    *p1 = _mm_packus_epi16(p1_lo, p1_hi);
-    *p0 = _mm_packus_epi16(p0_lo, p0_hi);
-    *q0 = _mm_packus_epi16(q0_lo, q0_hi);
-    *q1 = _mm_packus_epi16(q1_lo, q1_hi);
+        *p1 = _mm_packus_epi16(p1_lo, p1_hi);
+        *p0 = _mm_packus_epi16(p0_lo, p0_hi);
+        *q0 = _mm_packus_epi16(q0_lo, q0_hi);
+        *q1 = _mm_packus_epi16(q1_lo, q1_hi);
+    }
 }
 
 /// Vectorized 16-line Luma bS < 4 (Lt4) filter across contiguous sample rows.
@@ -203,17 +207,21 @@ pub unsafe fn deblock_luma_lt4_16(
     beta: i32,
     tc: &[i8; 4],
 ) {
-    let vp2 = _mm_loadu_si128(p2.as_ptr() as *const __m128i);
-    let mut vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
-    let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
-    let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
-    let mut vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
-    let vq2 = _mm_loadu_si128(q2.as_ptr() as *const __m128i);
-    deblock_luma_lt4_vec(vp2, &mut vp1, &mut vp0, &mut vq0, &mut vq1, vq2, alpha, beta, tc);
-    _mm_storeu_si128(p1.as_mut_ptr() as *mut __m128i, vp1);
-    _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
-    _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
-    _mm_storeu_si128(q1.as_mut_ptr() as *mut __m128i, vq1);
+    unsafe {
+        let vp2 = _mm_loadu_si128(p2.as_ptr() as *const __m128i);
+        let mut vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
+        let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
+        let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
+        let mut vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
+        let vq2 = _mm_loadu_si128(q2.as_ptr() as *const __m128i);
+        deblock_luma_lt4_vec(
+            vp2, &mut vp1, &mut vp0, &mut vq0, &mut vq1, vq2, alpha, beta, tc,
+        );
+        _mm_storeu_si128(p1.as_mut_ptr() as *mut __m128i, vp1);
+        _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
+        _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
+        _mm_storeu_si128(q1.as_mut_ptr() as *mut __m128i, vq1);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -231,161 +239,163 @@ unsafe fn deblock_luma_eq4_half8(
     beta_vec: __m128i,
     small_thresh: __m128i,
 ) {
-    let two = _mm_set1_epi16(2);
-    let four = _mm_set1_epi16(4);
+    unsafe {
+        let two = _mm_set1_epi16(2);
+        let four = _mm_set1_epi16(4);
 
-    let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
-    let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
+        let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
+        let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
 
-    let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(*p1_16, *p0_16), _mm_sub_epi16(*p0_16, *p1_16));
-    let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
+        let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(*p1_16, *p0_16), _mm_sub_epi16(*p0_16, *p1_16));
+        let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
 
-    let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(*q1_16, *q0_16), _mm_sub_epi16(*q0_16, *q1_16));
-    let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
+        let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(*q1_16, *q0_16), _mm_sub_epi16(*q0_16, *q1_16));
+        let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
 
-    let mask_filter = _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0));
-    if _mm_movemask_epi8(mask_filter) == 0 {
-        return;
+        let mask_filter = _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0));
+        if _mm_movemask_epi8(mask_filter) == 0 {
+            return;
+        }
+
+        let cond_small = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_p0q0, small_thresh));
+
+        let diff_p2p0 = _mm_max_epi16(_mm_sub_epi16(*p2_16, *p0_16), _mm_sub_epi16(*p0_16, *p2_16));
+        let cond_p2p0 = _mm_and_si128(cond_small, _mm_cmplt_epi16(diff_p2p0, beta_vec));
+
+        let diff_q2q0 = _mm_max_epi16(_mm_sub_epi16(*q2_16, *q0_16), _mm_sub_epi16(*q0_16, *q2_16));
+        let cond_q2q0 = _mm_and_si128(cond_small, _mm_cmplt_epi16(diff_q2q0, beta_vec));
+
+        let p0_default = _mm_srai_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(_mm_slli_epi16(*p1_16, 1), _mm_add_epi16(*p0_16, *q1_16)),
+                two,
+            ),
+            2,
+        );
+        let q0_default = _mm_srai_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(_mm_slli_epi16(*q1_16, 1), _mm_add_epi16(*q0_16, *p1_16)),
+                two,
+            ),
+            2,
+        );
+
+        let p0_p2p0 = _mm_srai_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(
+                    _mm_add_epi16(
+                        *p2_16,
+                        _mm_slli_epi16(_mm_add_epi16(*p1_16, _mm_add_epi16(*p0_16, *q0_16)), 1),
+                    ),
+                    *q1_16,
+                ),
+                four,
+            ),
+            3,
+        );
+        let p1_p2p0 = _mm_srai_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(_mm_add_epi16(*p2_16, *p1_16), _mm_add_epi16(*p0_16, *q0_16)),
+                two,
+            ),
+            2,
+        );
+        let p2_p2p0 = _mm_srai_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(
+                    _mm_add_epi16(
+                        _mm_slli_epi16(p3_16, 1),
+                        _mm_add_epi16(_mm_slli_epi16(*p2_16, 1), *p2_16),
+                    ),
+                    _mm_add_epi16(_mm_add_epi16(*p1_16, *p0_16), *q0_16),
+                ),
+                four,
+            ),
+            3,
+        );
+
+        let q0_q2q0 = _mm_srai_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(
+                    _mm_add_epi16(
+                        *p1_16,
+                        _mm_slli_epi16(_mm_add_epi16(*p0_16, _mm_add_epi16(*q0_16, *q1_16)), 1),
+                    ),
+                    *q2_16,
+                ),
+                four,
+            ),
+            3,
+        );
+        let q1_q2q0 = _mm_srai_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(_mm_add_epi16(*p0_16, *q0_16), _mm_add_epi16(*q1_16, *q2_16)),
+                two,
+            ),
+            2,
+        );
+        let q2_q2q0 = _mm_srai_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(
+                    _mm_add_epi16(
+                        _mm_slli_epi16(q3_16, 1),
+                        _mm_add_epi16(_mm_slli_epi16(*q2_16, 1), *q2_16),
+                    ),
+                    _mm_add_epi16(_mm_add_epi16(*q1_16, *q0_16), *p0_16),
+                ),
+                four,
+            ),
+            3,
+        );
+
+        let p0_cand = _mm_or_si128(
+            _mm_and_si128(cond_p2p0, p0_p2p0),
+            _mm_andnot_si128(cond_p2p0, p0_default),
+        );
+        let p0_out = _mm_or_si128(
+            _mm_and_si128(mask_filter, p0_cand),
+            _mm_andnot_si128(mask_filter, *p0_16),
+        );
+
+        let p1_out = _mm_or_si128(
+            _mm_and_si128(cond_p2p0, p1_p2p0),
+            _mm_andnot_si128(cond_p2p0, *p1_16),
+        );
+        let p2_out = _mm_or_si128(
+            _mm_and_si128(cond_p2p0, p2_p2p0),
+            _mm_andnot_si128(cond_p2p0, *p2_16),
+        );
+
+        let q0_cand = _mm_or_si128(
+            _mm_and_si128(cond_q2q0, q0_q2q0),
+            _mm_andnot_si128(cond_q2q0, q0_default),
+        );
+        let q0_out = _mm_or_si128(
+            _mm_and_si128(mask_filter, q0_cand),
+            _mm_andnot_si128(mask_filter, *q0_16),
+        );
+
+        let q1_out = _mm_or_si128(
+            _mm_and_si128(cond_q2q0, q1_q2q0),
+            _mm_andnot_si128(cond_q2q0, *q1_16),
+        );
+        let q2_out = _mm_or_si128(
+            _mm_and_si128(cond_q2q0, q2_q2q0),
+            _mm_andnot_si128(cond_q2q0, *q2_16),
+        );
+
+        *p2_16 = p2_out;
+        *p1_16 = p1_out;
+        *p0_16 = p0_out;
+        *q0_16 = q0_out;
+        *q1_16 = q1_out;
+        *q2_16 = q2_out;
     }
-
-    let cond_small = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_p0q0, small_thresh));
-
-    let diff_p2p0 = _mm_max_epi16(_mm_sub_epi16(*p2_16, *p0_16), _mm_sub_epi16(*p0_16, *p2_16));
-    let cond_p2p0 = _mm_and_si128(cond_small, _mm_cmplt_epi16(diff_p2p0, beta_vec));
-
-    let diff_q2q0 = _mm_max_epi16(_mm_sub_epi16(*q2_16, *q0_16), _mm_sub_epi16(*q0_16, *q2_16));
-    let cond_q2q0 = _mm_and_si128(cond_small, _mm_cmplt_epi16(diff_q2q0, beta_vec));
-
-    let p0_default = _mm_srai_epi16(
-        _mm_add_epi16(
-            _mm_add_epi16(_mm_slli_epi16(*p1_16, 1), _mm_add_epi16(*p0_16, *q1_16)),
-            two,
-        ),
-        2,
-    );
-    let q0_default = _mm_srai_epi16(
-        _mm_add_epi16(
-            _mm_add_epi16(_mm_slli_epi16(*q1_16, 1), _mm_add_epi16(*q0_16, *p1_16)),
-            two,
-        ),
-        2,
-    );
-
-    let p0_p2p0 = _mm_srai_epi16(
-        _mm_add_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(
-                    *p2_16,
-                    _mm_slli_epi16(_mm_add_epi16(*p1_16, _mm_add_epi16(*p0_16, *q0_16)), 1),
-                ),
-                *q1_16,
-            ),
-            four,
-        ),
-        3,
-    );
-    let p1_p2p0 = _mm_srai_epi16(
-        _mm_add_epi16(
-            _mm_add_epi16(_mm_add_epi16(*p2_16, *p1_16), _mm_add_epi16(*p0_16, *q0_16)),
-            two,
-        ),
-        2,
-    );
-    let p2_p2p0 = _mm_srai_epi16(
-        _mm_add_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(
-                    _mm_slli_epi16(p3_16, 1),
-                    _mm_add_epi16(_mm_slli_epi16(*p2_16, 1), *p2_16),
-                ),
-                _mm_add_epi16(_mm_add_epi16(*p1_16, *p0_16), *q0_16),
-            ),
-            four,
-        ),
-        3,
-    );
-
-    let q0_q2q0 = _mm_srai_epi16(
-        _mm_add_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(
-                    *p1_16,
-                    _mm_slli_epi16(_mm_add_epi16(*p0_16, _mm_add_epi16(*q0_16, *q1_16)), 1),
-                ),
-                *q2_16,
-            ),
-            four,
-        ),
-        3,
-    );
-    let q1_q2q0 = _mm_srai_epi16(
-        _mm_add_epi16(
-            _mm_add_epi16(_mm_add_epi16(*p0_16, *q0_16), _mm_add_epi16(*q1_16, *q2_16)),
-            two,
-        ),
-        2,
-    );
-    let q2_q2q0 = _mm_srai_epi16(
-        _mm_add_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(
-                    _mm_slli_epi16(q3_16, 1),
-                    _mm_add_epi16(_mm_slli_epi16(*q2_16, 1), *q2_16),
-                ),
-                _mm_add_epi16(_mm_add_epi16(*q1_16, *q0_16), *p0_16),
-            ),
-            four,
-        ),
-        3,
-    );
-
-    let p0_cand = _mm_or_si128(
-        _mm_and_si128(cond_p2p0, p0_p2p0),
-        _mm_andnot_si128(cond_p2p0, p0_default),
-    );
-    let p0_out = _mm_or_si128(
-        _mm_and_si128(mask_filter, p0_cand),
-        _mm_andnot_si128(mask_filter, *p0_16),
-    );
-
-    let p1_out = _mm_or_si128(
-        _mm_and_si128(cond_p2p0, p1_p2p0),
-        _mm_andnot_si128(cond_p2p0, *p1_16),
-    );
-    let p2_out = _mm_or_si128(
-        _mm_and_si128(cond_p2p0, p2_p2p0),
-        _mm_andnot_si128(cond_p2p0, *p2_16),
-    );
-
-    let q0_cand = _mm_or_si128(
-        _mm_and_si128(cond_q2q0, q0_q2q0),
-        _mm_andnot_si128(cond_q2q0, q0_default),
-    );
-    let q0_out = _mm_or_si128(
-        _mm_and_si128(mask_filter, q0_cand),
-        _mm_andnot_si128(mask_filter, *q0_16),
-    );
-
-    let q1_out = _mm_or_si128(
-        _mm_and_si128(cond_q2q0, q1_q2q0),
-        _mm_andnot_si128(cond_q2q0, *q1_16),
-    );
-    let q2_out = _mm_or_si128(
-        _mm_and_si128(cond_q2q0, q2_q2q0),
-        _mm_andnot_si128(cond_q2q0, *q2_16),
-    );
-
-    *p2_16 = p2_out;
-    *p1_16 = p1_out;
-    *p0_16 = p0_out;
-    *q0_16 = q0_out;
-    *q1_16 = q1_out;
-    *q2_16 = q2_out;
 }
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-pub unsafe fn deblock_luma_eq4_vec(
+unsafe fn deblock_luma_eq4_vec(
     p3: __m128i,
     p2: &mut __m128i,
     p1: &mut __m128i,
@@ -397,57 +407,59 @@ pub unsafe fn deblock_luma_eq4_vec(
     alpha: i32,
     beta: i32,
 ) {
-    let zero = _mm_setzero_si128();
-    let alpha_vec = _mm_set1_epi16(alpha as i16);
-    let beta_vec = _mm_set1_epi16(beta as i16);
-    let small_thresh = _mm_set1_epi16(((alpha >> 2) + 2) as i16);
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let alpha_vec = _mm_set1_epi16(alpha as i16);
+        let beta_vec = _mm_set1_epi16(beta as i16);
+        let small_thresh = _mm_set1_epi16(((alpha >> 2) + 2) as i16);
 
-    let mut p2_lo = _mm_unpacklo_epi8(*p2, zero);
-    let mut p1_lo = _mm_unpacklo_epi8(*p1, zero);
-    let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
-    let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
-    let mut q1_lo = _mm_unpacklo_epi8(*q1, zero);
-    let mut q2_lo = _mm_unpacklo_epi8(*q2, zero);
-    deblock_luma_eq4_half8(
-        _mm_unpacklo_epi8(p3, zero),
-        &mut p2_lo,
-        &mut p1_lo,
-        &mut p0_lo,
-        &mut q0_lo,
-        &mut q1_lo,
-        &mut q2_lo,
-        _mm_unpacklo_epi8(q3, zero),
-        alpha_vec,
-        beta_vec,
-        small_thresh,
-    );
+        let mut p2_lo = _mm_unpacklo_epi8(*p2, zero);
+        let mut p1_lo = _mm_unpacklo_epi8(*p1, zero);
+        let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
+        let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
+        let mut q1_lo = _mm_unpacklo_epi8(*q1, zero);
+        let mut q2_lo = _mm_unpacklo_epi8(*q2, zero);
+        deblock_luma_eq4_half8(
+            _mm_unpacklo_epi8(p3, zero),
+            &mut p2_lo,
+            &mut p1_lo,
+            &mut p0_lo,
+            &mut q0_lo,
+            &mut q1_lo,
+            &mut q2_lo,
+            _mm_unpacklo_epi8(q3, zero),
+            alpha_vec,
+            beta_vec,
+            small_thresh,
+        );
 
-    let mut p2_hi = _mm_unpackhi_epi8(*p2, zero);
-    let mut p1_hi = _mm_unpackhi_epi8(*p1, zero);
-    let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
-    let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
-    let mut q1_hi = _mm_unpackhi_epi8(*q1, zero);
-    let mut q2_hi = _mm_unpackhi_epi8(*q2, zero);
-    deblock_luma_eq4_half8(
-        _mm_unpackhi_epi8(p3, zero),
-        &mut p2_hi,
-        &mut p1_hi,
-        &mut p0_hi,
-        &mut q0_hi,
-        &mut q1_hi,
-        &mut q2_hi,
-        _mm_unpackhi_epi8(q3, zero),
-        alpha_vec,
-        beta_vec,
-        small_thresh,
-    );
+        let mut p2_hi = _mm_unpackhi_epi8(*p2, zero);
+        let mut p1_hi = _mm_unpackhi_epi8(*p1, zero);
+        let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
+        let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
+        let mut q1_hi = _mm_unpackhi_epi8(*q1, zero);
+        let mut q2_hi = _mm_unpackhi_epi8(*q2, zero);
+        deblock_luma_eq4_half8(
+            _mm_unpackhi_epi8(p3, zero),
+            &mut p2_hi,
+            &mut p1_hi,
+            &mut p0_hi,
+            &mut q0_hi,
+            &mut q1_hi,
+            &mut q2_hi,
+            _mm_unpackhi_epi8(q3, zero),
+            alpha_vec,
+            beta_vec,
+            small_thresh,
+        );
 
-    *p2 = _mm_packus_epi16(p2_lo, p2_hi);
-    *p1 = _mm_packus_epi16(p1_lo, p1_hi);
-    *p0 = _mm_packus_epi16(p0_lo, p0_hi);
-    *q0 = _mm_packus_epi16(q0_lo, q0_hi);
-    *q1 = _mm_packus_epi16(q1_lo, q1_hi);
-    *q2 = _mm_packus_epi16(q2_lo, q2_hi);
+        *p2 = _mm_packus_epi16(p2_lo, p2_hi);
+        *p1 = _mm_packus_epi16(p1_lo, p1_hi);
+        *p0 = _mm_packus_epi16(p0_lo, p0_hi);
+        *q0 = _mm_packus_epi16(q0_lo, q0_hi);
+        *q1 = _mm_packus_epi16(q1_lo, q1_hi);
+        *q2 = _mm_packus_epi16(q2_lo, q2_hi);
+    }
 }
 
 /// Vectorized 16-line Luma bS == 4 (Eq4) filter across contiguous sample rows.
@@ -465,23 +477,25 @@ pub unsafe fn deblock_luma_eq4_16(
     alpha: i32,
     beta: i32,
 ) {
-    let vp3 = _mm_loadu_si128(p3.as_ptr() as *const __m128i);
-    let mut vp2 = _mm_loadu_si128(p2.as_ptr() as *const __m128i);
-    let mut vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
-    let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
-    let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
-    let mut vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
-    let mut vq2 = _mm_loadu_si128(q2.as_ptr() as *const __m128i);
-    let vq3 = _mm_loadu_si128(q3.as_ptr() as *const __m128i);
-    deblock_luma_eq4_vec(
-        vp3, &mut vp2, &mut vp1, &mut vp0, &mut vq0, &mut vq1, &mut vq2, vq3, alpha, beta,
-    );
-    _mm_storeu_si128(p2.as_mut_ptr() as *mut __m128i, vp2);
-    _mm_storeu_si128(p1.as_mut_ptr() as *mut __m128i, vp1);
-    _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
-    _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
-    _mm_storeu_si128(q1.as_mut_ptr() as *mut __m128i, vq1);
-    _mm_storeu_si128(q2.as_mut_ptr() as *mut __m128i, vq2);
+    unsafe {
+        let vp3 = _mm_loadu_si128(p3.as_ptr() as *const __m128i);
+        let mut vp2 = _mm_loadu_si128(p2.as_ptr() as *const __m128i);
+        let mut vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
+        let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
+        let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
+        let mut vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
+        let mut vq2 = _mm_loadu_si128(q2.as_ptr() as *const __m128i);
+        let vq3 = _mm_loadu_si128(q3.as_ptr() as *const __m128i);
+        deblock_luma_eq4_vec(
+            vp3, &mut vp2, &mut vp1, &mut vp0, &mut vq0, &mut vq1, &mut vq2, vq3, alpha, beta,
+        );
+        _mm_storeu_si128(p2.as_mut_ptr() as *mut __m128i, vp2);
+        _mm_storeu_si128(p1.as_mut_ptr() as *mut __m128i, vp1);
+        _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
+        _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
+        _mm_storeu_si128(q1.as_mut_ptr() as *mut __m128i, vq1);
+        _mm_storeu_si128(q2.as_mut_ptr() as *mut __m128i, vq2);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -496,52 +510,54 @@ unsafe fn deblock_chroma_lt4_half8(
     tc0_vec: __m128i,
     mask_tc0_gt_0: __m128i,
 ) {
-    let zero = _mm_setzero_si128();
-    let four = _mm_set1_epi16(4);
-    let max_u8 = _mm_set1_epi16(255);
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let four = _mm_set1_epi16(4);
+        let max_u8 = _mm_set1_epi16(255);
 
-    let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
-    let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
+        let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
+        let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
 
-    let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(p1_16, *p0_16), _mm_sub_epi16(*p0_16, p1_16));
-    let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
+        let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(p1_16, *p0_16), _mm_sub_epi16(*p0_16, p1_16));
+        let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
 
-    let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(q1_16, *q0_16), _mm_sub_epi16(*q0_16, q1_16));
-    let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
+        let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(q1_16, *q0_16), _mm_sub_epi16(*q0_16, q1_16));
+        let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
 
-    let mask_filter = _mm_and_si128(
-        mask_tc0_gt_0,
-        _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0)),
-    );
-    if _mm_movemask_epi8(mask_filter) == 0 {
-        return;
+        let mask_filter = _mm_and_si128(
+            mask_tc0_gt_0,
+            _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0)),
+        );
+        if _mm_movemask_epi8(mask_filter) == 0 {
+            return;
+        }
+
+        let diff_q0p0_x4 = _mm_slli_epi16(_mm_sub_epi16(*q0_16, *p0_16), 2);
+        let diff_p1q1 = _mm_sub_epi16(p1_16, q1_16);
+        let t_deta = _mm_srai_epi16(
+            _mm_add_epi16(_mm_add_epi16(diff_q0p0_x4, diff_p1q1), four),
+            3,
+        );
+        let neg_tc0 = _mm_sub_epi16(zero, tc0_vec);
+        let deta = _mm_min_epi16(_mm_max_epi16(t_deta, neg_tc0), tc0_vec);
+
+        let p0_cand = _mm_max_epi16(_mm_min_epi16(_mm_add_epi16(*p0_16, deta), max_u8), zero);
+        let q0_cand = _mm_max_epi16(_mm_min_epi16(_mm_sub_epi16(*q0_16, deta), max_u8), zero);
+
+        *p0_16 = _mm_or_si128(
+            _mm_and_si128(mask_filter, p0_cand),
+            _mm_andnot_si128(mask_filter, *p0_16),
+        );
+        *q0_16 = _mm_or_si128(
+            _mm_and_si128(mask_filter, q0_cand),
+            _mm_andnot_si128(mask_filter, *q0_16),
+        );
     }
-
-    let diff_q0p0_x4 = _mm_slli_epi16(_mm_sub_epi16(*q0_16, *p0_16), 2);
-    let diff_p1q1 = _mm_sub_epi16(p1_16, q1_16);
-    let t_deta = _mm_srai_epi16(
-        _mm_add_epi16(_mm_add_epi16(diff_q0p0_x4, diff_p1q1), four),
-        3,
-    );
-    let neg_tc0 = _mm_sub_epi16(zero, tc0_vec);
-    let deta = _mm_min_epi16(_mm_max_epi16(t_deta, neg_tc0), tc0_vec);
-
-    let p0_cand = _mm_max_epi16(_mm_min_epi16(_mm_add_epi16(*p0_16, deta), max_u8), zero);
-    let q0_cand = _mm_max_epi16(_mm_min_epi16(_mm_sub_epi16(*q0_16, deta), max_u8), zero);
-
-    *p0_16 = _mm_or_si128(
-        _mm_and_si128(mask_filter, p0_cand),
-        _mm_andnot_si128(mask_filter, *p0_16),
-    );
-    *q0_16 = _mm_or_si128(
-        _mm_and_si128(mask_filter, q0_cand),
-        _mm_andnot_si128(mask_filter, *q0_16),
-    );
 }
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-pub unsafe fn deblock_chroma_lt4_vec(
+unsafe fn deblock_chroma_lt4_vec(
     p1: __m128i,
     p0: &mut __m128i,
     q0: &mut __m128i,
@@ -550,52 +566,54 @@ pub unsafe fn deblock_chroma_lt4_vec(
     beta: i32,
     tc: &[i8; 4],
 ) {
-    let zero = _mm_setzero_si128();
-    let tc0_vec = _mm_setr_epi16(
-        tc[0] as i16,
-        tc[0] as i16,
-        tc[1] as i16,
-        tc[1] as i16,
-        tc[2] as i16,
-        tc[2] as i16,
-        tc[3] as i16,
-        tc[3] as i16,
-    );
-    let mask_tc0_gt_0 = _mm_cmpgt_epi16(tc0_vec, zero);
-    if _mm_movemask_epi8(mask_tc0_gt_0) == 0 {
-        return;
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let tc0_vec = _mm_setr_epi16(
+            tc[0] as i16,
+            tc[0] as i16,
+            tc[1] as i16,
+            tc[1] as i16,
+            tc[2] as i16,
+            tc[2] as i16,
+            tc[3] as i16,
+            tc[3] as i16,
+        );
+        let mask_tc0_gt_0 = _mm_cmpgt_epi16(tc0_vec, zero);
+        if _mm_movemask_epi8(mask_tc0_gt_0) == 0 {
+            return;
+        }
+        let alpha_vec = _mm_set1_epi16(alpha as i16);
+        let beta_vec = _mm_set1_epi16(beta as i16);
+
+        let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
+        let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
+        deblock_chroma_lt4_half8(
+            _mm_unpacklo_epi8(p1, zero),
+            &mut p0_lo,
+            &mut q0_lo,
+            _mm_unpacklo_epi8(q1, zero),
+            alpha_vec,
+            beta_vec,
+            tc0_vec,
+            mask_tc0_gt_0,
+        );
+
+        let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
+        let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
+        deblock_chroma_lt4_half8(
+            _mm_unpackhi_epi8(p1, zero),
+            &mut p0_hi,
+            &mut q0_hi,
+            _mm_unpackhi_epi8(q1, zero),
+            alpha_vec,
+            beta_vec,
+            tc0_vec,
+            mask_tc0_gt_0,
+        );
+
+        *p0 = _mm_packus_epi16(p0_lo, p0_hi);
+        *q0 = _mm_packus_epi16(q0_lo, q0_hi);
     }
-    let alpha_vec = _mm_set1_epi16(alpha as i16);
-    let beta_vec = _mm_set1_epi16(beta as i16);
-
-    let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
-    let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
-    deblock_chroma_lt4_half8(
-        _mm_unpacklo_epi8(p1, zero),
-        &mut p0_lo,
-        &mut q0_lo,
-        _mm_unpacklo_epi8(q1, zero),
-        alpha_vec,
-        beta_vec,
-        tc0_vec,
-        mask_tc0_gt_0,
-    );
-
-    let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
-    let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
-    deblock_chroma_lt4_half8(
-        _mm_unpackhi_epi8(p1, zero),
-        &mut p0_hi,
-        &mut q0_hi,
-        _mm_unpackhi_epi8(q1, zero),
-        alpha_vec,
-        beta_vec,
-        tc0_vec,
-        mask_tc0_gt_0,
-    );
-
-    *p0 = _mm_packus_epi16(p0_lo, p0_hi);
-    *q0 = _mm_packus_epi16(q0_lo, q0_hi);
 }
 
 /// Vectorized 16-line Chroma bS < 4 (Lt4) filter across contiguous sample rows.
@@ -610,13 +628,15 @@ pub unsafe fn deblock_chroma_lt4_16(
     beta: i32,
     tc: &[i8; 4],
 ) {
-    let vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
-    let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
-    let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
-    let vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
-    deblock_chroma_lt4_vec(vp1, &mut vp0, &mut vq0, vq1, alpha, beta, tc);
-    _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
-    _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
+    unsafe {
+        let vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
+        let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
+        let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
+        let vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
+        deblock_chroma_lt4_vec(vp1, &mut vp0, &mut vq0, vq1, alpha, beta, tc);
+        _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
+        _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -629,50 +649,52 @@ unsafe fn deblock_chroma_eq4_half8(
     alpha_vec: __m128i,
     beta_vec: __m128i,
 ) {
-    let two = _mm_set1_epi16(2);
+    unsafe {
+        let two = _mm_set1_epi16(2);
 
-    let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
-    let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
+        let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
+        let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
 
-    let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(p1_16, *p0_16), _mm_sub_epi16(*p0_16, p1_16));
-    let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
+        let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(p1_16, *p0_16), _mm_sub_epi16(*p0_16, p1_16));
+        let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
 
-    let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(q1_16, *q0_16), _mm_sub_epi16(*q0_16, q1_16));
-    let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
+        let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(q1_16, *q0_16), _mm_sub_epi16(*q0_16, q1_16));
+        let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
 
-    let mask_filter = _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0));
-    if _mm_movemask_epi8(mask_filter) == 0 {
-        return;
+        let mask_filter = _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0));
+        if _mm_movemask_epi8(mask_filter) == 0 {
+            return;
+        }
+
+        let p0_cand = _mm_srai_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(_mm_slli_epi16(p1_16, 1), _mm_add_epi16(*p0_16, q1_16)),
+                two,
+            ),
+            2,
+        );
+        let q0_cand = _mm_srai_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(_mm_slli_epi16(q1_16, 1), _mm_add_epi16(*q0_16, p1_16)),
+                two,
+            ),
+            2,
+        );
+
+        *p0_16 = _mm_or_si128(
+            _mm_and_si128(mask_filter, p0_cand),
+            _mm_andnot_si128(mask_filter, *p0_16),
+        );
+        *q0_16 = _mm_or_si128(
+            _mm_and_si128(mask_filter, q0_cand),
+            _mm_andnot_si128(mask_filter, *q0_16),
+        );
     }
-
-    let p0_cand = _mm_srai_epi16(
-        _mm_add_epi16(
-            _mm_add_epi16(_mm_slli_epi16(p1_16, 1), _mm_add_epi16(*p0_16, q1_16)),
-            two,
-        ),
-        2,
-    );
-    let q0_cand = _mm_srai_epi16(
-        _mm_add_epi16(
-            _mm_add_epi16(_mm_slli_epi16(q1_16, 1), _mm_add_epi16(*q0_16, p1_16)),
-            two,
-        ),
-        2,
-    );
-
-    *p0_16 = _mm_or_si128(
-        _mm_and_si128(mask_filter, p0_cand),
-        _mm_andnot_si128(mask_filter, *p0_16),
-    );
-    *q0_16 = _mm_or_si128(
-        _mm_and_si128(mask_filter, q0_cand),
-        _mm_andnot_si128(mask_filter, *q0_16),
-    );
 }
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-pub unsafe fn deblock_chroma_eq4_vec(
+unsafe fn deblock_chroma_eq4_vec(
     p1: __m128i,
     p0: &mut __m128i,
     q0: &mut __m128i,
@@ -680,34 +702,36 @@ pub unsafe fn deblock_chroma_eq4_vec(
     alpha: i32,
     beta: i32,
 ) {
-    let zero = _mm_setzero_si128();
-    let alpha_vec = _mm_set1_epi16(alpha as i16);
-    let beta_vec = _mm_set1_epi16(beta as i16);
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let alpha_vec = _mm_set1_epi16(alpha as i16);
+        let beta_vec = _mm_set1_epi16(beta as i16);
 
-    let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
-    let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
-    deblock_chroma_eq4_half8(
-        _mm_unpacklo_epi8(p1, zero),
-        &mut p0_lo,
-        &mut q0_lo,
-        _mm_unpacklo_epi8(q1, zero),
-        alpha_vec,
-        beta_vec,
-    );
+        let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
+        let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
+        deblock_chroma_eq4_half8(
+            _mm_unpacklo_epi8(p1, zero),
+            &mut p0_lo,
+            &mut q0_lo,
+            _mm_unpacklo_epi8(q1, zero),
+            alpha_vec,
+            beta_vec,
+        );
 
-    let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
-    let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
-    deblock_chroma_eq4_half8(
-        _mm_unpackhi_epi8(p1, zero),
-        &mut p0_hi,
-        &mut q0_hi,
-        _mm_unpackhi_epi8(q1, zero),
-        alpha_vec,
-        beta_vec,
-    );
+        let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
+        let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
+        deblock_chroma_eq4_half8(
+            _mm_unpackhi_epi8(p1, zero),
+            &mut p0_hi,
+            &mut q0_hi,
+            _mm_unpackhi_epi8(q1, zero),
+            alpha_vec,
+            beta_vec,
+        );
 
-    *p0 = _mm_packus_epi16(p0_lo, p0_hi);
-    *q0 = _mm_packus_epi16(q0_lo, q0_hi);
+        *p0 = _mm_packus_epi16(p0_lo, p0_hi);
+        *q0 = _mm_packus_epi16(q0_lo, q0_hi);
+    }
 }
 
 /// Vectorized 16-line Chroma bS == 4 (Eq4) filter across contiguous sample rows.
@@ -721,13 +745,15 @@ pub unsafe fn deblock_chroma_eq4_16(
     alpha: i32,
     beta: i32,
 ) {
-    let vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
-    let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
-    let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
-    let vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
-    deblock_chroma_eq4_vec(vp1, &mut vp0, &mut vq0, vq1, alpha, beta);
-    _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
-    _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
+    unsafe {
+        let vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
+        let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
+        let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
+        let vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
+        deblock_chroma_eq4_vec(vp1, &mut vp0, &mut vq0, vq1, alpha, beta);
+        _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
+        _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
+    }
 }
 
 // ============================================================================
@@ -761,51 +787,53 @@ unsafe fn transpose_16x8_u8(
     __m128i,
     __m128i,
 ) {
-    // Stage 1: Interleave adjacent rows at byte level.
-    // t0..t3 process lower 8x8 block (rows 0..7), u0..u3 process upper 8x8 block (rows 8..15).
-    let t0 = _mm_unpacklo_epi8(r0, r1);
-    let t1 = _mm_unpacklo_epi8(r2, r3);
-    let t2 = _mm_unpacklo_epi8(r4, r5);
-    let t3 = _mm_unpacklo_epi8(r6, r7);
+    unsafe {
+        // Stage 1: Interleave adjacent rows at byte level.
+        // t0..t3 process lower 8x8 block (rows 0..7), u0..u3 process upper 8x8 block (rows 8..15).
+        let t0 = _mm_unpacklo_epi8(r0, r1);
+        let t1 = _mm_unpacklo_epi8(r2, r3);
+        let t2 = _mm_unpacklo_epi8(r4, r5);
+        let t3 = _mm_unpacklo_epi8(r6, r7);
 
-    let u0 = _mm_unpackhi_epi8(r0, r1);
-    let u1 = _mm_unpackhi_epi8(r2, r3);
-    let u2 = _mm_unpackhi_epi8(r4, r5);
-    let u3 = _mm_unpackhi_epi8(r6, r7);
+        let u0 = _mm_unpackhi_epi8(r0, r1);
+        let u1 = _mm_unpackhi_epi8(r2, r3);
+        let u2 = _mm_unpackhi_epi8(r4, r5);
+        let u3 = _mm_unpackhi_epi8(r6, r7);
 
-    // Stage 2: Interleave 16-bit words.
-    let w0 = _mm_unpacklo_epi16(t0, t1);
-    let w1 = _mm_unpackhi_epi16(t0, t1);
-    let w2 = _mm_unpacklo_epi16(t2, t3);
-    let w3 = _mm_unpackhi_epi16(t2, t3);
+        // Stage 2: Interleave 16-bit words.
+        let w0 = _mm_unpacklo_epi16(t0, t1);
+        let w1 = _mm_unpackhi_epi16(t0, t1);
+        let w2 = _mm_unpacklo_epi16(t2, t3);
+        let w3 = _mm_unpackhi_epi16(t2, t3);
 
-    let v0 = _mm_unpacklo_epi16(u0, u1);
-    let v1 = _mm_unpackhi_epi16(u0, u1);
-    let v2 = _mm_unpacklo_epi16(u2, u3);
-    let v3 = _mm_unpackhi_epi16(u2, u3);
+        let v0 = _mm_unpacklo_epi16(u0, u1);
+        let v1 = _mm_unpackhi_epi16(u0, u1);
+        let v2 = _mm_unpacklo_epi16(u2, u3);
+        let v3 = _mm_unpackhi_epi16(u2, u3);
 
-    // Stage 3: Interleave 32-bit dwords.
-    let d0 = _mm_unpacklo_epi32(w0, w2);
-    let d1 = _mm_unpackhi_epi32(w0, w2);
-    let d2 = _mm_unpacklo_epi32(w1, w3);
-    let d3 = _mm_unpackhi_epi32(w1, w3);
+        // Stage 3: Interleave 32-bit dwords.
+        let d0 = _mm_unpacklo_epi32(w0, w2);
+        let d1 = _mm_unpackhi_epi32(w0, w2);
+        let d2 = _mm_unpacklo_epi32(w1, w3);
+        let d3 = _mm_unpackhi_epi32(w1, w3);
 
-    let e0 = _mm_unpacklo_epi32(v0, v2);
-    let e1 = _mm_unpackhi_epi32(v0, v2);
-    let e2 = _mm_unpacklo_epi32(v1, v3);
-    let e3 = _mm_unpackhi_epi32(v1, v3);
+        let e0 = _mm_unpacklo_epi32(v0, v2);
+        let e1 = _mm_unpackhi_epi32(v0, v2);
+        let e2 = _mm_unpacklo_epi32(v1, v3);
+        let e3 = _mm_unpackhi_epi32(v1, v3);
 
-    // Stage 4: Combine 64-bit halves from lower and upper blocks into 16-sample columns.
-    let c0 = _mm_unpacklo_epi64(d0, e0);
-    let c1 = _mm_unpackhi_epi64(d0, e0);
-    let c2 = _mm_unpacklo_epi64(d1, e1);
-    let c3 = _mm_unpackhi_epi64(d1, e1);
-    let c4 = _mm_unpacklo_epi64(d2, e2);
-    let c5 = _mm_unpackhi_epi64(d2, e2);
-    let c6 = _mm_unpacklo_epi64(d3, e3);
-    let c7 = _mm_unpackhi_epi64(d3, e3);
+        // Stage 4: Combine 64-bit halves from lower and upper blocks into 16-sample columns.
+        let c0 = _mm_unpacklo_epi64(d0, e0);
+        let c1 = _mm_unpackhi_epi64(d0, e0);
+        let c2 = _mm_unpacklo_epi64(d1, e1);
+        let c3 = _mm_unpackhi_epi64(d1, e1);
+        let c4 = _mm_unpacklo_epi64(d2, e2);
+        let c5 = _mm_unpackhi_epi64(d2, e2);
+        let c6 = _mm_unpacklo_epi64(d3, e3);
+        let c7 = _mm_unpackhi_epi64(d3, e3);
 
-    (c0, c1, c2, c3, c4, c5, c6, c7)
+        (c0, c1, c2, c3, c4, c5, c6, c7)
+    }
 }
 
 /// Transposes 8 lines of 4-sample Cb and Cr taps into 4 16-byte column vectors.
@@ -825,31 +853,33 @@ unsafe fn transpose_chroma_4x8_u8(
     r6: __m128i,
     r7: __m128i,
 ) -> (__m128i, __m128i, __m128i, __m128i) {
-    // Stage 1: byte unpack
-    let a0 = _mm_unpacklo_epi8(r0, r1);
-    let a1 = _mm_unpacklo_epi8(r2, r3);
-    let a2 = _mm_unpacklo_epi8(r4, r5);
-    let a3 = _mm_unpacklo_epi8(r6, r7);
+    unsafe {
+        // Stage 1: byte unpack
+        let a0 = _mm_unpacklo_epi8(r0, r1);
+        let a1 = _mm_unpacklo_epi8(r2, r3);
+        let a2 = _mm_unpacklo_epi8(r4, r5);
+        let a3 = _mm_unpacklo_epi8(r6, r7);
 
-    // Stage 2: word unpack
-    let b0 = _mm_unpacklo_epi16(a0, a1);
-    let b1 = _mm_unpackhi_epi16(a0, a1);
-    let b2 = _mm_unpacklo_epi16(a2, a3);
-    let b3 = _mm_unpackhi_epi16(a2, a3);
+        // Stage 2: word unpack
+        let b0 = _mm_unpacklo_epi16(a0, a1);
+        let b1 = _mm_unpackhi_epi16(a0, a1);
+        let b2 = _mm_unpacklo_epi16(a2, a3);
+        let b3 = _mm_unpackhi_epi16(a2, a3);
 
-    // Stage 3: dword unpack
-    let cb01 = _mm_unpacklo_epi32(b0, b2);
-    let cb23 = _mm_unpackhi_epi32(b0, b2);
-    let cr01 = _mm_unpacklo_epi32(b1, b3);
-    let cr23 = _mm_unpackhi_epi32(b1, b3);
+        // Stage 3: dword unpack
+        let cb01 = _mm_unpacklo_epi32(b0, b2);
+        let cb23 = _mm_unpackhi_epi32(b0, b2);
+        let cr01 = _mm_unpacklo_epi32(b1, b3);
+        let cr23 = _mm_unpackhi_epi32(b1, b3);
 
-    // Stage 4: qword unpack combining Cb and Cr
-    let t0 = _mm_unpacklo_epi64(cb01, cr01);
-    let t1 = _mm_unpackhi_epi64(cb01, cr01);
-    let t2 = _mm_unpacklo_epi64(cb23, cr23);
-    let t3 = _mm_unpackhi_epi64(cb23, cr23);
+        // Stage 4: qword unpack combining Cb and Cr
+        let t0 = _mm_unpacklo_epi64(cb01, cr01);
+        let t1 = _mm_unpackhi_epi64(cb01, cr01);
+        let t2 = _mm_unpacklo_epi64(cb23, cr23);
+        let t3 = _mm_unpackhi_epi64(cb23, cr23);
 
-    (t0, t1, t2, t3)
+        (t0, t1, t2, t3)
+    }
 }
 
 // ============================================================================
@@ -1089,7 +1119,14 @@ pub fn deblock_chroma_lt4(
                     )
                 };
                 transpose_chroma_4x8_u8(
-                    row(0), row(1), row(2), row(3), row(4), row(5), row(6), row(7),
+                    row(0),
+                    row(1),
+                    row(2),
+                    row(3),
+                    row(4),
+                    row(5),
+                    row(6),
+                    row(7),
                 )
             };
 
@@ -1165,7 +1202,14 @@ pub fn deblock_chroma_eq4(
                     )
                 };
                 transpose_chroma_4x8_u8(
-                    row(0), row(1), row(2), row(3), row(4), row(5), row(6), row(7),
+                    row(0),
+                    row(1),
+                    row(2),
+                    row(3),
+                    row(4),
+                    row(5),
+                    row(6),
+                    row(7),
                 )
             };
 
@@ -1411,8 +1455,10 @@ unsafe fn nzc_term(cur: __m128i, prev: __m128i) -> __m128i {
 #[inline]
 #[target_feature(enable = "sse4.1")]
 unsafe fn ld_mv4<const K: usize>(mv: &[SMVUnitXY; 16]) -> __m128i {
-    const { assert!(K < 4, "a macroblock holds four groups of four vectors") };
-    _mm_loadu_si128(mv.as_ptr().cast::<__m128i>().add(K))
+    unsafe {
+        const { assert!(K < 4, "a macroblock holds four groups of four vectors") };
+        _mm_loadu_si128(mv.as_ptr().cast::<__m128i>().add(K))
+    }
 }
 
 /// Four motion vectors gathered from scattered indices — the left neighbour's last
@@ -1420,12 +1466,14 @@ unsafe fn ld_mv4<const K: usize>(mv: &[SMVUnitXY; 16]) -> __m128i {
 #[inline]
 #[target_feature(enable = "sse4.1")]
 unsafe fn gather_mv4(mv: &[SMVUnitXY; 16], idx: [usize; 4]) -> __m128i {
-    let mut w = [0i16; 8];
-    for (j, &i) in idx.iter().enumerate() {
-        w[2 * j] = mv[i].iMvX;
-        w[2 * j + 1] = mv[i].iMvY;
+    unsafe {
+        let mut w = [0i16; 8];
+        for (j, &i) in idx.iter().enumerate() {
+            w[2 * j] = mv[i].iMvX;
+            w[2 * j + 1] = mv[i].iMvY;
+        }
+        _mm_loadu_si128(w.as_ptr() as *const __m128i)
     }
-    _mm_loadu_si128(w.as_ptr() as *const __m128i)
 }
 
 /// `BS_COMPARE_MV`: for four vector pairs, a set mask where either component differs
@@ -1444,22 +1492,24 @@ unsafe fn mv_ge4(a: __m128i, b: __m128i) -> __m128i {
 #[inline]
 #[target_feature(enable = "sse4.1")]
 unsafe fn mv_term(m: [__m128i; 4]) -> __m128i {
-    let b01 = _mm_packs_epi16(m[0], m[1]);
-    let b23 = _mm_packs_epi16(m[2], m[3]);
+    unsafe {
+        let b01 = _mm_packs_epi16(m[0], m[1]);
+        let b23 = _mm_packs_epi16(m[2], m[3]);
 
-    let or01 = _mm_or_si128(b01, _mm_srli_si128(b01, 1));
-    let or23 = _mm_or_si128(b23, _mm_srli_si128(b23, 1));
+        let or01 = _mm_or_si128(b01, _mm_srli_si128(b01, 1));
+        let or23 = _mm_or_si128(b23, _mm_srli_si128(b23, 1));
 
-    let lo = _mm_shuffle_epi8(
-        or01,
-        _mm_loadu_si128(PACK_EVEN_BYTES_LO.as_ptr() as *const __m128i),
-    );
-    let hi = _mm_shuffle_epi8(
-        or23,
-        _mm_loadu_si128(PACK_EVEN_BYTES_HI.as_ptr() as *const __m128i),
-    );
+        let lo = _mm_shuffle_epi8(
+            or01,
+            _mm_loadu_si128(PACK_EVEN_BYTES_LO.as_ptr() as *const __m128i),
+        );
+        let hi = _mm_shuffle_epi8(
+            or23,
+            _mm_loadu_si128(PACK_EVEN_BYTES_HI.as_ptr() as *const __m128i),
+        );
 
-    _mm_and_si128(_mm_or_si128(lo, hi), _mm_set1_epi8(1))
+        _mm_and_si128(_mm_or_si128(lo, hi), _mm_set1_epi8(1))
+    }
 }
 
 /// The per-direction mask: the macroblock edge kept or cleared, the three interior
@@ -1467,9 +1517,11 @@ unsafe fn mv_term(m: [__m128i; 4]) -> __m128i {
 #[inline]
 #[target_feature(enable = "sse4.1")]
 unsafe fn bs_mask(edge_present: bool, inside: u8) -> __m128i {
-    let mut m = [inside; 16];
-    m[..4].fill(if edge_present { 0xFF } else { 0 });
-    _mm_loadu_si128(m.as_ptr() as *const __m128i)
+    unsafe {
+        let mut m = [inside; 16];
+        m[..4].fill(if edge_present { 0xFF } else { 0 });
+        _mm_loadu_si128(m.as_ptr() as *const __m128i)
+    }
 }
 
 /// Vectorized deblocking boundary strength calculation for one macroblock.
@@ -1489,70 +1541,72 @@ unsafe fn bs_calc_sse41(
     inside: u8,
     bs: &mut [[[u8; 4]; 4]; 2],
 ) {
-    let rows = _mm_loadu_si128(nzc_word_bytes(cur_nzc).as_ptr() as *const __m128i);
-    let cols = _mm_shuffle_epi8(
-        rows,
-        _mm_loadu_si128(COLUMN_MAJOR.as_ptr() as *const __m128i),
-    );
+    unsafe {
+        let rows = _mm_loadu_si128(nzc_word_bytes(cur_nzc).as_ptr() as *const __m128i);
+        let cols = _mm_shuffle_epi8(
+            rows,
+            _mm_loadu_si128(COLUMN_MAJOR.as_ptr() as *const __m128i),
+        );
 
-    let top_word = top.map_or(0, |(n, _)| nzc_word(n, [12, 13, 14, 15]));
-    let left_word = left.map_or(0, |(n, _)| nzc_word(n, [3, 7, 11, 15]));
+        let top_word = top.map_or(0, |(n, _)| nzc_word(n, [12, 13, 14, 15]));
+        let left_word = left.map_or(0, |(n, _)| nzc_word(n, [3, 7, 11, 15]));
 
-    let prev_rows = _mm_or_si128(_mm_slli_si128(rows, 4), _mm_cvtsi32_si128(top_word as i32));
-    let prev_cols = _mm_or_si128(_mm_slli_si128(cols, 4), _mm_cvtsi32_si128(left_word as i32));
+        let prev_rows = _mm_or_si128(_mm_slli_si128(rows, 4), _mm_cvtsi32_si128(top_word as i32));
+        let prev_cols = _mm_or_si128(_mm_slli_si128(cols, 4), _mm_cvtsi32_si128(left_word as i32));
 
-    let (r0, r1, r2, r3) = (
-        ld_mv4::<0>(cur_mv),
-        ld_mv4::<1>(cur_mv),
-        ld_mv4::<2>(cur_mv),
-        ld_mv4::<3>(cur_mv),
-    );
+        let (r0, r1, r2, r3) = (
+            ld_mv4::<0>(cur_mv),
+            ld_mv4::<1>(cur_mv),
+            ld_mv4::<2>(cur_mv),
+            ld_mv4::<3>(cur_mv),
+        );
 
-    let t0 = _mm_unpacklo_epi32(r0, r1);
-    let t1 = _mm_unpackhi_epi32(r0, r1);
-    let t2 = _mm_unpacklo_epi32(r2, r3);
-    let t3 = _mm_unpackhi_epi32(r2, r3);
+        let t0 = _mm_unpacklo_epi32(r0, r1);
+        let t1 = _mm_unpackhi_epi32(r0, r1);
+        let t2 = _mm_unpacklo_epi32(r2, r3);
+        let t3 = _mm_unpackhi_epi32(r2, r3);
 
-    let c0 = _mm_unpacklo_epi64(t0, t2);
-    let c1 = _mm_unpackhi_epi64(t0, t2);
-    let c2 = _mm_unpacklo_epi64(t1, t3);
-    let c3 = _mm_unpackhi_epi64(t1, t3);
+        let c0 = _mm_unpacklo_epi64(t0, t2);
+        let c1 = _mm_unpackhi_epi64(t0, t2);
+        let c2 = _mm_unpacklo_epi64(t1, t3);
+        let c3 = _mm_unpackhi_epi64(t1, t3);
 
-    let zero_mv = _mm_setzero_si128();
-    let prev_r = top.map_or(zero_mv, |(_, m)| ld_mv4::<3>(m));
-    let prev_c = left.map_or(zero_mv, |(_, m)| gather_mv4(m, [3, 7, 11, 15]));
+        let zero_mv = _mm_setzero_si128();
+        let prev_r = top.map_or(zero_mv, |(_, m)| ld_mv4::<3>(m));
+        let prev_c = left.map_or(zero_mv, |(_, m)| gather_mv4(m, [3, 7, 11, 15]));
 
-    let mv_rows = mv_term([
-        mv_ge4(prev_r, r0),
-        mv_ge4(r0, r1),
-        mv_ge4(r1, r2),
-        mv_ge4(r2, r3),
-    ]);
-    let mv_cols = mv_term([
-        mv_ge4(prev_c, c0),
-        mv_ge4(c0, c1),
-        mv_ge4(c1, c2),
-        mv_ge4(c2, c3),
-    ]);
+        let mv_rows = mv_term([
+            mv_ge4(prev_r, r0),
+            mv_ge4(r0, r1),
+            mv_ge4(r1, r2),
+            mv_ge4(r2, r3),
+        ]);
+        let mv_cols = mv_term([
+            mv_ge4(prev_c, c0),
+            mv_ge4(c0, c1),
+            mv_ge4(c1, c2),
+            mv_ge4(c2, c3),
+        ]);
 
-    let vertical = _mm_and_si128(
-        _mm_max_epu8(nzc_term(cols, prev_cols), mv_cols),
-        bs_mask(left.is_some(), inside),
-    );
-    let horizontal = _mm_and_si128(
-        _mm_max_epu8(nzc_term(rows, prev_rows), mv_rows),
-        bs_mask(top.is_some(), inside),
-    );
+        let vertical = _mm_and_si128(
+            _mm_max_epu8(nzc_term(cols, prev_cols), mv_cols),
+            bs_mask(left.is_some(), inside),
+        );
+        let horizontal = _mm_and_si128(
+            _mm_max_epu8(nzc_term(rows, prev_rows), mv_rows),
+            bs_mask(top.is_some(), inside),
+        );
 
-    let (v, h) = bs.split_at_mut(1);
-    _mm_storeu_si128(
-        v[0].as_flattened_mut().as_mut_ptr() as *mut __m128i,
-        vertical,
-    );
-    _mm_storeu_si128(
-        h[0].as_flattened_mut().as_mut_ptr() as *mut __m128i,
-        horizontal,
-    );
+        let (v, h) = bs.split_at_mut(1);
+        _mm_storeu_si128(
+            v[0].as_flattened_mut().as_mut_ptr() as *mut __m128i,
+            vertical,
+        );
+        _mm_storeu_si128(
+            h[0].as_flattened_mut().as_mut_ptr() as *mut __m128i,
+            horizontal,
+        );
+    }
 }
 
 /// The boundary strengths of one macroblock.

@@ -10,7 +10,7 @@
 //! install deliberately. `every_kernel_here_reaches_an_intrinsic` lists those fourteen
 //! and requires intrinsics in every other public kernel.
 
-#![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
+#![allow(unsafe_code)]
 
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
@@ -98,25 +98,27 @@ unsafe fn i16x16_plane_fill<O: PredOut>(
     left_shift: i32,
     lt_shift: i32,
 ) {
-    let inc_minus = _mm_setr_epi16(-7, -6, -5, -4, -3, -2, -1, 0);
-    let inc = _mm_setr_epi16(1, 2, 3, 4, 5, 6, 7, 8);
-    let b_vec = _mm_set1_epi16(top_shift as i16);
-    let c_vec = _mm_set1_epi16(left_shift as i16);
-    let mut s_vec = _mm_set1_epi16((lt_shift + 16 - 7 * left_shift) as i16);
+    unsafe {
+        let inc_minus = _mm_setr_epi16(-7, -6, -5, -4, -3, -2, -1, 0);
+        let inc = _mm_setr_epi16(1, 2, 3, 4, 5, 6, 7, 8);
+        let b_vec = _mm_set1_epi16(top_shift as i16);
+        let c_vec = _mm_set1_epi16(left_shift as i16);
+        let mut s_vec = _mm_set1_epi16((lt_shift + 16 - 7 * left_shift) as i16);
 
-    let term_lo = _mm_mullo_epi16(b_vec, inc_minus);
-    let term_hi = _mm_mullo_epi16(b_vec, inc);
+        let term_lo = _mm_mullo_epi16(b_vec, inc_minus);
+        let term_hi = _mm_mullo_epi16(b_vec, inc);
 
-    for dy in 0..16 {
-        let row_lo = _mm_srai_epi16(_mm_add_epi16(term_lo, s_vec), 5);
-        let row_hi = _mm_srai_epi16(_mm_add_epi16(term_hi, s_vec), 5);
-        let mut row = [0u8; 16];
-        _mm_storeu_si128(
-            row.as_mut_ptr() as *mut __m128i,
-            _mm_packus_epi16(row_lo, row_hi),
-        );
-        out.put(dy, &row);
-        s_vec = _mm_add_epi16(s_vec, c_vec);
+        for dy in 0..16 {
+            let row_lo = _mm_srai_epi16(_mm_add_epi16(term_lo, s_vec), 5);
+            let row_hi = _mm_srai_epi16(_mm_add_epi16(term_hi, s_vec), 5);
+            let mut row = [0u8; 16];
+            _mm_storeu_si128(
+                row.as_mut_ptr() as *mut __m128i,
+                _mm_packus_epi16(row_lo, row_hi),
+            );
+            out.put(dy, &row);
+            s_vec = _mm_add_epi16(s_vec, c_vec);
+        }
     }
 }
 
@@ -215,18 +217,25 @@ fn chroma_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
 
 /// The 8x8 chroma plane fill, from the three coefficients.
 #[inline(always)]
-unsafe fn chroma_plane_fill<O: PredOut>(out: &mut O, top_shift: i32, left_shift: i32, lt_shift: i32) {
-    let mul_b = _mm_setr_epi16(-3, -2, -1, 0, 1, 2, 3, 4);
-    let b_vec = _mm_set1_epi16(top_shift as i16);
-    let c_vec = _mm_set1_epi16(left_shift as i16);
-    let mut s_vec = _mm_set1_epi16((lt_shift + 16 - 3 * left_shift) as i16);
-    let term = _mm_mullo_epi16(b_vec, mul_b);
+unsafe fn chroma_plane_fill<O: PredOut>(
+    out: &mut O,
+    top_shift: i32,
+    left_shift: i32,
+    lt_shift: i32,
+) {
+    unsafe {
+        let mul_b = _mm_setr_epi16(-3, -2, -1, 0, 1, 2, 3, 4);
+        let b_vec = _mm_set1_epi16(top_shift as i16);
+        let c_vec = _mm_set1_epi16(left_shift as i16);
+        let mut s_vec = _mm_set1_epi16((lt_shift + 16 - 3 * left_shift) as i16);
+        let term = _mm_mullo_epi16(b_vec, mul_b);
 
-    for dy in 0..8 {
-        let row_w = _mm_srai_epi16(_mm_add_epi16(term, s_vec), 5);
-        let row_b = _mm_packus_epi16(row_w, row_w);
-        out.put(dy, &(_mm_cvtsi128_si64(row_b) as u64).to_ne_bytes());
-        s_vec = _mm_add_epi16(s_vec, c_vec);
+        for dy in 0..8 {
+            let row_w = _mm_srai_epi16(_mm_add_epi16(term, s_vec), 5);
+            let row_b = _mm_packus_epi16(row_w, row_w);
+            out.put(dy, &(_mm_cvtsi128_si64(row_b) as u64).to_ne_bytes());
+            s_vec = _mm_add_epi16(s_vec, c_vec);
+        }
     }
 }
 
@@ -792,7 +801,7 @@ unsafe fn intra_16x16_combined3_sad_avx2(
     lambda: i32,
 ) -> (u8, i32) {
     let top = rec.row_n::<16>(-1, 0);
-    let v_vec128 = _mm_loadu_si128(top.as_ptr() as *const __m128i);
+    let v_vec128 = unsafe { _mm_loadu_si128(top.as_ptr() as *const __m128i) };
     let sad_top = _mm_sad_epu8(v_vec128, _mm_setzero_si128());
     let sum_top = _mm_cvtsi128_si32(sad_top) + _mm_extract_epi16(sad_top, 4);
 
@@ -804,7 +813,7 @@ unsafe fn intra_16x16_combined3_sad_avx2(
     let mut left = [0u8; 16];
     let mut sum_left: i32 = 0;
     for y in 0..16 {
-        let val = *left_ptr.add(y * left_stride);
+        let val = unsafe { *left_ptr.add(y * left_stride) };
         left[y] = val;
         sum_left += val as i32;
     }
@@ -819,8 +828,12 @@ unsafe fn intra_16x16_combined3_sad_avx2(
 
     for step in 0..8 {
         let y = step * 2;
-        let enc0 = _mm_loadu_si128(enc_ptr.add(y * enc_stride) as *const __m128i);
-        let enc1 = _mm_loadu_si128(enc_ptr.add((y + 1) * enc_stride) as *const __m128i);
+        let (enc0, enc1) = unsafe {
+            (
+                _mm_loadu_si128(enc_ptr.add(y * enc_stride) as *const __m128i),
+                _mm_loadu_si128(enc_ptr.add((y + 1) * enc_stride) as *const __m128i),
+            )
+        };
         let enc256 = _mm256_set_m128i(enc1, enc0);
 
         let h0 = _mm_set1_epi8(left[y] as i8);
@@ -832,8 +845,9 @@ unsafe fn intra_16x16_combined3_sad_avx2(
         acc_dc = _mm256_add_epi64(acc_dc, _mm256_sad_epu8(enc256, dc_vec256));
     }
 
-    #[inline(always)]
-    unsafe fn reduce256(acc: __m256i) -> i32 {
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    fn reduce256(acc: __m256i) -> i32 {
         let lo = _mm256_castsi256_si128(acc);
         let hi = _mm256_extracti128_si256(acc, 1);
         let sum128 = _mm_add_epi64(lo, hi);
@@ -858,21 +872,23 @@ unsafe fn intra_16x16_combined3_sad_avx2(
     };
 
     let dst = pred.as_mut_ptr() as *mut __m256i;
-    match best_mode {
-        0 => {
-            for k in 0..8 {
-                _mm256_storeu_si256(dst.add(k), v_vec256);
+    unsafe {
+        match best_mode {
+            0 => {
+                for k in 0..8 {
+                    _mm256_storeu_si256(dst.add(k), v_vec256);
+                }
             }
-        }
-        1 => {
-            let dst128 = pred.as_mut_ptr() as *mut __m128i;
-            for y in 0..16 {
-                _mm_storeu_si128(dst128.add(y), _mm_set1_epi8(left[y] as i8));
+            1 => {
+                let dst128 = pred.as_mut_ptr() as *mut __m128i;
+                for y in 0..16 {
+                    _mm_storeu_si128(dst128.add(y), _mm_set1_epi8(left[y] as i8));
+                }
             }
-        }
-        _ => {
-            for k in 0..8 {
-                _mm256_storeu_si256(dst.add(k), dc_vec256);
+            _ => {
+                for k in 0..8 {
+                    _mm256_storeu_si256(dst.add(k), dc_vec256);
+                }
             }
         }
     }

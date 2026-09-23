@@ -5,7 +5,7 @@
 //! - Vertical 6-tap Wiener filter (`mc_hor_ver02`)
 //! - 2D center 6x6-tap Wiener filter (`mc_hor_ver22`)
 //! - Luma quarter-pel motion compensation (`mc_luma`)
-#![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
+#![allow(unsafe_code)]
 
 use crate::common::mc::mc_luma_with;
 use crate::common::mc::{
@@ -395,11 +395,13 @@ unsafe fn filter_6tap_intermediate_8_samples(
     p4: __m128i,
     p5: __m128i,
 ) -> __m128i {
-    let p14 = _mm_add_epi16(p1, p4);
-    let p23 = _mm_add_epi16(p2, p3);
-    let x = _mm_sub_epi16(_mm_slli_epi16(p23, 2), p14);
-    let p05 = _mm_add_epi16(p0, p5);
-    _mm_add_epi16(p05, _mm_add_epi16(x, _mm_slli_epi16(x, 2)))
+    unsafe {
+        let p14 = _mm_add_epi16(p1, p4);
+        let p23 = _mm_add_epi16(p2, p3);
+        let x = _mm_sub_epi16(_mm_slli_epi16(p23, 2), p14);
+        let p05 = _mm_add_epi16(p0, p5);
+        _mm_add_epi16(p05, _mm_add_epi16(x, _mm_slli_epi16(x, 2)))
+    }
 }
 
 // ============================================================================
@@ -409,23 +411,25 @@ unsafe fn filter_6tap_intermediate_8_samples(
 /// Vectorized 6-tap Wiener filter on 8 samples using SSSE3 pmaddubsw and pshufb.
 #[inline(always)]
 unsafe fn filter_6tap_8px(raw: __m128i) -> __m128i {
-    let mask_01 = _mm_setr_epi8(0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8);
-    let mask_23 = _mm_setr_epi8(2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10);
-    let mask_45 = _mm_setr_epi8(4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12);
+    unsafe {
+        let mask_01 = _mm_setr_epi8(0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8);
+        let mask_23 = _mm_setr_epi8(2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10);
+        let mask_45 = _mm_setr_epi8(4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12);
 
-    let coeff_01 = _mm_setr_epi8(1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5);
-    let coeff_23 = _mm_set1_epi8(20);
-    let coeff_45 = _mm_setr_epi8(-5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1);
+        let coeff_01 = _mm_setr_epi8(1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5);
+        let coeff_23 = _mm_set1_epi8(20);
+        let coeff_45 = _mm_setr_epi8(-5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1, -5, 1);
 
-    let p01 = _mm_shuffle_epi8(raw, mask_01);
-    let p23 = _mm_shuffle_epi8(raw, mask_23);
-    let p45 = _mm_shuffle_epi8(raw, mask_45);
+        let p01 = _mm_shuffle_epi8(raw, mask_01);
+        let p23 = _mm_shuffle_epi8(raw, mask_23);
+        let p45 = _mm_shuffle_epi8(raw, mask_45);
 
-    let m01 = _mm_maddubs_epi16(p01, coeff_01);
-    let m23 = _mm_maddubs_epi16(p23, coeff_23);
-    let m45 = _mm_maddubs_epi16(p45, coeff_45);
+        let m01 = _mm_maddubs_epi16(p01, coeff_01);
+        let m23 = _mm_maddubs_epi16(p23, coeff_23);
+        let m45 = _mm_maddubs_epi16(p45, coeff_45);
 
-    _mm_add_epi16(_mm_add_epi16(m01, m45), m23)
+        _mm_add_epi16(_mm_add_epi16(m01, m45), m23)
+    }
 }
 
 #[inline(always)]
@@ -434,108 +438,110 @@ unsafe fn hor_row_span<R: BlockRows, const W: usize, const SW: usize, const AVG:
     s: &R,
     y: usize,
 ) {
-    let op = out.as_mut_ptr();
-    if W >= 16 {
-        let r0_arr = s.row::<16>(y, 0);
-        let rt_arr = s.row::<8>(y, SW - 8);
-        let r0 = _mm_loadu_si128(r0_arr.as_ptr() as *const __m128i);
-        let rt = _mm_cvtsi64_si128(i64::from_ne_bytes(rt_arr));
-        let r1 = if SW == 22 {
-            _mm_srli_si128::<2>(rt)
+    unsafe {
+        let op = out.as_mut_ptr();
+        if W >= 16 {
+            let r0_arr = s.row::<16>(y, 0);
+            let rt_arr = s.row::<8>(y, SW - 8);
+            let r0 = _mm_loadu_si128(r0_arr.as_ptr() as *const __m128i);
+            let rt = _mm_cvtsi64_si128(i64::from_ne_bytes(rt_arr));
+            let r1 = if SW == 22 {
+                _mm_srli_si128::<2>(rt)
+            } else {
+                _mm_srli_si128::<3>(rt)
+            };
+            let r_hi = _mm_alignr_epi8(r1, r0, 8);
+            let sum_lo = filter_6tap_8px(r0);
+            let sum_hi = filter_6tap_8px(r_hi);
+            let shifted_lo = _mm_srai_epi16(_mm_add_epi16(sum_lo, _mm_set1_epi16(16)), 5);
+            let shifted_hi = _mm_srai_epi16(_mm_add_epi16(sum_hi, _mm_set1_epi16(16)), 5);
+            let mut res16 = _mm_packus_epi16(shifted_lo, shifted_hi);
+            if AVG != 0 {
+                let tap_arr = s.row::<16>(y, AVG);
+                let tap16 = _mm_loadu_si128(tap_arr.as_ptr() as *const __m128i);
+                res16 = _mm_avg_epu8(res16, tap16);
+            }
+            _mm_storeu_si128(op as *mut __m128i, res16);
+            if W > 16 {
+                let c = W - 8;
+                let raw_t = _mm_alignr_epi8(r1, r0, 9);
+                let sum_t = filter_6tap_8px(raw_t);
+                let shifted_t = _mm_srai_epi16(_mm_add_epi16(sum_t, _mm_set1_epi16(16)), 5);
+                let mut res_t = _mm_packus_epi16(shifted_t, shifted_t);
+                if AVG != 0 {
+                    let tap8 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, c + AVG)));
+                    res_t = _mm_avg_epu8(res_t, tap8);
+                }
+                _mm_storel_epi64(op.add(c) as *mut __m128i, res_t);
+            }
+        } else if W >= 8 {
+            let r0 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, 0)));
+            let rt = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, SW - 8)));
+            let r1 = if SW == 14 {
+                _mm_srli_si128::<2>(rt)
+            } else {
+                _mm_srli_si128::<3>(rt)
+            };
+            let raw0 = _mm_unpacklo_epi64(r0, r1);
+            let sum0 = filter_6tap_8px(raw0);
+            let shifted0 = _mm_srai_epi16(_mm_add_epi16(sum0, _mm_set1_epi16(16)), 5);
+            let mut res8 = _mm_packus_epi16(shifted0, shifted0);
+            if AVG != 0 {
+                let tap8 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, AVG)));
+                res8 = _mm_avg_epu8(res8, tap8);
+            }
+            _mm_storel_epi64(op as *mut __m128i, res8);
+            if W > 8 {
+                let c = W - 8;
+                let raw_t = _mm_srli_si128::<1>(raw0);
+                let sum_t = filter_6tap_8px(raw_t);
+                let shifted_t = _mm_srai_epi16(_mm_add_epi16(sum_t, _mm_set1_epi16(16)), 5);
+                let mut res_t = _mm_packus_epi16(shifted_t, shifted_t);
+                if AVG != 0 {
+                    let tap8 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, c + AVG)));
+                    res_t = _mm_avg_epu8(res_t, tap8);
+                }
+                _mm_storel_epi64(op.add(c) as *mut __m128i, res_t);
+            }
+        } else if W >= 4 {
+            let r0 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, 0)));
+            let rt = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y, SW - 4)));
+            let r1 = if SW == 10 {
+                _mm_srli_si128::<2>(rt)
+            } else {
+                _mm_srli_si128::<3>(rt)
+            };
+            let raw0 = _mm_unpacklo_epi64(r0, r1);
+            let sum0 = filter_6tap_8px(raw0);
+            let shifted0 = _mm_srai_epi16(_mm_add_epi16(sum0, _mm_set1_epi16(16)), 5);
+            let mut res4 = _mm_packus_epi16(shifted0, shifted0);
+            if AVG != 0 {
+                let tap4 = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y, AVG)));
+                res4 = _mm_avg_epu8(res4, tap4);
+            }
+            *(op as *mut [u8; 4]) = _mm_cvtsi128_si32(res4).to_ne_bytes();
+            if W > 4 {
+                let c = W - 4;
+                let raw_t = _mm_srli_si128::<1>(raw0);
+                let sum_t = filter_6tap_8px(raw_t);
+                let shifted_t = _mm_srai_epi16(_mm_add_epi16(sum_t, _mm_set1_epi16(16)), 5);
+                let mut res_t = _mm_packus_epi16(shifted_t, shifted_t);
+                if AVG != 0 {
+                    let tap4 = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y, c + AVG)));
+                    res_t = _mm_avg_epu8(res_t, tap4);
+                }
+                *(op.add(c) as *mut [u8; 4]) = _mm_cvtsi128_si32(res_t).to_ne_bytes();
+            }
         } else {
-            _mm_srli_si128::<3>(rt)
-        };
-        let r_hi = _mm_alignr_epi8(r1, r0, 8);
-        let sum_lo = filter_6tap_8px(r0);
-        let sum_hi = filter_6tap_8px(r_hi);
-        let shifted_lo = _mm_srai_epi16(_mm_add_epi16(sum_lo, _mm_set1_epi16(16)), 5);
-        let shifted_hi = _mm_srai_epi16(_mm_add_epi16(sum_hi, _mm_set1_epi16(16)), 5);
-        let mut res16 = _mm_packus_epi16(shifted_lo, shifted_hi);
-        if AVG != 0 {
-            let tap_arr = s.row::<16>(y, AVG);
-            let tap16 = _mm_loadu_si128(tap_arr.as_ptr() as *const __m128i);
-            res16 = _mm_avg_epu8(res16, tap16);
-        }
-        _mm_storeu_si128(op as *mut __m128i, res16);
-        if W > 16 {
-            let c = W - 8;
-            let raw_t = _mm_alignr_epi8(r1, r0, 9);
-            let sum_t = filter_6tap_8px(raw_t);
-            let shifted_t = _mm_srai_epi16(_mm_add_epi16(sum_t, _mm_set1_epi16(16)), 5);
-            let mut res_t = _mm_packus_epi16(shifted_t, shifted_t);
-            if AVG != 0 {
-                let tap8 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, c + AVG)));
-                res_t = _mm_avg_epu8(res_t, tap8);
+            let src_row = s.row::<SW>(y, 0);
+            for col in 0..W {
+                let t: [u8; 6] = src_row[col..col + 6].try_into().unwrap();
+                let mut v = WelsClip1((filter_input_8bit(&t) + 16) >> 5);
+                if AVG != 0 {
+                    v = ((v as u32 + src_row[col + AVG] as u32 + 1) >> 1) as u8;
+                }
+                out[col] = v;
             }
-            _mm_storel_epi64(op.add(c) as *mut __m128i, res_t);
-        }
-    } else if W >= 8 {
-        let r0 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, 0)));
-        let rt = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, SW - 8)));
-        let r1 = if SW == 14 {
-            _mm_srli_si128::<2>(rt)
-        } else {
-            _mm_srli_si128::<3>(rt)
-        };
-        let raw0 = _mm_unpacklo_epi64(r0, r1);
-        let sum0 = filter_6tap_8px(raw0);
-        let shifted0 = _mm_srai_epi16(_mm_add_epi16(sum0, _mm_set1_epi16(16)), 5);
-        let mut res8 = _mm_packus_epi16(shifted0, shifted0);
-        if AVG != 0 {
-            let tap8 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, AVG)));
-            res8 = _mm_avg_epu8(res8, tap8);
-        }
-        _mm_storel_epi64(op as *mut __m128i, res8);
-        if W > 8 {
-            let c = W - 8;
-            let raw_t = _mm_srli_si128::<1>(raw0);
-            let sum_t = filter_6tap_8px(raw_t);
-            let shifted_t = _mm_srai_epi16(_mm_add_epi16(sum_t, _mm_set1_epi16(16)), 5);
-            let mut res_t = _mm_packus_epi16(shifted_t, shifted_t);
-            if AVG != 0 {
-                let tap8 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, c + AVG)));
-                res_t = _mm_avg_epu8(res_t, tap8);
-            }
-            _mm_storel_epi64(op.add(c) as *mut __m128i, res_t);
-        }
-    } else if W >= 4 {
-        let r0 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, 0)));
-        let rt = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y, SW - 4)));
-        let r1 = if SW == 10 {
-            _mm_srli_si128::<2>(rt)
-        } else {
-            _mm_srli_si128::<3>(rt)
-        };
-        let raw0 = _mm_unpacklo_epi64(r0, r1);
-        let sum0 = filter_6tap_8px(raw0);
-        let shifted0 = _mm_srai_epi16(_mm_add_epi16(sum0, _mm_set1_epi16(16)), 5);
-        let mut res4 = _mm_packus_epi16(shifted0, shifted0);
-        if AVG != 0 {
-            let tap4 = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y, AVG)));
-            res4 = _mm_avg_epu8(res4, tap4);
-        }
-        *(op as *mut [u8; 4]) = _mm_cvtsi128_si32(res4).to_ne_bytes();
-        if W > 4 {
-            let c = W - 4;
-            let raw_t = _mm_srli_si128::<1>(raw0);
-            let sum_t = filter_6tap_8px(raw_t);
-            let shifted_t = _mm_srai_epi16(_mm_add_epi16(sum_t, _mm_set1_epi16(16)), 5);
-            let mut res_t = _mm_packus_epi16(shifted_t, shifted_t);
-            if AVG != 0 {
-                let tap4 = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y, c + AVG)));
-                res_t = _mm_avg_epu8(res_t, tap4);
-            }
-            *(op.add(c) as *mut [u8; 4]) = _mm_cvtsi128_si32(res_t).to_ne_bytes();
-        }
-    } else {
-        let src_row = s.row::<SW>(y, 0);
-        for col in 0..W {
-            let t: [u8; 6] = src_row[col..col + 6].try_into().unwrap();
-            let mut v = WelsClip1((filter_input_8bit(&t) + 16) >> 5);
-            if AVG != 0 {
-                v = ((v as u32 + src_row[col + AVG] as u32 + 1) >> 1) as u8;
-            }
-            out[col] = v;
         }
     }
 }
@@ -557,7 +563,7 @@ unsafe fn hor_block<
     let mut d = dst.span_mut::<W, H>(0, 0);
     for y in 0..H {
         let out = d.row_mut::<W>(y, 0);
-        hor_row_span::<_, W, SW, AVG>(out, &s, y);
+        unsafe { hor_row_span::<_, W, SW, AVG>(out, &s, y) };
     }
 }
 
@@ -604,13 +610,15 @@ unsafe fn filter_6tap_vertical_words(
     p4: __m128i,
     p5: __m128i,
 ) -> __m128i {
-    let p14 = _mm_add_epi16(p1, p4);
-    let p23 = _mm_add_epi16(p2, p3);
-    let x = _mm_sub_epi16(_mm_slli_epi16(p23, 2), p14);
-    let p05 = _mm_add_epi16(p0, p5);
-    let sum = _mm_add_epi16(p05, _mm_add_epi16(x, _mm_slli_epi16(x, 2)));
-    let rounded = _mm_add_epi16(sum, _mm_set1_epi16(16));
-    _mm_srai_epi16(rounded, 5)
+    unsafe {
+        let p14 = _mm_add_epi16(p1, p4);
+        let p23 = _mm_add_epi16(p2, p3);
+        let x = _mm_sub_epi16(_mm_slli_epi16(p23, 2), p14);
+        let p05 = _mm_add_epi16(p0, p5);
+        let sum = _mm_add_epi16(p05, _mm_add_epi16(x, _mm_slli_epi16(x, 2)));
+        let rounded = _mm_add_epi16(sum, _mm_set1_epi16(16));
+        _mm_srai_epi16(rounded, 5)
+    }
 }
 
 #[target_feature(enable = "avx2")]
@@ -647,7 +655,7 @@ unsafe fn ver_lanes_avx2_16x<
 
     let load_row = |y: usize| -> __m256i {
         let r = s.row::<16>(y, 0);
-        let raw = _mm_loadu_si128(r.as_ptr() as *const __m128i);
+        let raw = unsafe { _mm_loadu_si128(r.as_ptr() as *const __m128i) };
         _mm256_cvtepu8_epi16(raw)
     };
 
@@ -663,15 +671,16 @@ unsafe fn ver_lanes_avx2_16x<
         let r5 = load_row(y + 5);
         let out = d.row_mut::<16>(y, 0);
 
-        let w = filter_6tap_vertical_avx2(r0, r1, r2, r3, r4, r5);
+        let w = unsafe { filter_6tap_vertical_avx2(r0, r1, r2, r3, r4, r5) };
         let lo = _mm256_castsi256_si128(w);
         let hi = _mm256_extracti128_si256(w, 1);
         let mut both = _mm_packus_epi16(lo, hi);
         if AVG != 0 {
-            let tap = _mm_loadu_si128(s.row::<16>(y + AVG, 0).as_ptr() as *const __m128i);
+            let tap =
+                unsafe { _mm_loadu_si128(s.row::<16>(y + AVG, 0).as_ptr() as *const __m128i) };
             both = _mm_avg_epu8(both, tap);
         }
-        _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, both);
+        unsafe { _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, both) };
 
         (r0, r1, r2, r3, r4) = (r1, r2, r3, r4, r5);
     }
@@ -696,38 +705,40 @@ unsafe fn ver_lanes<
     let zero = _mm_setzero_si128();
 
     let load_row = |y: usize| -> [__m128i; 3] {
-        if W >= 16 {
-            let r01 = s.row::<16>(y, 0);
-            let raw0 = _mm_loadu_si128(r01.as_ptr() as *const __m128i);
-            let tail = if W > 16 {
-                let raw_t = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, W - 8)));
-                _mm_unpacklo_epi8(raw_t, zero)
+        unsafe {
+            if W >= 16 {
+                let r01 = s.row::<16>(y, 0);
+                let raw0 = _mm_loadu_si128(r01.as_ptr() as *const __m128i);
+                let tail = if W > 16 {
+                    let raw_t = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, W - 8)));
+                    _mm_unpacklo_epi8(raw_t, zero)
+                } else {
+                    zero
+                };
+                [
+                    _mm_unpacklo_epi8(raw0, zero),
+                    _mm_unpackhi_epi8(raw0, zero),
+                    tail,
+                ]
+            } else if W >= 8 {
+                let raw0 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, 0)));
+                let tail = if W > 8 {
+                    let raw_t = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, W - 8)));
+                    _mm_unpacklo_epi8(raw_t, zero)
+                } else {
+                    zero
+                };
+                [_mm_unpacklo_epi8(raw0, zero), tail, zero]
             } else {
-                zero
-            };
-            [
-                _mm_unpacklo_epi8(raw0, zero),
-                _mm_unpackhi_epi8(raw0, zero),
-                tail,
-            ]
-        } else if W >= 8 {
-            let raw0 = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, 0)));
-            let tail = if W > 8 {
-                let raw_t = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y, W - 8)));
-                _mm_unpacklo_epi8(raw_t, zero)
-            } else {
-                zero
-            };
-            [_mm_unpacklo_epi8(raw0, zero), tail, zero]
-        } else {
-            let raw0 = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y, 0)));
-            let tail = if W > 4 {
-                let raw_t = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y, W - 4)));
-                _mm_unpacklo_epi8(raw_t, zero)
-            } else {
-                zero
-            };
-            [_mm_unpacklo_epi8(raw0, zero), tail, zero]
+                let raw0 = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y, 0)));
+                let tail = if W > 4 {
+                    let raw_t = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y, W - 4)));
+                    _mm_unpacklo_epi8(raw_t, zero)
+                } else {
+                    zero
+                };
+                [_mm_unpacklo_epi8(raw0, zero), tail, zero]
+            }
         }
     };
 
@@ -744,58 +755,60 @@ unsafe fn ver_lanes<
         let out = d.row_mut::<W>(y, 0);
         let op = out.as_mut_ptr();
 
-        if W >= 16 {
-            let w_lo = filter_6tap_vertical_words(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
-            let w_hi = filter_6tap_vertical_words(r0[1], r1[1], r2[1], r3[1], r4[1], r5[1]);
-            let mut both = _mm_packus_epi16(w_lo, w_hi);
-            if AVG != 0 {
-                let tap_arr = s.row::<16>(y + AVG, 0);
-                let tap = _mm_loadu_si128(tap_arr.as_ptr() as *const __m128i);
-                both = _mm_avg_epu8(both, tap);
-            }
-            _mm_storeu_si128(op as *mut __m128i, both);
-            if W > 16 {
-                let w_t = filter_6tap_vertical_words(r0[2], r1[2], r2[2], r3[2], r4[2], r5[2]);
-                let mut res_t = _mm_packus_epi16(w_t, w_t);
+        unsafe {
+            if W >= 16 {
+                let w_lo = filter_6tap_vertical_words(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
+                let w_hi = filter_6tap_vertical_words(r0[1], r1[1], r2[1], r3[1], r4[1], r5[1]);
+                let mut both = _mm_packus_epi16(w_lo, w_hi);
                 if AVG != 0 {
-                    let tap = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y + AVG, W - 8)));
-                    res_t = _mm_avg_epu8(res_t, tap);
+                    let tap_arr = s.row::<16>(y + AVG, 0);
+                    let tap = _mm_loadu_si128(tap_arr.as_ptr() as *const __m128i);
+                    both = _mm_avg_epu8(both, tap);
                 }
-                _mm_storel_epi64(op.add(W - 8) as *mut __m128i, res_t);
-            }
-        } else if W >= 8 {
-            let w_lo = filter_6tap_vertical_words(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
-            let mut res = _mm_packus_epi16(w_lo, w_lo);
-            if AVG != 0 {
-                let tap = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y + AVG, 0)));
-                res = _mm_avg_epu8(res, tap);
-            }
-            _mm_storel_epi64(op as *mut __m128i, res);
-            if W > 8 {
-                let w_t = filter_6tap_vertical_words(r0[1], r1[1], r2[1], r3[1], r4[1], r5[1]);
-                let mut res_t = _mm_packus_epi16(w_t, w_t);
+                _mm_storeu_si128(op as *mut __m128i, both);
+                if W > 16 {
+                    let w_t = filter_6tap_vertical_words(r0[2], r1[2], r2[2], r3[2], r4[2], r5[2]);
+                    let mut res_t = _mm_packus_epi16(w_t, w_t);
+                    if AVG != 0 {
+                        let tap = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y + AVG, W - 8)));
+                        res_t = _mm_avg_epu8(res_t, tap);
+                    }
+                    _mm_storel_epi64(op.add(W - 8) as *mut __m128i, res_t);
+                }
+            } else if W >= 8 {
+                let w_lo = filter_6tap_vertical_words(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
+                let mut res = _mm_packus_epi16(w_lo, w_lo);
                 if AVG != 0 {
-                    let tap = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y + AVG, W - 8)));
-                    res_t = _mm_avg_epu8(res_t, tap);
+                    let tap = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y + AVG, 0)));
+                    res = _mm_avg_epu8(res, tap);
                 }
-                _mm_storel_epi64(op.add(W - 8) as *mut __m128i, res_t);
-            }
-        } else {
-            let w_lo = filter_6tap_vertical_words(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
-            let mut res = _mm_packus_epi16(w_lo, w_lo);
-            if AVG != 0 {
-                let tap = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y + AVG, 0)));
-                res = _mm_avg_epu8(res, tap);
-            }
-            *(op as *mut [u8; 4]) = _mm_cvtsi128_si32(res).to_ne_bytes();
-            if W > 4 {
-                let w_t = filter_6tap_vertical_words(r0[1], r1[1], r2[1], r3[1], r4[1], r5[1]);
-                let mut res_t = _mm_packus_epi16(w_t, w_t);
+                _mm_storel_epi64(op as *mut __m128i, res);
+                if W > 8 {
+                    let w_t = filter_6tap_vertical_words(r0[1], r1[1], r2[1], r3[1], r4[1], r5[1]);
+                    let mut res_t = _mm_packus_epi16(w_t, w_t);
+                    if AVG != 0 {
+                        let tap = _mm_cvtsi64_si128(i64::from_ne_bytes(s.row::<8>(y + AVG, W - 8)));
+                        res_t = _mm_avg_epu8(res_t, tap);
+                    }
+                    _mm_storel_epi64(op.add(W - 8) as *mut __m128i, res_t);
+                }
+            } else {
+                let w_lo = filter_6tap_vertical_words(r0[0], r1[0], r2[0], r3[0], r4[0], r5[0]);
+                let mut res = _mm_packus_epi16(w_lo, w_lo);
                 if AVG != 0 {
-                    let tap = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y + AVG, W - 4)));
-                    res_t = _mm_avg_epu8(res_t, tap);
+                    let tap = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y + AVG, 0)));
+                    res = _mm_avg_epu8(res, tap);
                 }
-                *(op.add(W - 4) as *mut [u8; 4]) = _mm_cvtsi128_si32(res_t).to_ne_bytes();
+                *(op as *mut [u8; 4]) = _mm_cvtsi128_si32(res).to_ne_bytes();
+                if W > 4 {
+                    let w_t = filter_6tap_vertical_words(r0[1], r1[1], r2[1], r3[1], r4[1], r5[1]);
+                    let mut res_t = _mm_packus_epi16(w_t, w_t);
+                    if AVG != 0 {
+                        let tap = _mm_cvtsi32_si128(i32::from_ne_bytes(s.row::<4>(y + AVG, W - 4)));
+                        res_t = _mm_avg_epu8(res_t, tap);
+                    }
+                    *(op.add(W - 4) as *mut [u8; 4]) = _mm_cvtsi128_si32(res_t).to_ne_bytes();
+                }
             }
         }
 
@@ -844,10 +857,10 @@ unsafe fn ver_block<
     dst: &mut PlaneCursorMut<'_>,
 ) {
     if W == 16 && crate::simd::has_avx2() {
-        ver_lanes_avx2_16x::<S, H, SH, AVG>(src, dst)
+        unsafe { ver_lanes_avx2_16x::<S, H, SH, AVG>(src, dst) }
     } else {
         match W {
-            17 | 16 | 9 | 8 | 5 | 4 => ver_lanes::<S, W, H, SH, AVG>(src, dst),
+            17 | 16 | 9 | 8 | 5 | 4 => unsafe { ver_lanes::<S, W, H, SH, AVG>(src, dst) },
             _ => ver_odd::<S, W, H, SH, AVG>(src, dst),
         }
     }
@@ -889,65 +902,71 @@ pub fn mc_hor_ver02<S: RefSamples + Copy>(
 
 #[inline(always)]
 unsafe fn hor_filter_4px_16bit(v0: __m128i, v1: __m128i) -> __m128i {
-    let mask_01 = _mm_setr_epi8(0, 1, 2, 3, 2, 3, 4, 5, 4, 5, 6, 7, 6, 7, 8, 9);
-    let mask_23 = _mm_setr_epi8(4, 5, 6, 7, 6, 7, 8, 9, 8, 9, 10, 11, 10, 11, 12, 13);
+    unsafe {
+        let mask_01 = _mm_setr_epi8(0, 1, 2, 3, 2, 3, 4, 5, 4, 5, 6, 7, 6, 7, 8, 9);
+        let mask_23 = _mm_setr_epi8(4, 5, 6, 7, 6, 7, 8, 9, 8, 9, 10, 11, 10, 11, 12, 13);
 
-    let coeff_01 = _mm_setr_epi16(1, -5, 1, -5, 1, -5, 1, -5);
-    let coeff_23 = _mm_set1_epi16(20);
-    let coeff_45 = _mm_setr_epi16(-5, 1, -5, 1, -5, 1, -5, 1);
+        let coeff_01 = _mm_setr_epi16(1, -5, 1, -5, 1, -5, 1, -5);
+        let coeff_23 = _mm_set1_epi16(20);
+        let coeff_45 = _mm_setr_epi16(-5, 1, -5, 1, -5, 1, -5, 1);
 
-    let p01 = _mm_shuffle_epi8(v0, mask_01);
-    let p23 = _mm_shuffle_epi8(v0, mask_23);
-    let v_align4 = _mm_alignr_epi8(v1, v0, 8);
-    let p45 = _mm_shuffle_epi8(v_align4, mask_01);
+        let p01 = _mm_shuffle_epi8(v0, mask_01);
+        let p23 = _mm_shuffle_epi8(v0, mask_23);
+        let v_align4 = _mm_alignr_epi8(v1, v0, 8);
+        let p45 = _mm_shuffle_epi8(v_align4, mask_01);
 
-    let m01 = _mm_madd_epi16(p01, coeff_01);
-    let m23 = _mm_madd_epi16(p23, coeff_23);
-    let m45 = _mm_madd_epi16(p45, coeff_45);
+        let m01 = _mm_madd_epi16(p01, coeff_01);
+        let m23 = _mm_madd_epi16(p23, coeff_23);
+        let m45 = _mm_madd_epi16(p45, coeff_45);
 
-    let sum = _mm_add_epi32(_mm_add_epi32(m01, m45), m23);
-    let rounded = _mm_add_epi32(sum, _mm_set1_epi32(512));
-    _mm_srai_epi32(rounded, 10)
+        let sum = _mm_add_epi32(_mm_add_epi32(m01, m45), m23);
+        let rounded = _mm_add_epi32(sum, _mm_set1_epi32(512));
+        _mm_srai_epi32(rounded, 10)
+    }
 }
 
 #[inline(always)]
 unsafe fn hor_filter_8px_from_regs(v0: __m128i, v1: __m128i, v2: __m128i) -> __m128i {
-    let s0 = hor_filter_4px_16bit(v0, v1);
-    let v0_hi = _mm_alignr_epi8(v1, v0, 8);
-    let v1_hi = _mm_alignr_epi8(v2, v1, 8);
-    let s1 = hor_filter_4px_16bit(v0_hi, v1_hi);
-    _mm_packs_epi32(s0, s1)
+    unsafe {
+        let s0 = hor_filter_4px_16bit(v0, v1);
+        let v0_hi = _mm_alignr_epi8(v1, v0, 8);
+        let v1_hi = _mm_alignr_epi8(v2, v1, 8);
+        let s1 = hor_filter_4px_16bit(v0_hi, v1_hi);
+        _mm_packs_epi32(s0, s1)
+    }
 }
 
 /// Loads one row of `SW` bytes (`SW <= 22`) into three 8-word `i16` vectors (`[__m128i; 3]`)
 /// using only 16-byte and 8-byte register loads so no `[u8; SW]` array is spilled to stack.
 #[inline(always)]
 unsafe fn cen_load_row<R: BlockRows, const SW: usize>(r: &R, y: usize) -> [__m128i; 3] {
-    let zero = _mm_setzero_si128();
-    if SW >= 16 {
-        let r01 = r.row::<16>(y, 0);
-        let r2 = r.row::<8>(y, SW - 8);
-        let v01 = _mm_loadu_si128(r01.as_ptr() as *const __m128i);
-        let v2 = _mm_cvtsi64_si128(i64::from_ne_bytes(r2));
-        [
-            _mm_unpacklo_epi8(v01, zero),
-            _mm_unpackhi_epi8(v01, zero),
-            _mm_unpacklo_epi8(v2, zero),
-        ]
-    } else if SW >= 8 {
-        let v0 = _mm_cvtsi64_si128(i64::from_ne_bytes(r.row::<8>(y, 0)));
-        let v1 = _mm_cvtsi64_si128(i64::from_ne_bytes(r.row::<8>(y, SW - 8)));
-        [
-            _mm_unpacklo_epi8(v0, zero),
-            _mm_unpacklo_epi8(v1, zero),
-            zero,
-        ]
-    } else {
-        let row = r.row::<SW>(y, 0);
-        let mut buf = [0u8; 8];
-        buf[..SW].copy_from_slice(&row);
-        let v0 = _mm_cvtsi64_si128(i64::from_ne_bytes(buf));
-        [_mm_unpacklo_epi8(v0, zero), zero, zero]
+    unsafe {
+        let zero = _mm_setzero_si128();
+        if SW >= 16 {
+            let r01 = r.row::<16>(y, 0);
+            let r2 = r.row::<8>(y, SW - 8);
+            let v01 = _mm_loadu_si128(r01.as_ptr() as *const __m128i);
+            let v2 = _mm_cvtsi64_si128(i64::from_ne_bytes(r2));
+            [
+                _mm_unpacklo_epi8(v01, zero),
+                _mm_unpackhi_epi8(v01, zero),
+                _mm_unpacklo_epi8(v2, zero),
+            ]
+        } else if SW >= 8 {
+            let v0 = _mm_cvtsi64_si128(i64::from_ne_bytes(r.row::<8>(y, 0)));
+            let v1 = _mm_cvtsi64_si128(i64::from_ne_bytes(r.row::<8>(y, SW - 8)));
+            [
+                _mm_unpacklo_epi8(v0, zero),
+                _mm_unpacklo_epi8(v1, zero),
+                zero,
+            ]
+        } else {
+            let row = r.row::<SW>(y, 0);
+            let mut buf = [0u8; 8];
+            buf[..SW].copy_from_slice(&row);
+            let v0 = _mm_cvtsi64_si128(i64::from_ne_bytes(buf));
+            [_mm_unpacklo_epi8(v0, zero), zero, zero]
+        }
     }
 }
 
@@ -961,77 +980,79 @@ unsafe fn cen_filter_row<const W: usize, const SW: usize>(
     w4: &[__m128i; 3],
     w5: &[__m128i; 3],
 ) {
-    let op = out.as_mut_ptr();
-    let t0 = filter_6tap_intermediate_8_samples(w0[0], w1[0], w2[0], w3[0], w4[0], w5[0]);
-    if W >= 16 {
-        let t1 = filter_6tap_intermediate_8_samples(w0[1], w1[1], w2[1], w3[1], w4[1], w5[1]);
-        let t2_overlap =
-            filter_6tap_intermediate_8_samples(w0[2], w1[2], w2[2], w3[2], w4[2], w5[2]);
-        // t2_overlap starts at column SW - 8 (13 for SW=21, 14 for SW=22). Shift right so t2 starts at column 16.
-        let t2 = if SW == 22 {
-            _mm_srli_si128::<4>(t2_overlap)
-        } else {
-            _mm_srli_si128::<6>(t2_overlap)
-        };
-        let w_lo = hor_filter_8px_from_regs(t0, t1, t2);
-        let w_hi = hor_filter_8px_from_regs(t1, t2, _mm_setzero_si128());
-        let res16 = _mm_packus_epi16(w_lo, w_hi);
-        _mm_storeu_si128(op as *mut __m128i, res16);
-        if W > 16 {
-            // Column 16 (and 13..17): starts at word 13 in [t1 | t2]
-            let v0 = _mm_alignr_epi8(t2, t1, 10);
-            let v1 = _mm_srli_si128::<10>(t2);
-            let s0 = hor_filter_4px_16bit(v0, v1);
+    unsafe {
+        let op = out.as_mut_ptr();
+        let t0 = filter_6tap_intermediate_8_samples(w0[0], w1[0], w2[0], w3[0], w4[0], w5[0]);
+        if W >= 16 {
+            let t1 = filter_6tap_intermediate_8_samples(w0[1], w1[1], w2[1], w3[1], w4[1], w5[1]);
+            let t2_overlap =
+                filter_6tap_intermediate_8_samples(w0[2], w1[2], w2[2], w3[2], w4[2], w5[2]);
+            // t2_overlap starts at column SW - 8 (13 for SW=21, 14 for SW=22). Shift right so t2 starts at column 16.
+            let t2 = if SW == 22 {
+                _mm_srli_si128::<4>(t2_overlap)
+            } else {
+                _mm_srli_si128::<6>(t2_overlap)
+            };
+            let w_lo = hor_filter_8px_from_regs(t0, t1, t2);
+            let w_hi = hor_filter_8px_from_regs(t1, t2, _mm_setzero_si128());
+            let res16 = _mm_packus_epi16(w_lo, w_hi);
+            _mm_storeu_si128(op as *mut __m128i, res16);
+            if W > 16 {
+                // Column 16 (and 13..17): starts at word 13 in [t1 | t2]
+                let v0 = _mm_alignr_epi8(t2, t1, 10);
+                let v1 = _mm_srli_si128::<10>(t2);
+                let s0 = hor_filter_4px_16bit(v0, v1);
+                let w4 = _mm_packs_epi32(s0, s0);
+                let res4 = _mm_packus_epi16(w4, w4);
+                *(op.add(W - 4) as *mut [u8; 4]) = _mm_cvtsi128_si32(res4).to_ne_bytes();
+            }
+        } else if W >= 8 {
+            let t1_overlap =
+                filter_6tap_intermediate_8_samples(w0[1], w1[1], w2[1], w3[1], w4[1], w5[1]);
+            // t1_overlap starts at column SW - 8 (5 for SW=13, 6 for SW=14). Shift right so t1 starts at column 8.
+            let t1 = if SW == 14 {
+                _mm_srli_si128::<4>(t1_overlap)
+            } else {
+                _mm_srli_si128::<6>(t1_overlap)
+            };
+            let w_lo = hor_filter_8px_from_regs(t0, t1, _mm_setzero_si128());
+            let res8 = _mm_packus_epi16(w_lo, w_lo);
+            _mm_storel_epi64(op as *mut __m128i, res8);
+            if W > 8 {
+                let v0 = _mm_alignr_epi8(t1, t0, 10);
+                let v1 = _mm_srli_si128::<10>(t1);
+                let s0 = hor_filter_4px_16bit(v0, v1);
+                let w4 = _mm_packs_epi32(s0, s0);
+                let res4 = _mm_packus_epi16(w4, w4);
+                *(op.add(W - 4) as *mut [u8; 4]) = _mm_cvtsi128_si32(res4).to_ne_bytes();
+            }
+        } else if W >= 4 {
+            let t1_overlap =
+                filter_6tap_intermediate_8_samples(w0[1], w1[1], w2[1], w3[1], w4[1], w5[1]);
+            let t1 = if SW == 10 {
+                _mm_srli_si128::<12>(t1_overlap)
+            } else {
+                _mm_srli_si128::<14>(t1_overlap)
+            };
+            let s0 = hor_filter_4px_16bit(t0, t1);
             let w4 = _mm_packs_epi32(s0, s0);
             let res4 = _mm_packus_epi16(w4, w4);
-            *(op.add(W - 4) as *mut [u8; 4]) = _mm_cvtsi128_si32(res4).to_ne_bytes();
-        }
-    } else if W >= 8 {
-        let t1_overlap =
-            filter_6tap_intermediate_8_samples(w0[1], w1[1], w2[1], w3[1], w4[1], w5[1]);
-        // t1_overlap starts at column SW - 8 (5 for SW=13, 6 for SW=14). Shift right so t1 starts at column 8.
-        let t1 = if SW == 14 {
-            _mm_srli_si128::<4>(t1_overlap)
+            *(op as *mut [u8; 4]) = _mm_cvtsi128_si32(res4).to_ne_bytes();
+            if W > 4 {
+                let v0 = _mm_alignr_epi8(t1, t0, 2);
+                let v1 = _mm_srli_si128::<2>(t1);
+                let s1 = hor_filter_4px_16bit(v0, v1);
+                let w4_t = _mm_packs_epi32(s1, s1);
+                let res4_t = _mm_packus_epi16(w4_t, w4_t);
+                *(op.add(W - 4) as *mut [u8; 4]) = _mm_cvtsi128_si32(res4_t).to_ne_bytes();
+            }
         } else {
-            _mm_srli_si128::<6>(t1_overlap)
-        };
-        let w_lo = hor_filter_8px_from_regs(t0, t1, _mm_setzero_si128());
-        let res8 = _mm_packus_epi16(w_lo, w_lo);
-        _mm_storel_epi64(op as *mut __m128i, res8);
-        if W > 8 {
-            let v0 = _mm_alignr_epi8(t1, t0, 10);
-            let v1 = _mm_srli_si128::<10>(t1);
-            let s0 = hor_filter_4px_16bit(v0, v1);
-            let w4 = _mm_packs_epi32(s0, s0);
-            let res4 = _mm_packus_epi16(w4, w4);
-            *(op.add(W - 4) as *mut [u8; 4]) = _mm_cvtsi128_si32(res4).to_ne_bytes();
-        }
-    } else if W >= 4 {
-        let t1_overlap =
-            filter_6tap_intermediate_8_samples(w0[1], w1[1], w2[1], w3[1], w4[1], w5[1]);
-        let t1 = if SW == 10 {
-            _mm_srli_si128::<12>(t1_overlap)
-        } else {
-            _mm_srli_si128::<14>(t1_overlap)
-        };
-        let s0 = hor_filter_4px_16bit(t0, t1);
-        let w4 = _mm_packs_epi32(s0, s0);
-        let res4 = _mm_packus_epi16(w4, w4);
-        *(op as *mut [u8; 4]) = _mm_cvtsi128_si32(res4).to_ne_bytes();
-        if W > 4 {
-            let v0 = _mm_alignr_epi8(t1, t0, 2);
-            let v1 = _mm_srli_si128::<2>(t1);
-            let s1 = hor_filter_4px_16bit(v0, v1);
-            let w4_t = _mm_packs_epi32(s1, s1);
-            let res4_t = _mm_packus_epi16(w4_t, w4_t);
-            *(op.add(W - 4) as *mut [u8; 4]) = _mm_cvtsi128_si32(res4_t).to_ne_bytes();
-        }
-    } else {
-        let mut tmp = [0i16; 8];
-        _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, t0);
-        for col in 0..W {
-            let t: &[i16; 6] = tmp[col..col + 6].try_into().unwrap();
-            out[col] = WelsClip1((hor_filter_input_16bit(t) + 512) >> 10);
+            let mut tmp = [0i16; 8];
+            _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, t0);
+            for col in 0..W {
+                let t: &[i16; 6] = tmp[col..col + 6].try_into().unwrap();
+                out[col] = WelsClip1((hor_filter_input_16bit(t) + 512) >> 10);
+            }
         }
     }
 }
@@ -1058,18 +1079,20 @@ unsafe fn cen_block<
     let s = src.span::<SW, SH>(-2, -2);
     let mut d = dst.span_mut::<W, H>(0, 0);
 
-    let (mut w0, mut w1, mut w2, mut w3, mut w4) = (
-        cen_load_row::<_, SW>(&s, 0),
-        cen_load_row::<_, SW>(&s, 1),
-        cen_load_row::<_, SW>(&s, 2),
-        cen_load_row::<_, SW>(&s, 3),
-        cen_load_row::<_, SW>(&s, 4),
-    );
+    let (mut w0, mut w1, mut w2, mut w3, mut w4) = unsafe {
+        (
+            cen_load_row::<_, SW>(&s, 0),
+            cen_load_row::<_, SW>(&s, 1),
+            cen_load_row::<_, SW>(&s, 2),
+            cen_load_row::<_, SW>(&s, 3),
+            cen_load_row::<_, SW>(&s, 4),
+        )
+    };
 
     for y in 0..H {
-        let w5 = cen_load_row::<_, SW>(&s, y + 5);
+        let w5 = unsafe { cen_load_row::<_, SW>(&s, y + 5) };
         let out = d.row_mut::<W>(y, 0);
-        cen_filter_row::<W, SW>(out, &w0, &w1, &w2, &w3, &w4, &w5);
+        unsafe { cen_filter_row::<W, SW>(out, &w0, &w1, &w2, &w3, &w4, &w5) };
         (w0, w1, w2, w3, w4) = (w1, w2, w3, w4, w5);
     }
 }

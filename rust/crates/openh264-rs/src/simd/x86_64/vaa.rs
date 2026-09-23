@@ -34,7 +34,7 @@
 //!
 //! Every read stays inside `vaa_span(pic_width, pic_height, pic_stride)` bytes of
 //! each plane; the last macroblock's window is `15 * stride + 16` bytes.
-#![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
+#![allow(unsafe_code)]
 
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
@@ -90,24 +90,28 @@ struct HalfStats {
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 unsafe fn halves_i32(v: __m128i) -> [i32; 2] {
-    [
-        _mm_cvtsi128_si32(v),
-        _mm_cvtsi128_si32(_mm_srli_si128(v, 8)),
-    ]
+    unsafe {
+        [
+            _mm_cvtsi128_si32(v),
+            _mm_cvtsi128_si32(_mm_srli_si128(v, 8)),
+        ]
+    }
 }
 
 /// Sum of the four dwords — the asm's `pshufd`/`paddd` pair, twice.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 unsafe fn sum_i32(v: __m128i) -> i32 {
-    let v = _mm_add_epi32(v, _mm_srli_si128(v, 8));
-    _mm_cvtsi128_si32(_mm_add_epi32(v, _mm_srli_si128(v, 4)))
+    unsafe {
+        let v = _mm_add_epi32(v, _mm_srli_si128(v, 8));
+        _mm_cvtsi128_si32(_mm_add_epi32(v, _mm_srli_si128(v, 4)))
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 unsafe fn fold256_add_epi32(v: __m256i) -> __m128i {
-    _mm_add_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256(v, 1))
+    unsafe { _mm_add_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256(v, 1)) }
 }
 
 /// The eight rows of one half-macroblock, from plane pointers anchored at its
@@ -124,71 +128,73 @@ unsafe fn half_mb<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     ref_ptr: *const u8,
     stride: usize,
 ) -> HalfStats {
-    let zero = _mm_setzero_si128();
-    // `psadbw` accumulators: the low quadword is the left quadrant, the high one
-    // the right.
-    let mut sad = zero;
-    let mut cur_sum = zero;
-    let mut ref_sum = zero;
-    let mut mad = zero;
-    let mut sqsum = zero;
-    let mut sqdiff = zero;
+    unsafe {
+        let zero = _mm_setzero_si128();
+        // `psadbw` accumulators: the low quadword is the left quadrant, the high one
+        // the right.
+        let mut sad = zero;
+        let mut cur_sum = zero;
+        let mut ref_sum = zero;
+        let mut mad = zero;
+        let mut sqsum = zero;
+        let mut sqdiff = zero;
 
-    for k in 0..8 {
-        let base = k * stride;
-        let a = _mm_loadu_si128(cur_ptr.add(base) as *const __m128i);
-        let b = _mm_loadu_si128(ref_ptr.add(base) as *const __m128i);
+        for k in 0..8 {
+            let base = k * stride;
+            let a = _mm_loadu_si128(cur_ptr.add(base) as *const __m128i);
+            let b = _mm_loadu_si128(ref_ptr.add(base) as *const __m128i);
 
-        sad = _mm_add_epi32(sad, _mm_sad_epu8(a, b));
-        if VAR || BGD {
-            cur_sum = _mm_add_epi32(cur_sum, _mm_sad_epu8(a, zero));
+            sad = _mm_add_epi32(sad, _mm_sad_epu8(a, b));
+            if VAR || BGD {
+                cur_sum = _mm_add_epi32(cur_sum, _mm_sad_epu8(a, zero));
+            }
+            if BGD {
+                ref_sum = _mm_add_epi32(ref_sum, _mm_sad_epu8(b, zero));
+                let d = _mm_sub_epi8(_mm_max_epu8(a, b), _mm_min_epu8(a, b));
+                mad = _mm_max_epu8(mad, d);
+            }
+            if VAR {
+                let lo = _mm_unpacklo_epi8(a, zero);
+                let hi = _mm_unpackhi_epi8(a, zero);
+                sqsum = _mm_add_epi32(sqsum, _mm_madd_epi16(lo, lo));
+                sqsum = _mm_add_epi32(sqsum, _mm_madd_epi16(hi, hi));
+            }
+            if SQDIFF {
+                let d = _mm_sub_epi8(_mm_max_epu8(a, b), _mm_min_epu8(a, b));
+                let lo = _mm_unpacklo_epi8(d, zero);
+                let hi = _mm_unpackhi_epi8(d, zero);
+                sqdiff = _mm_add_epi32(sqdiff, _mm_madd_epi16(lo, lo));
+                sqdiff = _mm_add_epi32(sqdiff, _mm_madd_epi16(hi, hi));
+            }
         }
-        if BGD {
-            ref_sum = _mm_add_epi32(ref_sum, _mm_sad_epu8(b, zero));
-            let d = _mm_sub_epi8(_mm_max_epu8(a, b), _mm_min_epu8(a, b));
-            mad = _mm_max_epu8(mad, d);
+
+        let mut out = HalfStats {
+            sad: halves_i32(sad),
+            ..Default::default()
+        };
+        if VAR || BGD {
+            let c = halves_i32(cur_sum);
+            if VAR {
+                out.sum = c[0] + c[1];
+            }
+            if BGD {
+                let r = halves_i32(ref_sum);
+                out.sd = [c[0] - r[0], c[1] - r[1]];
+                let m = _mm_max_epu8(mad, _mm_srli_si128(mad, 4));
+                let m = _mm_max_epu8(m, _mm_srli_si128(m, 2));
+                let m = _mm_max_epu8(m, _mm_srli_si128(m, 1));
+                let [lo, hi] = halves_i32(m);
+                out.mad = [lo as u8, hi as u8];
+            }
         }
         if VAR {
-            let lo = _mm_unpacklo_epi8(a, zero);
-            let hi = _mm_unpackhi_epi8(a, zero);
-            sqsum = _mm_add_epi32(sqsum, _mm_madd_epi16(lo, lo));
-            sqsum = _mm_add_epi32(sqsum, _mm_madd_epi16(hi, hi));
+            out.sqsum = sum_i32(sqsum);
         }
         if SQDIFF {
-            let d = _mm_sub_epi8(_mm_max_epu8(a, b), _mm_min_epu8(a, b));
-            let lo = _mm_unpacklo_epi8(d, zero);
-            let hi = _mm_unpackhi_epi8(d, zero);
-            sqdiff = _mm_add_epi32(sqdiff, _mm_madd_epi16(lo, lo));
-            sqdiff = _mm_add_epi32(sqdiff, _mm_madd_epi16(hi, hi));
+            out.sqdiff = sum_i32(sqdiff);
         }
+        out
     }
-
-    let mut out = HalfStats {
-        sad: halves_i32(sad),
-        ..Default::default()
-    };
-    if VAR || BGD {
-        let c = halves_i32(cur_sum);
-        if VAR {
-            out.sum = c[0] + c[1];
-        }
-        if BGD {
-            let r = halves_i32(ref_sum);
-            out.sd = [c[0] - r[0], c[1] - r[1]];
-            let m = _mm_max_epu8(mad, _mm_srli_si128(mad, 4));
-            let m = _mm_max_epu8(m, _mm_srli_si128(m, 2));
-            let m = _mm_max_epu8(m, _mm_srli_si128(m, 1));
-            let [lo, hi] = halves_i32(m);
-            out.mad = [lo as u8, hi as u8];
-        }
-    }
-    if VAR {
-        out.sqsum = sum_i32(sqsum);
-    }
-    if SQDIFF {
-        out.sqdiff = sum_i32(sqdiff);
-    }
-    out
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -198,79 +204,81 @@ unsafe fn half_mb_avx2<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     ref_ptr: *const u8,
     stride: usize,
 ) -> HalfStats {
-    let zero = _mm256_setzero_si256();
-    let mut sad256 = zero;
-    let mut cur_sum256 = zero;
-    let mut ref_sum256 = zero;
-    let mut mad256 = zero;
-    let mut sqsum256 = zero;
-    let mut sqdiff256 = zero;
+    unsafe {
+        let zero = _mm256_setzero_si256();
+        let mut sad256 = zero;
+        let mut cur_sum256 = zero;
+        let mut ref_sum256 = zero;
+        let mut mad256 = zero;
+        let mut sqsum256 = zero;
+        let mut sqdiff256 = zero;
 
-    for step in 0..4 {
-        let k = step * 2;
-        let base0 = k * stride;
-        let base1 = base0 + stride;
-        let a0 = _mm_loadu_si128(cur_ptr.add(base0) as *const __m128i);
-        let a1 = _mm_loadu_si128(cur_ptr.add(base1) as *const __m128i);
-        let b0 = _mm_loadu_si128(ref_ptr.add(base0) as *const __m128i);
-        let b1 = _mm_loadu_si128(ref_ptr.add(base1) as *const __m128i);
-        let a = _mm256_set_m128i(a1, a0);
-        let b = _mm256_set_m128i(b1, b0);
+        for step in 0..4 {
+            let k = step * 2;
+            let base0 = k * stride;
+            let base1 = base0 + stride;
+            let a0 = _mm_loadu_si128(cur_ptr.add(base0) as *const __m128i);
+            let a1 = _mm_loadu_si128(cur_ptr.add(base1) as *const __m128i);
+            let b0 = _mm_loadu_si128(ref_ptr.add(base0) as *const __m128i);
+            let b1 = _mm_loadu_si128(ref_ptr.add(base1) as *const __m128i);
+            let a = _mm256_set_m128i(a1, a0);
+            let b = _mm256_set_m128i(b1, b0);
 
-        sad256 = _mm256_add_epi32(sad256, _mm256_sad_epu8(a, b));
-        if VAR || BGD {
-            cur_sum256 = _mm256_add_epi32(cur_sum256, _mm256_sad_epu8(a, zero));
+            sad256 = _mm256_add_epi32(sad256, _mm256_sad_epu8(a, b));
+            if VAR || BGD {
+                cur_sum256 = _mm256_add_epi32(cur_sum256, _mm256_sad_epu8(a, zero));
+            }
+            if BGD {
+                ref_sum256 = _mm256_add_epi32(ref_sum256, _mm256_sad_epu8(b, zero));
+                let d = _mm256_sub_epi8(_mm256_max_epu8(a, b), _mm256_min_epu8(a, b));
+                mad256 = _mm256_max_epu8(mad256, d);
+            }
+            if VAR {
+                let lo = _mm256_unpacklo_epi8(a, zero);
+                let hi = _mm256_unpackhi_epi8(a, zero);
+                sqsum256 = _mm256_add_epi32(sqsum256, _mm256_madd_epi16(lo, lo));
+                sqsum256 = _mm256_add_epi32(sqsum256, _mm256_madd_epi16(hi, hi));
+            }
+            if SQDIFF {
+                let d = _mm256_sub_epi8(_mm256_max_epu8(a, b), _mm256_min_epu8(a, b));
+                let lo = _mm256_unpacklo_epi8(d, zero);
+                let hi = _mm256_unpackhi_epi8(d, zero);
+                sqdiff256 = _mm256_add_epi32(sqdiff256, _mm256_madd_epi16(lo, lo));
+                sqdiff256 = _mm256_add_epi32(sqdiff256, _mm256_madd_epi16(hi, hi));
+            }
         }
-        if BGD {
-            ref_sum256 = _mm256_add_epi32(ref_sum256, _mm256_sad_epu8(b, zero));
-            let d = _mm256_sub_epi8(_mm256_max_epu8(a, b), _mm256_min_epu8(a, b));
-            mad256 = _mm256_max_epu8(mad256, d);
+
+        let mut out = HalfStats {
+            sad: halves_i32(fold256_add_epi32(sad256)),
+            ..Default::default()
+        };
+        if VAR || BGD {
+            let c = halves_i32(fold256_add_epi32(cur_sum256));
+            if VAR {
+                out.sum = c[0] + c[1];
+            }
+            if BGD {
+                let r = halves_i32(fold256_add_epi32(ref_sum256));
+                out.sd = [c[0] - r[0], c[1] - r[1]];
+                let mad = _mm_max_epu8(
+                    _mm256_castsi256_si128(mad256),
+                    _mm256_extracti128_si256(mad256, 1),
+                );
+                let m = _mm_max_epu8(mad, _mm_srli_si128(mad, 4));
+                let m = _mm_max_epu8(m, _mm_srli_si128(m, 2));
+                let m = _mm_max_epu8(m, _mm_srli_si128(m, 1));
+                let [lo, hi] = halves_i32(m);
+                out.mad = [lo as u8, hi as u8];
+            }
         }
         if VAR {
-            let lo = _mm256_unpacklo_epi8(a, zero);
-            let hi = _mm256_unpackhi_epi8(a, zero);
-            sqsum256 = _mm256_add_epi32(sqsum256, _mm256_madd_epi16(lo, lo));
-            sqsum256 = _mm256_add_epi32(sqsum256, _mm256_madd_epi16(hi, hi));
+            out.sqsum = sum_i32(fold256_add_epi32(sqsum256));
         }
         if SQDIFF {
-            let d = _mm256_sub_epi8(_mm256_max_epu8(a, b), _mm256_min_epu8(a, b));
-            let lo = _mm256_unpacklo_epi8(d, zero);
-            let hi = _mm256_unpackhi_epi8(d, zero);
-            sqdiff256 = _mm256_add_epi32(sqdiff256, _mm256_madd_epi16(lo, lo));
-            sqdiff256 = _mm256_add_epi32(sqdiff256, _mm256_madd_epi16(hi, hi));
+            out.sqdiff = sum_i32(fold256_add_epi32(sqdiff256));
         }
+        out
     }
-
-    let mut out = HalfStats {
-        sad: halves_i32(fold256_add_epi32(sad256)),
-        ..Default::default()
-    };
-    if VAR || BGD {
-        let c = halves_i32(fold256_add_epi32(cur_sum256));
-        if VAR {
-            out.sum = c[0] + c[1];
-        }
-        if BGD {
-            let r = halves_i32(fold256_add_epi32(ref_sum256));
-            out.sd = [c[0] - r[0], c[1] - r[1]];
-            let mad = _mm_max_epu8(
-                _mm256_castsi256_si128(mad256),
-                _mm256_extracti128_si256(mad256, 1),
-            );
-            let m = _mm_max_epu8(mad, _mm_srli_si128(mad, 4));
-            let m = _mm_max_epu8(m, _mm_srli_si128(m, 2));
-            let m = _mm_max_epu8(m, _mm_srli_si128(m, 1));
-            let [lo, hi] = halves_i32(m);
-            out.mad = [lo as u8, hi as u8];
-        }
-    }
-    if VAR {
-        out.sqsum = sum_i32(fold256_add_epi32(sqsum256));
-    }
-    if SQDIFF {
-        out.sqdiff = sum_i32(fold256_add_epi32(sqdiff256));
-    }
-    out
 }
 
 /// One macroblock: the top half, then the bottom half eight rows down.
@@ -288,8 +296,12 @@ unsafe fn mb_stats<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     let bottom = 8 * stride;
     let cur_ptr = cur.as_ptr();
     let ref_ptr = refp.as_ptr();
-    let top = half_mb::<VAR, SQDIFF, BGD>(cur_ptr, ref_ptr, stride);
-    let bot = half_mb::<VAR, SQDIFF, BGD>(cur_ptr.add(bottom), ref_ptr.add(bottom), stride);
+    let (top, bot) = unsafe {
+        (
+            half_mb::<VAR, SQDIFF, BGD>(cur_ptr, ref_ptr, stride),
+            half_mb::<VAR, SQDIFF, BGD>(cur_ptr.add(bottom), ref_ptr.add(bottom), stride),
+        )
+    };
     MbStats {
         sad: [top.sad[0], top.sad[1], bot.sad[0], bot.sad[1]],
         sd: [top.sd[0], top.sd[1], bot.sd[0], bot.sd[1]],
@@ -312,8 +324,12 @@ unsafe fn mb_stats_avx2<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     let bottom = 8 * stride;
     let cur_ptr = cur.as_ptr();
     let ref_ptr = refp.as_ptr();
-    let top = half_mb_avx2::<VAR, SQDIFF, BGD>(cur_ptr, ref_ptr, stride);
-    let bot = half_mb_avx2::<VAR, SQDIFF, BGD>(cur_ptr.add(bottom), ref_ptr.add(bottom), stride);
+    let (top, bot) = unsafe {
+        (
+            half_mb_avx2::<VAR, SQDIFF, BGD>(cur_ptr, ref_ptr, stride),
+            half_mb_avx2::<VAR, SQDIFF, BGD>(cur_ptr.add(bottom), ref_ptr.add(bottom), stride),
+        )
+    };
     MbStats {
         sad: [top.sad[0], top.sad[1], bot.sad[0], bot.sad[1]],
         sd: [top.sd[0], top.sd[1], bot.sd[0], bot.sd[1]],
@@ -345,11 +361,9 @@ unsafe fn walk_avx2<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     for _ in 0..mb_height {
         let mut mb_origin = row_origin;
         for _ in 0..mb_width {
-            let s = mb_stats_avx2::<VAR, SQDIFF, BGD>(
-                &cur[mb_origin..],
-                &refp[mb_origin..],
-                stride,
-            );
+            let s = unsafe {
+                mb_stats_avx2::<VAR, SQDIFF, BGD>(&cur[mb_origin..], &refp[mb_origin..], stride)
+            };
             frame_sad += s.sad[0] + s.sad[1] + s.sad[2] + s.sad[3];
             out.sad8x8[mb_index] = s.sad;
             if VAR {
@@ -383,7 +397,9 @@ unsafe fn walk<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     out: &mut Outputs<'_>,
 ) -> i32 {
     if crate::simd::has_avx2() {
-        return walk_avx2::<VAR, SQDIFF, BGD>(cur, refp, pic_width, pic_height, pic_stride, out);
+        return unsafe {
+            walk_avx2::<VAR, SQDIFF, BGD>(cur, refp, pic_width, pic_height, pic_stride, out)
+        };
     }
     let mb_width = pic_width >> 4;
     let mb_height = pic_height >> 4;
@@ -396,7 +412,9 @@ unsafe fn walk<const VAR: bool, const SQDIFF: bool, const BGD: bool>(
     for _ in 0..mb_height {
         let mut mb_origin = row_origin;
         for _ in 0..mb_width {
-            let s = mb_stats::<VAR, SQDIFF, BGD>(&cur[mb_origin..], &refp[mb_origin..], stride);
+            let s = unsafe {
+                mb_stats::<VAR, SQDIFF, BGD>(&cur[mb_origin..], &refp[mb_origin..], stride)
+            };
             // The frame total accumulates in the C++'s quadrant order.
             frame_sad += s.sad[0] + s.sad[1] + s.sad[2] + s.sad[3];
             out.sad8x8[mb_index] = s.sad;
