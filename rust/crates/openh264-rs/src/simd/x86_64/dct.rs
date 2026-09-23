@@ -1,8 +1,8 @@
 //! SSE4.1 and SSE2 implementations of Forward 4x4 DCT and Inverse DCT (IDCT) with Prediction Addition.
-#![allow(unsafe_code)]
+#![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use crate::encoder::rec_view::RecCursor;
-use crate::safe::plane::{PlaneCursor, PlaneCursorMut, RefSamples, SampleCursor};
+use crate::safe::plane::{BlockRows, PlaneCursor, PlaneCursorMut, RefSamples, SampleCursor};
 use core::arch::x86_64::*;
 
 // ============================================================================
@@ -21,8 +21,7 @@ use core::arch::x86_64::*;
 ///   s1 = d1 + d2, s2 = d1 - d2
 ///
 /// Operates in parallel across all lanes of `__m128i`.
-#[inline]
-#[target_feature(enable = "sse4.1")]
+#[inline(always)]
 unsafe fn dct_pass(
     d0: __m128i,
     d1: __m128i,
@@ -43,8 +42,7 @@ unsafe fn dct_pass(
 }
 
 /// In-register transpose of a 4x4 matrix of 16-bit integers stored in the lower 64 bits of 4 registers.
-#[inline]
-#[target_feature(enable = "sse4.1")]
+#[inline(always)]
 unsafe fn transpose4(
     v0: __m128i,
     v1: __m128i,
@@ -64,43 +62,41 @@ unsafe fn transpose4(
     (c0, c1, c2, c3)
 }
 
-/// 4x4 Forward Integer DCT of the pixel difference `(pix1 - pix2)` using SSE4.1.
+/// 4x4 Forward Integer DCT of the pixel difference `(pix1 - pix2)` using SSE2.
 ///
 /// C++: `WelsDctT4_sse2`, `codec/common/x86/dct.asm`.
-#[target_feature(enable = "sse4.1")]
-unsafe fn dct_4x4_sse41_impl<A: SampleCursor, B: SampleCursor>(
-    dct: &mut [i16; 16],
-    pix1: &A,
-    pix2: &B,
-) {
+#[inline(always)]
+pub fn dct_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 16], pix1: &A, pix2: &B) {
     unsafe {
-        // 1. Load 4 rows of 4 difference pixels
-        let r1_0 = pix1.row_n::<4>(0, 0);
-        let r2_0 = pix2.row_n::<4>(0, 0);
+        let (s1, s2) = (pix1.span::<4, 4>(0, 0), pix2.span::<4, 4>(0, 0));
+        let zero = _mm_setzero_si128();
+
+        let r1_0 = s1.row::<4>(0, 0);
+        let r2_0 = s2.row::<4>(0, 0);
         let diff0 = _mm_sub_epi16(
-            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_0))),
-            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_0))),
+            _mm_unpacklo_epi8(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_0)), zero),
+            _mm_unpacklo_epi8(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_0)), zero),
         );
 
-        let r1_1 = pix1.row_n::<4>(1, 0);
-        let r2_1 = pix2.row_n::<4>(1, 0);
+        let r1_1 = s1.row::<4>(1, 0);
+        let r2_1 = s2.row::<4>(1, 0);
         let diff1 = _mm_sub_epi16(
-            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_1))),
-            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_1))),
+            _mm_unpacklo_epi8(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_1)), zero),
+            _mm_unpacklo_epi8(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_1)), zero),
         );
 
-        let r1_2 = pix1.row_n::<4>(2, 0);
-        let r2_2 = pix2.row_n::<4>(2, 0);
+        let r1_2 = s1.row::<4>(2, 0);
+        let r2_2 = s2.row::<4>(2, 0);
         let diff2 = _mm_sub_epi16(
-            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_2))),
-            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_2))),
+            _mm_unpacklo_epi8(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_2)), zero),
+            _mm_unpacklo_epi8(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_2)), zero),
         );
 
-        let r1_3 = pix1.row_n::<4>(3, 0);
-        let r2_3 = pix2.row_n::<4>(3, 0);
+        let r1_3 = s1.row::<4>(3, 0);
+        let r2_3 = s2.row::<4>(3, 0);
         let diff3 = _mm_sub_epi16(
-            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_3))),
-            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_3))),
+            _mm_unpacklo_epi8(_mm_cvtsi32_si128(i32::from_ne_bytes(r1_3)), zero),
+            _mm_unpacklo_epi8(_mm_cvtsi32_si128(i32::from_ne_bytes(r2_3)), zero),
         );
 
         // 2. Vertical 1D DCT across all 4 columns simultaneously
@@ -123,29 +119,8 @@ unsafe fn dct_4x4_sse41_impl<A: SampleCursor, B: SampleCursor>(
     }
 }
 
-/// 4x4 Forward Integer DCT of the pixel difference `(pix1 - pix2)` using SSE4.1.
-///
-/// C++: `WelsDctT4_sse2`, `codec/common/x86/dct.asm`.
-#[inline]
-pub fn dct_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 16], pix1: &A, pix2: &B) {
-    unsafe { dct_4x4_sse41_impl(dct, pix1, pix2) }
-}
-
 /// In-register transpose of two 4x4 blocks stored side-by-side in four 8-word registers.
-///
-/// Input:
-///   v0 = [a00, a01, a02, a03 | A00, A01, A02, A03]
-///   v1 = [a10, a11, a12, a13 | A10, A11, A12, A13]
-///   v2 = [a20, a21, a22, a23 | A20, A21, A22, A23]
-///   v3 = [a30, a31, a32, a33 | A30, A31, A32, A33]
-///
-/// Output:
-///   c0 = [a00, a10, a20, a30 | A00, A10, A20, A30]
-///   c1 = [a01, a11, a21, a31 | A01, A11, A21, A31]
-///   c2 = [a02, a12, a22, a32 | A02, A12, A22, A32]
-///   c3 = [a03, a13, a23, a33 | A03, A13, A23, A33]
-#[inline]
-#[target_feature(enable = "sse4.1")]
+#[inline(always)]
 unsafe fn transpose8(
     v0: __m128i,
     v1: __m128i,
@@ -170,43 +145,44 @@ unsafe fn transpose8(
     (c0, c1, c2, c3)
 }
 
-/// Transforms two horizontally adjacent 4x4 blocks side-by-side using 8-wide SSE SIMD.
-#[inline]
-#[target_feature(enable = "sse4.1")]
-unsafe fn dct_two_4x4_sse41<A: SampleCursor, B: SampleCursor>(
+/// Transforms two horizontally adjacent 4x4 blocks side-by-side using 8-wide SSE2 SIMD
+/// over an already bounds-checked `BlockRows` span.
+#[inline(always)]
+unsafe fn dct_two_4x4_from_span<S1: BlockRows, S2: BlockRows>(
     out_left: *mut i16,
     out_right: *mut i16,
-    pix1: &A,
-    pix2: &B,
-    y_offset: isize,
+    s1: &S1,
+    s2: &S2,
+    y0: usize,
 ) {
     unsafe {
-        let r1_0 = pix1.row_n::<8>(y_offset + 0, 0);
-        let r2_0 = pix2.row_n::<8>(y_offset + 0, 0);
+        let zero = _mm_setzero_si128();
+        let r1_0 = s1.row::<8>(y0, 0);
+        let r2_0 = s2.row::<8>(y0, 0);
         let diff0 = _mm_sub_epi16(
-            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_0))),
-            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_0))),
+            _mm_unpacklo_epi8(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_0)), zero),
+            _mm_unpacklo_epi8(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_0)), zero),
         );
 
-        let r1_1 = pix1.row_n::<8>(y_offset + 1, 0);
-        let r2_1 = pix2.row_n::<8>(y_offset + 1, 0);
+        let r1_1 = s1.row::<8>(y0 + 1, 0);
+        let r2_1 = s2.row::<8>(y0 + 1, 0);
         let diff1 = _mm_sub_epi16(
-            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_1))),
-            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_1))),
+            _mm_unpacklo_epi8(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_1)), zero),
+            _mm_unpacklo_epi8(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_1)), zero),
         );
 
-        let r1_2 = pix1.row_n::<8>(y_offset + 2, 0);
-        let r2_2 = pix2.row_n::<8>(y_offset + 2, 0);
+        let r1_2 = s1.row::<8>(y0 + 2, 0);
+        let r2_2 = s2.row::<8>(y0 + 2, 0);
         let diff2 = _mm_sub_epi16(
-            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_2))),
-            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_2))),
+            _mm_unpacklo_epi8(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_2)), zero),
+            _mm_unpacklo_epi8(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_2)), zero),
         );
 
-        let r1_3 = pix1.row_n::<8>(y_offset + 3, 0);
-        let r2_3 = pix2.row_n::<8>(y_offset + 3, 0);
+        let r1_3 = s1.row::<8>(y0 + 3, 0);
+        let r2_3 = s2.row::<8>(y0 + 3, 0);
         let diff3 = _mm_sub_epi16(
-            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_3))),
-            _mm_cvtepu8_epi16(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_3))),
+            _mm_unpacklo_epi8(_mm_cvtsi64_si128(i64::from_ne_bytes(r1_3)), zero),
+            _mm_unpacklo_epi8(_mm_cvtsi64_si128(i64::from_ne_bytes(r2_3)), zero),
         );
 
         // Vertical pass on both blocks
@@ -235,54 +211,64 @@ unsafe fn dct_two_4x4_sse41<A: SampleCursor, B: SampleCursor>(
         _mm_storeu_si128(out_right.add(8) as *mut __m128i, right_r23);
     }
 }
-#[target_feature(enable = "sse4.1")]
-unsafe fn dct_four_4x4_sse41_impl<A: SampleCursor, B: SampleCursor>(
-    dct: &mut [i16; 64],
-    pix1: &A,
-    pix2: &B,
-) {
-    unsafe {
-        let p = dct.as_mut_ptr();
-        // Top two blocks: Block 0 (offset 0) and Block 1 (offset 16)
-        dct_two_4x4_sse41(p, p.add(16), pix1, pix2, 0);
-        // Bottom two blocks: Block 2 (offset 32) and Block 3 (offset 48)
-        dct_two_4x4_sse41(p.add(32), p.add(48), pix1, pix2, 4);
-    }
-}
 
-/// Performs 4x4 FDCT on four adjacent 4x4 blocks forming an 8x8 quadrant using SSE4.1.
+/// Performs 4x4 FDCT on four adjacent 4x4 blocks forming an 8x8 quadrant using SSE2.
 ///
 /// C++: `WelsDctFourT4_sse2`, `codec/common/x86/dct.asm`.
-#[inline]
+#[inline(always)]
 pub fn dct_four_4x4<A: SampleCursor, B: SampleCursor>(dct: &mut [i16; 64], pix1: &A, pix2: &B) {
-    unsafe { dct_four_4x4_sse41_impl(dct, pix1, pix2) }
+    unsafe {
+        let (s1, s2) = (pix1.span::<8, 8>(0, 0), pix2.span::<8, 8>(0, 0));
+        let p = dct.as_mut_ptr();
+        dct_two_4x4_from_span(p, p.add(16), &s1, &s2, 0);
+        dct_two_4x4_from_span(p.add(32), p.add(48), &s1, &s2, 4);
+    }
 }
 
 // ============================================================================
 // Inverse 4x4 Integer DCT & Prediction Addition
 // ============================================================================
 
-#[inline]
-#[target_feature(enable = "sse4.1")]
+#[inline(always)]
 unsafe fn add_res_and_clip(pred_4bytes: [u8; 4], res: __m128i) -> [u8; 4] {
     let p_vec = _mm_cvtsi32_si128(i32::from_ne_bytes(pred_4bytes));
-    let p_unp = _mm_cvtepu8_epi16(p_vec);
+    let p_unp = _mm_unpacklo_epi8(p_vec, _mm_setzero_si128());
     let sum = _mm_add_epi16(p_unp, res);
     let packed = _mm_packus_epi16(sum, sum);
-    let res32 = _mm_cvtsi128_si32(packed);
-    res32.to_ne_bytes()
+    _mm_cvtsi128_si32(packed).to_ne_bytes()
 }
 
-/// Computes the 4x4 IDCT residual vectors for 4 rows using SSE4.1.
-///
-/// # The vertical pass runs in `i32`
-///
-/// The horizontal pass truncates to `i16` — `iSrc` is an `int16_t[16]` and the
-/// truncation is observable — so `s0..s12` span the full `i16` range and `s0 + s8`
-/// overflows 16 bits, where `epi16` lanes would wrap and the scalar saturates.
-/// `idct_vertical_pass_does_not_wrap_at_16_bits` pins the case.
-#[inline]
-#[target_feature(enable = "sse4.1")]
+#[inline(always)]
+unsafe fn add_res_and_clip8(pred_8bytes: [u8; 8], res: __m128i) -> [u8; 8] {
+    let p_vec = _mm_cvtsi64_si128(i64::from_ne_bytes(pred_8bytes));
+    let p_unp = _mm_unpacklo_epi8(p_vec, _mm_setzero_si128());
+    let sum = _mm_add_epi16(p_unp, res);
+    let packed = _mm_packus_epi16(sum, sum);
+    _mm_cvtsi128_si64(packed).to_ne_bytes()
+}
+
+#[inline(always)]
+unsafe fn idct_col_butterfly_i32(
+    s0_32: __m128i,
+    s4_32: __m128i,
+    s8_32: __m128i,
+    s12_32: __m128i,
+) -> (__m128i, __m128i, __m128i, __m128i) {
+    let c32 = _mm_set1_epi32(32);
+    let t1_a = _mm_add_epi32(s0_32, s8_32);
+    let t2_a = _mm_add_epi32(s4_32, _mm_srai_epi32(s12_32, 1));
+    let res0 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_a, t2_a), c32), 6);
+    let res3 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_a, t2_a), c32), 6);
+
+    let t1_b = _mm_sub_epi32(s0_32, s8_32);
+    let t2_b = _mm_sub_epi32(_mm_srai_epi32(s4_32, 1), s12_32);
+    let res1 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_b, t2_b), c32), 6);
+    let res2 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_b, t2_b), c32), 6);
+    (res0, res1, res2, res3)
+}
+
+/// Computes the 4x4 IDCT residual vectors for 4 rows using baseline SSE2.
+#[inline(always)]
 unsafe fn compute_idct_residuals(dct: &[i16; 16]) -> (__m128i, __m128i, __m128i, __m128i) {
     unsafe {
         let p = dct.as_ptr() as *const __m128i;
@@ -312,22 +298,12 @@ unsafe fn compute_idct_residuals(dct: &[i16; 16]) -> (__m128i, __m128i, __m128i,
         let (r0, r1, r2, r3) = transpose4(s0, s1, s2, s3);
 
         // 4. Widen to i32 for vertical butterfly to prevent overflow
-        let s0_32 = _mm_cvtepi16_epi32(r0);
-        let s4_32 = _mm_cvtepi16_epi32(r1);
-        let s8_32 = _mm_cvtepi16_epi32(r2);
-        let s12_32 = _mm_cvtepi16_epi32(r3);
+        let s0_32 = _mm_srai_epi32(_mm_unpacklo_epi16(r0, r0), 16);
+        let s4_32 = _mm_srai_epi32(_mm_unpacklo_epi16(r1, r1), 16);
+        let s8_32 = _mm_srai_epi32(_mm_unpacklo_epi16(r2, r2), 16);
+        let s12_32 = _mm_srai_epi32(_mm_unpacklo_epi16(r3, r3), 16);
 
-        let c32 = _mm_set1_epi32(32);
-
-        let t1_a = _mm_add_epi32(s0_32, s8_32);
-        let t2_a = _mm_add_epi32(s4_32, _mm_srai_epi32(s12_32, 1));
-        let res0 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_a, t2_a), c32), 6);
-        let res3 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_a, t2_a), c32), 6);
-
-        let t1_b = _mm_sub_epi32(s0_32, s8_32);
-        let t2_b = _mm_sub_epi32(_mm_srai_epi32(s4_32, 1), s12_32);
-        let res1 = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(t1_b, t2_b), c32), 6);
-        let res2 = _mm_srai_epi32(_mm_add_epi32(_mm_sub_epi32(t1_b, t2_b), c32), 6);
+        let (res0, res1, res2, res3) = idct_col_butterfly_i32(s0_32, s4_32, s8_32, s12_32);
 
         let zero = _mm_setzero_si128();
         (
@@ -339,109 +315,135 @@ unsafe fn compute_idct_residuals(dct: &[i16; 16]) -> (__m128i, __m128i, __m128i,
     }
 }
 
-#[target_feature(enable = "sse4.1")]
-unsafe fn idct_res_add_pred_sse41_impl(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
+/// Computes the IDCT residuals of two horizontally adjacent 4x4 blocks (`&[i16; 32]`)
+/// in parallel across 8 lanes (`[left 4 | right 4]` per row).
+#[inline(always)]
+unsafe fn compute_idct_residuals_two(dct: &[i16; 32]) -> [__m128i; 4] {
+    unsafe {
+        let p = dct.as_ptr() as *const __m128i;
+        let l01 = _mm_loadu_si128(p);
+        let l23 = _mm_loadu_si128(p.add(1));
+        let r01 = _mm_loadu_si128(p.add(2));
+        let r23 = _mm_loadu_si128(p.add(3));
+
+        let row0 = _mm_unpacklo_epi64(l01, r01);
+        let row1 = _mm_unpackhi_epi64(l01, r01);
+        let row2 = _mm_unpacklo_epi64(l23, r23);
+        let row3 = _mm_unpackhi_epi64(l23, r23);
+
+        let (c0, c1, c2, c3) = transpose8(row0, row1, row2, row3);
+
+        let t0 = _mm_add_epi16(c0, c2);
+        let t1 = _mm_sub_epi16(c0, c2);
+        let t2 = _mm_sub_epi16(_mm_srai_epi16(c1, 1), c3);
+        let t3 = _mm_add_epi16(c1, _mm_srai_epi16(c3, 1));
+
+        let s0 = _mm_add_epi16(t0, t3);
+        let s1 = _mm_add_epi16(t1, t2);
+        let s2 = _mm_sub_epi16(t1, t2);
+        let s3 = _mm_sub_epi16(t0, t3);
+
+        let (g0, g1, g2, g3) = transpose8(s0, s1, s2, s3);
+
+        let (l_res0, l_res1, l_res2, l_res3) = idct_col_butterfly_i32(
+            _mm_srai_epi32(_mm_unpacklo_epi16(g0, g0), 16),
+            _mm_srai_epi32(_mm_unpacklo_epi16(g1, g1), 16),
+            _mm_srai_epi32(_mm_unpacklo_epi16(g2, g2), 16),
+            _mm_srai_epi32(_mm_unpacklo_epi16(g3, g3), 16),
+        );
+        let (r_res0, r_res1, r_res2, r_res3) = idct_col_butterfly_i32(
+            _mm_srai_epi32(_mm_unpackhi_epi16(g0, g0), 16),
+            _mm_srai_epi32(_mm_unpackhi_epi16(g1, g1), 16),
+            _mm_srai_epi32(_mm_unpackhi_epi16(g2, g2), 16),
+            _mm_srai_epi32(_mm_unpackhi_epi16(g3, g3), 16),
+        );
+
+        [
+            _mm_packs_epi32(l_res0, r_res0),
+            _mm_packs_epi32(l_res1, r_res1),
+            _mm_packs_epi32(l_res2, r_res2),
+            _mm_packs_epi32(l_res3, r_res3),
+        ]
+    }
+}
+
+/// 4x4 inverse integer DCT of `rs`, added to `pred` and saturated to `[0, 255]` in place.
+///
+/// C++: `IdctResAddPred_sse2`, `codec/common/x86/dct.asm`.
+#[inline(always)]
+pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
     unsafe {
         let (res0, res1, res2, res3) = compute_idct_residuals(rs);
+        let mut s = pred.span_mut::<4, 4>(0, 0);
         for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
-            let row: &mut [u8; 4] = pred.row_mut(dy as isize, 0, 4).try_into().unwrap();
+            let row = s.row_mut::<4>(dy, 0);
             *row = add_res_and_clip(*row, res);
         }
     }
 }
 
-/// 4x4 inverse integer DCT of `rs`, added to `pred` and saturated to `[0, 255]` in place using SSE4.1.
-///
-/// C++: `IdctResAddPred_sse2`, `codec/common/x86/dct.asm`.
-#[inline]
-pub fn idct_res_add_pred(pred: &mut PlaneCursorMut<'_>, rs: &[i16; 16]) {
-    unsafe { idct_res_add_pred_sse41_impl(pred, rs) }
-}
-
-#[target_feature(enable = "sse4.1")]
-unsafe fn idct_t4_rec_sse41_impl(
-    rec: &mut PlaneCursorMut<'_>,
-    pred: &PlaneCursor<'_>,
-    dct: &[i16; 16],
-) {
-    unsafe {
-        let (res0, res1, res2, res3) = compute_idct_residuals(dct);
-        for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
-            let p: [u8; 4] = pred.row_view(dy as isize, 0, 4).try_into().unwrap();
-            let row: &mut [u8; 4] = rec.row_mut(dy as isize, 0, 4).try_into().unwrap();
-            *row = add_res_and_clip(p, res);
-        }
-    }
-}
-
-/// 4x4 IDCT with separate source prediction cursor using SSE4.1.
+/// 4x4 IDCT with separate source prediction cursor.
 ///
 /// C++: `WelsIDctT4Rec_sse2`, `codec/common/x86/dct.asm`.
-#[inline]
+#[inline(always)]
 pub fn idct_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 16]) {
-    unsafe { idct_t4_rec_sse41_impl(rec, pred, dct) }
-}
-
-#[target_feature(enable = "sse4.1")]
-unsafe fn idct_t4_rec_in_place_sse41_impl(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
     unsafe {
-        idct_res_add_pred_sse41_impl(rec, dct);
+        let (res0, res1, res2, res3) = compute_idct_residuals(dct);
+        let sp = pred.span::<4, 4>(0, 0);
+        let mut sr = rec.span_mut::<4, 4>(0, 0);
+        for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
+            let p = sp.row::<4>(dy, 0);
+            *sr.row_mut::<4>(dy, 0) = add_res_and_clip(p, res);
+        }
     }
 }
 
 /// [`idct_t4_rec`] in place on `rec`.
-#[inline]
+#[inline(always)]
 pub fn idct_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 16]) {
-    unsafe { idct_t4_rec_in_place_sse41_impl(rec, dct) }
-}
-
-#[target_feature(enable = "sse4.1")]
-unsafe fn idct_four_t4_rec_sse41_impl(
-    rec: &mut PlaneCursorMut<'_>,
-    pred: &PlaneCursor<'_>,
-    dct: &[i16; 64],
-) {
-    const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
-    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
-        let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-        unsafe {
-            idct_t4_rec_sse41_impl(&mut rec.reborrow(dx, dy), &pred.advance(dx, dy), sub);
-        }
-    }
+    idct_res_add_pred(rec, dct)
 }
 
 /// IDCT over four 4x4 blocks forming an 8x8 quadrant.
 ///
 /// C++: `WelsIDctFourT4Rec_sse2`, `codec/common/x86/dct.asm`.
-#[inline]
+#[inline(always)]
 pub fn idct_four_t4_rec(rec: &mut PlaneCursorMut<'_>, pred: &PlaneCursor<'_>, dct: &[i16; 64]) {
-    unsafe { idct_four_t4_rec_sse41_impl(rec, pred, dct) }
-}
-
-#[target_feature(enable = "sse4.1")]
-unsafe fn idct_four_t4_rec_in_place_sse41_impl(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
-    const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
-    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
-        let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-        unsafe {
-            idct_t4_rec_in_place_sse41_impl(&mut rec.reborrow(dx, dy), sub);
+    unsafe {
+        let sp = pred.span::<8, 8>(0, 0);
+        let mut sr = rec.span_mut::<8, 8>(0, 0);
+        for k in 0..2usize {
+            let sub: &[i16; 32] = (&dct[k * 32..][..32]).try_into().unwrap();
+            let rows = compute_idct_residuals_two(sub);
+            for (j, res) in rows.into_iter().enumerate() {
+                let y = 4 * k + j;
+                let p = sp.row::<8>(y, 0);
+                *sr.row_mut::<8>(y, 0) = add_res_and_clip8(p, res);
+            }
         }
     }
 }
 
 /// [`idct_t4_rec_in_place`] over four 4x4 blocks forming an 8x8 quadrant.
-#[inline]
+#[inline(always)]
 pub fn idct_four_t4_rec_in_place(rec: &mut PlaneCursorMut<'_>, dct: &[i16; 64]) {
-    unsafe { idct_four_t4_rec_in_place_sse41_impl(rec, dct) }
+    unsafe {
+        let mut sr = rec.span_mut::<8, 8>(0, 0);
+        for k in 0..2usize {
+            let sub: &[i16; 32] = (&dct[k * 32..][..32]).try_into().unwrap();
+            let rows = compute_idct_residuals_two(sub);
+            for (j, res) in rows.into_iter().enumerate() {
+                let y = 4 * k + j;
+                let row = sr.row_mut::<8>(y, 0);
+                *row = add_res_and_clip8(*row, res);
+            }
+        }
+    }
 }
 
-#[target_feature(enable = "sse4.1")]
-unsafe fn idct_t4_rec_to_view_sse41_impl(
-    rec: &RecCursor<'_>,
-    pred: &[u8],
-    pred_stride: usize,
-    dct: &[i16; 16],
-) {
+/// [`idct_t4_rec_to_view`] using SSE2.
+#[inline(always)]
+pub fn idct_t4_rec_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dct: &[i16; 16]) {
     unsafe {
         let (res0, res1, res2, res3) = compute_idct_residuals(dct);
         for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
@@ -452,90 +454,68 @@ unsafe fn idct_t4_rec_to_view_sse41_impl(
     }
 }
 
-/// [`idct_t4_rec_to_view`] using SSE4.1.
-#[inline]
-pub fn idct_t4_rec_to_view(rec: &RecCursor<'_>, pred: &[u8], pred_stride: usize, dct: &[i16; 16]) {
-    unsafe { idct_t4_rec_to_view_sse41_impl(rec, pred, pred_stride, dct) }
-}
-
-#[target_feature(enable = "sse4.1")]
-unsafe fn idct_four_t4_rec_to_view_sse41_impl(
-    rec: &RecCursor<'_>,
-    pred: &[u8],
-    pred_stride: usize,
-    dct: &[i16; 64],
-) {
-    const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
-    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
-        let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-        let off = dy as usize * pred_stride + dx as usize;
-        unsafe {
-            idct_t4_rec_to_view_sse41_impl(&rec.advance(dx, dy), &pred[off..], pred_stride, sub);
-        }
-    }
-}
-
-/// [`idct_four_t4_rec_to_view`] using SSE4.1.
-#[inline]
+/// [`idct_four_t4_rec_to_view`] using SSE2.
+#[inline(always)]
 pub fn idct_four_t4_rec_to_view(
     rec: &RecCursor<'_>,
     pred: &[u8],
     pred_stride: usize,
     dct: &[i16; 64],
 ) {
-    unsafe { idct_four_t4_rec_to_view_sse41_impl(rec, pred, pred_stride, dct) }
+    unsafe {
+        for k in 0..2usize {
+            let sub: &[i16; 32] = (&dct[k * 32..][..32]).try_into().unwrap();
+            let rows = compute_idct_residuals_two(sub);
+            for (j, res) in rows.into_iter().enumerate() {
+                let y = 4 * k + j;
+                let p: [u8; 8] = pred[y * pred_stride..][..8].try_into().unwrap();
+                let out = add_res_and_clip8(p, res);
+                rec.write_row::<8>(y as isize, 0, &out);
+            }
+        }
+    }
 }
 
-#[target_feature(enable = "sse4.1")]
-unsafe fn idct_t4_rec_in_place_view_sse41_impl(rec: &RecCursor<'_>, dct: &[i16; 16]) {
+/// [`idct_t4_rec_in_place_view`] using SSE2.
+#[inline(always)]
+pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
     unsafe {
         let (res0, res1, res2, res3) = compute_idct_residuals(dct);
+        let s = rec.span::<4, 4>(0, 0);
         for (dy, res) in [res0, res1, res2, res3].into_iter().enumerate() {
-            let cur = rec.row::<4>(dy as isize, 0);
+            let cur = s.row::<4>(dy, 0);
             let out = add_res_and_clip(cur, res);
             rec.write_row::<4>(dy as isize, 0, &out);
         }
     }
 }
 
-/// [`idct_t4_rec_in_place_view`] using SSE4.1.
-#[inline]
-pub fn idct_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 16]) {
-    unsafe { idct_t4_rec_in_place_view_sse41_impl(rec, dct) }
-}
-
-#[target_feature(enable = "sse4.1")]
-unsafe fn idct_four_t4_rec_in_place_view_sse41_impl(rec: &RecCursor<'_>, dct: &[i16; 64]) {
-    const SUBS: [(isize, isize); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
-    for (k, &(dx, dy)) in SUBS.iter().enumerate() {
-        let sub: &[i16; 16] = (&dct[k << 4..][..16]).try_into().unwrap();
-        unsafe {
-            idct_t4_rec_in_place_view_sse41_impl(&rec.advance(dx, dy), sub);
+/// [`idct_four_t4_rec_in_place_view`] using SSE2.
+#[inline(always)]
+pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
+    unsafe {
+        let s = rec.span::<8, 8>(0, 0);
+        for k in 0..2usize {
+            let sub: &[i16; 32] = (&dct[k * 32..][..32]).try_into().unwrap();
+            let rows = compute_idct_residuals_two(sub);
+            for (j, res) in rows.into_iter().enumerate() {
+                let y = 4 * k + j;
+                let cur = s.row::<8>(y, 0);
+                let out = add_res_and_clip8(cur, res);
+                rec.write_row::<8>(y as isize, 0, &out);
+            }
         }
     }
 }
 
-/// [`idct_four_t4_rec_in_place_view`] using SSE4.1.
-#[inline]
-pub fn idct_four_t4_rec_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 64]) {
-    unsafe { idct_four_t4_rec_in_place_view_sse41_impl(rec, dct) }
-}
-
-#[target_feature(enable = "sse4.1")]
-unsafe fn idct_t4_rec_on_mb_in_place_view_sse41_impl(rec: &RecCursor<'_>, dct: &[i16; 256]) {
+/// [`idct_t4_rec_on_mb_in_place_view`] using SSE2.
+#[inline(always)]
+pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
     const QUADS: [(isize, isize); 4] = [(0, 0), (8, 0), (0, 8), (8, 8)];
     for (k, &(dx, dy)) in QUADS.iter().enumerate() {
         let sub: &[i16; 64] = (&dct[k << 6..][..64]).try_into().unwrap();
-        unsafe {
-            idct_four_t4_rec_in_place_view_sse41_impl(&rec.advance(dx, dy), sub);
-        }
+        idct_four_t4_rec_in_place_view(&rec.advance(dx, dy), sub);
     }
-}
-
-/// [`idct_t4_rec_on_mb_in_place_view`] using SSE4.1.
-#[inline]
-pub fn idct_t4_rec_on_mb_in_place_view(rec: &RecCursor<'_>, dct: &[i16; 256]) {
-    unsafe { idct_t4_rec_on_mb_in_place_view_sse41_impl(rec, dct) }
 }
 
 #[target_feature(enable = "sse2")]

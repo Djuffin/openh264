@@ -303,35 +303,9 @@ impl PaddedPlane {
 /// macroblock, so a source plane is reached through the shared seam exactly as the
 /// reconstruction planes are, while a prediction scratch on `SMbCache` is an owned array
 /// and stays a plain slice.
-pub trait SampleCursor: Copy {
-    /// Sample at `(dx, dy)` from the anchor.
-    fn at(&self, dx: isize, dy: isize) -> u8;
+pub trait SampleCursor: RefSamples + Copy {}
 
-    /// `N` samples of row `dy` starting at `dx0`, by value — a shared view cannot
-    /// lend a slice into its cells.
-    fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N];
-
-    /// The same anchor moved by `(dx, dy)`.
-    fn advance(self, dx: isize, dy: isize) -> Self;
-}
-
-impl SampleCursor for PlaneCursor<'_> {
-    #[inline]
-    fn at(&self, dx: isize, dy: isize) -> u8 {
-        PlaneCursor::at(self, dx, dy)
-    }
-    #[inline]
-    fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
-        let r = PlaneCursor::row(self, dy, dx0, N);
-        let mut out = [0u8; N];
-        out.copy_from_slice(r);
-        out
-    }
-    #[inline]
-    fn advance(self, dx: isize, dy: isize) -> Self {
-        PlaneCursor::advance(self, dx, dy)
-    }
-}
+impl SampleCursor for PlaneCursor<'_> {}
 
 /// The rows of a block whose bounds have already been checked once, as a whole.
 ///

@@ -27,11 +27,9 @@ use crate::encoder::svc_encode_mb::{WelsEncInterY, WelsEncRecI16x16Y};
 pub use crate::encoder::svc_encode_slice::SDqLayer;
 pub use crate::encoder::svc_encode_slice::SLayerInfo;
 pub use crate::encoder::svc_encode_slice::SSlice;
+use crate::encoder::svc_encode_slice::current_layer_expect;
 use crate::encoder::svc_encode_slice::{
     CLIP3_QP_0_51, WelsIMbChromaEncode, WelsPMbChromaEncode, g_kuiChromaQpTable,
-};
-use crate::encoder::svc_encode_slice::{
-    current_layer_expect,
 };
 use crate::encoder::svc_encode_slice::{layer_enc_view_expect, layer_rec_view_expect};
 pub use crate::encoder::svc_motion_estimate::SWelsME;
@@ -299,7 +297,7 @@ pub extern "C" fn WelsMdInterJudgePskip(
 
 /// `svc_base_layer_md.cpp:1954`. P_SKIP macroblock encode.
 pub fn WelsMdInterDecidedPskip(pWelsMd: &SWelsMD<'_>, pSlice: &mut SSlice, pCurMb: &mut SMB) {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     pCurMb.uiMbType = MB_TYPE_SKIP;
     WelsRecPskip(pWelsMd.mbc(), pCurMb, &mut pSlice.sMbCacheInfo);
     WelsMdInterUpdatePskip(sc.chroma_qp_offset, &mut *pSlice, pCurMb);
@@ -458,71 +456,62 @@ pub extern "C" fn WelsMdBackgroundMbEnc(
 ) {
     // The slice's context and the macroblock's cursors, both resolved before the
     // macroblock loop reached this.
-    let sc = *pWelsMd.sc();
-    // The three cursors this needs, not the struct: `*pWelsMd.mbc()` would copy all
-    // nine because `pWelsMd` is written further down. The four the body reads are
-    // taken by field, and the reconstruction cursors are read from their own borrows
-    // where they are used.
-    let (cEncLuma, cRefLuma, cRefCb, cRefCr, cRecLuma, cRecCb, cRecCr) = {
-        let mbc = pWelsMd.mbc();
-        (
-            mbc.enc_y,
-            mbc.ref_y,
-            mbc.ref_cb,
-            mbc.ref_cr,
-            mbc.rec_y,
-            mbc.rec_cb,
-            mbc.rec_cr,
-        )
-    };
+    let sc = pWelsMd.sc();
     let pMbCache = &mut pSlice.sMbCacheInfo;
     let sMvp = SMVUnitXY::default();
 
     pCurMb.uiCbp = 0;
     pMbCache.bCollocatedPredFlag = true;
     pWelsMd.iCostLuma = 0; // BGD&RC integration
-    pCurMb.iSadCost = (sc.sad16)(&cEncLuma, &cRefLuma);
-    pCurMb.sP16x16Mv = SMVUnitXY::default();
-    sc.rec
-        .mv_list()
-        .set(pCurMb.iMbXY as usize, SMVUnitXY::default());
-
-    if bSkipMbFlag {
-        pCurMb.uiMbType = MB_TYPE_BACKGROUND;
-
-        // update motion info to current MB
-        pCurMb.iRefIndex = [0; MB_BLOCK8x8_NUM];
-        (sc.func.pfUpdateMbMv)(&mut pCurMb.sMv, sMvp);
-
-        pCurMb.uiLumaQp = pSlice.uiLastMbQp;
-        pCurMb.uiChromaQp =
-            g_kuiChromaQpTable[CLIP3_QP_0_51(pCurMb.uiLumaQp as i32 + sc.chroma_qp_offset)];
-
-        kernels::copy::copy_16x16(&cRecLuma, &cRefLuma);
-        kernels::copy::copy_8x8(&cRecCb, &cRefCb);
-        kernels::copy::copy_8x8(&cRecCr, &cRefCr);
-        pCurMb.iNonZeroCount = [0; MB_LUMA_CHROMA_BLOCK4x4_NUM];
-        VaaBackgroundMbDataUpdate(&sc, pCurMb);
-        return;
-    }
-
-    // Fallthrough to 16x16 inter encode: stage the (0, 0) reference into `sMemPredMb`.
     {
-        let kiOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
-        let mut cDstLuma =
-            PlaneCursorMut::new(&mut pMbCache.sMemPredMb[kiOff..kiOff + 256], 0, 16);
-        mc_luma(&cRefLuma, &mut cDstLuma, 0, 0, 16, 16);
+        let mbc = pWelsMd.mbc();
+        pCurMb.iSadCost = (sc.sad16)(&mbc.enc_y, &mbc.ref_y);
+        pCurMb.sP16x16Mv = SMVUnitXY::default();
+        sc.rec
+            .mv_list()
+            .set(pCurMb.iMbXY as usize, SMVUnitXY::default());
+
+        if bSkipMbFlag {
+            pCurMb.uiMbType = MB_TYPE_BACKGROUND;
+
+            // update motion info to current MB
+            pCurMb.iRefIndex = [0; MB_BLOCK8x8_NUM];
+            (sc.func.pfUpdateMbMv)(&mut pCurMb.sMv, sMvp);
+
+            pCurMb.uiLumaQp = pSlice.uiLastMbQp;
+            pCurMb.uiChromaQp =
+                g_kuiChromaQpTable[CLIP3_QP_0_51(pCurMb.uiLumaQp as i32 + sc.chroma_qp_offset)];
+
+            kernels::copy::copy_16x16(&mbc.rec_y, &mbc.ref_y);
+            kernels::copy::copy_8x8(&mbc.rec_cb, &mbc.ref_cb);
+            kernels::copy::copy_8x8(&mbc.rec_cr, &mbc.ref_cr);
+            pCurMb.iNonZeroCount = [0; MB_LUMA_CHROMA_BLOCK4x4_NUM];
+            VaaBackgroundMbDataUpdate(sc, pCurMb);
+            return;
+        }
+
+        // Fallthrough to 16x16 inter encode: stage the (0, 0) reference into `sMemPredMb`.
+        {
+            let kiOff = mem_pred_luma_off(pMbCache.uiMemPredLumaHalf);
+            let mut cDstLuma =
+                PlaneCursorMut::new(&mut pMbCache.sMemPredMb[kiOff..kiOff + 256], 0, 16);
+            mc_luma(&mbc.ref_y, &mut cDstLuma, 0, 0, 16, 16);
+        }
+        {
+            let kiOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
+            let mut cDstCb = PlaneCursorMut::new(&mut pMbCache.sMemPredMb[kiOff..kiOff + 64], 0, 8);
+            mc_chroma(&mbc.ref_cb, &mut cDstCb, 0, 0, 8, 8);
+        }
+        {
+            let kiOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf) + 64;
+            let mut cDstCr = PlaneCursorMut::new(&mut pMbCache.sMemPredMb[kiOff..kiOff + 64], 0, 8);
+            mc_chroma(&mbc.ref_cr, &mut cDstCr, 0, 0, 8, 8);
+        }
     }
-    {
-        let kiOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf);
-        let mut cDstCb = PlaneCursorMut::new(&mut pMbCache.sMemPredMb[kiOff..kiOff + 64], 0, 8);
-        mc_chroma(&cRefCb, &mut cDstCb, 0, 0, 8, 8);
-    }
-    {
-        let kiOff = mem_pred_chroma_off(pMbCache.uiMemPredLumaHalf) + 64;
-        let mut cDstCr = PlaneCursorMut::new(&mut pMbCache.sMemPredMb[kiOff..kiOff + 64], 0, 8);
-        mc_chroma(&cRefCr, &mut cDstCr, 0, 0, 8, 8);
-    }
+    let (cEncLuma, cRefLuma) = {
+        let mbc = pWelsMd.mbc();
+        (mbc.enc_y, mbc.ref_y)
+    };
 
     pCurMb.uiMbType = MB_TYPE_16x16;
 
@@ -1074,7 +1063,7 @@ pub fn WelsMdP16x16<'a>(
     pSlice: &mut SSlice,
     mbs: &mut MbSplit<'_, SMB>,
 ) -> i32 {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     let mbi = pWelsMd.mbi;
     let pRefPic = sc.ref_pic();
     let pMbCache = &mut pSlice.sMbCacheInfo;
@@ -1153,7 +1142,7 @@ pub extern "C" fn WelsMdP8x8<'a>(
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
 ) -> i32 {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     let pEncPlane = sc.enc.plane(0);
     let pRefPlane = sc.refv().plane(0);
     let pRefFeatureStorage = sc.ref_pic().pScreenBlockFeatureStorage.as_deref();
@@ -1494,7 +1483,7 @@ pub fn WelsMdInterJudgeBGDPskip(
     pCurMb: &mut SMB,
     bKeepSkip: &mut bool,
 ) -> bool {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     let pMbCache = &mut pSlice.sMbCacheInfo;
 
     let kiRefMbQp = pWelsMd.mbi.ref_qp as i32;
@@ -1721,7 +1710,7 @@ pub extern "C" fn SvcMdSCDMbEnc(
     sCurMbMv: &[SMVUnitXY; 2],
     eSkipMode: ESkipModes,
 ) {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     let pRefView = sc.refv();
     let pFunc = sc.func;
     let (cEncLuma, cRecLuma, cRecCb, cRecCr) = {
@@ -1793,7 +1782,8 @@ pub extern "C" fn SvcMdSCDMbEnc(
 
     // Motion Compensation into `sMemPredMb`
     {
-        let mut cDst = PlaneCursorMut::new(&mut pMbCache.sMemPredMb[luma_off..luma_off + 256], 0, 16);
+        let mut cDst =
+            PlaneCursorMut::new(&mut pMbCache.sMemPredMb[luma_off..luma_off + 256], 0, 16);
         mc_luma(&cRefLuma, &mut cDst, 0, 0, 16, 16);
     }
     for (cRef, extra) in [(&cRefCb, 0usize), (&cRefCr, 64)] {
@@ -2427,12 +2417,7 @@ mod tests {
         };
 
         let iLambda = 10;
-        let cost = WelsMdI16x16FromLayer(
-            &func_list,
-            Some(&dq_layer),
-            &mut mb_cache,
-            iLambda,
-        );
+        let cost = WelsMdI16x16FromLayer(&func_list, Some(&dq_layer), &mut mb_cache, iLambda);
 
         // Every neighbour sample is 128 and every source sample is 138, so V, H and
         // DC all predict 128 and all score SAD = 256 * 10 = 2560. The tie is broken

@@ -45,3 +45,20 @@ pub fn hadamard_t4_dc(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
 pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
     crate::encoder::decode_mb_aux::dequant_ihadamard_4x4(res, mf)
 }
+
+#[inline(always)]
+pub fn cavlc_param_cal(
+    pCoffLevel: &[i16],
+    pRun: &mut [u8; 16],
+    pLevel: &mut [i16; 16],
+    pTotalCoeff: &mut i32,
+    iEndIdx: i32,
+) -> i32 {
+    crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c(
+        pCoffLevel,
+        pRun,
+        pLevel,
+        pTotalCoeff,
+        iEndIdx,
+    )
+}

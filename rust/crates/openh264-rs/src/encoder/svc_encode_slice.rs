@@ -2422,10 +2422,11 @@ pub fn WelsPSliceMdEnc(
         .and_then(|l| l.pRefOri[0])
         .and_then(|r| ctx_pic_ref(pEncCtx, r))
         .map(crate::encoder::rec_view::RoPicView::build);
+    let sctx = current_layer_ref(pEncCtx)
+        .map(|l| MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref(), kpRefOriView.as_ref()));
     // Fully zeroed; every field is assigned before it is read.
     let mut sMd = SWelsMD::default();
-    sMd.sctx = current_layer_ref(pEncCtx)
-        .map(|l| MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref(), kpRefOriView.as_ref()));
+    sMd.sctx = sctx.as_ref();
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
     // `svc_encode_slice.cpp:698`.
     sMd.bMdUsingSad =
@@ -2462,9 +2463,10 @@ pub fn WelsPSliceMdEncDynamic(
         .and_then(|l| l.pRefOri[0])
         .and_then(|r| ctx_pic_ref(pEncCtx, r))
         .map(crate::encoder::rec_view::RoPicView::build);
-    let mut sMd = SWelsMD::default();
-    sMd.sctx = current_layer_ref(pEncCtx)
+    let sctx = current_layer_ref(pEncCtx)
         .map(|l| MdSliceCtx::build(pEncCtx, l, kpRefView.as_ref(), kpRefOriView.as_ref()));
+    let mut sMd = SWelsMD::default();
+    sMd.sctx = sctx.as_ref();
     sMd.uiRef = kpShExt.sSliceHeader.uiRefIndex;
     // `svc_encode_slice.cpp:715`.
     sMd.bMdUsingSad =

@@ -327,6 +327,23 @@ pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
     unsafe { dequant_ihadamard_4x4_neon(res, mf) }
 }
 
+#[inline(always)]
+pub fn cavlc_param_cal(
+    pCoffLevel: &[i16],
+    pRun: &mut [u8; 16],
+    pLevel: &mut [i16; 16],
+    pTotalCoeff: &mut i32,
+    iEndIdx: i32,
+) -> i32 {
+    crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c(
+        pCoffLevel,
+        pRun,
+        pLevel,
+        pTotalCoeff,
+        iEndIdx,
+    )
+}
+
 // ============================================================================
 // Unit Tests & Parity
 // ============================================================================

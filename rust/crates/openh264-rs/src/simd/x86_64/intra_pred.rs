@@ -16,7 +16,7 @@
 use core::arch::x86_64::*;
 
 use crate::encoder::rec_view::RecCursor;
-use crate::safe::plane::{PlaneCursorMut, RefSamples};
+use crate::safe::plane::{BlockRows, PlaneCursorMut, RefSamples};
 
 // ============================================================================
 // 16x16 Luma Intra Prediction (SSE2)
@@ -72,13 +72,20 @@ fn fill_rows<const N: usize, O: PredOut>(out: &mut O, rows: usize, row: &[u8; N]
 /// C++: `WelsI16x16LumaPredPlane_c`, `codec/common/src/intra_pred_common.cpp`.
 #[inline(always)]
 fn i16x16_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
+    let top = src.row_n::<17>(-1, -1);
+    let left_span = src.span::<1, 16>(0, -1);
+    let mut left = [0u8; 17];
+    left[0] = top[0];
+    for y in 0..16 {
+        left[y + 1] = left_span.row::<1>(y, 0)[0];
+    }
     let mut top_sum: i32 = 0;
     let mut left_sum: i32 = 0;
-    for i in 0..8isize {
-        top_sum += (i as i32 + 1) * (src.at(8 + i, -1) as i32 - src.at(6 - i, -1) as i32);
-        left_sum += (i as i32 + 1) * (src.at(-1, 8 + i) as i32 - src.at(-1, 6 - i) as i32);
+    for i in 0..8usize {
+        top_sum += (i as i32 + 1) * (top[9 + i] as i32 - top[7 - i] as i32);
+        left_sum += (i as i32 + 1) * (left[9 + i] as i32 - left[7 - i] as i32);
     }
-    let lt_shift = (src.at(-1, 15) as i32 + src.at(15, -1) as i32) << 4;
+    let lt_shift = (left[16] as i32 + top[16] as i32) << 4;
     ((5 * top_sum + 32) >> 6, (5 * left_sum + 32) >> 6, lt_shift)
 }
 
@@ -130,7 +137,8 @@ fn i16x16_dc_mean<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
             0
         };
         let sum_left = if use_left {
-            (0..16).map(|y| src.at(-1, y as isize) as i32).sum()
+            let left_span = src.span::<1, 16>(0, -1);
+            (0..16).map(|y| left_span.row::<1>(y, 0)[0] as i32).sum()
         } else {
             0
         };
@@ -776,10 +784,12 @@ pub fn intra_16x16_combined3_sad(
         let sad_top = _mm_sad_epu8(v_vec, _mm_setzero_si128());
         let sum_top = _mm_cvtsi128_si32(sad_top) + _mm_extract_epi16(sad_top, 4);
 
+        let left_span = rec.span::<1, 16>(0, -1);
+        let enc_span = enc.span::<16, 16>(0, 0);
         let mut left = [0u8; 16];
         let mut sum_left: i32 = 0;
         for y in 0..16 {
-            let val = rec.at(-1, y as isize);
+            let val = left_span.row::<1>(y, 0)[0];
             left[y] = val;
             sum_left += val as i32;
         }
@@ -792,7 +802,7 @@ pub fn intra_16x16_combined3_sad(
         let mut acc_dc = _mm_setzero_si128();
 
         for y in 0..16 {
-            let enc_row = enc.row_n::<16>(y as isize, 0);
+            let enc_row = enc_span.row::<16>(y, 0);
             let enc_vec = _mm_loadu_si128(enc_row.as_ptr() as *const __m128i);
 
             let h_vec = _mm_set1_epi8(left[y] as i8);

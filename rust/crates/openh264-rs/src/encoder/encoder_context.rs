@@ -1136,7 +1136,6 @@ impl sWelsEncCtx {
         self.vaa_mut().expect("the frame's video-analysis block")
     }
 
-
     /// The screen-content frame complexity.
     ///
     /// Under `SCREEN_CONTENT_REAL_TIME` the block is the `Screen` arm and this answers its
@@ -1620,11 +1619,12 @@ pub fn InitFunctionPointers(pEncCtx: &mut sWelsEncCtx, _uiCpuFlag: u32) -> i32 {
 
 /// `set_mb_syn_cavlc.cpp:305`. Selects the coefficient-writing entry points for the
 /// configured entropy coder.
-///
-/// No SIMD implementation exists for `CavlcParamCal` in Rust, so the scalar (`_c`)
-/// kernel is used regardless of CPU flags.
-fn InitCoeffFunc(pFuncList: &mut SWelsFuncPtrList, _uiCpuFlag: u32, iEntropyCodingModeFlag: i32) {
-    pFuncList.pfCavlcParamCal = CavlcParamCal_c;
+fn InitCoeffFunc(pFuncList: &mut SWelsFuncPtrList, uiCpuFlag: u32, iEntropyCodingModeFlag: i32) {
+    pFuncList.pfCavlcParamCal = if (uiCpuFlag & WELS_CPU_SSE2) != 0 {
+        crate::simd::kernels::quant::cavlc_param_cal
+    } else {
+        CavlcParamCal_c
+    };
     pFuncList.eEntropyCoder = EntropyCoder::from_flag(iEntropyCodingModeFlag);
 }
 
@@ -1946,7 +1946,10 @@ mod tests {
             assert_eq!(ctx.frame_bs_cur(), stored.wrapping_add(i as usize));
             ctx.frame_bs_tail_mut().expect("tail slice")[0] = 0xA0 | i as u8;
         }
-        assert_eq!(ctx.pFrameBs[0], 0xA0, "the stored root still matches index 0");
+        assert_eq!(
+            ctx.pFrameBs[0], 0xA0,
+            "the stored root still matches index 0"
+        );
         ctx.iPosBsBuffer = 8;
         assert_eq!(ctx.frame_bs_cur(), stored.wrapping_add(8));
         ctx.frame_bs_tail_mut().expect("tail slice")[0] = 0x5A;
@@ -2103,7 +2106,10 @@ mod tests {
         assert_eq!(*eSliceType, EWelsSliceType::P_SLICE);
         assert_eq!(*eNalType, EWelsNalUnitType::NAL_UNIT_UNSPEC_0);
         assert_eq!(*eNalPriority, EWelsNalRefIdc::NRI_PRI_LOWEST);
-        assert_eq!(*eLastNalPriority, [EWelsNalRefIdc::NRI_PRI_LOWEST; MAX_DEPENDENCY_LAYER]);
+        assert_eq!(
+            *eLastNalPriority,
+            [EWelsNalRefIdc::NRI_PRI_LOWEST; MAX_DEPENDENCY_LAYER]
+        );
         assert_eq!(*iNumRef0, 0);
         assert_eq!(*uiDependencyId, 0);
         assert_eq!(*uiTemporalId, 0);
@@ -2130,7 +2136,11 @@ mod tests {
         assert!(pFrameBs.is_empty());
         assert_eq!(*iFrameBsSize, 0);
         assert_eq!(*iPosBsBuffer, 0);
-        assert!(sSpatialIndexMap.iter().all(|e| e.pSrc.is_none() && e.iDid == 0));
+        assert!(
+            sSpatialIndexMap
+                .iter()
+                .all(|e| e.pSrc.is_none() && e.iDid == 0)
+        );
         assert_eq!(*iSliceBufferSize, [0; MAX_DEPENDENCY_LAYER]);
         assert_eq!(
             *bRefOfCurTidIsLtr,
@@ -2172,7 +2182,10 @@ mod tests {
         assert!(fl.pfMotionSearch.iter().all(Option::is_none));
         assert!(fl.sMeFuncs.pfSearchMethod.iter().all(Option::is_none));
         assert!(
-            fl.sSampleDealingFuncs.pfSampleSad.iter().all(Option::is_none)
+            fl.sSampleDealingFuncs
+                .pfSampleSad
+                .iter()
+                .all(Option::is_none)
                 && fl.sSampleDealingFuncs.pfMdCost == crate::encoder::md::CostFamily::Unset
                 && fl.sSampleDealingFuncs.pfMeCost == crate::encoder::md::CostFamily::Unset
         );

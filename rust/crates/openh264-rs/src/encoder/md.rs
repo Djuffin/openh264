@@ -366,7 +366,7 @@ pub struct SWelsMD<'a> {
     /// paths that never built one (an I slice, and the unit tests), which is why
     /// every reader goes through [`SWelsMD::sc`] / [`SWelsMD::mbc`] rather than
     /// touching the fields.
-    pub sctx: Option<MdSliceCtx<'a>>,
+    pub sctx: Option<&'a MdSliceCtx<'a>>,
     pub mbc: Option<MbCursors<'a>>,
     /// The reference picture's entries for this macroblock, stamped beside `mbc`.
     /// Zero on the paths that stamp nothing (an I slice, and the unit tests), which
@@ -396,10 +396,9 @@ impl<'a> SWelsMD<'a> {
     /// # Panics
     /// If no context was built — every P-slice entry point builds one before the
     /// macroblock loop.
-    #[inline]
-    pub fn sc(&self) -> &MdSliceCtx<'a> {
+    #[inline(always)]
+    pub fn sc(&self) -> &'a MdSliceCtx<'a> {
         self.sctx
-            .as_ref()
             .expect("the P-slice mode-decision context is built for this slice")
     }
 

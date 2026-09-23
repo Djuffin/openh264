@@ -1047,7 +1047,7 @@ pub extern "C" fn WelsMdP16x8<'a>(
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
 ) -> i32 {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     let pEncPlane = sc.enc.plane(0);
     let pRefPlane = sc.refv().plane(0);
     let pRefFeatureStorage = sc.ref_pic().pScreenBlockFeatureStorage.as_deref();
@@ -1101,7 +1101,7 @@ pub extern "C" fn WelsMdP8x16<'a>(
     pWelsMd: &mut SWelsMD<'a>,
     pSlice: &mut SSlice,
 ) -> i32 {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     let pEncPlane = sc.enc.plane(0);
     let pRefPlane = sc.refv().plane(0);
     let pRefFeatureStorage = sc.ref_pic().pScreenBlockFeatureStorage.as_deref();
@@ -1263,7 +1263,7 @@ pub fn WelsMdPSkipEnc(
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     let mbi = pWelsMd.mbi;
     let (cEncLuma, cEncCb, cEncCr) = {
         let mbc = pWelsMd.mbc();
@@ -1416,7 +1416,7 @@ fn AcceptPskip(
     iSadCostLuma: i32,
     iSadCostMb: i32,
 ) {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     let cEncLuma = pWelsMd.mbc().enc_y;
 
     pCurMb.iRefIndex = [0; MB_BLOCK8x8_NUM];
@@ -1444,7 +1444,7 @@ pub fn WelsMdInterMbRefinement(
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     let pFunc = sc.func;
     let pRefPicture = sc.refv();
     let pEncPicture = sc.enc;
@@ -1704,7 +1704,7 @@ pub fn WelsMdFirstIntraMode(
     pCurMb: &mut SMB,
     pMbCache: &mut SMbCache,
 ) -> bool {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     let pFunc = sc.func;
 
     let (cRecLuma, cEncLuma) = {
@@ -1751,7 +1751,7 @@ pub fn WelsMdInterMb<'a>(
     pSlice: &mut SSlice,
     mbs: &mut MbSplit<'_, SMB>,
 ) {
-    let sc = *pWelsMd.sc();
+    let sc = pWelsMd.sc();
     let pCurDqLayer = sc.layer;
     let kuiNeighborAvail = mbs.cur().uiNeighborAvail as u32;
     let bMbLeftAvailPskip = if (kuiNeighborAvail & LEFT_MB_POS) != 0 {

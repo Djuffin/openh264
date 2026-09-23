@@ -389,6 +389,76 @@ pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
     }
 }
 
+/// Calculates non-zero count, level, run, and total zero statistics for CAVLC transform blocks
+/// using SSE2 `pcmpeqw` + `packsswb` + `pmovmskb` bitmask extraction and `lzcnt`/`bsr`.
+///
+/// C++: `CavlcParamCal_sse2` / `CavlcParamCal_sse42`, `codec/encoder/core/x86/coeff.asm`.
+#[inline(always)]
+pub fn cavlc_param_cal(
+    pCoffLevel: &[i16],
+    pRun: &mut [u8; 16],
+    pLevel: &mut [i16; 16],
+    pTotalCoeff: &mut i32,
+    iEndIdx: i32,
+) -> i32 {
+    if iEndIdx < 0 || pCoffLevel.is_empty() {
+        *pTotalCoeff = 0;
+        return 0;
+    }
+    let last_bound = (iEndIdx as usize).min(pCoffLevel.len() - 1).min(15);
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let raw_mask = if last_bound <= 3 && pCoffLevel.len() >= 4 {
+            let v0 = _mm_loadl_epi64(pCoffLevel.as_ptr() as *const __m128i);
+            let z0 = _mm_cmpeq_epi16(v0, zero);
+            let packed = _mm_packs_epi16(z0, zero);
+            (_mm_movemask_epi8(packed) as u32) ^ 0x000F
+        } else if pCoffLevel.len() >= 16 {
+            let ptr = pCoffLevel.as_ptr() as *const __m128i;
+            let v0 = _mm_loadu_si128(ptr);
+            let v1 = _mm_loadu_si128(ptr.add(1));
+            let z0 = _mm_cmpeq_epi16(v0, zero);
+            let z1 = _mm_cmpeq_epi16(v1, zero);
+            let packed = _mm_packs_epi16(z0, z1);
+            (_mm_movemask_epi8(packed) as u32) ^ 0xFFFF
+        } else {
+            return crate::encoder::svc_set_mb_syn_cavlc::CavlcParamCal_c(
+                pCoffLevel,
+                pRun,
+                pLevel,
+                pTotalCoeff,
+                iEndIdx,
+            );
+        };
+        let valid_bits = (1u32 << (last_bound + 1)) - 1;
+        let mut m = raw_mask & valid_bits;
+        if m == 0 {
+            *pTotalCoeff = 0;
+            return 0;
+        }
+        let first_idx = 31 - m.leading_zeros();
+        let total_coeffs = m.count_ones() as i32;
+        let total_zeros = (first_idx as i32 + 1) - total_coeffs;
+        *pTotalCoeff = total_coeffs;
+
+        let ptr = pCoffLevel.as_ptr();
+        let mut k = 0usize;
+        let mut cur_idx = first_idx as usize;
+        m &= !(1u32 << first_idx);
+        while m != 0 {
+            let next_idx = (31 - m.leading_zeros()) as usize;
+            *pLevel.get_unchecked_mut(k) = *ptr.add(cur_idx);
+            *pRun.get_unchecked_mut(k) = (cur_idx - next_idx - 1) as u8;
+            k += 1;
+            cur_idx = next_idx;
+            m &= !(1u32 << next_idx);
+        }
+        *pLevel.get_unchecked_mut(k) = *ptr.add(cur_idx);
+        *pRun.get_unchecked_mut(k) = cur_idx as u8;
+        total_zeros
+    }
+}
+
 // ============================================================================
 // Unit Tests & Parity
 // ============================================================================

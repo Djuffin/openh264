@@ -696,20 +696,7 @@ impl RecPicView {
     }
 }
 
-impl SampleCursor for RecCursor<'_> {
-    #[inline]
-    fn at(&self, dx: isize, dy: isize) -> u8 {
-        RecCursor::at(self, dx, dy)
-    }
-    #[inline]
-    fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
-        RecCursor::row::<N>(self, dy, dx0)
-    }
-    #[inline]
-    fn advance(self, dx: isize, dy: isize) -> Self {
-        RecCursor::advance(self, dx, dy)
-    }
-}
+impl SampleCursor for RecCursor<'_> {}
 
 /// `W` bytes of each of `height` rows, from one shared cursor to another.
 ///
