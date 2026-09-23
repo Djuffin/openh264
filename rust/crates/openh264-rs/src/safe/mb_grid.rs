@@ -365,13 +365,13 @@ impl<'a, T> MbWindow<'a, T> {
     }
 
     /// Raster address of the current macroblock.
-    #[inline]
+    #[inline(always)]
     pub fn cur_xy(&self) -> usize {
         self.cur
     }
 
     /// Macroblocks per row.
-    #[inline]
+    #[inline(always)]
     pub fn stride(&self) -> usize {
         self.stride
     }
@@ -380,7 +380,7 @@ impl<'a, T> MbWindow<'a, T> {
     ///
     /// # Panics
     /// If `cur` is outside the window.
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn set_cur(&mut self, cur: usize) {
         assert!(
@@ -394,7 +394,7 @@ impl<'a, T> MbWindow<'a, T> {
     }
 
     /// `xy` relative to the window.
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     fn rel(&self, xy: usize, what: &'static str) -> usize {
         assert!(
@@ -409,19 +409,19 @@ impl<'a, T> MbWindow<'a, T> {
     }
 
     /// The current macroblock's record.
-    #[inline]
+    #[inline(always)]
     pub fn cur(&self) -> &T {
         &self.mbs[self.cur - self.base]
     }
 
     /// Mutable form of [`cur`](Self::cur).
-    #[inline]
+    #[inline(always)]
     pub fn cur_mut(&mut self) -> &mut T {
         &mut self.mbs[self.cur - self.base]
     }
 
     /// The record at raster address `xy`, for the list walkers.
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn at(&self, xy: usize) -> &T {
         let i = self.rel(xy, "record");
@@ -429,7 +429,7 @@ impl<'a, T> MbWindow<'a, T> {
     }
 
     /// Mutable form of [`at`](Self::at).
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn at_mut(&mut self, xy: usize) -> &mut T {
         let i = self.rel(xy, "record");
@@ -441,7 +441,7 @@ impl<'a, T> MbWindow<'a, T> {
     ///
     /// # Panics
     /// At the left grid edge, or if `cur - 1` is outside the window.
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn left(&self) -> &T {
         assert!(
@@ -458,7 +458,7 @@ impl<'a, T> MbWindow<'a, T> {
     ///
     /// # Panics
     /// In the top grid row, or if `cur - stride` is outside the window.
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn top(&self) -> &T {
         assert!(
@@ -472,7 +472,7 @@ impl<'a, T> MbWindow<'a, T> {
     }
 
     /// The record above-left. See [`left`](Self::left) for the contract.
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn top_left(&self) -> &T {
         assert!(
@@ -486,7 +486,7 @@ impl<'a, T> MbWindow<'a, T> {
     }
 
     /// The record above-right. See [`left`](Self::left) for the contract.
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn top_right(&self) -> &T {
         assert!(
@@ -507,7 +507,7 @@ impl<'a, T> MbWindow<'a, T> {
     /// # Panics
     /// If `cur - 1` is outside the window (the caller has already checked
     /// "not the first macroblock of the slice").
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn prev(&self) -> &T {
         let i = self.rel(self.cur.wrapping_sub(1), "prev-in-coding-order");
@@ -527,8 +527,7 @@ impl<'a, T> MbWindow<'a, T> {
     ///
     /// The column is taken once here: all four guards ask where the cursor sits in its
     /// row, and `cur % stride` divides by a value only known at run time.
-    #[inline]
-    #[track_caller]
+    #[inline(always)]
     pub fn split_cur(&mut self) -> MbSplit<'_, T> {
         let local = self.cur - self.base;
         let (stride, cur) = (self.stride, self.cur);
@@ -567,20 +566,20 @@ pub struct MbSplit<'a, T> {
 
 impl<'a, T> MbSplit<'a, T> {
     /// The current macroblock's record.
-    #[inline]
+    #[inline(always)]
     pub fn cur(&self) -> &T {
         self.cur
     }
 
     /// Mutable form of [`cur`](Self::cur) — the one record deblocking writes.
-    #[inline]
+    #[inline(always)]
     pub fn cur_mut(&mut self) -> &mut T {
         self.cur
     }
 
     /// The left neighbour's record. The caller has already checked its availability
     /// flag, so a panic here means the flag and the window's geometry disagree.
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn left(&self) -> &T {
         self.left
@@ -588,7 +587,7 @@ impl<'a, T> MbSplit<'a, T> {
     }
 
     /// The record above. See [`left`](Self::left) for the contract.
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn top(&self) -> &T {
         self.top
@@ -596,7 +595,7 @@ impl<'a, T> MbSplit<'a, T> {
     }
 
     /// The record above-left. See [`left`](Self::left) for the contract.
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn top_left(&self) -> &T {
         self.top_left
@@ -604,7 +603,7 @@ impl<'a, T> MbSplit<'a, T> {
     }
 
     /// The record above-right. See [`left`](Self::left) for the contract.
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     pub fn top_right(&self) -> &T {
         self.top_right
@@ -613,7 +612,7 @@ impl<'a, T> MbSplit<'a, T> {
 
     /// Records per grid row — the window's own stride, which the neighbour-cache
     /// bodies read as `iMbWidth`.
-    #[inline]
+    #[inline(always)]
     pub fn stride(&self) -> usize {
         self.stride
     }

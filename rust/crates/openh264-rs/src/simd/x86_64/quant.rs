@@ -393,6 +393,7 @@ pub fn dequant_ihadamard_4x4(res: &mut [i16; 16], mf: u16) {
 /// using SSE2 `pcmpeqw` + `packsswb` + `pmovmskb` bitmask extraction and `lzcnt`/`bsr`.
 ///
 /// C++: `CavlcParamCal_sse2` / `CavlcParamCal_sse42`, `codec/encoder/core/x86/coeff.asm`.
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub fn cavlc_param_cal(
     pCoffLevel: &[i16],

@@ -74,10 +74,11 @@ fn fill_rows<const N: usize, O: PredOut>(out: &mut O, rows: usize, row: &[u8; N]
 fn i16x16_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
     let top = src.row_n::<17>(-1, -1);
     let left_span = src.span::<1, 16>(0, -1);
+    let (left_ptr, left_stride) = left_span.as_ptr_and_stride();
     let mut left = [0u8; 17];
     left[0] = top[0];
     for y in 0..16 {
-        left[y + 1] = left_span.row::<1>(y, 0)[0];
+        left[y + 1] = unsafe { *left_ptr.add(y * left_stride) };
     }
     let mut top_sum: i32 = 0;
     let mut left_sum: i32 = 0;
@@ -90,7 +91,7 @@ fn i16x16_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
 }
 
 /// The 16x16 plane fill, from the three coefficients.
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 unsafe fn i16x16_plane_fill<O: PredOut>(
     out: &mut O,
     top_shift: i32,
@@ -123,8 +124,8 @@ unsafe fn i16x16_plane_fill<O: PredOut>(
 ///
 /// C++: `WelsI16x16LumaPredDc_c` and its `_T`/`_NA` siblings, which differ only in
 /// which sums are in scope and the rounding.
-#[target_feature(enable = "sse2")]
-fn i16x16_dc_mean<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
+#[inline(always)]
+unsafe fn i16x16_dc_mean<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
     unsafe {
         let sum_top = if use_top {
             let top = src.row_n::<16>(-1, 0);
@@ -138,7 +139,12 @@ fn i16x16_dc_mean<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
         };
         let sum_left = if use_left {
             let left_span = src.span::<1, 16>(0, -1);
-            (0..16).map(|y| left_span.row::<1>(y, 0)[0] as i32).sum()
+            let (left_ptr, left_stride) = left_span.as_ptr_and_stride();
+            let mut s = 0i32;
+            for y in 0..16 {
+                s += *left_ptr.add(y * left_stride) as i32;
+            }
+            s
         } else {
             0
         };
@@ -158,10 +164,16 @@ fn i16x16_dc_mean<S: RefSamples>(src: &S, use_top: bool, use_left: bool) -> u8 {
 #[inline(always)]
 fn chroma_dc_rows<S: RefSamples>(src: &S) -> ([u8; 8], [u8; 8]) {
     let top = src.row_n::<8>(-1, 0);
+    let left_span = src.span::<1, 8>(0, -1);
+    let (left_ptr, left_stride) = left_span.as_ptr_and_stride();
     let sum_top0: i32 = (0..4).map(|i| top[i] as i32).sum();
     let sum_top1: i32 = (0..4).map(|i| top[i + 4] as i32).sum();
-    let sum_left0: i32 = (0..4).map(|y| src.at(-1, y as isize) as i32).sum();
-    let sum_left1: i32 = (0..4).map(|y| src.at(-1, (y + 4) as isize) as i32).sum();
+    let sum_left0: i32 = (0..4)
+        .map(|y| unsafe { *left_ptr.add(y * left_stride) as i32 })
+        .sum();
+    let sum_left1: i32 = (0..4)
+        .map(|y| unsafe { *left_ptr.add((y + 4) * left_stride) as i32 })
+        .sum();
 
     let mean1 = ((sum_top0 + sum_left0 + 4) >> 3) as u8;
     let mean2 = ((sum_top1 + 2) >> 2) as u8;
@@ -179,13 +191,21 @@ fn chroma_dc_rows<S: RefSamples>(src: &S) -> ([u8; 8], [u8; 8]) {
 /// C++: `WelsIChromaPredPlane_c`.
 #[inline(always)]
 fn chroma_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
+    let top = src.row_n::<9>(-1, -1);
+    let left_span = src.span::<1, 8>(0, -1);
+    let (left_ptr, left_stride) = left_span.as_ptr_and_stride();
+    let mut left = [0u8; 9];
+    left[0] = top[0];
+    for y in 0..8 {
+        left[y + 1] = unsafe { *left_ptr.add(y * left_stride) };
+    }
     let mut top_sum: i32 = 0;
     let mut left_sum: i32 = 0;
-    for i in 0..4isize {
-        top_sum += (i as i32 + 1) * (src.at(4 + i, -1) as i32 - src.at(2 - i, -1) as i32);
-        left_sum += (i as i32 + 1) * (src.at(-1, 4 + i) as i32 - src.at(-1, 2 - i) as i32);
+    for i in 0..4usize {
+        top_sum += (i as i32 + 1) * (top[5 + i] as i32 - top[3 - i] as i32);
+        left_sum += (i as i32 + 1) * (left[5 + i] as i32 - left[3 - i] as i32);
     }
-    let lt_shift = (src.at(-1, 7) as i32 + src.at(7, -1) as i32) << 4;
+    let lt_shift = (left[8] as i32 + top[8] as i32) << 4;
     (
         (17 * top_sum + 16) >> 5,
         (17 * left_sum + 16) >> 5,
@@ -194,8 +214,8 @@ fn chroma_plane_coeffs<S: RefSamples>(src: &S) -> (i32, i32, i32) {
 }
 
 /// The 8x8 chroma plane fill, from the three coefficients.
-#[target_feature(enable = "sse2")]
-fn chroma_plane_fill<O: PredOut>(out: &mut O, top_shift: i32, left_shift: i32, lt_shift: i32) {
+#[inline(always)]
+unsafe fn chroma_plane_fill<O: PredOut>(out: &mut O, top_shift: i32, left_shift: i32, lt_shift: i32) {
     let mul_b = _mm_setr_epi16(-3, -2, -1, 0, 1, 2, 3, 4);
     let b_vec = _mm_set1_epi16(top_shift as i16);
     let c_vec = _mm_set1_epi16(left_shift as i16);
@@ -764,6 +784,102 @@ pub fn dec_i4x4_luma_pred_hu(pred: &mut PlaneCursorMut<'_>) {
     put4(pred, &rows)
 }
 
+#[target_feature(enable = "avx2")]
+unsafe fn intra_16x16_combined3_sad_avx2(
+    pred: &mut [u8; 256],
+    rec: &RecCursor<'_>,
+    enc: &RecCursor<'_>,
+    lambda: i32,
+) -> (u8, i32) {
+    let top = rec.row_n::<16>(-1, 0);
+    let v_vec128 = _mm_loadu_si128(top.as_ptr() as *const __m128i);
+    let sad_top = _mm_sad_epu8(v_vec128, _mm_setzero_si128());
+    let sum_top = _mm_cvtsi128_si32(sad_top) + _mm_extract_epi16(sad_top, 4);
+
+    let left_span = rec.span::<1, 16>(0, -1);
+    let enc_span = enc.span::<16, 16>(0, 0);
+    let (left_ptr, left_stride) = left_span.as_ptr_and_stride();
+    let (enc_ptr, enc_stride) = enc_span.as_ptr_and_stride();
+
+    let mut left = [0u8; 16];
+    let mut sum_left: i32 = 0;
+    for y in 0..16 {
+        let val = *left_ptr.add(y * left_stride);
+        left[y] = val;
+        sum_left += val as i32;
+    }
+
+    let dc_val = ((16 + sum_top + sum_left) >> 5) as u8;
+    let dc_vec256 = _mm256_set1_epi8(dc_val as i8);
+    let v_vec256 = _mm256_broadcastsi128_si256(v_vec128);
+
+    let mut acc_v = _mm256_setzero_si256();
+    let mut acc_h = _mm256_setzero_si256();
+    let mut acc_dc = _mm256_setzero_si256();
+
+    for step in 0..8 {
+        let y = step * 2;
+        let enc0 = _mm_loadu_si128(enc_ptr.add(y * enc_stride) as *const __m128i);
+        let enc1 = _mm_loadu_si128(enc_ptr.add((y + 1) * enc_stride) as *const __m128i);
+        let enc256 = _mm256_set_m128i(enc1, enc0);
+
+        let h0 = _mm_set1_epi8(left[y] as i8);
+        let h1 = _mm_set1_epi8(left[y + 1] as i8);
+        let h256 = _mm256_set_m128i(h1, h0);
+
+        acc_v = _mm256_add_epi64(acc_v, _mm256_sad_epu8(enc256, v_vec256));
+        acc_h = _mm256_add_epi64(acc_h, _mm256_sad_epu8(enc256, h256));
+        acc_dc = _mm256_add_epi64(acc_dc, _mm256_sad_epu8(enc256, dc_vec256));
+    }
+
+    #[inline(always)]
+    unsafe fn reduce256(acc: __m256i) -> i32 {
+        let lo = _mm256_castsi256_si128(acc);
+        let hi = _mm256_extracti128_si256(acc, 1);
+        let sum128 = _mm_add_epi64(lo, hi);
+        let sum_hi = _mm_srli_si128(sum128, 8);
+        _mm_cvtsi128_si32(_mm_add_epi32(sum128, sum_hi))
+    }
+
+    let sad_v = reduce256(acc_v);
+    let sad_h = reduce256(acc_h);
+    let sad_dc = reduce256(acc_dc);
+
+    let cost_v = sad_v + lambda;
+    let cost_h = sad_h + lambda * 3;
+    let cost_dc = sad_dc + lambda * 3;
+
+    let (best_mode, best_cost) = if cost_dc < cost_h && cost_dc < cost_v {
+        (2u8, cost_dc)
+    } else if cost_h < cost_v {
+        (1u8, cost_h)
+    } else {
+        (0u8, cost_v)
+    };
+
+    let dst = pred.as_mut_ptr() as *mut __m256i;
+    match best_mode {
+        0 => {
+            for k in 0..8 {
+                _mm256_storeu_si256(dst.add(k), v_vec256);
+            }
+        }
+        1 => {
+            let dst128 = pred.as_mut_ptr() as *mut __m128i;
+            for y in 0..16 {
+                _mm_storeu_si128(dst128.add(y), _mm_set1_epi8(left[y] as i8));
+            }
+        }
+        _ => {
+            for k in 0..8 {
+                _mm256_storeu_si256(dst.add(k), dc_vec256);
+            }
+        }
+    }
+
+    (best_mode, best_cost)
+}
+
 /// Combined 3-mode (Vertical, Horizontal, DC) 16x16 Intra Prediction and SAD evaluation.
 ///
 /// Evaluates modes 0 (V), 1 (H), and 2 (DC) simultaneously in a single streaming pass
@@ -778,6 +894,9 @@ pub fn intra_16x16_combined3_sad(
     enc: &RecCursor<'_>,
     lambda: i32,
 ) -> (u8, i32) {
+    if crate::simd::has_avx2() {
+        return unsafe { intra_16x16_combined3_sad_avx2(pred, rec, enc, lambda) };
+    }
     unsafe {
         let top = rec.row_n::<16>(-1, 0);
         let v_vec = _mm_loadu_si128(top.as_ptr() as *const __m128i);
@@ -786,10 +905,13 @@ pub fn intra_16x16_combined3_sad(
 
         let left_span = rec.span::<1, 16>(0, -1);
         let enc_span = enc.span::<16, 16>(0, 0);
+        let (left_ptr, left_stride) = left_span.as_ptr_and_stride();
+        let (enc_ptr, enc_stride) = enc_span.as_ptr_and_stride();
+
         let mut left = [0u8; 16];
         let mut sum_left: i32 = 0;
         for y in 0..16 {
-            let val = left_span.row::<1>(y, 0)[0];
+            let val = *left_ptr.add(y * left_stride);
             left[y] = val;
             sum_left += val as i32;
         }
@@ -802,9 +924,7 @@ pub fn intra_16x16_combined3_sad(
         let mut acc_dc = _mm_setzero_si128();
 
         for y in 0..16 {
-            let enc_row = enc_span.row::<16>(y, 0);
-            let enc_vec = _mm_loadu_si128(enc_row.as_ptr() as *const __m128i);
-
+            let enc_vec = _mm_loadu_si128(enc_ptr.add(y * enc_stride) as *const __m128i);
             let h_vec = _mm_set1_epi8(left[y] as i8);
 
             acc_v = _mm_add_epi64(acc_v, _mm_sad_epu8(enc_vec, v_vec));
@@ -824,7 +944,7 @@ pub fn intra_16x16_combined3_sad(
         let sum_dc = _mm_add_epi32(acc_dc, hi_dc);
         let sad_dc = _mm_cvtsi128_si32(sum_dc);
 
-        let cost_v = sad_v + lambda * 1;
+        let cost_v = sad_v + lambda;
         let cost_h = sad_h + lambda * 3;
         let cost_dc = sad_dc + lambda * 3;
 
@@ -836,19 +956,22 @@ pub fn intra_16x16_combined3_sad(
             (0u8, cost_v)
         };
 
+        let dst = pred.as_mut_ptr() as *mut __m128i;
         match best_mode {
             0 => {
                 for y in 0..16 {
-                    pred[y * 16..(y + 1) * 16].copy_from_slice(&top);
+                    _mm_storeu_si128(dst.add(y), v_vec);
                 }
             }
             1 => {
                 for y in 0..16 {
-                    pred[y * 16..(y + 1) * 16].fill(left[y]);
+                    _mm_storeu_si128(dst.add(y), _mm_set1_epi8(left[y] as i8));
                 }
             }
             _ => {
-                pred.fill(dc_val);
+                for y in 0..16 {
+                    _mm_storeu_si128(dst.add(y), dc_vec);
+                }
             }
         }
 

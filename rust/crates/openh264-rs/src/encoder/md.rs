@@ -1256,32 +1256,29 @@ pub fn MdInterAnalysisVaaInfo_c(kpSad8x8: &[i32; 4]) -> u8 {
     uiMbSign
 }
 
+#[inline(always)]
 pub extern "C" fn AnalysisVaaInfoIntra_c(cEnc: &RecCursor<'_>) -> i32 {
-    let mut uiAvgBlock = [0u16; 16];
-    let mut blk_idx = 0usize;
-    for j in (0..16isize).step_by(4) {
-        for i in (0..16isize).step_by(4) {
-            let mut sum: u32 = 0;
-            for dy in 0..4isize {
-                let row = cEnc.row::<4>(j + dy, i);
-                sum += row[0] as u32 + row[1] as u32 + row[2] as u32 + row[3] as u32;
-            }
-            uiAvgBlock[blk_idx] = (sum >> 4) as u16;
-            blk_idx += 1;
-        }
-    }
-
+    use crate::safe::plane::{BlockRows, RefSamples};
+    let span = cEnc.span::<16, 16>(0, 0);
     let mut iSumAvg: i32 = 0;
     let mut iSumSqr: i32 = 0;
 
-    for i in (0..16).step_by(4) {
-        let b0 = uiAvgBlock[i] as i32;
-        let b1 = uiAvgBlock[i + 1] as i32;
-        let b2 = uiAvgBlock[i + 2] as i32;
-        let b3 = uiAvgBlock[i + 3] as i32;
+    for strip in 0..4usize {
+        let r0 = span.row::<16>(strip * 4, 0);
+        let r1 = span.row::<16>(strip * 4 + 1, 0);
+        let r2 = span.row::<16>(strip * 4 + 2, 0);
+        let r3 = span.row::<16>(strip * 4 + 3, 0);
 
-        iSumAvg += b0 + b1 + b2 + b3;
-        iSumSqr += b0 * b0 + b1 * b1 + b2 * b2 + b3 * b3;
+        for bx in 0..4usize {
+            let x = bx * 4;
+            let sum = (r0[x] as u32 + r0[x + 1] as u32 + r0[x + 2] as u32 + r0[x + 3] as u32)
+                + (r1[x] as u32 + r1[x + 1] as u32 + r1[x + 2] as u32 + r1[x + 3] as u32)
+                + (r2[x] as u32 + r2[x + 1] as u32 + r2[x + 2] as u32 + r2[x + 3] as u32)
+                + (r3[x] as u32 + r3[x + 1] as u32 + r3[x + 2] as u32 + r3[x + 3] as u32);
+            let avg = (sum >> 4) as i32;
+            iSumAvg += avg;
+            iSumSqr += avg * avg;
+        }
     }
 
     iSumSqr - ((iSumAvg * iSumAvg) >> 4)
@@ -1293,9 +1290,9 @@ pub extern "C" fn InitIntraAnalysisVaaInfo(pFuncList: &mut SWelsFuncPtrList, _ku
     pFuncList.pfUpdateMbMv = UpdateMbMv_c;
 }
 
-pub fn MdIntraAnalysisVaaInfo(pEncCtx: &sWelsEncCtx, cEncMb: &RecCursor<'_>) -> bool {
-    let pfGetVariance = pEncCtx.func_list().pfGetVarianceFromIntraVaa;
-    let kiVariance = pfGetVariance(cEncMb);
+#[inline(always)]
+pub fn MdIntraAnalysisVaaInfo(_pEncCtx: &sWelsEncCtx, cEncMb: &RecCursor<'_>) -> bool {
+    let kiVariance = AnalysisVaaInfoIntra_c(cEncMb);
     kiVariance >= INTRA_VARIANCE_SAD_THRESHOLD
 }
 

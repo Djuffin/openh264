@@ -19,6 +19,176 @@ use crate::safe::plane::{BlockRows, PlaneSamples};
 // Core SSE2 Vectorized Edge Filters
 // ============================================================================
 
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn deblock_luma_lt4_half8(
+    p2_16: __m128i,
+    p1_16: &mut __m128i,
+    p0_16: &mut __m128i,
+    q0_16: &mut __m128i,
+    q1_16: &mut __m128i,
+    q2_16: __m128i,
+    alpha_vec: __m128i,
+    beta_vec: __m128i,
+    tc0_vec: __m128i,
+) {
+    let zero = _mm_setzero_si128();
+    let one = _mm_set1_epi16(1);
+    let four = _mm_set1_epi16(4);
+    let max_u8 = _mm_set1_epi16(255);
+
+    let mask_tc0_ge_0 = _mm_cmpgt_epi16(tc0_vec, _mm_set1_epi16(-1));
+    let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
+    let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
+
+    let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(*p1_16, *p0_16), _mm_sub_epi16(*p0_16, *p1_16));
+    let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
+
+    let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(*q1_16, *q0_16), _mm_sub_epi16(*q0_16, *q1_16));
+    let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
+
+    let mask_filter = _mm_and_si128(
+        mask_tc0_ge_0,
+        _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0)),
+    );
+
+    if _mm_movemask_epi8(mask_filter) == 0 {
+        return;
+    }
+
+    let diff_p2p0 = _mm_max_epi16(_mm_sub_epi16(p2_16, *p0_16), _mm_sub_epi16(*p0_16, p2_16));
+    let cond_p2p0 = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_p2p0, beta_vec));
+
+    let diff_q2q0 = _mm_max_epi16(_mm_sub_epi16(q2_16, *q0_16), _mm_sub_epi16(*q0_16, q2_16));
+    let cond_q2q0 = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_q2q0, beta_vec));
+
+    let avg_p0q0 = _mm_srai_epi16(_mm_add_epi16(_mm_add_epi16(*p0_16, *q0_16), one), 1);
+
+    let t_p1 = _mm_srai_epi16(
+        _mm_sub_epi16(_mm_add_epi16(p2_16, avg_p0q0), _mm_slli_epi16(*p1_16, 1)),
+        1,
+    );
+    let neg_tc0 = _mm_sub_epi16(zero, tc0_vec);
+    let clip_p1 = _mm_min_epi16(_mm_max_epi16(t_p1, neg_tc0), tc0_vec);
+    let new_p1_val = _mm_and_si128(_mm_add_epi16(*p1_16, clip_p1), _mm_set1_epi16(0x00FF));
+    let p1_out = _mm_or_si128(
+        _mm_and_si128(cond_p2p0, new_p1_val),
+        _mm_andnot_si128(cond_p2p0, *p1_16),
+    );
+
+    let t_q1 = _mm_srai_epi16(
+        _mm_sub_epi16(_mm_add_epi16(q2_16, avg_p0q0), _mm_slli_epi16(*q1_16, 1)),
+        1,
+    );
+    let clip_q1 = _mm_min_epi16(_mm_max_epi16(t_q1, neg_tc0), tc0_vec);
+    let new_q1_val = _mm_and_si128(_mm_add_epi16(*q1_16, clip_q1), _mm_set1_epi16(0x00FF));
+    let q1_out = _mm_or_si128(
+        _mm_and_si128(cond_q2q0, new_q1_val),
+        _mm_andnot_si128(cond_q2q0, *q1_16),
+    );
+
+    let tc_i = _mm_sub_epi16(_mm_sub_epi16(tc0_vec, cond_p2p0), cond_q2q0);
+    let neg_tc_i = _mm_sub_epi16(zero, tc_i);
+
+    let diff_q0p0_x4 = _mm_slli_epi16(_mm_sub_epi16(*q0_16, *p0_16), 2);
+    let diff_p1q1 = _mm_sub_epi16(*p1_16, *q1_16);
+    let t_deta = _mm_srai_epi16(
+        _mm_add_epi16(_mm_add_epi16(diff_q0p0_x4, diff_p1q1), four),
+        3,
+    );
+    let deta = _mm_min_epi16(_mm_max_epi16(t_deta, neg_tc_i), tc_i);
+
+    let p0_cand = _mm_max_epi16(_mm_min_epi16(_mm_add_epi16(*p0_16, deta), max_u8), zero);
+    *p0_16 = _mm_or_si128(
+        _mm_and_si128(mask_filter, p0_cand),
+        _mm_andnot_si128(mask_filter, *p0_16),
+    );
+
+    let q0_cand = _mm_max_epi16(_mm_min_epi16(_mm_sub_epi16(*q0_16, deta), max_u8), zero);
+    *q0_16 = _mm_or_si128(
+        _mm_and_si128(mask_filter, q0_cand),
+        _mm_andnot_si128(mask_filter, *q0_16),
+    );
+    *p1_16 = p1_out;
+    *q1_16 = q1_out;
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub unsafe fn deblock_luma_lt4_vec(
+    p2: __m128i,
+    p1: &mut __m128i,
+    p0: &mut __m128i,
+    q0: &mut __m128i,
+    q1: &mut __m128i,
+    q2: __m128i,
+    alpha: i32,
+    beta: i32,
+    tc: &[i8; 4],
+) {
+    let zero = _mm_setzero_si128();
+    let alpha_vec = _mm_set1_epi16(alpha as i16);
+    let beta_vec = _mm_set1_epi16(beta as i16);
+
+    let tc_lo = _mm_setr_epi16(
+        tc[0] as i16,
+        tc[0] as i16,
+        tc[0] as i16,
+        tc[0] as i16,
+        tc[1] as i16,
+        tc[1] as i16,
+        tc[1] as i16,
+        tc[1] as i16,
+    );
+    let tc_hi = _mm_setr_epi16(
+        tc[2] as i16,
+        tc[2] as i16,
+        tc[2] as i16,
+        tc[2] as i16,
+        tc[3] as i16,
+        tc[3] as i16,
+        tc[3] as i16,
+        tc[3] as i16,
+    );
+
+    let mut p1_lo = _mm_unpacklo_epi8(*p1, zero);
+    let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
+    let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
+    let mut q1_lo = _mm_unpacklo_epi8(*q1, zero);
+    deblock_luma_lt4_half8(
+        _mm_unpacklo_epi8(p2, zero),
+        &mut p1_lo,
+        &mut p0_lo,
+        &mut q0_lo,
+        &mut q1_lo,
+        _mm_unpacklo_epi8(q2, zero),
+        alpha_vec,
+        beta_vec,
+        tc_lo,
+    );
+
+    let mut p1_hi = _mm_unpackhi_epi8(*p1, zero);
+    let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
+    let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
+    let mut q1_hi = _mm_unpackhi_epi8(*q1, zero);
+    deblock_luma_lt4_half8(
+        _mm_unpackhi_epi8(p2, zero),
+        &mut p1_hi,
+        &mut p0_hi,
+        &mut q0_hi,
+        &mut q1_hi,
+        _mm_unpackhi_epi8(q2, zero),
+        alpha_vec,
+        beta_vec,
+        tc_hi,
+    );
+
+    *p1 = _mm_packus_epi16(p1_lo, p1_hi);
+    *p0 = _mm_packus_epi16(p0_lo, p0_hi);
+    *q0 = _mm_packus_epi16(q0_lo, q0_hi);
+    *q1 = _mm_packus_epi16(q1_lo, q1_hi);
+}
+
 /// Vectorized 16-line Luma bS < 4 (Lt4) filter across contiguous sample rows.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
@@ -33,137 +203,251 @@ pub unsafe fn deblock_luma_lt4_16(
     beta: i32,
     tc: &[i8; 4],
 ) {
-    let zero = _mm_setzero_si128();
-    let one = _mm_set1_epi16(1);
+    let vp2 = _mm_loadu_si128(p2.as_ptr() as *const __m128i);
+    let mut vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
+    let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
+    let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
+    let mut vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
+    let vq2 = _mm_loadu_si128(q2.as_ptr() as *const __m128i);
+    deblock_luma_lt4_vec(vp2, &mut vp1, &mut vp0, &mut vq0, &mut vq1, vq2, alpha, beta, tc);
+    _mm_storeu_si128(p1.as_mut_ptr() as *mut __m128i, vp1);
+    _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
+    _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
+    _mm_storeu_si128(q1.as_mut_ptr() as *mut __m128i, vq1);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn deblock_luma_eq4_half8(
+    p3_16: __m128i,
+    p2_16: &mut __m128i,
+    p1_16: &mut __m128i,
+    p0_16: &mut __m128i,
+    q0_16: &mut __m128i,
+    q1_16: &mut __m128i,
+    q2_16: &mut __m128i,
+    q3_16: __m128i,
+    alpha_vec: __m128i,
+    beta_vec: __m128i,
+    small_thresh: __m128i,
+) {
+    let two = _mm_set1_epi16(2);
     let four = _mm_set1_epi16(4);
+
+    let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
+    let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
+
+    let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(*p1_16, *p0_16), _mm_sub_epi16(*p0_16, *p1_16));
+    let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
+
+    let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(*q1_16, *q0_16), _mm_sub_epi16(*q0_16, *q1_16));
+    let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
+
+    let mask_filter = _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0));
+    if _mm_movemask_epi8(mask_filter) == 0 {
+        return;
+    }
+
+    let cond_small = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_p0q0, small_thresh));
+
+    let diff_p2p0 = _mm_max_epi16(_mm_sub_epi16(*p2_16, *p0_16), _mm_sub_epi16(*p0_16, *p2_16));
+    let cond_p2p0 = _mm_and_si128(cond_small, _mm_cmplt_epi16(diff_p2p0, beta_vec));
+
+    let diff_q2q0 = _mm_max_epi16(_mm_sub_epi16(*q2_16, *q0_16), _mm_sub_epi16(*q0_16, *q2_16));
+    let cond_q2q0 = _mm_and_si128(cond_small, _mm_cmplt_epi16(diff_q2q0, beta_vec));
+
+    let p0_default = _mm_srai_epi16(
+        _mm_add_epi16(
+            _mm_add_epi16(_mm_slli_epi16(*p1_16, 1), _mm_add_epi16(*p0_16, *q1_16)),
+            two,
+        ),
+        2,
+    );
+    let q0_default = _mm_srai_epi16(
+        _mm_add_epi16(
+            _mm_add_epi16(_mm_slli_epi16(*q1_16, 1), _mm_add_epi16(*q0_16, *p1_16)),
+            two,
+        ),
+        2,
+    );
+
+    let p0_p2p0 = _mm_srai_epi16(
+        _mm_add_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(
+                    *p2_16,
+                    _mm_slli_epi16(_mm_add_epi16(*p1_16, _mm_add_epi16(*p0_16, *q0_16)), 1),
+                ),
+                *q1_16,
+            ),
+            four,
+        ),
+        3,
+    );
+    let p1_p2p0 = _mm_srai_epi16(
+        _mm_add_epi16(
+            _mm_add_epi16(_mm_add_epi16(*p2_16, *p1_16), _mm_add_epi16(*p0_16, *q0_16)),
+            two,
+        ),
+        2,
+    );
+    let p2_p2p0 = _mm_srai_epi16(
+        _mm_add_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(
+                    _mm_slli_epi16(p3_16, 1),
+                    _mm_add_epi16(_mm_slli_epi16(*p2_16, 1), *p2_16),
+                ),
+                _mm_add_epi16(_mm_add_epi16(*p1_16, *p0_16), *q0_16),
+            ),
+            four,
+        ),
+        3,
+    );
+
+    let q0_q2q0 = _mm_srai_epi16(
+        _mm_add_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(
+                    *p1_16,
+                    _mm_slli_epi16(_mm_add_epi16(*p0_16, _mm_add_epi16(*q0_16, *q1_16)), 1),
+                ),
+                *q2_16,
+            ),
+            four,
+        ),
+        3,
+    );
+    let q1_q2q0 = _mm_srai_epi16(
+        _mm_add_epi16(
+            _mm_add_epi16(_mm_add_epi16(*p0_16, *q0_16), _mm_add_epi16(*q1_16, *q2_16)),
+            two,
+        ),
+        2,
+    );
+    let q2_q2q0 = _mm_srai_epi16(
+        _mm_add_epi16(
+            _mm_add_epi16(
+                _mm_add_epi16(
+                    _mm_slli_epi16(q3_16, 1),
+                    _mm_add_epi16(_mm_slli_epi16(*q2_16, 1), *q2_16),
+                ),
+                _mm_add_epi16(_mm_add_epi16(*q1_16, *q0_16), *p0_16),
+            ),
+            four,
+        ),
+        3,
+    );
+
+    let p0_cand = _mm_or_si128(
+        _mm_and_si128(cond_p2p0, p0_p2p0),
+        _mm_andnot_si128(cond_p2p0, p0_default),
+    );
+    let p0_out = _mm_or_si128(
+        _mm_and_si128(mask_filter, p0_cand),
+        _mm_andnot_si128(mask_filter, *p0_16),
+    );
+
+    let p1_out = _mm_or_si128(
+        _mm_and_si128(cond_p2p0, p1_p2p0),
+        _mm_andnot_si128(cond_p2p0, *p1_16),
+    );
+    let p2_out = _mm_or_si128(
+        _mm_and_si128(cond_p2p0, p2_p2p0),
+        _mm_andnot_si128(cond_p2p0, *p2_16),
+    );
+
+    let q0_cand = _mm_or_si128(
+        _mm_and_si128(cond_q2q0, q0_q2q0),
+        _mm_andnot_si128(cond_q2q0, q0_default),
+    );
+    let q0_out = _mm_or_si128(
+        _mm_and_si128(mask_filter, q0_cand),
+        _mm_andnot_si128(mask_filter, *q0_16),
+    );
+
+    let q1_out = _mm_or_si128(
+        _mm_and_si128(cond_q2q0, q1_q2q0),
+        _mm_andnot_si128(cond_q2q0, *q1_16),
+    );
+    let q2_out = _mm_or_si128(
+        _mm_and_si128(cond_q2q0, q2_q2q0),
+        _mm_andnot_si128(cond_q2q0, *q2_16),
+    );
+
+    *p2_16 = p2_out;
+    *p1_16 = p1_out;
+    *p0_16 = p0_out;
+    *q0_16 = q0_out;
+    *q1_16 = q1_out;
+    *q2_16 = q2_out;
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub unsafe fn deblock_luma_eq4_vec(
+    p3: __m128i,
+    p2: &mut __m128i,
+    p1: &mut __m128i,
+    p0: &mut __m128i,
+    q0: &mut __m128i,
+    q1: &mut __m128i,
+    q2: &mut __m128i,
+    q3: __m128i,
+    alpha: i32,
+    beta: i32,
+) {
+    let zero = _mm_setzero_si128();
     let alpha_vec = _mm_set1_epi16(alpha as i16);
     let beta_vec = _mm_set1_epi16(beta as i16);
-    let max_u8 = _mm_set1_epi16(255);
+    let small_thresh = _mm_set1_epi16(((alpha >> 2) + 2) as i16);
 
-    for half in 0..2 {
-        let tc0_vec = if half == 0 {
-            _mm_setr_epi16(
-                tc[0] as i16,
-                tc[0] as i16,
-                tc[0] as i16,
-                tc[0] as i16,
-                tc[1] as i16,
-                tc[1] as i16,
-                tc[1] as i16,
-                tc[1] as i16,
-            )
-        } else {
-            _mm_setr_epi16(
-                tc[2] as i16,
-                tc[2] as i16,
-                tc[2] as i16,
-                tc[2] as i16,
-                tc[3] as i16,
-                tc[3] as i16,
-                tc[3] as i16,
-                tc[3] as i16,
-            )
-        };
+    let mut p2_lo = _mm_unpacklo_epi8(*p2, zero);
+    let mut p1_lo = _mm_unpacklo_epi8(*p1, zero);
+    let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
+    let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
+    let mut q1_lo = _mm_unpacklo_epi8(*q1, zero);
+    let mut q2_lo = _mm_unpacklo_epi8(*q2, zero);
+    deblock_luma_eq4_half8(
+        _mm_unpacklo_epi8(p3, zero),
+        &mut p2_lo,
+        &mut p1_lo,
+        &mut p0_lo,
+        &mut q0_lo,
+        &mut q1_lo,
+        &mut q2_lo,
+        _mm_unpacklo_epi8(q3, zero),
+        alpha_vec,
+        beta_vec,
+        small_thresh,
+    );
 
-        let mask_tc0_ge_0 = _mm_cmpgt_epi16(tc0_vec, _mm_set1_epi16(-1));
+    let mut p2_hi = _mm_unpackhi_epi8(*p2, zero);
+    let mut p1_hi = _mm_unpackhi_epi8(*p1, zero);
+    let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
+    let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
+    let mut q1_hi = _mm_unpackhi_epi8(*q1, zero);
+    let mut q2_hi = _mm_unpackhi_epi8(*q2, zero);
+    deblock_luma_eq4_half8(
+        _mm_unpackhi_epi8(p3, zero),
+        &mut p2_hi,
+        &mut p1_hi,
+        &mut p0_hi,
+        &mut q0_hi,
+        &mut q1_hi,
+        &mut q2_hi,
+        _mm_unpackhi_epi8(q3, zero),
+        alpha_vec,
+        beta_vec,
+        small_thresh,
+    );
 
-        let offset = half * 8;
-        let p0_8 = _mm_loadl_epi64(p0.as_ptr().add(offset) as *const __m128i);
-        let p1_8 = _mm_loadl_epi64(p1.as_ptr().add(offset) as *const __m128i);
-        let p2_8 = _mm_loadl_epi64(p2.as_ptr().add(offset) as *const __m128i);
-        let q0_8 = _mm_loadl_epi64(q0.as_ptr().add(offset) as *const __m128i);
-        let q1_8 = _mm_loadl_epi64(q1.as_ptr().add(offset) as *const __m128i);
-        let q2_8 = _mm_loadl_epi64(q2.as_ptr().add(offset) as *const __m128i);
-
-        let p0_16 = _mm_unpacklo_epi8(p0_8, zero);
-        let p1_16 = _mm_unpacklo_epi8(p1_8, zero);
-        let p2_16 = _mm_unpacklo_epi8(p2_8, zero);
-        let q0_16 = _mm_unpacklo_epi8(q0_8, zero);
-        let q1_16 = _mm_unpacklo_epi8(q1_8, zero);
-        let q2_16 = _mm_unpacklo_epi8(q2_8, zero);
-
-        let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(p0_16, q0_16), _mm_sub_epi16(q0_16, p0_16));
-        let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
-
-        let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(p1_16, p0_16), _mm_sub_epi16(p0_16, p1_16));
-        let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
-
-        let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(q1_16, q0_16), _mm_sub_epi16(q0_16, q1_16));
-        let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
-
-        let mask_filter = _mm_and_si128(
-            mask_tc0_ge_0,
-            _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0)),
-        );
-
-        if _mm_movemask_epi8(mask_filter) == 0 {
-            continue;
-        }
-
-        let diff_p2p0 = _mm_max_epi16(_mm_sub_epi16(p2_16, p0_16), _mm_sub_epi16(p0_16, p2_16));
-        let cond_p2p0 = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_p2p0, beta_vec));
-
-        let diff_q2q0 = _mm_max_epi16(_mm_sub_epi16(q2_16, q0_16), _mm_sub_epi16(q0_16, q2_16));
-        let cond_q2q0 = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_q2q0, beta_vec));
-
-        let avg_p0q0 = _mm_srai_epi16(_mm_add_epi16(_mm_add_epi16(p0_16, q0_16), one), 1);
-
-        let t_p1 = _mm_srai_epi16(
-            _mm_sub_epi16(_mm_add_epi16(p2_16, avg_p0q0), _mm_slli_epi16(p1_16, 1)),
-            1,
-        );
-        let neg_tc0 = _mm_sub_epi16(zero, tc0_vec);
-        let clip_p1 = _mm_min_epi16(_mm_max_epi16(t_p1, neg_tc0), tc0_vec);
-        let new_p1_val = _mm_and_si128(_mm_add_epi16(p1_16, clip_p1), _mm_set1_epi16(0x00FF));
-        let p1_out = _mm_or_si128(
-            _mm_and_si128(cond_p2p0, new_p1_val),
-            _mm_andnot_si128(cond_p2p0, p1_16),
-        );
-
-        let t_q1 = _mm_srai_epi16(
-            _mm_sub_epi16(_mm_add_epi16(q2_16, avg_p0q0), _mm_slli_epi16(q1_16, 1)),
-            1,
-        );
-        let clip_q1 = _mm_min_epi16(_mm_max_epi16(t_q1, neg_tc0), tc0_vec);
-        let new_q1_val = _mm_and_si128(_mm_add_epi16(q1_16, clip_q1), _mm_set1_epi16(0x00FF));
-        let q1_out = _mm_or_si128(
-            _mm_and_si128(cond_q2q0, new_q1_val),
-            _mm_andnot_si128(cond_q2q0, q1_16),
-        );
-
-        let tc_i = _mm_sub_epi16(_mm_sub_epi16(tc0_vec, cond_p2p0), cond_q2q0);
-        let neg_tc_i = _mm_sub_epi16(zero, tc_i);
-
-        let diff_q0p0_x4 = _mm_slli_epi16(_mm_sub_epi16(q0_16, p0_16), 2);
-        let diff_p1q1 = _mm_sub_epi16(p1_16, q1_16);
-        let t_deta = _mm_srai_epi16(
-            _mm_add_epi16(_mm_add_epi16(diff_q0p0_x4, diff_p1q1), four),
-            3,
-        );
-        let deta = _mm_min_epi16(_mm_max_epi16(t_deta, neg_tc_i), tc_i);
-
-        let p0_cand = _mm_max_epi16(_mm_min_epi16(_mm_add_epi16(p0_16, deta), max_u8), zero);
-        let p0_out = _mm_or_si128(
-            _mm_and_si128(mask_filter, p0_cand),
-            _mm_andnot_si128(mask_filter, p0_16),
-        );
-
-        let q0_cand = _mm_max_epi16(_mm_min_epi16(_mm_sub_epi16(q0_16, deta), max_u8), zero);
-        let q0_out = _mm_or_si128(
-            _mm_and_si128(mask_filter, q0_cand),
-            _mm_andnot_si128(mask_filter, q0_16),
-        );
-
-        let p0_val = _mm_cvtsi128_si64(_mm_packus_epi16(p0_out, zero));
-        let q0_val = _mm_cvtsi128_si64(_mm_packus_epi16(q0_out, zero));
-        let p1_val = _mm_cvtsi128_si64(_mm_packus_epi16(p1_out, zero));
-        let q1_val = _mm_cvtsi128_si64(_mm_packus_epi16(q1_out, zero));
-
-        p0[offset..offset + 8].copy_from_slice(&p0_val.to_ne_bytes());
-        q0[offset..offset + 8].copy_from_slice(&q0_val.to_ne_bytes());
-        p1[offset..offset + 8].copy_from_slice(&p1_val.to_ne_bytes());
-        q1[offset..offset + 8].copy_from_slice(&q1_val.to_ne_bytes());
-    }
+    *p2 = _mm_packus_epi16(p2_lo, p2_hi);
+    *p1 = _mm_packus_epi16(p1_lo, p1_hi);
+    *p0 = _mm_packus_epi16(p0_lo, p0_hi);
+    *q0 = _mm_packus_epi16(q0_lo, q0_hi);
+    *q1 = _mm_packus_epi16(q1_lo, q1_hi);
+    *q2 = _mm_packus_epi16(q2_lo, q2_hi);
 }
 
 /// Vectorized 16-line Luma bS == 4 (Eq4) filter across contiguous sample rows.
@@ -181,188 +465,137 @@ pub unsafe fn deblock_luma_eq4_16(
     alpha: i32,
     beta: i32,
 ) {
+    let vp3 = _mm_loadu_si128(p3.as_ptr() as *const __m128i);
+    let mut vp2 = _mm_loadu_si128(p2.as_ptr() as *const __m128i);
+    let mut vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
+    let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
+    let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
+    let mut vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
+    let mut vq2 = _mm_loadu_si128(q2.as_ptr() as *const __m128i);
+    let vq3 = _mm_loadu_si128(q3.as_ptr() as *const __m128i);
+    deblock_luma_eq4_vec(
+        vp3, &mut vp2, &mut vp1, &mut vp0, &mut vq0, &mut vq1, &mut vq2, vq3, alpha, beta,
+    );
+    _mm_storeu_si128(p2.as_mut_ptr() as *mut __m128i, vp2);
+    _mm_storeu_si128(p1.as_mut_ptr() as *mut __m128i, vp1);
+    _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
+    _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
+    _mm_storeu_si128(q1.as_mut_ptr() as *mut __m128i, vq1);
+    _mm_storeu_si128(q2.as_mut_ptr() as *mut __m128i, vq2);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn deblock_chroma_lt4_half8(
+    p1_16: __m128i,
+    p0_16: &mut __m128i,
+    q0_16: &mut __m128i,
+    q1_16: __m128i,
+    alpha_vec: __m128i,
+    beta_vec: __m128i,
+    tc0_vec: __m128i,
+    mask_tc0_gt_0: __m128i,
+) {
     let zero = _mm_setzero_si128();
-    let two = _mm_set1_epi16(2);
     let four = _mm_set1_epi16(4);
+    let max_u8 = _mm_set1_epi16(255);
+
+    let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
+    let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
+
+    let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(p1_16, *p0_16), _mm_sub_epi16(*p0_16, p1_16));
+    let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
+
+    let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(q1_16, *q0_16), _mm_sub_epi16(*q0_16, q1_16));
+    let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
+
+    let mask_filter = _mm_and_si128(
+        mask_tc0_gt_0,
+        _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0)),
+    );
+    if _mm_movemask_epi8(mask_filter) == 0 {
+        return;
+    }
+
+    let diff_q0p0_x4 = _mm_slli_epi16(_mm_sub_epi16(*q0_16, *p0_16), 2);
+    let diff_p1q1 = _mm_sub_epi16(p1_16, q1_16);
+    let t_deta = _mm_srai_epi16(
+        _mm_add_epi16(_mm_add_epi16(diff_q0p0_x4, diff_p1q1), four),
+        3,
+    );
+    let neg_tc0 = _mm_sub_epi16(zero, tc0_vec);
+    let deta = _mm_min_epi16(_mm_max_epi16(t_deta, neg_tc0), tc0_vec);
+
+    let p0_cand = _mm_max_epi16(_mm_min_epi16(_mm_add_epi16(*p0_16, deta), max_u8), zero);
+    let q0_cand = _mm_max_epi16(_mm_min_epi16(_mm_sub_epi16(*q0_16, deta), max_u8), zero);
+
+    *p0_16 = _mm_or_si128(
+        _mm_and_si128(mask_filter, p0_cand),
+        _mm_andnot_si128(mask_filter, *p0_16),
+    );
+    *q0_16 = _mm_or_si128(
+        _mm_and_si128(mask_filter, q0_cand),
+        _mm_andnot_si128(mask_filter, *q0_16),
+    );
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub unsafe fn deblock_chroma_lt4_vec(
+    p1: __m128i,
+    p0: &mut __m128i,
+    q0: &mut __m128i,
+    q1: __m128i,
+    alpha: i32,
+    beta: i32,
+    tc: &[i8; 4],
+) {
+    let zero = _mm_setzero_si128();
+    let tc0_vec = _mm_setr_epi16(
+        tc[0] as i16,
+        tc[0] as i16,
+        tc[1] as i16,
+        tc[1] as i16,
+        tc[2] as i16,
+        tc[2] as i16,
+        tc[3] as i16,
+        tc[3] as i16,
+    );
+    let mask_tc0_gt_0 = _mm_cmpgt_epi16(tc0_vec, zero);
+    if _mm_movemask_epi8(mask_tc0_gt_0) == 0 {
+        return;
+    }
     let alpha_vec = _mm_set1_epi16(alpha as i16);
     let beta_vec = _mm_set1_epi16(beta as i16);
-    let small_thresh = _mm_set1_epi16(((alpha >> 2) + 2) as i16);
 
-    for half in 0..2 {
-        let offset = half * 8;
-        let p3_8 = _mm_loadl_epi64(p3.as_ptr().add(offset) as *const __m128i);
-        let p2_8 = _mm_loadl_epi64(p2.as_ptr().add(offset) as *const __m128i);
-        let p1_8 = _mm_loadl_epi64(p1.as_ptr().add(offset) as *const __m128i);
-        let p0_8 = _mm_loadl_epi64(p0.as_ptr().add(offset) as *const __m128i);
-        let q0_8 = _mm_loadl_epi64(q0.as_ptr().add(offset) as *const __m128i);
-        let q1_8 = _mm_loadl_epi64(q1.as_ptr().add(offset) as *const __m128i);
-        let q2_8 = _mm_loadl_epi64(q2.as_ptr().add(offset) as *const __m128i);
-        let q3_8 = _mm_loadl_epi64(q3.as_ptr().add(offset) as *const __m128i);
+    let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
+    let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
+    deblock_chroma_lt4_half8(
+        _mm_unpacklo_epi8(p1, zero),
+        &mut p0_lo,
+        &mut q0_lo,
+        _mm_unpacklo_epi8(q1, zero),
+        alpha_vec,
+        beta_vec,
+        tc0_vec,
+        mask_tc0_gt_0,
+    );
 
-        let p3_16 = _mm_unpacklo_epi8(p3_8, zero);
-        let p2_16 = _mm_unpacklo_epi8(p2_8, zero);
-        let p1_16 = _mm_unpacklo_epi8(p1_8, zero);
-        let p0_16 = _mm_unpacklo_epi8(p0_8, zero);
-        let q0_16 = _mm_unpacklo_epi8(q0_8, zero);
-        let q1_16 = _mm_unpacklo_epi8(q1_8, zero);
-        let q2_16 = _mm_unpacklo_epi8(q2_8, zero);
-        let q3_16 = _mm_unpacklo_epi8(q3_8, zero);
+    let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
+    let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
+    deblock_chroma_lt4_half8(
+        _mm_unpackhi_epi8(p1, zero),
+        &mut p0_hi,
+        &mut q0_hi,
+        _mm_unpackhi_epi8(q1, zero),
+        alpha_vec,
+        beta_vec,
+        tc0_vec,
+        mask_tc0_gt_0,
+    );
 
-        let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(p0_16, q0_16), _mm_sub_epi16(q0_16, p0_16));
-        let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
-
-        let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(p1_16, p0_16), _mm_sub_epi16(p0_16, p1_16));
-        let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
-
-        let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(q1_16, q0_16), _mm_sub_epi16(q0_16, q1_16));
-        let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
-
-        let mask_filter = _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0));
-        if _mm_movemask_epi8(mask_filter) == 0 {
-            continue;
-        }
-
-        let cond_small = _mm_and_si128(mask_filter, _mm_cmplt_epi16(diff_p0q0, small_thresh));
-
-        let diff_p2p0 = _mm_max_epi16(_mm_sub_epi16(p2_16, p0_16), _mm_sub_epi16(p0_16, p2_16));
-        let cond_p2p0 = _mm_and_si128(cond_small, _mm_cmplt_epi16(diff_p2p0, beta_vec));
-
-        let diff_q2q0 = _mm_max_epi16(_mm_sub_epi16(q2_16, q0_16), _mm_sub_epi16(q0_16, q2_16));
-        let cond_q2q0 = _mm_and_si128(cond_small, _mm_cmplt_epi16(diff_q2q0, beta_vec));
-
-        let p0_default = _mm_srai_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(_mm_slli_epi16(p1_16, 1), _mm_add_epi16(p0_16, q1_16)),
-                two,
-            ),
-            2,
-        );
-        let q0_default = _mm_srai_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(_mm_slli_epi16(q1_16, 1), _mm_add_epi16(q0_16, p1_16)),
-                two,
-            ),
-            2,
-        );
-
-        let p0_p2p0 = _mm_srai_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(
-                    _mm_add_epi16(
-                        p2_16,
-                        _mm_slli_epi16(_mm_add_epi16(p1_16, _mm_add_epi16(p0_16, q0_16)), 1),
-                    ),
-                    q1_16,
-                ),
-                four,
-            ),
-            3,
-        );
-        let p1_p2p0 = _mm_srai_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(_mm_add_epi16(p2_16, p1_16), _mm_add_epi16(p0_16, q0_16)),
-                two,
-            ),
-            2,
-        );
-        let p2_p2p0 = _mm_srai_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(
-                    _mm_add_epi16(
-                        _mm_slli_epi16(p3_16, 1),
-                        _mm_add_epi16(_mm_slli_epi16(p2_16, 1), p2_16),
-                    ),
-                    _mm_add_epi16(_mm_add_epi16(p1_16, p0_16), q0_16),
-                ),
-                four,
-            ),
-            3,
-        );
-
-        let q0_q2q0 = _mm_srai_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(
-                    _mm_add_epi16(
-                        p1_16,
-                        _mm_slli_epi16(_mm_add_epi16(p0_16, _mm_add_epi16(q0_16, q1_16)), 1),
-                    ),
-                    q2_16,
-                ),
-                four,
-            ),
-            3,
-        );
-        let q1_q2q0 = _mm_srai_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(_mm_add_epi16(p0_16, q0_16), _mm_add_epi16(q1_16, q2_16)),
-                two,
-            ),
-            2,
-        );
-        let q2_q2q0 = _mm_srai_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(
-                    _mm_add_epi16(
-                        _mm_slli_epi16(q3_16, 1),
-                        _mm_add_epi16(_mm_slli_epi16(q2_16, 1), q2_16),
-                    ),
-                    _mm_add_epi16(_mm_add_epi16(q1_16, q0_16), p0_16),
-                ),
-                four,
-            ),
-            3,
-        );
-
-        let p0_cand = _mm_or_si128(
-            _mm_and_si128(cond_p2p0, p0_p2p0),
-            _mm_andnot_si128(cond_p2p0, p0_default),
-        );
-        let p0_out = _mm_or_si128(
-            _mm_and_si128(mask_filter, p0_cand),
-            _mm_andnot_si128(mask_filter, p0_16),
-        );
-
-        let p1_out = _mm_or_si128(
-            _mm_and_si128(cond_p2p0, p1_p2p0),
-            _mm_andnot_si128(cond_p2p0, p1_16),
-        );
-        let p2_out = _mm_or_si128(
-            _mm_and_si128(cond_p2p0, p2_p2p0),
-            _mm_andnot_si128(cond_p2p0, p2_16),
-        );
-
-        let q0_cand = _mm_or_si128(
-            _mm_and_si128(cond_q2q0, q0_q2q0),
-            _mm_andnot_si128(cond_q2q0, q0_default),
-        );
-        let q0_out = _mm_or_si128(
-            _mm_and_si128(mask_filter, q0_cand),
-            _mm_andnot_si128(mask_filter, q0_16),
-        );
-
-        let q1_out = _mm_or_si128(
-            _mm_and_si128(cond_q2q0, q1_q2q0),
-            _mm_andnot_si128(cond_q2q0, q1_16),
-        );
-        let q2_out = _mm_or_si128(
-            _mm_and_si128(cond_q2q0, q2_q2q0),
-            _mm_andnot_si128(cond_q2q0, q2_16),
-        );
-
-        let p0_val = _mm_cvtsi128_si64(_mm_packus_epi16(p0_out, zero));
-        let p1_val = _mm_cvtsi128_si64(_mm_packus_epi16(p1_out, zero));
-        let p2_val = _mm_cvtsi128_si64(_mm_packus_epi16(p2_out, zero));
-        let q0_val = _mm_cvtsi128_si64(_mm_packus_epi16(q0_out, zero));
-        let q1_val = _mm_cvtsi128_si64(_mm_packus_epi16(q1_out, zero));
-        let q2_val = _mm_cvtsi128_si64(_mm_packus_epi16(q2_out, zero));
-
-        p0[offset..offset + 8].copy_from_slice(&p0_val.to_ne_bytes());
-        p1[offset..offset + 8].copy_from_slice(&p1_val.to_ne_bytes());
-        p2[offset..offset + 8].copy_from_slice(&p2_val.to_ne_bytes());
-        q0[offset..offset + 8].copy_from_slice(&q0_val.to_ne_bytes());
-        q1[offset..offset + 8].copy_from_slice(&q1_val.to_ne_bytes());
-        q2[offset..offset + 8].copy_from_slice(&q2_val.to_ne_bytes());
-    }
+    *p0 = _mm_packus_epi16(p0_lo, p0_hi);
+    *q0 = _mm_packus_epi16(q0_lo, q0_hi);
 }
 
 /// Vectorized 16-line Chroma bS < 4 (Lt4) filter across contiguous sample rows.
@@ -377,83 +610,104 @@ pub unsafe fn deblock_chroma_lt4_16(
     beta: i32,
     tc: &[i8; 4],
 ) {
+    let vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
+    let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
+    let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
+    let vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
+    deblock_chroma_lt4_vec(vp1, &mut vp0, &mut vq0, vq1, alpha, beta, tc);
+    _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
+    _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+unsafe fn deblock_chroma_eq4_half8(
+    p1_16: __m128i,
+    p0_16: &mut __m128i,
+    q0_16: &mut __m128i,
+    q1_16: __m128i,
+    alpha_vec: __m128i,
+    beta_vec: __m128i,
+) {
+    let two = _mm_set1_epi16(2);
+
+    let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(*p0_16, *q0_16), _mm_sub_epi16(*q0_16, *p0_16));
+    let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
+
+    let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(p1_16, *p0_16), _mm_sub_epi16(*p0_16, p1_16));
+    let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
+
+    let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(q1_16, *q0_16), _mm_sub_epi16(*q0_16, q1_16));
+    let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
+
+    let mask_filter = _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0));
+    if _mm_movemask_epi8(mask_filter) == 0 {
+        return;
+    }
+
+    let p0_cand = _mm_srai_epi16(
+        _mm_add_epi16(
+            _mm_add_epi16(_mm_slli_epi16(p1_16, 1), _mm_add_epi16(*p0_16, q1_16)),
+            two,
+        ),
+        2,
+    );
+    let q0_cand = _mm_srai_epi16(
+        _mm_add_epi16(
+            _mm_add_epi16(_mm_slli_epi16(q1_16, 1), _mm_add_epi16(*q0_16, p1_16)),
+            two,
+        ),
+        2,
+    );
+
+    *p0_16 = _mm_or_si128(
+        _mm_and_si128(mask_filter, p0_cand),
+        _mm_andnot_si128(mask_filter, *p0_16),
+    );
+    *q0_16 = _mm_or_si128(
+        _mm_and_si128(mask_filter, q0_cand),
+        _mm_andnot_si128(mask_filter, *q0_16),
+    );
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub unsafe fn deblock_chroma_eq4_vec(
+    p1: __m128i,
+    p0: &mut __m128i,
+    q0: &mut __m128i,
+    q1: __m128i,
+    alpha: i32,
+    beta: i32,
+) {
     let zero = _mm_setzero_si128();
-    let four = _mm_set1_epi16(4);
     let alpha_vec = _mm_set1_epi16(alpha as i16);
     let beta_vec = _mm_set1_epi16(beta as i16);
-    let max_u8 = _mm_set1_epi16(255);
 
-    let tc0_vec = _mm_setr_epi16(
-        tc[0] as i16,
-        tc[0] as i16,
-        tc[1] as i16,
-        tc[1] as i16,
-        tc[2] as i16,
-        tc[2] as i16,
-        tc[3] as i16,
-        tc[3] as i16,
+    let mut p0_lo = _mm_unpacklo_epi8(*p0, zero);
+    let mut q0_lo = _mm_unpacklo_epi8(*q0, zero);
+    deblock_chroma_eq4_half8(
+        _mm_unpacklo_epi8(p1, zero),
+        &mut p0_lo,
+        &mut q0_lo,
+        _mm_unpacklo_epi8(q1, zero),
+        alpha_vec,
+        beta_vec,
     );
-    let mask_tc0_gt_0 = _mm_cmpgt_epi16(tc0_vec, zero);
 
-    for half in 0..2 {
-        if _mm_movemask_epi8(mask_tc0_gt_0) == 0 {
-            continue;
-        }
-        let offset = half * 8;
-        let p1_8 = _mm_loadl_epi64(p1.as_ptr().add(offset) as *const __m128i);
-        let p0_8 = _mm_loadl_epi64(p0.as_ptr().add(offset) as *const __m128i);
-        let q0_8 = _mm_loadl_epi64(q0.as_ptr().add(offset) as *const __m128i);
-        let q1_8 = _mm_loadl_epi64(q1.as_ptr().add(offset) as *const __m128i);
+    let mut p0_hi = _mm_unpackhi_epi8(*p0, zero);
+    let mut q0_hi = _mm_unpackhi_epi8(*q0, zero);
+    deblock_chroma_eq4_half8(
+        _mm_unpackhi_epi8(p1, zero),
+        &mut p0_hi,
+        &mut q0_hi,
+        _mm_unpackhi_epi8(q1, zero),
+        alpha_vec,
+        beta_vec,
+    );
 
-        let p1_16 = _mm_unpacklo_epi8(p1_8, zero);
-        let p0_16 = _mm_unpacklo_epi8(p0_8, zero);
-        let q0_16 = _mm_unpacklo_epi8(q0_8, zero);
-        let q1_16 = _mm_unpacklo_epi8(q1_8, zero);
-
-        let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(p0_16, q0_16), _mm_sub_epi16(q0_16, p0_16));
-        let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
-
-        let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(p1_16, p0_16), _mm_sub_epi16(p0_16, p1_16));
-        let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
-
-        let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(q1_16, q0_16), _mm_sub_epi16(q0_16, q1_16));
-        let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
-
-        let mask_filter = _mm_and_si128(
-            mask_tc0_gt_0,
-            _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0)),
-        );
-        if _mm_movemask_epi8(mask_filter) == 0 {
-            continue;
-        }
-
-        let diff_q0p0_x4 = _mm_slli_epi16(_mm_sub_epi16(q0_16, p0_16), 2);
-        let diff_p1q1 = _mm_sub_epi16(p1_16, q1_16);
-        let t_deta = _mm_srai_epi16(
-            _mm_add_epi16(_mm_add_epi16(diff_q0p0_x4, diff_p1q1), four),
-            3,
-        );
-        let neg_tc0 = _mm_sub_epi16(zero, tc0_vec);
-        let deta = _mm_min_epi16(_mm_max_epi16(t_deta, neg_tc0), tc0_vec);
-
-        let p0_cand = _mm_max_epi16(_mm_min_epi16(_mm_add_epi16(p0_16, deta), max_u8), zero);
-        let q0_cand = _mm_max_epi16(_mm_min_epi16(_mm_sub_epi16(q0_16, deta), max_u8), zero);
-
-        let p0_out = _mm_or_si128(
-            _mm_and_si128(mask_filter, p0_cand),
-            _mm_andnot_si128(mask_filter, p0_16),
-        );
-        let q0_out = _mm_or_si128(
-            _mm_and_si128(mask_filter, q0_cand),
-            _mm_andnot_si128(mask_filter, q0_16),
-        );
-
-        let p0_val = _mm_cvtsi128_si64(_mm_packus_epi16(p0_out, zero));
-        let q0_val = _mm_cvtsi128_si64(_mm_packus_epi16(q0_out, zero));
-
-        p0[offset..offset + 8].copy_from_slice(&p0_val.to_ne_bytes());
-        q0[offset..offset + 8].copy_from_slice(&q0_val.to_ne_bytes());
-    }
+    *p0 = _mm_packus_epi16(p0_lo, p0_hi);
+    *q0 = _mm_packus_epi16(q0_lo, q0_hi);
 }
 
 /// Vectorized 16-line Chroma bS == 4 (Eq4) filter across contiguous sample rows.
@@ -467,67 +721,13 @@ pub unsafe fn deblock_chroma_eq4_16(
     alpha: i32,
     beta: i32,
 ) {
-    let zero = _mm_setzero_si128();
-    let two = _mm_set1_epi16(2);
-    let alpha_vec = _mm_set1_epi16(alpha as i16);
-    let beta_vec = _mm_set1_epi16(beta as i16);
-
-    for half in 0..2 {
-        let offset = half * 8;
-        let p1_8 = _mm_loadl_epi64(p1.as_ptr().add(offset) as *const __m128i);
-        let p0_8 = _mm_loadl_epi64(p0.as_ptr().add(offset) as *const __m128i);
-        let q0_8 = _mm_loadl_epi64(q0.as_ptr().add(offset) as *const __m128i);
-        let q1_8 = _mm_loadl_epi64(q1.as_ptr().add(offset) as *const __m128i);
-
-        let p1_16 = _mm_unpacklo_epi8(p1_8, zero);
-        let p0_16 = _mm_unpacklo_epi8(p0_8, zero);
-        let q0_16 = _mm_unpacklo_epi8(q0_8, zero);
-        let q1_16 = _mm_unpacklo_epi8(q1_8, zero);
-
-        let diff_p0q0 = _mm_max_epi16(_mm_sub_epi16(p0_16, q0_16), _mm_sub_epi16(q0_16, p0_16));
-        let cond_p0q0 = _mm_cmplt_epi16(diff_p0q0, alpha_vec);
-
-        let diff_p1p0 = _mm_max_epi16(_mm_sub_epi16(p1_16, p0_16), _mm_sub_epi16(p0_16, p1_16));
-        let cond_p1p0 = _mm_cmplt_epi16(diff_p1p0, beta_vec);
-
-        let diff_q1q0 = _mm_max_epi16(_mm_sub_epi16(q1_16, q0_16), _mm_sub_epi16(q0_16, q1_16));
-        let cond_q1q0 = _mm_cmplt_epi16(diff_q1q0, beta_vec);
-
-        let mask_filter = _mm_and_si128(cond_p0q0, _mm_and_si128(cond_p1p0, cond_q1q0));
-        if _mm_movemask_epi8(mask_filter) == 0 {
-            continue;
-        }
-
-        let p0_cand = _mm_srai_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(_mm_slli_epi16(p1_16, 1), _mm_add_epi16(p0_16, q1_16)),
-                two,
-            ),
-            2,
-        );
-        let q0_cand = _mm_srai_epi16(
-            _mm_add_epi16(
-                _mm_add_epi16(_mm_slli_epi16(q1_16, 1), _mm_add_epi16(q0_16, p1_16)),
-                two,
-            ),
-            2,
-        );
-
-        let p0_out = _mm_or_si128(
-            _mm_and_si128(mask_filter, p0_cand),
-            _mm_andnot_si128(mask_filter, p0_16),
-        );
-        let q0_out = _mm_or_si128(
-            _mm_and_si128(mask_filter, q0_cand),
-            _mm_andnot_si128(mask_filter, q0_16),
-        );
-
-        let p0_val = _mm_cvtsi128_si64(_mm_packus_epi16(p0_out, zero));
-        let q0_val = _mm_cvtsi128_si64(_mm_packus_epi16(q0_out, zero));
-
-        p0[offset..offset + 8].copy_from_slice(&p0_val.to_ne_bytes());
-        q0[offset..offset + 8].copy_from_slice(&q0_val.to_ne_bytes());
-    }
+    let vp1 = _mm_loadu_si128(p1.as_ptr() as *const __m128i);
+    let mut vp0 = _mm_loadu_si128(p0.as_ptr() as *const __m128i);
+    let mut vq0 = _mm_loadu_si128(q0.as_ptr() as *const __m128i);
+    let vq1 = _mm_loadu_si128(q1.as_ptr() as *const __m128i);
+    deblock_chroma_eq4_vec(vp1, &mut vp0, &mut vq0, vq1, alpha, beta);
+    _mm_storeu_si128(p0.as_mut_ptr() as *mut __m128i, vp0);
+    _mm_storeu_si128(q0.as_mut_ptr() as *mut __m128i, vq0);
 }
 
 // ============================================================================
@@ -672,101 +872,60 @@ pub fn deblock_luma_lt4(
     tc: &[i8; 4],
 ) {
     if step_y == 1 {
-        // The cross-line step must be this cursor's stride.
         debug_assert_eq!(step_x, pix.stride() as isize);
-        // Horizontal edge: taps `-3 .. 2` step vertically — one 16-wide, 6-tall span.
-        let (mut p2, mut p1, mut p0, mut q0, mut q1, mut q2) = {
-            let s = pix.span::<16, 6>(-3, 0);
-            (
-                s.row::<16>(0, 0),
-                s.row::<16>(1, 0),
-                s.row::<16>(2, 0),
-                s.row::<16>(3, 0),
-                s.row::<16>(4, 0),
-                s.row::<16>(5, 0),
-            )
-        };
-
         unsafe {
-            deblock_luma_lt4_16(
-                &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, alpha, beta, tc,
-            );
-        }
-
-        pix.set_block::<16, 4>(-2, 0, &[p1, p0, q0, q1]);
-    } else if step_x == 1 {
-        // The cross-line step must be this cursor's stride.
-        debug_assert_eq!(step_y, pix.stride() as isize);
-        // Vertical edge: 16 lines of taps at cols `-4 .. 4`, out of one span.
-        unsafe {
-            let (r0, r1, r2, r3, r4, r5, r6, r7) = {
-                let s = pix.span::<8, 16>(0, -4);
+            let (p2, mut p1, mut p0, mut q0, mut q1, q2) = {
+                let s = pix.span::<16, 6>(-3, 0);
+                let (p, stride) = s.as_ptr_and_stride();
                 (
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(8, 0)),
-                        i64::from_ne_bytes(s.row::<8>(0, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(9, 0)),
-                        i64::from_ne_bytes(s.row::<8>(1, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(10, 0)),
-                        i64::from_ne_bytes(s.row::<8>(2, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(11, 0)),
-                        i64::from_ne_bytes(s.row::<8>(3, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(12, 0)),
-                        i64::from_ne_bytes(s.row::<8>(4, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(13, 0)),
-                        i64::from_ne_bytes(s.row::<8>(5, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(14, 0)),
-                        i64::from_ne_bytes(s.row::<8>(6, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(15, 0)),
-                        i64::from_ne_bytes(s.row::<8>(7, 0)),
-                    ),
+                    _mm_loadu_si128(p as *const __m128i),
+                    _mm_loadu_si128(p.add(stride) as *const __m128i),
+                    _mm_loadu_si128(p.add(2 * stride) as *const __m128i),
+                    _mm_loadu_si128(p.add(3 * stride) as *const __m128i),
+                    _mm_loadu_si128(p.add(4 * stride) as *const __m128i),
+                    _mm_loadu_si128(p.add(5 * stride) as *const __m128i),
                 )
             };
 
-            let (_c0, c1, c2, c3, c4, c5, c6, _c7) =
+            deblock_luma_lt4_vec(p2, &mut p1, &mut p0, &mut q0, &mut q1, q2, alpha, beta, tc);
+
+            let mut rows = [[0u8; 16]; 4];
+            let dst = rows.as_mut_ptr() as *mut __m128i;
+            _mm_storeu_si128(dst.add(0), p1);
+            _mm_storeu_si128(dst.add(1), p0);
+            _mm_storeu_si128(dst.add(2), q0);
+            _mm_storeu_si128(dst.add(3), q1);
+            pix.set_block::<16, 4>(-2, 0, &rows);
+        }
+    } else if step_x == 1 {
+        debug_assert_eq!(step_y, pix.stride() as isize);
+        unsafe {
+            let (r0, r1, r2, r3, r4, r5, r6, r7) = {
+                let s = pix.span::<8, 16>(0, -4);
+                let (p, stride) = s.as_ptr_and_stride();
+                let load64 = |y: usize| (p.add(y * stride) as *const i64).read_unaligned();
+                (
+                    _mm_set_epi64x(load64(8), load64(0)),
+                    _mm_set_epi64x(load64(9), load64(1)),
+                    _mm_set_epi64x(load64(10), load64(2)),
+                    _mm_set_epi64x(load64(11), load64(3)),
+                    _mm_set_epi64x(load64(12), load64(4)),
+                    _mm_set_epi64x(load64(13), load64(5)),
+                    _mm_set_epi64x(load64(14), load64(6)),
+                    _mm_set_epi64x(load64(15), load64(7)),
+                )
+            };
+
+            let (_c0, c1, mut c2, mut c3, mut c4, mut c5, c6, _c7) =
                 transpose_16x8_u8(r0, r1, r2, r3, r4, r5, r6, r7);
 
-            let mut t1 = [0u8; 16];
-            let mut t2 = [0u8; 16];
-            let mut t3 = [0u8; 16];
-            let mut t4 = [0u8; 16];
-            let mut t5 = [0u8; 16];
-            let mut t6 = [0u8; 16];
-            _mm_storeu_si128(t1.as_mut_ptr() as *mut __m128i, c1);
-            _mm_storeu_si128(t2.as_mut_ptr() as *mut __m128i, c2);
-            _mm_storeu_si128(t3.as_mut_ptr() as *mut __m128i, c3);
-            _mm_storeu_si128(t4.as_mut_ptr() as *mut __m128i, c4);
-            _mm_storeu_si128(t5.as_mut_ptr() as *mut __m128i, c5);
-            _mm_storeu_si128(t6.as_mut_ptr() as *mut __m128i, c6);
-
-            deblock_luma_lt4_16(
-                &mut t1, &mut t2, &mut t3, &mut t4, &mut t5, &mut t6, alpha, beta, tc,
-            );
-
-            let p1_vec = _mm_loadu_si128(t2.as_ptr() as *const __m128i);
-            let p0_vec = _mm_loadu_si128(t3.as_ptr() as *const __m128i);
-            let q0_vec = _mm_loadu_si128(t4.as_ptr() as *const __m128i);
-            let q1_vec = _mm_loadu_si128(t5.as_ptr() as *const __m128i);
+            deblock_luma_lt4_vec(c1, &mut c2, &mut c3, &mut c4, &mut c5, c6, alpha, beta, tc);
 
             // Interleave (p1, p0) and (q0, q1) pairs
-            let a0 = _mm_unpacklo_epi8(p1_vec, p0_vec);
-            let a1 = _mm_unpackhi_epi8(p1_vec, p0_vec);
-            let b0 = _mm_unpacklo_epi8(q0_vec, q1_vec);
-            let b1 = _mm_unpackhi_epi8(q0_vec, q1_vec);
+            let a0 = _mm_unpacklo_epi8(c2, c3);
+            let a1 = _mm_unpackhi_epi8(c2, c3);
+            let b0 = _mm_unpacklo_epi8(c4, c5);
+            let b1 = _mm_unpackhi_epi8(c4, c5);
 
             // Interleave pairs into 4-sample rows: [p1, p0, q0, q1]
             let row0_3 = _mm_unpacklo_epi16(a0, b0);
@@ -781,9 +940,6 @@ pub fn deblock_luma_lt4(
             _mm_storeu_si128(ptr.add(2), row8_11);
             _mm_storeu_si128(ptr.add(3), row12_15);
 
-            // Write back only the columns the filter can modify: the span read above is
-            // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
-            // the previous macroblock.
             pix.set_block::<4, 16>(0, -2, &out);
         }
     } else {
@@ -792,12 +948,6 @@ pub fn deblock_luma_lt4(
 }
 
 /// Accelerated Luma Eq4 filter (bS == 4).
-/// # Preconditions
-///
-/// The direction guard below (`step_y == 1` / `step_x == 1`) is only half the
-/// contract: this kernel addresses in 2D through the cursor, so the other step must
-/// also be the cursor's own stride. A caller that satisfies the guard with a
-/// different pitch reads and writes the wrong samples; the `debug_assert!` checks it.
 pub fn deblock_luma_eq4(
     pix: &mut impl PlaneSamples,
     step_x: isize,
@@ -806,103 +956,62 @@ pub fn deblock_luma_eq4(
     beta: i32,
 ) {
     if step_y == 1 {
-        // The cross-line step must be this cursor's stride.
         debug_assert_eq!(step_x, pix.stride() as isize);
-        // Horizontal edge: taps `-4 .. 3` step vertically — one 16-wide, 8-tall span.
-        let (p3, mut p2, mut p1, mut p0, mut q0, mut q1, mut q2, q3) = {
-            let s = pix.span::<16, 8>(-4, 0);
-            (
-                s.row::<16>(0, 0),
-                s.row::<16>(1, 0),
-                s.row::<16>(2, 0),
-                s.row::<16>(3, 0),
-                s.row::<16>(4, 0),
-                s.row::<16>(5, 0),
-                s.row::<16>(6, 0),
-                s.row::<16>(7, 0),
-            )
-        };
-
         unsafe {
-            deblock_luma_eq4_16(
-                &p3, &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, &q3, alpha, beta,
-            );
-        }
+            let (p3, mut p2, mut p1, mut p0, mut q0, mut q1, mut q2, q3) = {
+                let s = pix.span::<16, 8>(-4, 0);
+                let (p, stride) = s.as_ptr_and_stride();
+                (
+                    _mm_loadu_si128(p as *const __m128i),
+                    _mm_loadu_si128(p.add(stride) as *const __m128i),
+                    _mm_loadu_si128(p.add(2 * stride) as *const __m128i),
+                    _mm_loadu_si128(p.add(3 * stride) as *const __m128i),
+                    _mm_loadu_si128(p.add(4 * stride) as *const __m128i),
+                    _mm_loadu_si128(p.add(5 * stride) as *const __m128i),
+                    _mm_loadu_si128(p.add(6 * stride) as *const __m128i),
+                    _mm_loadu_si128(p.add(7 * stride) as *const __m128i),
+                )
+            };
 
-        pix.set_block::<16, 6>(-3, 0, &[p2, p1, p0, q0, q1, q2]);
+            deblock_luma_eq4_vec(
+                p3, &mut p2, &mut p1, &mut p0, &mut q0, &mut q1, &mut q2, q3, alpha, beta,
+            );
+
+            let mut rows = [[0u8; 16]; 6];
+            let dst = rows.as_mut_ptr() as *mut __m128i;
+            _mm_storeu_si128(dst.add(0), p2);
+            _mm_storeu_si128(dst.add(1), p1);
+            _mm_storeu_si128(dst.add(2), p0);
+            _mm_storeu_si128(dst.add(3), q0);
+            _mm_storeu_si128(dst.add(4), q1);
+            _mm_storeu_si128(dst.add(5), q2);
+            pix.set_block::<16, 6>(-3, 0, &rows);
+        }
     } else if step_x == 1 {
-        // The cross-line step must be this cursor's stride.
         debug_assert_eq!(step_y, pix.stride() as isize);
-        // Vertical edge: 16 lines of taps `-4 .. 4`, out of one span.
         unsafe {
             let (r0, r1, r2, r3, r4, r5, r6, r7) = {
                 let s = pix.span::<8, 16>(0, -4);
+                let (p, stride) = s.as_ptr_and_stride();
+                let load64 = |y: usize| (p.add(y * stride) as *const i64).read_unaligned();
                 (
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(8, 0)),
-                        i64::from_ne_bytes(s.row::<8>(0, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(9, 0)),
-                        i64::from_ne_bytes(s.row::<8>(1, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(10, 0)),
-                        i64::from_ne_bytes(s.row::<8>(2, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(11, 0)),
-                        i64::from_ne_bytes(s.row::<8>(3, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(12, 0)),
-                        i64::from_ne_bytes(s.row::<8>(4, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(13, 0)),
-                        i64::from_ne_bytes(s.row::<8>(5, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(14, 0)),
-                        i64::from_ne_bytes(s.row::<8>(6, 0)),
-                    ),
-                    _mm_set_epi64x(
-                        i64::from_ne_bytes(s.row::<8>(15, 0)),
-                        i64::from_ne_bytes(s.row::<8>(7, 0)),
-                    ),
+                    _mm_set_epi64x(load64(8), load64(0)),
+                    _mm_set_epi64x(load64(9), load64(1)),
+                    _mm_set_epi64x(load64(10), load64(2)),
+                    _mm_set_epi64x(load64(11), load64(3)),
+                    _mm_set_epi64x(load64(12), load64(4)),
+                    _mm_set_epi64x(load64(13), load64(5)),
+                    _mm_set_epi64x(load64(14), load64(6)),
+                    _mm_set_epi64x(load64(15), load64(7)),
                 )
             };
 
             let (c0, mut c1, mut c2, mut c3, mut c4, mut c5, mut c6, c7) =
                 transpose_16x8_u8(r0, r1, r2, r3, r4, r5, r6, r7);
 
-            let mut t0 = [0u8; 16];
-            let mut t1 = [0u8; 16];
-            let mut t2 = [0u8; 16];
-            let mut t3 = [0u8; 16];
-            let mut t4 = [0u8; 16];
-            let mut t5 = [0u8; 16];
-            let mut t6 = [0u8; 16];
-            let mut t7 = [0u8; 16];
-            _mm_storeu_si128(t0.as_mut_ptr() as *mut __m128i, c0);
-            _mm_storeu_si128(t1.as_mut_ptr() as *mut __m128i, c1);
-            _mm_storeu_si128(t2.as_mut_ptr() as *mut __m128i, c2);
-            _mm_storeu_si128(t3.as_mut_ptr() as *mut __m128i, c3);
-            _mm_storeu_si128(t4.as_mut_ptr() as *mut __m128i, c4);
-            _mm_storeu_si128(t5.as_mut_ptr() as *mut __m128i, c5);
-            _mm_storeu_si128(t6.as_mut_ptr() as *mut __m128i, c6);
-            _mm_storeu_si128(t7.as_mut_ptr() as *mut __m128i, c7);
-
-            deblock_luma_eq4_16(
-                &t0, &mut t1, &mut t2, &mut t3, &mut t4, &mut t5, &mut t6, &t7, alpha, beta,
+            deblock_luma_eq4_vec(
+                c0, &mut c1, &mut c2, &mut c3, &mut c4, &mut c5, &mut c6, c7, alpha, beta,
             );
-
-            c1 = _mm_loadu_si128(t1.as_ptr() as *const __m128i);
-            c2 = _mm_loadu_si128(t2.as_ptr() as *const __m128i);
-            c3 = _mm_loadu_si128(t3.as_ptr() as *const __m128i);
-            c4 = _mm_loadu_si128(t4.as_ptr() as *const __m128i);
-            c5 = _mm_loadu_si128(t5.as_ptr() as *const __m128i);
-            c6 = _mm_loadu_si128(t6.as_ptr() as *const __m128i);
 
             let (r0_out, r1_out, r2_out, r3_out, r4_out, r5_out, r6_out, r7_out) =
                 transpose_16x8_u8(c0, c1, c2, c3, c4, c5, c6, c7);
@@ -918,9 +1027,6 @@ pub fn deblock_luma_eq4(
                 out[i + 8].copy_from_slice(&b_hi[1..7]);
             }
 
-            // Write back only the columns the filter can modify: the span read above is
-            // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
-            // the previous macroblock.
             pix.set_block::<6, 16>(0, -3, &out);
         }
     } else {
@@ -929,12 +1035,6 @@ pub fn deblock_luma_eq4(
 }
 
 /// Accelerated Chroma Lt4 filter (bS < 4).
-/// # Preconditions
-///
-/// The direction guard below (`step_y == 1` / `step_x == 1`) is only half the
-/// contract: this kernel addresses in 2D through the cursor, so the other step must
-/// also be the cursor's own stride. A caller that satisfies the guard with a
-/// different pitch reads and writes the wrong samples; the `debug_assert!` checks it.
 pub fn deblock_chroma_lt4(
     cb: &mut impl PlaneSamples,
     cr: &mut impl PlaneSamples,
@@ -945,138 +1045,64 @@ pub fn deblock_chroma_lt4(
     tc: &[i8; 4],
 ) {
     if step_y == 1 {
-        // The cross-line step must be this cursor's stride; Cb and Cr are separate
-        // planes, so both are checked.
         debug_assert_eq!(step_x, cb.stride() as isize);
         debug_assert_eq!(step_x, cr.stride() as isize);
-        // Taps `-2 .. 1` of each plane: one 8-wide, 4-tall span apiece.
-        let (cb_p1, mut cb_p0, mut cb_q0, cb_q1, cr_p1, mut cr_p0, mut cr_q0, cr_q1) = {
-            let (sb, sr) = (cb.span::<8, 4>(-2, 0), cr.span::<8, 4>(-2, 0));
-            (
-                sb.row::<8>(0, 0),
-                sb.row::<8>(1, 0),
-                sb.row::<8>(2, 0),
-                sb.row::<8>(3, 0),
-                sr.row::<8>(0, 0),
-                sr.row::<8>(1, 0),
-                sr.row::<8>(2, 0),
-                sr.row::<8>(3, 0),
-            )
-        };
-
-        let mut p1 = [0u8; 16];
-        let mut p0 = [0u8; 16];
-        let mut q0 = [0u8; 16];
-        let mut q1 = [0u8; 16];
-
-        p1[..8].copy_from_slice(&cb_p1);
-        p1[8..].copy_from_slice(&cr_p1);
-        p0[..8].copy_from_slice(&cb_p0);
-        p0[8..].copy_from_slice(&cr_p0);
-        q0[..8].copy_from_slice(&cb_q0);
-        q0[8..].copy_from_slice(&cr_q0);
-        q1[..8].copy_from_slice(&cb_q1);
-        q1[8..].copy_from_slice(&cr_q1);
-
         unsafe {
-            deblock_chroma_lt4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta, tc);
-        }
-
-        cb_p0.copy_from_slice(&p0[..8]);
-        cr_p0.copy_from_slice(&p0[8..]);
-        cb_q0.copy_from_slice(&q0[..8]);
-        cr_q0.copy_from_slice(&q0[8..]);
-
-        cb.set_block::<8, 2>(-1, 0, &[cb_p0, cb_q0]);
-        cr.set_block::<8, 2>(-1, 0, &[cr_p0, cr_q0]);
-    } else if step_x == 1 {
-        // The cross-line step must be this cursor's stride; Cb and Cr are separate
-        // planes, so both are checked.
-        debug_assert_eq!(step_y, cb.stride() as isize);
-        debug_assert_eq!(step_y, cr.stride() as isize);
-        // Eight lines of taps `-2 .. 2` per plane, out of one span each.
-        unsafe {
-            let (r0, r1, r2, r3, r4, r5, r6, r7) = {
-                let (sb, sr) = (cb.span::<4, 8>(0, -2), cr.span::<4, 8>(0, -2));
+            let (p1, mut p0, mut q0, q1) = {
+                let (sb, sr) = (cb.span::<8, 4>(-2, 0), cr.span::<8, 4>(-2, 0));
+                let (pb, stride_b) = sb.as_ptr_and_stride();
+                let (pr, stride_r) = sr.as_ptr_and_stride();
+                let lb = |y: usize| (pb.add(y * stride_b) as *const i64).read_unaligned();
+                let lr = |y: usize| (pr.add(y * stride_r) as *const i64).read_unaligned();
                 (
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(0, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(0, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(1, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(1, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(2, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(2, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(3, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(3, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(4, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(4, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(5, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(5, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(6, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(6, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(7, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(7, 0)) as i32,
-                        0,
-                        0,
-                    ),
+                    _mm_set_epi64x(lr(0), lb(0)),
+                    _mm_set_epi64x(lr(1), lb(1)),
+                    _mm_set_epi64x(lr(2), lb(2)),
+                    _mm_set_epi64x(lr(3), lb(3)),
                 )
             };
 
-            let (t0, t1, t2, t3) = transpose_chroma_4x8_u8(r0, r1, r2, r3, r4, r5, r6, r7);
+            deblock_chroma_lt4_vec(p1, &mut p0, &mut q0, q1, alpha, beta, tc);
 
-            let mut arr_p1 = [0u8; 16];
-            let mut arr_p0 = [0u8; 16];
-            let mut arr_q0 = [0u8; 16];
-            let mut arr_q1 = [0u8; 16];
-            _mm_storeu_si128(arr_p1.as_mut_ptr() as *mut __m128i, t0);
-            _mm_storeu_si128(arr_p0.as_mut_ptr() as *mut __m128i, t1);
-            _mm_storeu_si128(arr_q0.as_mut_ptr() as *mut __m128i, t2);
-            _mm_storeu_si128(arr_q1.as_mut_ptr() as *mut __m128i, t3);
+            let cb_p0 = (_mm_cvtsi128_si64(p0) as u64).to_ne_bytes();
+            let cr_p0 = (_mm_cvtsi128_si64(_mm_srli_si128(p0, 8)) as u64).to_ne_bytes();
+            let cb_q0 = (_mm_cvtsi128_si64(q0) as u64).to_ne_bytes();
+            let cr_q0 = (_mm_cvtsi128_si64(_mm_srli_si128(q0, 8)) as u64).to_ne_bytes();
 
-            deblock_chroma_lt4_16(&arr_p1, &mut arr_p0, &mut arr_q0, &arr_q1, alpha, beta, tc);
+            cb.set_block::<8, 2>(-1, 0, &[cb_p0, cb_q0]);
+            cr.set_block::<8, 2>(-1, 0, &[cr_p0, cr_q0]);
+        }
+    } else if step_x == 1 {
+        debug_assert_eq!(step_y, cb.stride() as isize);
+        debug_assert_eq!(step_y, cr.stride() as isize);
+        unsafe {
+            let (t0, mut t1, mut t2, t3) = {
+                let (sb, sr) = (cb.span::<4, 8>(0, -2), cr.span::<4, 8>(0, -2));
+                let (pb, stride_b) = sb.as_ptr_and_stride();
+                let (pr, stride_r) = sr.as_ptr_and_stride();
+                let row = |y: usize| {
+                    _mm_setr_epi32(
+                        (pb.add(y * stride_b) as *const i32).read_unaligned(),
+                        (pr.add(y * stride_r) as *const i32).read_unaligned(),
+                        0,
+                        0,
+                    )
+                };
+                transpose_chroma_4x8_u8(
+                    row(0), row(1), row(2), row(3), row(4), row(5), row(6), row(7),
+                )
+            };
 
-            let p0 = _mm_loadu_si128(arr_p0.as_ptr() as *const __m128i);
-            let q0 = _mm_loadu_si128(arr_q0.as_ptr() as *const __m128i);
+            deblock_chroma_lt4_vec(t0, &mut t1, &mut t2, t3, alpha, beta, tc);
 
-            let cb_pairs = _mm_unpacklo_epi8(p0, q0);
-            let cr_pairs = _mm_unpackhi_epi8(p0, q0);
+            let cb_pairs = _mm_unpacklo_epi8(t1, t2);
+            let cr_pairs = _mm_unpackhi_epi8(t1, t2);
 
             let mut out_cb = [[0u8; 2]; 8];
             let mut out_cr = [[0u8; 2]; 8];
             _mm_storeu_si128(out_cb.as_mut_ptr() as *mut __m128i, cb_pairs);
             _mm_storeu_si128(out_cr.as_mut_ptr() as *mut __m128i, cr_pairs);
 
-            // Write back only the columns the filter can modify: the span read above is
-            // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
-            // the previous macroblock.
             cb.set_block::<2, 8>(0, -1, &out_cb);
             cr.set_block::<2, 8>(0, -1, &out_cr);
         }
@@ -1086,12 +1112,6 @@ pub fn deblock_chroma_lt4(
 }
 
 /// Accelerated Chroma Eq4 filter (bS == 4).
-/// # Preconditions
-///
-/// The direction guard below (`step_y == 1` / `step_x == 1`) is only half the
-/// contract: this kernel addresses in 2D through the cursor, so the other step must
-/// also be the cursor's own stride. A caller that satisfies the guard with a
-/// different pitch reads and writes the wrong samples; the `debug_assert!` checks it.
 pub fn deblock_chroma_eq4(
     cb: &mut impl PlaneSamples,
     cr: &mut impl PlaneSamples,
@@ -1101,138 +1121,64 @@ pub fn deblock_chroma_eq4(
     beta: i32,
 ) {
     if step_y == 1 {
-        // The cross-line step must be this cursor's stride; Cb and Cr are separate
-        // planes, so both are checked.
         debug_assert_eq!(step_x, cb.stride() as isize);
         debug_assert_eq!(step_x, cr.stride() as isize);
-        // Taps `-2 .. 1` of each plane: one 8-wide, 4-tall span apiece.
-        let (cb_p1, mut cb_p0, mut cb_q0, cb_q1, cr_p1, mut cr_p0, mut cr_q0, cr_q1) = {
-            let (sb, sr) = (cb.span::<8, 4>(-2, 0), cr.span::<8, 4>(-2, 0));
-            (
-                sb.row::<8>(0, 0),
-                sb.row::<8>(1, 0),
-                sb.row::<8>(2, 0),
-                sb.row::<8>(3, 0),
-                sr.row::<8>(0, 0),
-                sr.row::<8>(1, 0),
-                sr.row::<8>(2, 0),
-                sr.row::<8>(3, 0),
-            )
-        };
-
-        let mut p1 = [0u8; 16];
-        let mut p0 = [0u8; 16];
-        let mut q0 = [0u8; 16];
-        let mut q1 = [0u8; 16];
-
-        p1[..8].copy_from_slice(&cb_p1);
-        p1[8..].copy_from_slice(&cr_p1);
-        p0[..8].copy_from_slice(&cb_p0);
-        p0[8..].copy_from_slice(&cr_p0);
-        q0[..8].copy_from_slice(&cb_q0);
-        q0[8..].copy_from_slice(&cr_q0);
-        q1[..8].copy_from_slice(&cb_q1);
-        q1[8..].copy_from_slice(&cr_q1);
-
         unsafe {
-            deblock_chroma_eq4_16(&p1, &mut p0, &mut q0, &q1, alpha, beta);
-        }
-
-        cb_p0.copy_from_slice(&p0[..8]);
-        cr_p0.copy_from_slice(&p0[8..]);
-        cb_q0.copy_from_slice(&q0[..8]);
-        cr_q0.copy_from_slice(&q0[8..]);
-
-        cb.set_block::<8, 2>(-1, 0, &[cb_p0, cb_q0]);
-        cr.set_block::<8, 2>(-1, 0, &[cr_p0, cr_q0]);
-    } else if step_x == 1 {
-        // The cross-line step must be this cursor's stride; Cb and Cr are separate
-        // planes, so both are checked.
-        debug_assert_eq!(step_y, cb.stride() as isize);
-        debug_assert_eq!(step_y, cr.stride() as isize);
-        // Eight lines of taps `-2 .. 2` per plane, out of one span each.
-        unsafe {
-            let (r0, r1, r2, r3, r4, r5, r6, r7) = {
-                let (sb, sr) = (cb.span::<4, 8>(0, -2), cr.span::<4, 8>(0, -2));
+            let (p1, mut p0, mut q0, q1) = {
+                let (sb, sr) = (cb.span::<8, 4>(-2, 0), cr.span::<8, 4>(-2, 0));
+                let (pb, stride_b) = sb.as_ptr_and_stride();
+                let (pr, stride_r) = sr.as_ptr_and_stride();
+                let lb = |y: usize| (pb.add(y * stride_b) as *const i64).read_unaligned();
+                let lr = |y: usize| (pr.add(y * stride_r) as *const i64).read_unaligned();
                 (
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(0, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(0, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(1, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(1, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(2, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(2, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(3, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(3, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(4, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(4, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(5, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(5, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(6, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(6, 0)) as i32,
-                        0,
-                        0,
-                    ),
-                    _mm_setr_epi32(
-                        u32::from_ne_bytes(sb.row::<4>(7, 0)) as i32,
-                        u32::from_ne_bytes(sr.row::<4>(7, 0)) as i32,
-                        0,
-                        0,
-                    ),
+                    _mm_set_epi64x(lr(0), lb(0)),
+                    _mm_set_epi64x(lr(1), lb(1)),
+                    _mm_set_epi64x(lr(2), lb(2)),
+                    _mm_set_epi64x(lr(3), lb(3)),
                 )
             };
 
-            let (t0, t1, t2, t3) = transpose_chroma_4x8_u8(r0, r1, r2, r3, r4, r5, r6, r7);
+            deblock_chroma_eq4_vec(p1, &mut p0, &mut q0, q1, alpha, beta);
 
-            let mut arr_p1 = [0u8; 16];
-            let mut arr_p0 = [0u8; 16];
-            let mut arr_q0 = [0u8; 16];
-            let mut arr_q1 = [0u8; 16];
-            _mm_storeu_si128(arr_p1.as_mut_ptr() as *mut __m128i, t0);
-            _mm_storeu_si128(arr_p0.as_mut_ptr() as *mut __m128i, t1);
-            _mm_storeu_si128(arr_q0.as_mut_ptr() as *mut __m128i, t2);
-            _mm_storeu_si128(arr_q1.as_mut_ptr() as *mut __m128i, t3);
+            let cb_p0 = (_mm_cvtsi128_si64(p0) as u64).to_ne_bytes();
+            let cr_p0 = (_mm_cvtsi128_si64(_mm_srli_si128(p0, 8)) as u64).to_ne_bytes();
+            let cb_q0 = (_mm_cvtsi128_si64(q0) as u64).to_ne_bytes();
+            let cr_q0 = (_mm_cvtsi128_si64(_mm_srli_si128(q0, 8)) as u64).to_ne_bytes();
 
-            deblock_chroma_eq4_16(&arr_p1, &mut arr_p0, &mut arr_q0, &arr_q1, alpha, beta);
+            cb.set_block::<8, 2>(-1, 0, &[cb_p0, cb_q0]);
+            cr.set_block::<8, 2>(-1, 0, &[cr_p0, cr_q0]);
+        }
+    } else if step_x == 1 {
+        debug_assert_eq!(step_y, cb.stride() as isize);
+        debug_assert_eq!(step_y, cr.stride() as isize);
+        unsafe {
+            let (t0, mut t1, mut t2, t3) = {
+                let (sb, sr) = (cb.span::<4, 8>(0, -2), cr.span::<4, 8>(0, -2));
+                let (pb, stride_b) = sb.as_ptr_and_stride();
+                let (pr, stride_r) = sr.as_ptr_and_stride();
+                let row = |y: usize| {
+                    _mm_setr_epi32(
+                        (pb.add(y * stride_b) as *const i32).read_unaligned(),
+                        (pr.add(y * stride_r) as *const i32).read_unaligned(),
+                        0,
+                        0,
+                    )
+                };
+                transpose_chroma_4x8_u8(
+                    row(0), row(1), row(2), row(3), row(4), row(5), row(6), row(7),
+                )
+            };
 
-            let p0 = _mm_loadu_si128(arr_p0.as_ptr() as *const __m128i);
-            let q0 = _mm_loadu_si128(arr_q0.as_ptr() as *const __m128i);
+            deblock_chroma_eq4_vec(t0, &mut t1, &mut t2, t3, alpha, beta);
 
-            let cb_pairs = _mm_unpacklo_epi8(p0, q0);
-            let cr_pairs = _mm_unpackhi_epi8(p0, q0);
+            let cb_pairs = _mm_unpacklo_epi8(t1, t2);
+            let cr_pairs = _mm_unpackhi_epi8(t1, t2);
 
             let mut out_cb = [[0u8; 2]; 8];
             let mut out_cr = [[0u8; 2]; 8];
             _mm_storeu_si128(out_cb.as_mut_ptr() as *mut __m128i, cb_pairs);
             _mm_storeu_si128(out_cr.as_mut_ptr() as *mut __m128i, cr_pairs);
 
-            // Write back only the columns the filter can modify: the span read above is
-            // wider for the outer taps, and at `iEdge == 0` those outer columns belong to
-            // the previous macroblock.
             cb.set_block::<2, 8>(0, -1, &out_cb);
             cr.set_block::<2, 8>(0, -1, &out_cr);
         }

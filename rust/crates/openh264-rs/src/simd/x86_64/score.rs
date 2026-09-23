@@ -42,38 +42,21 @@ fn nonzero_mask(dct: &[i16; 16]) -> u32 {
 /// JVT-O079 CAVLC bit-cost estimate: for each run of zeros between non-zero
 /// coefficients (scanning from the high end), add the run-length penalty.
 ///
+/// Since `KI_TRUN_TABLE` is `[3, 2, 2, 1, 1, 1, 0, ...]`, each non-zero coefficient at
+/// bit `p` of `nz` contributes `[run(p) <= 0] + [run(p) <= 2] + [run(p) <= 5]`, where
+/// `run(p)` is the distance to the nearest preceding non-zero bit (or virtual bit `-1`).
+///
 /// C++: `WelsCalculateSingleCtr4x4_sse2`, `codec/encoder/core/x86/score.asm:263`.
 #[inline(always)]
 pub fn calculate_single_ctr_4x4(dct: &[i16; 16]) -> i32 {
-    use crate::encoder::encode_mb_aux::KI_TRUN_TABLE;
-
     let nz = nonzero_mask(dct);
-    if nz == 0 {
-        return 0;
-    }
-
-    let mut single_ctr: i32 = 0;
-    let mut curr_idx = 31 - nz.leading_zeros() as i32;
-    let mut m = nz ^ (1 << curr_idx);
-
-    while curr_idx >= 0 {
-        let run = if m != 0 {
-            let next_idx = 31 - m.leading_zeros() as i32;
-            m ^= 1 << next_idx;
-            let r = curr_idx - next_idx - 1;
-            curr_idx = next_idx;
-            r
-        } else {
-            let r = curr_idx;
-            curr_idx = -1;
-            r
-        };
-        if (run as usize) < KI_TRUN_TABLE.len() {
-            single_ctr += KI_TRUN_TABLE[run as usize];
-        }
-    }
-
-    single_ctr
+    let p0 = (nz << 1) | 1;
+    let p2 = p0 | (p0 << 1) | (p0 << 2);
+    let p5 = p2 | (p2 << 3);
+    let c0 = (nz & p0) as u64;
+    let c2 = (nz & p2) as u64;
+    let c5 = (nz & p5) as u64;
+    (c0 | (c2 << 16) | (c5 << 32)).count_ones() as i32
 }
 
 // ============================================================================

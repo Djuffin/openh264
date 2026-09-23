@@ -448,28 +448,28 @@ pub fn hadamard_t4_dc(luma_dc: &mut [i16; 16], dct: &[i16; 241]) {
     }
 }
 
-/// The 4x4 zigzag permutation: raster position of scan position `i`.
-const ZIGZAG: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
-
 /// All 16 coefficients of `dct`, zigzag-reordered into `level`.
 ///
 /// C++: `WelsScan4x4DcAc_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
 /// (`WelsScan4x4Dc` is the same permutation; its shim calls in here too.)
+#[inline(always)]
 pub fn scan_4x4_dc_ac(level: &mut [i16; 16], dct: &[i16; 16]) {
-    for (l, &z) in level.iter_mut().zip(ZIGZAG.iter()) {
-        *l = dct[z];
-    }
+    *level = [
+        dct[0], dct[1], dct[4], dct[8], dct[5], dct[2], dct[3], dct[6], dct[9], dct[12], dct[13],
+        dct[10], dct[7], dct[11], dct[14], dct[15],
+    ];
 }
 
 /// The 15 AC coefficients of `dct` (DC omitted), zigzag-reordered into
 /// `level[0..15]`, with `level[15] = 0`.
 ///
 /// C++: `WelsScan4x4Ac_c`, `codec/encoder/core/src/encode_mb_aux.cpp`.
+#[inline(always)]
 pub fn scan_4x4_ac(level: &mut [i16; 16], dct: &[i16; 16]) {
-    for (l, &z) in level.iter_mut().zip(ZIGZAG[1..].iter()) {
-        *l = dct[z];
-    }
-    level[15] = 0;
+    *level = [
+        dct[1], dct[4], dct[8], dct[5], dct[2], dct[3], dct[6], dct[9], dct[12], dct[13], dct[10],
+        dct[7], dct[11], dct[14], dct[15], 0,
+    ];
 }
 
 /// JVT-O079 CAVLC bit-cost estimate: for each run of zeros between non-zero
@@ -549,6 +549,7 @@ pub fn WelsDctFourT4_c(
     dct_four_4x4(dct, pPixel1, pPixel2);
 }
 
+#[inline(always)]
 pub fn WelsDctT4_sse2(
     pDct: &mut [i16],
     pPixel1: &crate::encoder::rec_view::RecCursor<'_>,
@@ -558,6 +559,7 @@ pub fn WelsDctT4_sse2(
     kernels::dct::dct_4x4(dct, pPixel1, pPixel2);
 }
 
+#[inline(always)]
 pub fn WelsDctFourT4_sse2(
     pDct: &mut [i16],
     pPixel1: &crate::encoder::rec_view::RecCursor<'_>,

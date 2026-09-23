@@ -67,20 +67,20 @@ impl<T: Copy> SharedCells<T> {
     /// (`Vec::as_mut_ptr`, `PaddedPlane::root_ptr`) and **never** through a
     /// slice: `&mut [T]` is a `Unique` retag over the whole buffer, so a base
     /// taken that way is a child that the next such borrow pops.
-    #[inline]
+    #[inline(always)]
     fn from_parts(base: *mut T, len: usize) -> Self {
         Self { base, len }
     }
 
     /// Captures a `Vec`'s elements for the view's lifetime.
-    #[inline]
+    #[inline(always)]
     fn capture(v: &mut Vec<T>) -> Self {
         Self::from_parts(v.as_mut_ptr(), v.len())
     }
 
     /// An empty capture, for a picture allocated without `bNeedMbInfo`
     /// (`picture_handle.cpp:104`).
-    #[inline]
+    #[inline(always)]
     fn empty() -> Self {
         Self::from_parts(std::ptr::NonNull::dangling().as_ptr(), 0)
     }
@@ -94,17 +94,17 @@ impl<T: Copy> SharedCells<T> {
     /// lifetime, so the range is allocated and no `&mut` to it exists. A `Cell` retag is
     /// `SharedReadWrite`, which performs no memory access, so this call cannot race.
     #[allow(unsafe_code)]
-    #[inline]
+    #[inline(always)]
     fn cells(&self) -> &[Cell<T>] {
         unsafe { std::slice::from_raw_parts(self.base.cast::<Cell<T>>(), self.len) }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.len
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -135,7 +135,7 @@ pub struct SharedPlane {
     origin: usize,
 }
 
-#[inline]
+#[inline(always)]
 fn idx(center: usize, dx: isize, dy: isize, stride: usize) -> usize {
     (center as isize + dy * stride as isize + dx) as usize
 }
@@ -166,25 +166,25 @@ impl SharedPlane {
     }
 
     /// Bytes per row — the C++ `iLineSize[i]`.
-    #[inline]
+    #[inline(always)]
     pub fn stride(&self) -> usize {
         self.stride
     }
 
     /// True where the picture was built without this plane at all.
-    #[inline]
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.cells.is_empty()
     }
 
     /// Sample at logical `(x, y)`.
-    #[inline]
+    #[inline(always)]
     pub fn at(&self, x: isize, y: isize) -> u8 {
         self.cells.cells()[idx(self.origin, x, y, self.stride)].get()
     }
 
     /// Writes the sample at logical `(x, y)`.
-    #[inline]
+    #[inline(always)]
     pub fn set(&self, x: isize, y: isize, v: u8) {
         self.cells.cells()[idx(self.origin, x, y, self.stride)].set(v);
     }
@@ -194,7 +194,7 @@ impl SharedPlane {
     ///
     /// The stride bound the spans rely on is the plane's, checked in [`new`](Self::new);
     /// see [`PlaneCursor::new`](crate::safe::plane::PlaneCursor::new) for what it buys.
-    #[inline]
+    #[inline(always)]
     pub fn cursor(&self, x: isize, y: isize) -> RecCursor<'_> {
         debug_assert!(
             self.stride <= u32::MAX as usize,
@@ -223,13 +223,13 @@ pub struct RecCursor<'a> {
 
 impl<'a> RecCursor<'a> {
     /// Sample at `(dx, dy)` from the anchor.
-    #[inline]
+    #[inline(always)]
     pub fn at(&self, dx: isize, dy: isize) -> u8 {
         self.cells[idx(self.center, dx, dy, self.stride)].get()
     }
 
     /// Writes the sample at `(dx, dy)` from the anchor.
-    #[inline]
+    #[inline(always)]
     pub fn set(&self, dx: isize, dy: isize, v: u8) {
         self.cells[idx(self.center, dx, dy, self.stride)].set(v);
     }
@@ -239,7 +239,7 @@ impl<'a> RecCursor<'a> {
     /// By value rather than by reference because a shared view cannot lend
     /// `&[u8]` into cells; every reconstruction kernel's row is 4, 8 or 16
     /// samples, so the copy is a register-file move.
-    #[inline]
+    #[inline(always)]
     pub fn row<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
         let start = idx(self.center, dx0, dy, self.stride);
         let row = &self.cells[start..][..N];
@@ -280,7 +280,7 @@ impl<'a> RecCursor<'a> {
     ///
     /// # Panics
     /// If the block leaves the buffer.
-    #[inline]
+    #[inline(always)]
     pub fn block_span(&self, dy0: isize, dx0: isize, w: usize, h: usize) -> &'a [Cell<u8>] {
         let start = idx(self.center, dx0, dy0, self.stride);
         let span = if h == 0 { 0 } else { (h - 1) * self.stride + w };
@@ -301,7 +301,7 @@ impl<'a> RecCursor<'a> {
     ///
     /// # Panics
     /// If the row leaves the buffer.
-    #[inline]
+    #[inline(always)]
     pub fn write_row<const N: usize>(&self, dy: isize, dx0: isize, src: &[u8; N]) {
         let start = idx(self.center, dx0, dy, self.stride);
         let row = &self.cells[start..][..N];
@@ -321,7 +321,7 @@ impl<'a> RecCursor<'a> {
     /// `SMbCache` feed the very kernel a shared picture plane feeds, so a dispatch slot
     /// needs **one** operand type rather than two — which a function-pointer table
     /// cannot express otherwise, being unable to be generic.
-    #[inline]
+    #[inline(always)]
     pub fn over_owned(buf: &'a mut [u8], center: usize, stride: usize) -> Self {
         assert!(stride <= u32::MAX as usize, "stride {stride} exceeds u32");
         Self {
@@ -332,7 +332,7 @@ impl<'a> RecCursor<'a> {
     }
 
     /// The same anchor moved by `(dx, dy)`.
-    #[inline]
+    #[inline(always)]
     #[must_use]
     pub fn advance(self, dx: isize, dy: isize) -> Self {
         Self {
@@ -342,7 +342,7 @@ impl<'a> RecCursor<'a> {
     }
 
     /// Bytes per row.
-    #[inline]
+    #[inline(always)]
     pub fn stride(&self) -> usize {
         self.stride
     }
@@ -373,7 +373,7 @@ impl<'a> CellSpan<'a> {
     ///
     /// # Panics
     /// If the block leaves `cells`.
-    #[inline]
+    #[inline(always)]
     fn cut(cells: &'a [Cell<u8>], start: usize, stride: usize, w: usize, h: usize) -> Self {
         debug_assert!(stride <= u32::MAX as usize, "cursor stride bound violated");
         let stride = stride as u32;
@@ -401,7 +401,7 @@ impl<'a> CellSpan<'a> {
     /// # Panics
     /// If the row leaves the span, which a caller writing the block the span was cut
     /// for cannot reach.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn row_cells<const W: usize>(&self, y: usize) -> &'a [Cell<u8>; W] {
         self.cells[y * self.stride as usize..][..W]
             .try_into()
@@ -413,13 +413,13 @@ impl crate::safe::plane::BlockRows for CellSpan<'_> {
     /// Cells cannot be `copy_from_slice`d, so the row is read entry by entry; over a
     /// slice the compiler knows to be `W` long that is `W` byte loads it coalesces
     /// into one vector load, not `W` bounds checks.
-    #[inline]
+    #[inline(always)]
     fn row<const W: usize>(&self, y: usize, x: usize) -> [u8; W] {
         let row = &self.cells[y * self.stride as usize + x..][..W];
         std::array::from_fn(|i| row[i].get())
     }
 
-    #[inline]
+    #[inline(always)]
     fn window<const W: usize>(&self, y: usize, h: usize) -> Self {
         let stride = self.stride as usize;
         let len = if h == 0 { 0 } else { (h - 1) * stride + W };
@@ -429,14 +429,14 @@ impl crate::safe::plane::BlockRows for CellSpan<'_> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn as_ptr_and_stride(&self) -> (*const u8, usize) {
         (self.cells.as_ptr() as *const u8, self.stride as usize)
     }
 }
 
 impl crate::safe::plane::PlaneSamples for RecCursor<'_> {
-    #[inline]
+    #[inline(always)]
     fn stride(&self) -> usize {
         RecCursor::stride(self)
     }
@@ -444,21 +444,21 @@ impl crate::safe::plane::PlaneSamples for RecCursor<'_> {
     /// `&mut self` to fit the trait, though the write itself needs only `&self`
     /// — the cursor value is the caller's, and what the seam withholds is a
     /// `&mut [u8]` into the plane, which this cannot produce.
-    #[inline]
+    #[inline(always)]
     fn set(&mut self, dx: isize, dy: isize, v: u8) {
         RecCursor::set(self, dx, dy, v)
     }
 
     /// The trait's default is a `set` per sample, which on this cursor is `N`
     /// bounds-checked cell stores; [`RecCursor::write_row`] is one store.
-    #[inline]
+    #[inline(always)]
     fn set_row_n<const N: usize>(&mut self, dy: isize, dx0: isize, val: &[u8; N]) {
         RecCursor::write_row::<N>(self, dy, dx0, val)
     }
 
     /// One cut span and `H` folded row writes, where the default would re-derive and
     /// re-check every row; see [`PlaneSamples::set_block`](crate::safe::plane::PlaneSamples::set_block).
-    #[inline]
+    #[inline(always)]
     fn set_block<const W: usize, const H: usize>(
         &mut self,
         dy0: isize,
@@ -475,12 +475,12 @@ impl crate::safe::plane::PlaneSamples for RecCursor<'_> {
 }
 
 impl crate::safe::plane::RefSamples for RecCursor<'_> {
-    #[inline]
+    #[inline(always)]
     fn at(&self, dx: isize, dy: isize) -> u8 {
         RecCursor::at(self, dx, dy)
     }
 
-    #[inline]
+    #[inline(always)]
     fn row_n<const N: usize>(&self, dy: isize, dx0: isize) -> [u8; N] {
         RecCursor::row::<N>(self, dy, dx0)
     }
@@ -506,7 +506,7 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
     where
         Self: 'a;
 
-    #[inline]
+    #[inline(always)]
     fn span<const W: usize, const H: usize>(&self, dy0: isize, dx0: isize) -> CellSpan<'_> {
         CellSpan::cut(
             self.cells,
@@ -523,7 +523,7 @@ impl crate::safe::plane::RefSamples for RecCursor<'_> {
     where
         Self: 'a;
 
-    #[inline]
+    #[inline(always)]
     fn advance(self, dx: isize, dy: isize) -> Self {
         RecCursor::advance(self, dx, dy)
     }

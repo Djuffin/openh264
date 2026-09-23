@@ -9,19 +9,19 @@
 //! probes at span rows `j` and `j + 2` of column 1, the left and right at row `j + 1`
 //! of columns 0 and 2. Per group rather than once per block because only a constant
 //! row offset inside a span folds; `G` is sized so the group's walk unrolls.
-#![allow(unsafe_code)]
+#![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use crate::safe::plane::{BlockRows, RefSamples};
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
 // ============================================================================
-// Internal SSE2 Kernels
+// Internal SSE2 & AVX2 Kernels
 // ============================================================================
 
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
-pub fn sad_16x<S: RefSamples, const H: usize>(
+#[inline(always)]
+pub unsafe fn sad_16x<S: RefSamples, const H: usize>(
     sample1: &S,
     sample2: &S,
     dx: isize,
@@ -29,12 +29,12 @@ pub fn sad_16x<S: RefSamples, const H: usize>(
 ) -> i32 {
     unsafe {
         let (s1, s2) = (sample1.span::<16, H>(0, 0), sample2.span::<16, H>(dy, dx));
+        let (p1, stride1) = s1.as_ptr_and_stride();
+        let (p2, stride2) = s2.as_ptr_and_stride();
         let mut acc = _mm_setzero_si128();
         for y in 0..H {
-            let r1 = s1.row::<16>(y, 0);
-            let r2 = s2.row::<16>(y, 0);
-            let v1 = _mm_loadu_si128(r1.as_ptr() as *const __m128i);
-            let v2 = _mm_loadu_si128(r2.as_ptr() as *const __m128i);
+            let v1 = _mm_loadu_si128(p1.add(y * stride1) as *const __m128i);
+            let v2 = _mm_loadu_si128(p2.add(y * stride2) as *const __m128i);
             acc = _mm_add_epi64(acc, _mm_sad_epu8(v1, v2));
         }
         let hi = _mm_srli_si128(acc, 8);
@@ -45,12 +45,7 @@ pub fn sad_16x<S: RefSamples, const H: usize>(
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-pub fn sad_16x_avx2<S: RefSamples, const H: usize>(
-    sample1: &S,
-    sample2: &S,
-    dx: isize,
-    dy: isize,
-) -> i32 {
+pub fn sad_16x_avx2<S: RefSamples, const H: usize>(sample1: &S, sample2: &S) -> i32 {
     // The loop steps two rows per iteration, so an odd `H` would read and accumulate
     // row `H` — one past the block.
     const {
@@ -60,19 +55,16 @@ pub fn sad_16x_avx2<S: RefSamples, const H: usize>(
         )
     };
     unsafe {
-        let (s1, s2) = (sample1.span::<16, H>(0, 0), sample2.span::<16, H>(dy, dx));
+        let (s1, s2) = (sample1.span::<16, H>(0, 0), sample2.span::<16, H>(0, 0));
+        let (p1, stride1) = s1.as_ptr_and_stride();
+        let (p2, stride2) = s2.as_ptr_and_stride();
         let mut acc = _mm256_setzero_si256();
         let mut y = 0;
         while y < H {
-            let r1_0 = s1.row::<16>(y, 0);
-            let r2_0 = s2.row::<16>(y, 0);
-            let r1_1 = s1.row::<16>(y + 1, 0);
-            let r2_1 = s2.row::<16>(y + 1, 0);
-
-            let v1_0 = _mm_loadu_si128(r1_0.as_ptr() as *const __m128i);
-            let v2_0 = _mm_loadu_si128(r2_0.as_ptr() as *const __m128i);
-            let v1_1 = _mm_loadu_si128(r1_1.as_ptr() as *const __m128i);
-            let v2_1 = _mm_loadu_si128(r2_1.as_ptr() as *const __m128i);
+            let v1_0 = _mm_loadu_si128(p1.add(y * stride1) as *const __m128i);
+            let v2_0 = _mm_loadu_si128(p2.add(y * stride2) as *const __m128i);
+            let v1_1 = _mm_loadu_si128(p1.add((y + 1) * stride1) as *const __m128i);
+            let v2_1 = _mm_loadu_si128(p2.add((y + 1) * stride2) as *const __m128i);
 
             let v1 = _mm256_set_m128i(v1_1, v1_0);
             let v2 = _mm256_set_m128i(v2_1, v2_0);
@@ -90,8 +82,8 @@ pub fn sad_16x_avx2<S: RefSamples, const H: usize>(
 }
 
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
-pub fn sad_8x<S: RefSamples, const H: usize>(
+#[inline(always)]
+pub unsafe fn sad_8x<S: RefSamples, const H: usize>(
     sample1: &S,
     sample2: &S,
     dx: isize,
@@ -99,12 +91,12 @@ pub fn sad_8x<S: RefSamples, const H: usize>(
 ) -> i32 {
     unsafe {
         let (s1, s2) = (sample1.span::<8, H>(0, 0), sample2.span::<8, H>(dy, dx));
+        let (p1, stride1) = s1.as_ptr_and_stride();
+        let (p2, stride2) = s2.as_ptr_and_stride();
         let mut acc = _mm_setzero_si128();
         for y in 0..H {
-            let r1 = s1.row::<8>(y, 0);
-            let r2 = s2.row::<8>(y, 0);
-            let v1 = _mm_loadl_epi64(r1.as_ptr() as *const __m128i);
-            let v2 = _mm_loadl_epi64(r2.as_ptr() as *const __m128i);
+            let v1 = _mm_loadl_epi64(p1.add(y * stride1) as *const __m128i);
+            let v2 = _mm_loadl_epi64(p2.add(y * stride2) as *const __m128i);
             acc = _mm_add_epi64(acc, _mm_sad_epu8(v1, v2));
         }
         _mm_cvtsi128_si32(acc)
@@ -112,32 +104,109 @@ pub fn sad_8x<S: RefSamples, const H: usize>(
 }
 
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
-pub fn sad_4x<S: RefSamples, const H: usize>(
+#[inline(always)]
+pub unsafe fn sad_4x<S: RefSamples, const H: usize>(
     sample1: &S,
     sample2: &S,
     dx: isize,
     dy: isize,
 ) -> i32 {
-    let (s1, s2) = (sample1.span::<4, H>(0, 0), sample2.span::<4, H>(dy, dx));
-    let mut acc = _mm_setzero_si128();
-    for y in 0..H {
-        let r1 = s1.row::<4>(y, 0);
-        let r2 = s2.row::<4>(y, 0);
-        let v1 = _mm_cvtsi32_si128(i32::from_ne_bytes(r1));
-        let v2 = _mm_cvtsi32_si128(i32::from_ne_bytes(r2));
-        acc = _mm_add_epi64(acc, _mm_sad_epu8(v1, v2));
+    unsafe {
+        let (s1, s2) = (sample1.span::<4, H>(0, 0), sample2.span::<4, H>(dy, dx));
+        let (p1, stride1) = s1.as_ptr_and_stride();
+        let (p2, stride2) = s2.as_ptr_and_stride();
+        let mut acc = _mm_setzero_si128();
+        for y in 0..H {
+            let v1 = _mm_cvtsi32_si128((p1.add(y * stride1) as *const i32).read_unaligned());
+            let v2 = _mm_cvtsi32_si128((p2.add(y * stride2) as *const i32).read_unaligned());
+            acc = _mm_add_epi64(acc, _mm_sad_epu8(v1, v2));
+        }
+        _mm_cvtsi128_si32(acc)
     }
-    _mm_cvtsi128_si32(acc)
 }
 
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
-pub fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
+#[target_feature(enable = "avx2")]
+unsafe fn sample_sad_four_16x_avx2<S: RefSamples, const H: usize, const HW: usize>(
     sample1: &S,
     sample2: &S,
     sad: &mut [i32; 4],
 ) {
+    const { assert!(H % 2 == 0, "H must be even") };
+    const { assert!(HW == H + 2, "HW must equal H + 2") };
+    let s1 = sample1.span::<16, H>(0, 0);
+    let s2 = sample2.span::<18, HW>(-1, -1);
+    let (p1, stride1) = s1.as_ptr_and_stride();
+    let (p2, stride2) = s2.as_ptr_and_stride();
+
+    let mut acc0 = _mm256_setzero_si256();
+    let mut acc1 = _mm256_setzero_si256();
+    let mut acc2 = _mm256_setzero_si256();
+    let mut acc3 = _mm256_setzero_si256();
+
+    let mut v2_r0 = _mm_loadu_si128(p2.add(1) as *const __m128i);
+    let mut v2_r1 = _mm_loadu_si128(p2.add(stride2 + 1) as *const __m128i);
+
+    let mut y = 0usize;
+    while y < H {
+        let v1_0 = _mm_loadu_si128(p1.add(y * stride1) as *const __m128i);
+        let v1_1 = _mm_loadu_si128(p1.add((y + 1) * stride1) as *const __m128i);
+        let v1 = _mm256_set_m128i(v1_1, v1_0);
+
+        let p2_r1 = p2.add((y + 1) * stride2);
+        let p2_r2 = p2.add((y + 2) * stride2);
+        let p2_r3 = p2.add((y + 3) * stride2);
+
+        let v2_r2 = _mm_loadu_si128(p2_r2.add(1) as *const __m128i);
+        let v2_r3 = _mm_loadu_si128(p2_r3.add(1) as *const __m128i);
+
+        let v2_up = _mm256_set_m128i(v2_r1, v2_r0);
+        let v2_dn = _mm256_set_m128i(v2_r3, v2_r2);
+
+        let v2_lt_0 = _mm_loadu_si128(p2_r1 as *const __m128i);
+        let v2_lt_1 = _mm_loadu_si128(p2_r2 as *const __m128i);
+        let v2_lt = _mm256_set_m128i(v2_lt_1, v2_lt_0);
+
+        let v2_rt_0 = _mm_loadu_si128(p2_r1.add(2) as *const __m128i);
+        let v2_rt_1 = _mm_loadu_si128(p2_r2.add(2) as *const __m128i);
+        let v2_rt = _mm256_set_m128i(v2_rt_1, v2_rt_0);
+
+        acc0 = _mm256_add_epi64(acc0, _mm256_sad_epu8(v1, v2_up));
+        acc1 = _mm256_add_epi64(acc1, _mm256_sad_epu8(v1, v2_dn));
+        acc2 = _mm256_add_epi64(acc2, _mm256_sad_epu8(v1, v2_lt));
+        acc3 = _mm256_add_epi64(acc3, _mm256_sad_epu8(v1, v2_rt));
+
+        v2_r0 = v2_r2;
+        v2_r1 = v2_r3;
+        y += 2;
+    }
+
+    #[inline(always)]
+    unsafe fn reduce256(acc: __m256i) -> i32 {
+        let lo = _mm256_castsi256_si128(acc);
+        let hi = _mm256_extracti128_si256(acc, 1);
+        let sum128 = _mm_add_epi64(lo, hi);
+        let sum_hi = _mm_srli_si128(sum128, 8);
+        _mm_cvtsi128_si32(_mm_add_epi32(sum128, sum_hi))
+    }
+
+    sad[0] = reduce256(acc0);
+    sad[1] = reduce256(acc1);
+    sad[2] = reduce256(acc2);
+    sad[3] = reduce256(acc3);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub unsafe fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
+    sample1: &S,
+    sample2: &S,
+    sad: &mut [i32; 4],
+) {
+    if crate::simd::has_avx2() {
+        unsafe { sample_sad_four_16x_avx2::<S, H, HW>(sample1, sample2, sad) };
+        return;
+    }
     unsafe {
         const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
         const {
@@ -153,38 +222,32 @@ pub fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const
 
         let s1 = sample1.span::<16, H>(0, 0);
         let s2 = sample2.span::<18, HW>(-1, -1);
-        let mut y = 0usize;
-        while y < H {
-            let s1 = s1.window::<16>(y, G);
-            let s2 = s2.window::<18>(y, G + 2);
-            for j in 0..G {
-                let r1 = s1.row::<16>(j, 0);
-                let v1 = _mm_loadu_si128(r1.as_ptr() as *const __m128i);
+        let (p1, stride1) = s1.as_ptr_and_stride();
+        let (p2, stride2) = s2.as_ptr_and_stride();
 
-                let r2_up = s2.row::<16>(j, 1);
-                let r2_dn = s2.row::<16>(j + 2, 1);
-                let r2_lt = s2.row::<16>(j + 1, 0);
-                let r2_rt = s2.row::<16>(j + 1, 2);
+        let mut v2_up = _mm_loadu_si128(p2.add(1) as *const __m128i);
+        let mut v2_mid = _mm_loadu_si128(p2.add(stride2 + 1) as *const __m128i);
 
-                let v2_up = _mm_loadu_si128(r2_up.as_ptr() as *const __m128i);
-                let v2_dn = _mm_loadu_si128(r2_dn.as_ptr() as *const __m128i);
-                let v2_lt = _mm_loadu_si128(r2_lt.as_ptr() as *const __m128i);
-                let v2_rt = _mm_loadu_si128(r2_rt.as_ptr() as *const __m128i);
+        for y in 0..H {
+            let v1 = _mm_loadu_si128(p1.add(y * stride1) as *const __m128i);
+            let p2_mid = p2.add((y + 1) * stride2);
+            let v2_dn = _mm_loadu_si128(p2.add((y + 2) * stride2 + 1) as *const __m128i);
+            let v2_lt = _mm_loadu_si128(p2_mid as *const __m128i);
+            let v2_rt = _mm_loadu_si128(p2_mid.add(2) as *const __m128i);
 
-                acc0 = _mm_add_epi64(acc0, _mm_sad_epu8(v1, v2_up));
-                acc1 = _mm_add_epi64(acc1, _mm_sad_epu8(v1, v2_dn));
-                acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
-                acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
-            }
-            y += G;
+            acc0 = _mm_add_epi64(acc0, _mm_sad_epu8(v1, v2_up));
+            acc1 = _mm_add_epi64(acc1, _mm_sad_epu8(v1, v2_dn));
+            acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
+            acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
+
+            v2_up = v2_mid;
+            v2_mid = v2_dn;
         }
         #[inline(always)]
         unsafe fn reduce16(acc: __m128i) -> i32 {
-            unsafe {
-                let hi = _mm_srli_si128(acc, 8);
-                let sum = _mm_add_epi32(acc, hi);
-                _mm_cvtsi128_si32(sum)
-            }
+            let hi = _mm_srli_si128(acc, 8);
+            let sum = _mm_add_epi32(acc, hi);
+            _mm_cvtsi128_si32(sum)
         }
 
         sad[0] = reduce16(acc0);
@@ -195,8 +258,8 @@ pub fn sample_sad_four_16x<S: RefSamples, const H: usize, const HW: usize, const
 }
 
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
-pub fn sample_sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
+#[inline(always)]
+pub unsafe fn sample_sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sample1: &S,
     sample2: &S,
     sad: &mut [i32; 4],
@@ -216,30 +279,26 @@ pub fn sample_sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const 
 
         let s1 = sample1.span::<8, H>(0, 0);
         let s2 = sample2.span::<10, HW>(-1, -1);
-        let mut y = 0usize;
-        while y < H {
-            let s1 = s1.window::<8>(y, G);
-            let s2 = s2.window::<10>(y, G + 2);
-            for j in 0..G {
-                let r1 = s1.row::<8>(j, 0);
-                let v1 = _mm_loadl_epi64(r1.as_ptr() as *const __m128i);
+        let (p1, stride1) = s1.as_ptr_and_stride();
+        let (p2, stride2) = s2.as_ptr_and_stride();
 
-                let r2_up = s2.row::<8>(j, 1);
-                let r2_dn = s2.row::<8>(j + 2, 1);
-                let r2_lt = s2.row::<8>(j + 1, 0);
-                let r2_rt = s2.row::<8>(j + 1, 2);
+        let mut v2_up = _mm_loadl_epi64(p2.add(1) as *const __m128i);
+        let mut v2_mid = _mm_loadl_epi64(p2.add(stride2 + 1) as *const __m128i);
 
-                let v2_up = _mm_loadl_epi64(r2_up.as_ptr() as *const __m128i);
-                let v2_dn = _mm_loadl_epi64(r2_dn.as_ptr() as *const __m128i);
-                let v2_lt = _mm_loadl_epi64(r2_lt.as_ptr() as *const __m128i);
-                let v2_rt = _mm_loadl_epi64(r2_rt.as_ptr() as *const __m128i);
+        for y in 0..H {
+            let v1 = _mm_loadl_epi64(p1.add(y * stride1) as *const __m128i);
+            let p2_mid = p2.add((y + 1) * stride2);
+            let v2_dn = _mm_loadl_epi64(p2.add((y + 2) * stride2 + 1) as *const __m128i);
+            let v2_lt = _mm_loadl_epi64(p2_mid as *const __m128i);
+            let v2_rt = _mm_loadl_epi64(p2_mid.add(2) as *const __m128i);
 
-                acc0 = _mm_add_epi64(acc0, _mm_sad_epu8(v1, v2_up));
-                acc1 = _mm_add_epi64(acc1, _mm_sad_epu8(v1, v2_dn));
-                acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
-                acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
-            }
-            y += G;
+            acc0 = _mm_add_epi64(acc0, _mm_sad_epu8(v1, v2_up));
+            acc1 = _mm_add_epi64(acc1, _mm_sad_epu8(v1, v2_dn));
+            acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
+            acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
+
+            v2_up = v2_mid;
+            v2_mid = v2_dn;
         }
         sad[0] = _mm_cvtsi128_si32(acc0);
         sad[1] = _mm_cvtsi128_si32(acc1);
@@ -249,55 +308,53 @@ pub fn sample_sad_four_8x<S: RefSamples, const H: usize, const HW: usize, const 
 }
 
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse2")]
-pub fn sample_sad_four_4x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
+#[inline(always)]
+pub unsafe fn sample_sad_four_4x<S: RefSamples, const H: usize, const HW: usize, const G: usize>(
     sample1: &S,
     sample2: &S,
     sad: &mut [i32; 4],
 ) {
-    const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
-    const {
-        assert!(
-            HW == H + 2,
-            "the probe span is two rows taller than the block"
-        )
-    };
-    let mut acc0 = _mm_setzero_si128();
-    let mut acc1 = _mm_setzero_si128();
-    let mut acc2 = _mm_setzero_si128();
-    let mut acc3 = _mm_setzero_si128();
+    unsafe {
+        const { assert!(H % G == 0, "the block is a whole number of G-row cuts") };
+        const {
+            assert!(
+                HW == H + 2,
+                "the probe span is two rows taller than the block"
+            )
+        };
+        let mut acc0 = _mm_setzero_si128();
+        let mut acc1 = _mm_setzero_si128();
+        let mut acc2 = _mm_setzero_si128();
+        let mut acc3 = _mm_setzero_si128();
 
-    let s1 = sample1.span::<4, H>(0, 0);
-    let s2 = sample2.span::<6, HW>(-1, -1);
-    let mut y = 0usize;
-    while y < H {
-        let s1 = s1.window::<4>(y, G);
-        let s2 = s2.window::<6>(y, G + 2);
-        for j in 0..G {
-            let r1 = s1.row::<4>(j, 0);
-            let v1 = _mm_cvtsi32_si128(i32::from_ne_bytes(r1));
+        let s1 = sample1.span::<4, H>(0, 0);
+        let s2 = sample2.span::<6, HW>(-1, -1);
+        let (p1, stride1) = s1.as_ptr_and_stride();
+        let (p2, stride2) = s2.as_ptr_and_stride();
 
-            let r2_up = s2.row::<4>(j, 1);
-            let r2_dn = s2.row::<4>(j + 2, 1);
-            let r2_lt = s2.row::<4>(j + 1, 0);
-            let r2_rt = s2.row::<4>(j + 1, 2);
+        let mut v2_up = _mm_cvtsi32_si128((p2.add(1) as *const i32).read_unaligned());
+        let mut v2_mid = _mm_cvtsi32_si128((p2.add(stride2 + 1) as *const i32).read_unaligned());
 
-            let v2_up = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_up));
-            let v2_dn = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_dn));
-            let v2_lt = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_lt));
-            let v2_rt = _mm_cvtsi32_si128(i32::from_ne_bytes(r2_rt));
+        for y in 0..H {
+            let v1 = _mm_cvtsi32_si128((p1.add(y * stride1) as *const i32).read_unaligned());
+            let p2_mid = p2.add((y + 1) * stride2);
+            let v2_dn = _mm_cvtsi32_si128((p2.add((y + 2) * stride2 + 1) as *const i32).read_unaligned());
+            let v2_lt = _mm_cvtsi32_si128((p2_mid as *const i32).read_unaligned());
+            let v2_rt = _mm_cvtsi32_si128((p2_mid.add(2) as *const i32).read_unaligned());
 
             acc0 = _mm_add_epi64(acc0, _mm_sad_epu8(v1, v2_up));
             acc1 = _mm_add_epi64(acc1, _mm_sad_epu8(v1, v2_dn));
             acc2 = _mm_add_epi64(acc2, _mm_sad_epu8(v1, v2_lt));
             acc3 = _mm_add_epi64(acc3, _mm_sad_epu8(v1, v2_rt));
+
+            v2_up = v2_mid;
+            v2_mid = v2_dn;
         }
-        y += G;
+        sad[0] = _mm_cvtsi128_si32(acc0);
+        sad[1] = _mm_cvtsi128_si32(acc1);
+        sad[2] = _mm_cvtsi128_si32(acc2);
+        sad[3] = _mm_cvtsi128_si32(acc3);
     }
-    sad[0] = _mm_cvtsi128_si32(acc0);
-    sad[1] = _mm_cvtsi128_si32(acc1);
-    sad[2] = _mm_cvtsi128_si32(acc2);
-    sad[3] = _mm_cvtsi128_si32(acc3);
 }
 
 // ============================================================================
@@ -318,7 +375,7 @@ pub fn sample_sad_16x16<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 #[inline(always)]
 pub(crate) fn sample_sad_16x16_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     // SAFETY: the caller established AVX2 support before installing this; see above.
-    unsafe { sad_16x_avx2::<S, 16>(sample1, sample2, 0, 0) }
+    unsafe { sad_16x_avx2::<S, 16>(sample1, sample2) }
 }
 
 #[inline(always)]
@@ -335,7 +392,7 @@ pub fn sample_sad_16x8<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
 #[inline(always)]
 pub(crate) fn sample_sad_16x8_avx2<S: RefSamples>(sample1: &S, sample2: &S) -> i32 {
     // SAFETY: the caller established AVX2 support before installing this; see above.
-    unsafe { sad_16x_avx2::<S, 8>(sample1, sample2, 0, 0) }
+    unsafe { sad_16x_avx2::<S, 8>(sample1, sample2) }
 }
 
 #[inline(always)]

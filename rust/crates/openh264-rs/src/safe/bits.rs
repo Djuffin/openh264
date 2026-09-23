@@ -518,7 +518,7 @@ impl Default for BsWriter {
 /// Stores `value` big-endian at `buf[pos..pos + 4]`.
 ///
 /// Mirrors `WRITE_BE_32` (`codec/encoder/core/inc/vlc_encoder.h`).
-#[inline]
+#[inline(always)]
 fn write_be_32(buf: &mut [u8], pos: usize, value: u32) {
     buf[pos..pos + 4].copy_from_slice(&value.to_be_bytes());
 }
@@ -527,7 +527,7 @@ impl BsWriter {
     /// A writer positioned at the start of a buffer.
     ///
     /// Mirrors `InitBits` (`codec/encoder/core/inc/vlc_encoder.h`).
-    #[inline]
+    #[inline(always)]
     pub fn new() -> Self {
         Self {
             pos: 0,
@@ -538,13 +538,13 @@ impl BsWriter {
 
     /// Bytes written so far — the C++ `pCurBuf - pStartBuf`. Whole words only; bits
     /// still in the accumulator are not counted (use [`bits_pos`](Self::bits_pos)).
-    #[inline]
+    #[inline(always)]
     pub fn pos(&self) -> usize {
         self.pos
     }
 
     /// Bits free in the accumulator — the C++ `iLeftBits`.
-    #[inline]
+    #[inline(always)]
     pub fn left_bits(&self) -> i32 {
         self.left_bits
     }
@@ -554,7 +554,7 @@ impl BsWriter {
     /// One caller: the CABAC slice tail (`WelsWriteSliceEndSyn`), where the arithmetic
     /// coder has written bytes through its own cursor into the same buffer and hands
     /// the position back.
-    #[inline]
+    #[inline(always)]
     pub fn at(pos: usize) -> Self {
         Self {
             pos,
@@ -566,7 +566,7 @@ impl BsWriter {
     /// The write position in bits.
     ///
     /// Mirrors `BsGetBitsPos`.
-    #[inline]
+    #[inline(always)]
     pub fn bits_pos(&self) -> i32 {
         ((self.pos as i32) << 3) + 32 - self.left_bits
     }
@@ -581,7 +581,7 @@ impl BsWriter {
     ///
     /// # Panics
     /// If fewer than 4 bytes remain at the current word position.
-    #[inline]
+    #[inline(always)]
     pub fn write_bits(&mut self, buf: &mut [u8], n: i32, value: u32) {
         if n < self.left_bits {
             self.cur_bits = (self.cur_bits << n) | value;
@@ -609,7 +609,7 @@ impl BsWriter {
     }
 
     /// Writes one bit. Mirrors `BsWriteOneBit`.
-    #[inline]
+    #[inline(always)]
     pub fn write_one_bit(&mut self, buf: &mut [u8], value: u32) {
         self.write_bits(buf, 1, value);
     }
@@ -620,7 +620,7 @@ impl BsWriter {
     ///
     /// # Panics
     /// On `u32::MAX`, where `value + 1` overflows.
-    #[inline]
+    #[inline(always)]
     pub fn write_ue(&mut self, buf: &mut [u8], value: u32) {
         self.write_bits(buf, size_ue(value) as i32, value + 1);
     }
@@ -629,15 +629,14 @@ impl BsWriter {
     ///
     /// The magnitude is taken with `unsigned_abs`, so `i32::MIN` encodes the wrapped
     /// value instead of overflowing.
-    #[inline]
+    #[inline(always)]
     pub fn write_se(&mut self, buf: &mut [u8], value: i32) {
-        if value == 0 {
-            self.write_one_bit(buf, 1);
-        } else if value > 0 {
-            self.write_ue(buf, ((value as u32) << 1) - 1);
+        let code = if value > 0 {
+            ((value as u32) << 1) - 1
         } else {
-            self.write_ue(buf, (value.unsigned_abs()) << 1);
-        }
+            value.unsigned_abs() << 1
+        };
+        self.write_ue(buf, code);
     }
 
     /// Flushes the accumulator, padding the last byte with zeros.
@@ -700,7 +699,7 @@ impl BsWriter {
 ///
 /// # Panics
 /// On `u32::MAX`.
-#[inline]
+#[inline(always)]
 pub fn size_ue(value: u32) -> u32 {
     // floor(log2(value + 1)) prefix zeros, one stop bit, that many suffix bits.
     2 * (31 - (value + 1).leading_zeros()) + 1

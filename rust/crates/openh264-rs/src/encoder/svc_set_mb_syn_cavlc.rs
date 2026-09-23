@@ -202,40 +202,45 @@ pub fn WriteBlockResidualCavlc(
     buf: &mut [u8],
     pBs: &mut BsWriter,
 ) -> i32 {
+    let nc_idx = g_kuiEncNcMapTable[iNC.clamp(0, 17) as usize] as usize;
+    if iCalRunLevelFlag == 0 {
+        let upCoeffToken = g_kuiVlcCoeffToken[nc_idx][0][0];
+        BsWriteBits(buf, &mut *pBs, upCoeffToken[1] as i32, upCoeffToken[0] as u32);
+        return ENC_RETURN_SUCCESS;
+    }
+
     let mut iLevel = [0i16; 16];
     let mut uiRun = [0u8; 16];
-
     let mut iTotalCoeffs = 0i32;
+
+    let _ = pFuncList;
+    let iTotalZeros = crate::simd::kernels::quant::cavlc_param_cal(
+        pCoffLevel,
+        &mut uiRun,
+        &mut iLevel,
+        &mut iTotalCoeffs,
+        iEndIdx,
+    );
+
+    if iTotalCoeffs == 0 {
+        let upCoeffToken = g_kuiVlcCoeffToken[nc_idx][0][0];
+        BsWriteBits(buf, &mut *pBs, upCoeffToken[1] as i32, upCoeffToken[0] as u32);
+        return ENC_RETURN_SUCCESS;
+    }
+
     let mut iTrailingOnes = 0i32;
-    let mut iTotalZeros = 0i32;
     let mut uiSign = 0u32;
-
-    if iCalRunLevelFlag != 0 {
-        let func = pFuncList.pfCavlcParamCal;
-
-        iTotalZeros = func(
-            pCoffLevel,
-            &mut uiRun,
-            &mut iLevel,
-            &mut iTotalCoeffs,
-            iEndIdx,
-        );
-
-        let iCount = if iTotalCoeffs > 3 { 3 } else { iTotalCoeffs };
-        for i in 0..iCount {
-            if iLevel[i as usize].abs() == 1 {
-                iTrailingOnes += 1;
-                uiSign <<= 1;
-                if iLevel[i as usize] < 0 {
-                    uiSign |= 1;
-                }
-            } else {
-                break;
-            }
+    let iCount = if iTotalCoeffs > 3 { 3 } else { iTotalCoeffs };
+    for i in 0..iCount {
+        let lv = iLevel[i as usize];
+        if lv.abs() == 1 {
+            iTrailingOnes += 1;
+            uiSign = (uiSign << 1) | ((lv < 0) as u32);
+        } else {
+            break;
         }
     }
 
-    let nc_idx = g_kuiEncNcMapTable[iNC.clamp(0, 17) as usize] as usize;
     let total_coeffs_idx = (iTotalCoeffs as usize).min(16);
     let trailing_ones_idx = (iTrailingOnes as usize).min(3);
 
@@ -243,11 +248,6 @@ pub fn WriteBlockResidualCavlc(
     let upCoeffToken = g_kuiVlcCoeffToken[nc_idx][total_coeffs_idx][trailing_ones_idx];
     let mut iValue = upCoeffToken[0] as u32;
     let mut n = upCoeffToken[1] as i32;
-
-    if iTotalCoeffs == 0 {
-        BsWriteBits(buf, &mut *pBs, n, iValue);
-        return ENC_RETURN_SUCCESS;
-    }
 
     // Trailing ones sign bits
     n += iTrailingOnes;

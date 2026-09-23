@@ -2052,12 +2052,19 @@ fn WelsMdWriteMbWithReencoding<'a, const DYNAMIC: bool>(
     kuiChromaQpIndexOffset: u8,
     kbCabac: bool,
 ) -> i32 {
+    let mut first = true;
     loop {
         {
             // One split for the whole mode-decision stretch, ending before
             // `WelsSpatialWriteMbSyn` takes the window back; the re-encoding loop
             // may come back through here.
             let mut split = pMbs.split_cur();
+            if first {
+                first = false;
+                let pMbCache = &mut pSlice.sMbCacheInfo;
+                crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut split, &mut *pMbCache);
+                WelsMdInterInit(pMd.sc(), &pMd.mbi, pEncCtx.iMvRange, pSlice, &mut split);
+            }
             WelsInitInterMDStruc(split.cur(), pMvdCostTable, kiMvdInterTableStride, pMd);
             if let Some(func) = func_list.pfInterMd {
                 func(pEncCtx, pMd, &mut *pSlice, &mut split);
@@ -2175,17 +2182,6 @@ pub fn WelsMdInterMbLoop<'a>(
         func_list
             .pfRc
             .WelsRcMbInit(pEncCtx, pMbs.cur_mut(), &mut *pSlice, pCtxOutBs.as_deref());
-
-        //step (2). save some value for future use, initial pWelsMd
-        // The macroblock and its four raster predecessors, split once for both inits
-        // and every mode-decision body below — what the C++ holds in `pCurMb` and
-        // its neighbour pointers.
-        {
-            let mut split = pMbs.split_cur();
-            let pMbCache = &mut pSlice.sMbCacheInfo;
-            crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut split, &mut *pMbCache);
-            WelsMdInterInit(pMd.sc(), &pMd.mbi, pEncCtx.iMvRange, pSlice, &mut split);
-        }
 
         let iEncReturn = WelsMdWriteMbWithReencoding::<false>(
             pEncCtx,
@@ -2307,17 +2303,6 @@ pub fn WelsMdInterMbLoopOverDynamicSlice<'a>(
             pMbs.cur_mut().uiLumaQp = max_qp as u8;
             pMbs.cur_mut().uiChromaQp =
                 g_kuiChromaQpTable[CLIP3_QP_0_51(max_qp + kuiChromaQpIndexOffset as i32)];
-        }
-
-        // step (2): save some values for future use, initialise pWelsMd.
-        // The macroblock and its four raster predecessors, split once for both inits
-        // and every mode-decision body below — what the C++ holds in `pCurMb` and
-        // its neighbour pointers.
-        {
-            let mut split = pMbs.split_cur();
-            let pMbCache = &mut pSlice.sMbCacheInfo;
-            crate::encoder::svc_base_layer_md::WelsMdIntraInit(&mut split, &mut *pMbCache);
-            WelsMdInterInit(pMd.sc(), &pMd.mbi, pEncCtx.iMvRange, pSlice, &mut split);
         }
 
         // TRY_REENCODING
