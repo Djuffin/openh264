@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Screen-content motion-estimation feature kernels — `SumOf8x8SingleBlock_AArch64_neon`,
 //! `SumOf16x16SingleBlock_AArch64_neon`, `SumOf8x8BlockOfFrame_AArch64_neon`, and
 //! `SumOf16x16BlockOfFrame_AArch64_neon`

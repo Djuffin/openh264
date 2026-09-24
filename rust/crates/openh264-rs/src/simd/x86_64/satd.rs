@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! x86_64 SSE2 & AVX2 implementations of SATD (Hadamard transformed SAD).
 //!
 //! The 4x4 block every shape is built from cuts each operand once into a

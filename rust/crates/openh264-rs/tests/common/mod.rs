@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Common test helper utilities for integration tests.
 
 // `#[path]`-included into several test crates, each of which uses only some helpers.

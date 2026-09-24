@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! The reset-arm reachability sweep: every `res/*.264` stream under every base
 //! concealment mode under both bitstream declarations, in one pass, pinning which
 //! error classes are reachable at all.

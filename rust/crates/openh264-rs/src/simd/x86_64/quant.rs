@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! SSE2 implementations of Quantization, Dequantization, Hadamard Transforms,
 //! and Non-Zero Coefficient Counting.
 #![allow(unsafe_code)]

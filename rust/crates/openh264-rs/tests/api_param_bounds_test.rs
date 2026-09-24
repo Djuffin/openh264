@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Integration tests for OpenH264 parameter validation and boundary error checks.
 //! C++: `test/api/encoder_test.cpp`, `test/api/decode_api_test.cpp`.
 

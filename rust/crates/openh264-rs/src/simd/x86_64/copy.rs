@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! x86_64 SSE2 fixed-shape macroblock copies.
 //!
 //! C++: `codec/common/x86/mb_copy.asm`. These fill the encoder's `pfCopyNxM` slots,

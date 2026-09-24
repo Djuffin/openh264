@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! SATD — `WelsSampleSatd*_AArch64_neon`, `codec/encoder/core/arm64/pixel_aarch64_neon.S`.
 //!
 //! `WelsSampleSatd4x4_AArch64_neon` holds the block as `[row0 | row1]` and

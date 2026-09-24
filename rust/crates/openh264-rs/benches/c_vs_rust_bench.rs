@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Side-by-side timing and bitstream SHA-1 comparison, in one process: the dlopen'd
 //! C++ `libopenh264` against this crate's encoder.
 //!

@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! A mid-stream change of `num_ref_frames` at an unchanged resolution must resize the
 //! picture pool in place.
 //!

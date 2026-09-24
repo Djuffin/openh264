@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 #![forbid(unsafe_code)]
 
 //! The MVD-cost cursor — [`MvdCostCursor`], the safe stand-in for the encoder's

@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! `ForceIntraFrame` with LTR on — `ltr_test.cpp:14-42`.
 //!
 //! With long-term reference enabled (`iLTRRefNum = 1`, marking period 2) and

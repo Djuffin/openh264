@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Codegen probes for the SIMD kernels: one `#[unsafe(no_mangle)]` wrapper per kernel, so
 //! the emitted assembly can be read function by function.
 //!

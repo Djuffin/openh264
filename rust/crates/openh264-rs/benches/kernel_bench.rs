@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Per-kernel timing of the two implementations of each SIMD kernel: the scalar
 //! reference and the `core::arch` intrinsics for the host (`simd::x86_64`, SSE2, or
 //! `simd::aarch64`, NEON).

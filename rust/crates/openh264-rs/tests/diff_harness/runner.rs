@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Core execution engine that drives C++ and Rust encoders through the identical API sequence in-memory.
 
 #![allow(unused, non_snake_case)]

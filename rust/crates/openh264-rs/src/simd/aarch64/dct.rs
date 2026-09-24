@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Forward 4x4 DCT and the inverse DCT with prediction add — `WelsDctT4_AArch64_neon`,
 //! `WelsDctFourT4_AArch64_neon`, `WelsIDctT4Rec_AArch64_neon`,
 //! `WelsIDctFourT4Rec_AArch64_neon` and `WelsIDctRecI16x16Dc_AArch64_neon` in

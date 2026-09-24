@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! x86_64 SSE2 CAVLC scoring kernel.
 //!
 //! `codec/encoder/core/x86/score.asm` holds four kernels; this file holds one.

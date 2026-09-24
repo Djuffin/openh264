@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! The two preprocessing plugins are accepted and run: denoise on must not produce the
 //! same bytes as denoise off, and a two-layer encode must not produce the same bytes as
 //! a one-layer encode of the same source.

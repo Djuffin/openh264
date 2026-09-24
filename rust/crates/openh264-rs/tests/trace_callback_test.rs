@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! `ENCODER_OPTION_TRACE_CALLBACK` / `_CONTEXT` and `DECODER_OPTION_TRACE_CALLBACK`
 //! / `_CONTEXT`: a caller installs a function and every message the codec logs is
 //! handed to it, together with the caller's context pointer.

@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! The VAA (video analysis) statistics kernels — `VAACalcSad_AArch64_neon`,
 //! `VAACalcSadVar_AArch64_neon`, `VAACalcSadSsd_AArch64_neon`,
 //! `VAACalcSadBgd_AArch64_neon` and `VAACalcSadSsdBgd_AArch64_neon`,

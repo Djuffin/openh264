@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! `ISVCDecoder::DecodeParser` is a different entry point from `DecodeFrame2`, with
 //! a different output: an annex-B bitstream the caller can feed to another decoder,
 //! not planes.

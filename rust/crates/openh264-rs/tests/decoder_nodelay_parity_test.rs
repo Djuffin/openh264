@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! `DecodeFrameNoDelay` is a different entry point from `DecodeFrame2`.
 //!
 //! `welsDecoderExt.cpp:720–725`, the whole of the single-threaded body:

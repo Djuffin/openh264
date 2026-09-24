@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! A mid-stream resolution change must reallocate the picture pool. The stream
 //! decoded here runs 352x288 → 640x480 → 352x288.
 

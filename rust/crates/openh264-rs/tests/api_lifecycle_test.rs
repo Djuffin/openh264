@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Integration tests for OpenH264 API lifecycle and memory management.
 //! C++: `test/api/c_interface_test.c`, `test/api/cpp_interface_test.cpp`.
 

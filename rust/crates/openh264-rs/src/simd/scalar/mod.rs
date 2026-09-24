@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! The scalar kernel set — every entry point of `simd::x86_64` and `simd::aarch64`,
 //! forwarding to the scalar body the codec would otherwise have called directly.
 //!

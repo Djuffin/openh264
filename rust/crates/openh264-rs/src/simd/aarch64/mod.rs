@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! The aarch64 NEON kernel set — every entry point of `super::x86_64`, from
 //! upstream's arm64 assembly under `codec/common/arm64/`,
 //! `codec/encoder/core/arm64/` and `codec/decoder/core/arm64/`.

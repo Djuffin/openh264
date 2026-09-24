@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 #![forbid(unsafe_code)]
 // Compiled twice: as `crate::safe::prng` under `#[cfg(test)]`, and as `common::prng`
 // in `tests/` via `#[path = "../../src/safe/prng.rs"]`. It must therefore stay

@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! SSE4.1 / SSSE3 implementations of Motion Compensation (MC) kernels:
 //! - Pixel averaging (`pixel_avg`)
 //! - Chroma motion compensation (`mc_chroma`)

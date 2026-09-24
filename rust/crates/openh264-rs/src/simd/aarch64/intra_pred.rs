@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Intra prediction — `WelsI16x16LumaPred*_AArch64_neon`, `WelsIChromaPred*_AArch64_neon`
 //! and `WelsI4x4LumaPred*_AArch64_neon` in `codec/common/arm64/intra_pred_common_aarch64_neon.S`
 //! and `codec/encoder/core/arm64/intra_pred_aarch64_neon.S`. The decoder twins in

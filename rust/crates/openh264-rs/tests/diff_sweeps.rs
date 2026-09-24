@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Integration test suite executing full differential sweeps against C++ OpenH264 in-memory.
 
 mod diff_harness;

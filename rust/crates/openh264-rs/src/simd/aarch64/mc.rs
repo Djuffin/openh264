@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Motion compensation — `McHorVer*_AArch64_neon`, `McChromaWidthEq*_AArch64_neon`
 //! and `PixelAvgWidthEq*_AArch64_neon`, `codec/common/arm64/mc_aarch64_neon.S`, with
 //! `McLuma_AArch64_neon`'s dispatch from `codec/common/src/mc.cpp`.

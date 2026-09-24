@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! x86_64 SSE2 Intra Prediction Kernels.
 //!
 //! 16x16 luma, 8x8 chroma, and 4x4 luma intra predictors, serving both the encoder

@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! `CWelsDecoder::DecodeFrame2`'s error-reporting block, the three
 //! `DecoderConfigParam` statements it depends on, and the live re-initialisation
 //! rebuild.

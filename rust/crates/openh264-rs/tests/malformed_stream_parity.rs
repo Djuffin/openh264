@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Malformed-stream error-code parity.
 //!
 //! Pins decoder behaviour on inputs the conformance tests do not reach: truncated

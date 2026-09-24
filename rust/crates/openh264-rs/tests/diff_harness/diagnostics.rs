@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Rich NAL-unit and bitstream divergence diagnostics.
 
 use openh264_rs::split_annexb_units;

@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! Quantisation, dequantisation, the luma-DC Hadamard pair and the non-zero count —
 //! `WelsQuant*_AArch64_neon`, `WelsDequant*_AArch64_neon`, `WelsHadamardT4Dc_AArch64_neon`,
 //! `WelsDequantIHadamard4x4_AArch64_neon` and `WelsGetNoneZeroCount_AArch64_neon`,

@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! 1080p decode throughput: native C++ OpenH264 (`libopenh264.dylib`) vs. the
 //! Rust port, both fed byte-identical Annex-B streams produced by ffmpeg.
 //!

@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! SAD and four-point SAD — `WelsSampleSad*_AArch64_neon` and
 //! `WelsSampleSadFour*_AArch64_neon`, `codec/encoder/core/arm64/pixel_aarch64_neon.S`.
 //!

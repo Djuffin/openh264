@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE_CHROMIUM file.
+
 //! The CAVLC bit-cost estimate.
 //!
 //! The sixteen `== 0` tests are one vector compare and a mask, and the run-length sum
