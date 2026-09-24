@@ -1,7 +1,4 @@
 #![deny(unsafe_code)]
-// Copyright (c) 2009-2013, Cisco Systems
-// All rights reserved.
-//
 // This file has no C++ counterpart.
 
 //! The reconstruction seam.
